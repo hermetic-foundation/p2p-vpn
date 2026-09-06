@@ -7,6 +7,7 @@ Use these docs when changing, testing, or debugging `p2p-vpn`.
 | Document | Use It For |
 | --- | --- |
 | [Architecture](architecture.md) | Runtime and protocol layout. |
+| [Reliability Review](refactor-review.md) | Findings, refactoring sequence, and completion evidence. |
 | [Android Architecture](android.md) | Shared TUN, network isolation, VpnService, persistence, and recovery. |
 | [Feature Matrix](feature-matrix.md) | Current implementation status. |
 | [NixOS Module Design](nixos-module.md) | Modes, secret lifecycle, service contract, and tests. |

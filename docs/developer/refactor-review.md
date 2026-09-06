@@ -1,0 +1,161 @@
+# Reliability Review and Refactoring
+
+## Status
+
+Started 2026-09-06 against `560754de`. This is an evolving review, not a completed
+security audit. Source inspection is distinguished from reproduced behavior.
+
+## Completion Criteria
+
+| Requirement | Required Evidence | Status |
+| --- | --- | --- |
+| Correctness review | Findings with source references and disposition | In progress |
+| Authorization consistency | Shared policy and cross-consumer regression tests | Pending |
+| Runtime ownership | Cohesive state owners and testable recovery decisions | Pending |
+| Operational verification | Restart, revocation, minimal LAN/relay recovery, isolation | Pending |
+| Resource behavior | Comparable idle CPU, memory, connection, and retry measurements | Pending |
+| Documentation | Architecture and user instructions match verified behavior | Pending |
+
+Confirmed correctness or security findings must be fixed, or explicitly deferred
+with user agreement. Refactoring alone does not satisfy these criteria.
+
+## Initial Findings
+
+### R1: Pairing and DNS Disagree About Name Ownership
+
+Priority: P2. Status: confirmed decision-path mismatch; regression pending.
+
+`validate_pairing_hostname_available` checks local configuration and names in
+effective membership grants. It receives no signed hostname updates and does
+not inspect configured remote names.
+
+DNS instead replaces legacy grant names with effective signed hostname records
+and includes configured names. After a rename, pairing can reject a released
+name or accept an occupied name, producing a DNS conflict after admission.
+
+| Evidence | Location at Review Baseline |
+| --- | --- |
+| Pairing validation | `src/runtime/runner.rs:15353` |
+| Existing pairing conflict tests | `src/runtime/runner.rs:22630` |
+| DNS name precedence | `src/dns.rs:240` |
+| Rename regression coverage for DNS | `src/dns.rs:783` |
+
+Required regression cases:
+
+- Renamed member: reject its current name and permit its released name.
+- Configured member: reject an occupied name while it remains authorized.
+- Revoked member: do not retain name ownership through static metadata.
+- DNS disabled: pairing must still enforce effective name ownership.
+
+### R2: Effective Authorization Is Rebuilt Independently
+
+Priority: architectural. Status: confirmed duplication, not a newly proven bypass.
+
+The recent revocation correction added consistent static/signed precedence,
+but consumers still independently reconstruct local eligibility and remote sets.
+That leaves future policy changes dependent on coordinated edits.
+
+| Consumer | Location at Review Baseline |
+| --- | --- |
+| Route compilation | `src/config.rs:119` |
+| Forwarding transport set | `src/runtime/forward.rs:770` |
+| Forwarding packet set | `src/runtime/forward.rs:800` |
+| Packet authorization constructor | `src/runtime/packet.rs:165` |
+| Runtime membership | `src/runtime/runner.rs:9288` |
+| DNS eligibility | `src/dns.rs:289` |
+| Inventory eligibility | `src/network_peer.rs:440` |
+
+Introduce an evaluated authorization view with explicit local eligibility,
+remote membership, and signed/static provenance. Preserve audit records without
+treating their presence as packet or route authority.
+
+### R3: Recovery State Has Distributed Ownership
+
+Priority: architectural. Status: confirmed coupling; behavioral audit pending.
+
+`RuntimeNetworkChangeContext` coordinates paths, connection epochs, discovery,
+relay reservations, packet sessions, capabilities, probes, and in-flight packets.
+The network-change handler resets these and immediately invokes redial logic.
+
+| Evidence | Location at Review Baseline |
+| --- | --- |
+| Network-change state and effects | `src/runtime/runner.rs:4435` |
+| Periodic discovery and redial effects | `src/runtime/runner.rs:5904` |
+| Runtime size | 21,262 lines before the main test module |
+
+Extract recovery decisions with explicit time and generation inputs. Keep
+libp2p effects in the runtime adapter. Test obsolete completions, LAN-first
+holdoff, relay replacement, cancellation, and quiet-state retry bounds.
+
+### R4: Architecture Documentation Contains Stale Governance Language
+
+Priority: documentation. Status: confirmed.
+
+`architecture.md` describes signed records as a delegated trust graph and
+`README.md` indexes membership as a trust graph. The current ledger implements
+flat any-member governance with non-cascading revocation and legacy restoration.
+
+Update these descriptions with the implementation changes and retain explicit
+migration information in the membership reference.
+
+## Review Coverage Still Required
+
+| Area | Evidence Inspected | Next Check |
+| --- | --- | --- |
+| Membership | Time-ordered ledger, version and epoch decisions | Adversarial ordering, compaction, trust anchors |
+| Persistence | State load/save, pairing reconciliation, revoke application | Failure injection between durable and runtime transitions |
+| Isolation | Android dispatch generations and overlap rejection | Stale leases, inbound validation, shared-TUN tests |
+| Discovery | Network-change reset and periodic redial | Full timer/connection completion lifecycle |
+| Android | Mutation polling, teardown, scheduled task cancellation | Slow native shutdown, stale callbacks, per-network independence |
+| Resources | Live service identity and memory counters | Controlled baseline and comparable post-change sampling |
+
+No absence-of-bug claim follows from these partial inspections.
+
+## Implementation Sequence
+
+1. Complete the review incrementally and add reproducers for confirmed defects.
+2. Fix naming divergence and introduce shared effective authorization decisions.
+3. Give membership evaluation and application a clear owner and transaction boundary.
+4. Extract discovery/recovery state, decisions, and bounded effects.
+5. Extract pairing orchestration and transport-session lifecycle where justified.
+6. Address Android/CLI findings with focused changes and preserved interfaces.
+7. Run operational gates, compare resource measurements, and reconcile docs.
+
+Each change must have one reviewable purpose and an atomic Conventional Commit.
+Push each verified commit to `main`; preserve user changes and wire/config formats.
+
+## Verification and Resource Plan
+
+| Layer | Approach |
+| --- | --- |
+| Rust | Focused regressions, workspace tests, format, required Clippy groups |
+| Integration | Namespace tests and focused NixOS VM scenarios |
+| Android | JVM tests, lint, native supervisor tests, reproducible APK |
+| End to end | Revocation/restart, minimal LAN/relay recovery, network isolation |
+| Physical/public | Record topology and exact binary; distinguish from local proofs |
+| Full gate | Inspect exported checks, then execute in bounded batches |
+
+Use at most two Cargo build jobs and one Nix build job during this work.
+Run one VM scenario at a time. Keep downloads within the requested 10 Mbps cap.
+Use cached dependencies where possible; do not start unrestricted fetches.
+
+Use one reusable task target directory with debug information and incremental
+compilation disabled when practical. Inspect its size before expensive stages;
+pause builds for cleanup at 10 GiB of task-created temporary output.
+
+Do not garbage-collect unrelated Nix roots or user caches. Clean task-created
+temporary artifacts after their final use.
+
+### Live Environment Preflight
+
+On 2026-09-06, both local instances were running the store output
+`s5mvmma78p5s0mlq936gp6n21fmf1aha-p2p-vpn-0.1.0`.
+This is not evidence that the deployed binary matches the review baseline.
+
+| Instance | MemoryCurrent | TasksCurrent |
+| --- | ---: | ---: |
+| monarchic-runners | 45,215,744 bytes | 19 |
+| personal-devices | 50,794,496 bytes | 19 |
+
+These are single service-cgroup observations, not an idle benchmark. Record
+binary identity, duration, topology, workload, and counter deltas for comparisons.
