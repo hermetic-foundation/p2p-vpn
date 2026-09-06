@@ -2,6 +2,31 @@
 
 ## Latest Attempt
 
+The lifecycle-fixed APK (`39c2ecb6`) with diagnostic harness `2d4d06e7` failed
+on 2026-09-06 after 262 seconds. Thirty-two steps passed before Android-to-Linux
+IPv4 received 4/5 replies on beta after APK replacement with alpha disabled.
+
+| Observation | Evidence boundary |
+| --- | --- |
+| Initial concurrent traffic and overlap rejection | Both networks passed dual-stack traffic checks |
+| Independent disable | Beta passed both directions and address families |
+| APK replacement | Disabled set restored; Linux-to-Android checks passed before reverse IPv4 lost one reply |
+| OS underlay at failure | Validated non-VPN Wi-Fi and cellular agents were present |
+| App state | Connected peer, Wi-Fi selected, no queue drops, one relay fallback and two direct promotions |
+| Later scenarios | Re-enable, cellular transition, reboot, lockdown, and failure isolation were not reached |
+
+The lost reply is not explained by the final aggregate counters. Logs show path
+changes after restart, but this is not proof they caused the loss. Retain the
+failure and investigate packet timing; do not replace it with a passing retry.
+
+- Original: `/tmp/p2p-vpn-review-lifecycle-multi-network/evidence.json`.
+- Sanitized [update-failure sample](android-multi-network-update-failure-sample.json).
+- Cleanup stopped the emulator and fixtures, removed private state, and redacted logs.
+- The original OS summary labels a mixed Wi-Fi/VPN agent as Wi-Fi; `not_vpn=false` remains correct.
+- A subsequent parser fix recognizes mixed VPN transports; it does not fix packet recovery.
+
+## Earlier Cellular Failure
+
 The rerun at `6dbb680c` failed on 2026-09-06 after 456 seconds: 39 steps passed,
 then Wi-Fi-to-emulated-cellular recovery failed. It used the verified APK and
 fixture hashes in the [network-workflow report](android-network-workflow-review.md).

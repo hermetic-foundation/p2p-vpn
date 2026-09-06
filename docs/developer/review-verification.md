@@ -19,7 +19,7 @@ Earlier milestones remain historical evidence, not automatic proof for later cha
 | Nix consumer evaluation | `nixos-consumer-flake-eval` built; all 15 configuration contracts pass. | Does not build the consumer OS or execute the service. |
 | Membership VM | Earlier four-node run passed 18 subtests. | Predates later ownership changes. |
 | Storage repair VM | Current-at-test binary recovered automatically after permission repair. | Predates `0acbd725`; tests startup rejection, not ENOSPC or power loss. |
-| Android | [24 network-workflow steps](android-network-workflow-review.md) pass at `6dbb680c`. The [multi-network rerun](android-multi-network-review.md) passes 39 steps then fails cellular transition. | No available underlay in app diagnostics; OS capabilities were not captured. Earlier 68-step pass at `f026342f` does not close the current failed gate. |
+| Android | [24 network-workflow steps](android-network-workflow-review.md) pass at `6dbb680c`. The latest [multi-network rerun](android-multi-network-review.md) passes 32 steps then receives 4/5 reverse IPv4 replies after APK replacement. | OS underlays were available in this run; cause of loss remains unresolved. Neither the earlier cellular failure nor the historical 68-step pass closes this gate. |
 | Resources | Two controlled idle samples per compared revision. | Small static topology; see [measurement limits](idle-resource-comparison.md). |
 | Inventory evaluation | [Joint/separate diagnostic](inventory-evaluation-measurement.md) passed at 8, 32, and 128 records. | Single unoptimized run; not daemon throughput or memory evidence. |
 | Retained membership | [Forwarder comparison](forwarder-resource-comparison.md): 12 fresh-process samples at 8, 128, and 256 records. | Larger current samples show higher RSS growth; not exact map allocation cost or release-profile CPU evidence. |
@@ -120,6 +120,7 @@ Logs use `/tmp/p2p-vpn-review-startup-snapshot-*`.
 | Resource comparison | Signed-ledger RSS sampled through 256 records; timer refresh reuses valid evaluations. Isolate retained allocations and establish release-profile/daemon impact. |
 | Platform validation | Repeat affected Android and VM gates on final shared-runtime code. |
 | Android underlay failure | Capture OS cellular availability/validation independently of the app tracker, then resolve and rerun the failed multi-network transition. |
+| Android update traffic | Investigate the retained 4/5 reverse IPv4 result after APK replacement, including packet timing and path changes. |
 | Packaging/tooling | Resolve or explicitly account for unverified exported checks without uncontrolled source builds. |
 | Documentation | Reconcile architecture and user workflows with final behavior and evidence. |
 

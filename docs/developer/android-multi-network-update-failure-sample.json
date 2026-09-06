@@ -1,0 +1,97 @@
+{
+  "application_revision": "39c2ecb6",
+  "harness_revision": "2d4d06e7",
+  "apk_sha256": "846aaa646a4b2e67ecfbc6b3361d29bc808151a2ff6100aa6bc67443805d39a5",
+  "host_fixture_sha256": "b77fa69e35ae249ab3dcbc7976df8e3ceb1e574e35dc236769f1f348720d94a4",
+  "started_utc": "2026-09-06T19:38:56Z",
+  "finished_utc": "2026-09-06T19:43:18Z",
+  "status": "failed",
+  "detail": "Android-to-Linux IPv4 ping received 4 of 5 replies after restoring the disabled set through an app update",
+  "passed_steps": 32,
+  "failed_steps": [
+    {
+      "name": "updated-disabled-beta_android_to_linux_ipv4",
+      "status": "failed",
+      "detail": "Android-to-Linux IPv4 ping received 4 of 5 replies after restoring the disabled set through an app update"
+    }
+  ],
+  "os_underlay": {
+    "status": "parsed",
+    "networks": [
+      {
+        "kind": "wifi",
+        "validated": true,
+        "internet": true,
+        "not_vpn": true
+      },
+      {
+        "kind": "cellular",
+        "validated": true,
+        "internet": true,
+        "not_vpn": true
+      },
+      {
+        "kind": "wifi",
+        "validated": true,
+        "internet": true,
+        "not_vpn": false
+      }
+    ]
+  },
+  "os_underlay_note": "Original summary retained: combined Wi-Fi/VPN transport was labeled wifi with not_vpn=false; subsequent parser regression fixes mixed transport classification.",
+  "final_runtime": {
+    "connected": true,
+    "busy": false,
+    "runtime_generation": 1,
+    "underlay": {
+      "kind": "wifi",
+      "validated": true,
+      "available_networks": 1,
+      "selection_changes": 0,
+      "selected_losses": 0,
+      "recoveries": 0,
+      "runtime_recovery_requests": 0,
+      "runtime_recovery_failures": 0
+    },
+    "paths": {
+      "connected_peers": 1,
+      "direct_udp_datagram": 0,
+      "direct_quic_datagram": 0,
+      "direct_quic_stream": 0,
+      "direct_tcp_stream": 1,
+      "relay": 1,
+      "public_routing_peers": 6,
+      "packet_plane_quic_sessions": 0,
+      "outbound_quic_datagram_packets": 0,
+      "outbound_direct_tcp_stream_packets": 15,
+      "promotions_to_direct": 2
+    }
+  },
+  "queue": {
+    "queued_packets": 0,
+    "queued_bytes": 0,
+    "oldest_packet_age_millis": 0,
+    "blocked_no_supported_path_events": 0,
+    "blocked_packet_window_events": 0
+  },
+  "drops": {
+    "queue_packets": 0,
+    "queue_bytes": 0,
+    "expired_packets": 0,
+    "expired_bytes": 0,
+    "outbound_packets": 0,
+    "inbound_packets": 0,
+    "packet_plane_datagrams": 0,
+    "path_fallbacks_to_relay": 1,
+    "packet_plane_path_demotions": 0,
+    "stream_path_demotions": 0
+  },
+  "cleanup": {
+    "emulator_stopped": true,
+    "fixture_stopped": true,
+    "private_state_removed": true,
+    "logs_redacted": true,
+    "diagnostic_report_redacted": true,
+    "always_on_cleared": true
+  }
+}
