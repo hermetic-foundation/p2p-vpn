@@ -2,7 +2,7 @@
 
 ## Scope
 
-Audited on 2026-09-06, including completed pairing cancellation.
+Audited on 2026-09-06, including pairing acceptance retry ownership.
 This is the current acceptance map for
 the [reliability review](refactor-review.md), not a production certification.
 Earlier milestones remain historical evidence, not automatic proof for later changes.
@@ -11,7 +11,7 @@ Earlier milestones remain historical evidence, not automatic proof for later cha
 
 | Area | Evidence | Limitation |
 | --- | --- | --- |
-| Workspace | Last full run: 1,210 passed, 18 opt-in tests ignored. Diagnostics run separately. | Native Linux toolchain; not an Android device run. |
+| Workspace | Last full run: 1,211 passed, 18 opt-in tests ignored. Diagnostics run separately. | Native Linux toolchain; not an Android device run. |
 | Namespace integration | All 11 pass after terminal stale-response cleanup, in 188.03 seconds. | Controlled topology, not public NAT traversal. |
 | Static analysis | Required correctness, suspicious, and performance Clippy groups pass. | Existing non-fatal style warnings remain. |
 | Formatting | Changed Rust files pass rustfmt; whitespace checks pass. | Not proof of the complete flake `fmt` target. |
@@ -31,6 +31,7 @@ Earlier milestones remain historical evidence, not automatic proof for later cha
 | Stale sync responses | Two loopback TCP connections; real completed response followed by controlled retirement reproduces the owner leak and verifies cleanup/newer-ID isolation. | Controlled application ordering, not physical WAN race-frequency evidence. |
 | Sync history | Completion and retry maps each cap at 1,024 peers; overflow preserves backoff; authorization pruning and disconnect retention pass. | Entry-count/deadline evidence, not RSS or live overload measurements. |
 | Pairing cancellation | Both roles preserve completion and persisted state across late cancellation and restore; all 48 session tests pass. | Preventive fix, not repair of existing invalid snapshots; [transaction review](pairing-transaction-review.md) remains open. |
+| Acceptance retry | Four response-dispatch cases cover Submit/Poll persistence and route failures; bounded retry eligibility is restored. | Injected local errors, not partial rollback, restart recovery, or physical retry delivery. |
 | Startup ownership | Linux and Android pass installed snapshots; expiry deletion and metadata guards pass. Android reactivation asserts its reserved snapshot. | External library integrations must opt into the additive snapshot handoff to avoid config-derived compatibility behavior. |
 
 ## Exported Flake Checks

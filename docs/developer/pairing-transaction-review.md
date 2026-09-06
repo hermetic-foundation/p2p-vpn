@@ -11,7 +11,7 @@ within the [reliability review](refactor-review.md).
 | --- | --- | --- |
 | P1 | Cancel after completion produces unrestorable state | Reproduced for inviter and joiner; cancellation now preserves completed state. |
 | P1 | Prepared enrollment loses recovery dependencies | Secondary source review; failure-injection reproduction and fix remain pending. |
-| P2 | Accepted Submit failure leaves submission in flight | Secondary source review; compare Submit and Poll retry paths under persistence and route failures. |
+| P2 | Accepted Submit failure leaves submission in flight | Reproduced at response dispatch; release the matching request before applying acceptance. |
 | P2 | New operation prevents acknowledgement of older enrollment | Secondary source review; reproduce across restart and declarative configuration changes. |
 
 ## Completed Cancellation
@@ -62,8 +62,8 @@ already corrupted by the old transition. Recovery compatibility remains an open 
 
 1. Inject failure after Prepared persistence and before runtime commit; exercise
    cancellation, rejection, expiry, and same-role replacement before recovery.
-2. Verify accepted Submit and Poll retries independently after persistence and
-   route failures, including partial route application and rollback errors.
+2. Extend retry-eligibility coverage to successful continuation after repair,
+   including partial route application and rollback errors.
 3. Separate durable receipt ownership from the replaceable operation slot where
    reproduction confirms older enrollments cannot be acknowledged.
 4. Reconcile old invalid snapshots without silently dropping committed membership
@@ -72,3 +72,39 @@ already corrupted by the old transition. Recovery compatibility remains an open 
 
 Secondary-review observations are not yet equivalent to reproduced failures.
 No production state has been altered to investigate these cases.
+
+## Acceptance Retry Ownership
+
+### Failure and Correction
+
+- `handle_pairing_code_response` handles accepted Submit and Poll responses together.
+- Both local failure branches previously released only the Poll in-flight flag.
+- Submit then remained in flight indefinitely, despite its transport request having completed.
+- Accepted responses now release the matching request before local application.
+
+The existing release helper preserves the retry delay and operation/peer checks.
+Invalid acceptance still fails the operation; successful application clears its pending state.
+This does not add retries to terminally rejected pairings or change the wire protocol.
+
+### Evidence Boundary
+
+The runner regression `accepted_pairing_retries_after_local_application_failure`
+dispatches signed acceptance directly, with public discovery disabled.
+The initial Submit persistence case failed at `submit must retry` before correction.
+
+The test matrix covers Submit and Poll with a rejected state-file destination or
+an injected route-controller error. It checks retry eligibility, no immediate retry,
+and unchanged peer configuration. It does not simulate partial route rollback,
+power loss, or delivery of the subsequent retry over a physical network.
+
+Verification after the retry fix:
+
+| Gate | Result |
+| --- | --- |
+| Native workspace | 1,211 passed, 18 opt-in tests ignored |
+| Four-case regression | Passed, 1.16 seconds |
+| Code-pairing namespace | Passed, 13.32 seconds |
+| Clippy | Required correctness, suspicious, and performance groups pass |
+| Formatting | Changed Rust and whitespace checks pass |
+
+Android runtime gates remain outstanding for the combined transaction changes.

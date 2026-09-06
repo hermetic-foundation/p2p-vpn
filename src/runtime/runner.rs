@@ -14161,6 +14161,16 @@ fn handle_pairing_code_response(
         return Ok(());
     }
 
+    // The response finishes transport ownership even if applying acceptance fails locally.
+    if matches!(&response, PairingCodeResponse::Accepted { .. })
+        && matches!(
+            &pending,
+            OutboundCodeRequest::Submit(_) | OutboundCodeRequest::Poll(_)
+        )
+    {
+        release_outbound_code_request(context.code_pairing_sessions, &pending);
+    }
+
     match (pending, response) {
         (OutboundCodeRequest::Hello(outbound), PairingCodeResponse::Challenge { challenge }) => {
             let result = open_pairing_code_challenge_at(
@@ -14382,11 +14392,6 @@ fn handle_pairing_code_response(
                 context.code_pairing_sessions,
                 &context.local_capabilities.network_name,
             ) {
-                context.code_pairing_sessions.release_remote_poll(
-                    &outbound.operation_id,
-                    peer,
-                    Instant::now(),
-                );
                 log_pairing_persistence_failure("joiner_prepare", &error);
                 return Ok(());
             }
@@ -14400,11 +14405,6 @@ fn handle_pairing_code_response(
             ) {
                 Ok(peer) => peer,
                 Err(error) => {
-                    context.code_pairing_sessions.release_remote_poll(
-                        &outbound.operation_id,
-                        peer,
-                        Instant::now(),
-                    );
                     log_runtime_event(
                         LogLevel::Error,
                         "pairing_code_enrollment_commit_failed",
@@ -22008,6 +22008,196 @@ mod tests {
         )
         .expect("pairing response");
         (config, inviter, joiner, offer, request, response)
+    }
+
+    #[tokio::test]
+    async fn accepted_pairing_retries_after_local_application_failure() {
+        for (poll, persistence_failure) in
+            [(false, true), (true, true), (false, false), (true, false)]
+        {
+            let unix = current_unix_seconds_lossy();
+            let (_, inviter, joiner, offer, request, response) =
+                code_pairing_runtime_fixture_at(None, unix - 10);
+            let peer = inviter.peer_id.parse().unwrap();
+            let mut config = config_with_peer(&joiner, peer);
+            config.peers.clear();
+            let mut forwarder = Forwarder::from_config(&config).unwrap();
+            let mut node = membership_sync_test_node(joiner);
+            let now = Instant::now();
+            let mut sessions = CodePairingSessions::new();
+            let started = sessions
+                .join(
+                    "lab",
+                    crate::pairing_code::PairingCode::generate(),
+                    None,
+                    Vec::new(),
+                    600,
+                    unix,
+                    now,
+                )
+                .unwrap();
+            let transcript = pairing_request_transcript_sha256(&request).unwrap();
+            sessions
+                .set_pending_submission(
+                    &started.operation_id,
+                    peer,
+                    request.clone(),
+                    offer.clone(),
+                    transcript.clone(),
+                    now,
+                )
+                .unwrap();
+            let wire_request = if poll {
+                let ticket = URL_SAFE_NO_PAD.encode([0_u8; 16]);
+                sessions
+                    .set_remote_pending(
+                        &started.operation_id,
+                        peer,
+                        offer.clone(),
+                        transcript.clone(),
+                        ticket.clone(),
+                        now,
+                    )
+                    .unwrap();
+                assert!(sessions.due_remote_poll(now).is_some());
+                PairingCodeRequest::Poll { ticket }
+            } else {
+                assert!(sessions.due_pending_submission(now).is_some());
+                PairingCodeRequest::Submit {
+                    request: Box::new(request),
+                }
+            };
+            let request_id = node
+                .swarm
+                .behaviour_mut()
+                .pairing_code
+                .send_request(&peer, wire_request);
+            let outbound = OutboundPairing {
+                operation_id: started.operation_id.clone(),
+                peer,
+                offer,
+                transcript_sha256: transcript,
+            };
+            if poll {
+                sessions.insert_outbound_poll(request_id, outbound).unwrap();
+            } else {
+                sessions
+                    .insert_outbound_submit(request_id, outbound)
+                    .unwrap();
+            }
+            let state_path = test_pairing_state_path(if poll {
+                "accepted-poll-retry"
+            } else {
+                "accepted-submit-retry"
+            });
+            // A directory at the destination fails the store's regular-file check.
+            if persistence_failure {
+                fs::create_dir(&state_path).unwrap();
+            }
+            let store = PairingStateStore::new(&state_path);
+            struct FailingRoutes {
+                calls: usize,
+            }
+            impl TunRouteController for FailingRoutes {
+                fn reconcile(
+                    &mut self,
+                    _: &TunRuntimeConfig,
+                    _: &TunRuntimeConfig,
+                    _: &TunRouteUpdate,
+                ) -> Result<(), RunnerError> {
+                    self.calls += 1;
+                    Err(io::Error::other("injected route failure").into())
+                }
+            }
+            let mut routes = FailingRoutes { calls: 0 };
+            struct UnusedPacketIo;
+            impl crate::runtime::tun::PacketRead for UnusedPacketIo {
+                fn read_packet(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                    panic!("pairing must not read packets")
+                }
+            }
+            impl crate::runtime::tun::PacketWrite for UnusedPacketIo {
+                fn write_packet(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                    panic!("pairing must not write packets")
+                }
+            }
+            let (_, mut writer) = PacketIo::new(UnusedPacketIo, UnusedPacketIo).split();
+            let mut membership = OverlayMembership::from_config(&config).unwrap();
+            let mut tun_runtime = TunRuntimeConfig::from_config(&config).unwrap();
+            let mut capabilities = ControlCapabilities::local("lab", None, 1280);
+            handle_pairing_code_response(
+                &mut node.swarm,
+                &mut SwarmEventContext {
+                    forwarder: &mut forwarder,
+                    membership: &mut membership,
+                    tun_runtime: &mut tun_runtime,
+                    route_controller: &mut routes,
+                    infrastructure_peers: &mut InfrastructurePeers::default(),
+                    routing_infrastructure_peers: &mut RoutingInfrastructurePeers::default(),
+                    writer: &mut writer,
+                    paths: &mut PathSet::new(),
+                    peer_capabilities: &mut PeerCapabilities::default(),
+                    relay_readiness: &mut RelayReadiness::default(),
+                    auto_relay: &mut AutoRelayState::default(),
+                    public_discovery_backoff: &mut PublicDiscoveryBackoff::default(),
+                    public_discovery_holdoff_active: false,
+                    relay_addresses: &[],
+                    configured_peer_addresses: &[],
+                    configured_relay_reservation_listeners: &mut HashSet::new(),
+                    retiring_configured_relay_reservation_listeners: &mut HashSet::new(),
+                    relay_server_enabled: false,
+                    discovered_peer_addresses: &mut DiscoveredPeerAddresses::default(),
+                    packet_in_flight: &mut PacketInFlight::new(1),
+                    inbound_packet_rate_limiters: &mut PeerRateLimiters::new(1),
+                    pairing_request_rate_limiters: &mut PeerRateLimiters::new(1),
+                    membership_page_rate_limiters: &mut PeerRateLimiters::new(1),
+                    membership_record_syncs: &mut MembershipRecordSyncs::default(),
+                    pairing_handshake_rate_limiter: &mut GlobalRateLimiter::new(1, now),
+                    metrics: &RuntimeMetrics::default(),
+                    local_capabilities: &mut capabilities,
+                    persistent_packet_endpoint_candidates: &[],
+                    persistent_packet_plane_quic_endpoint_candidates: &[],
+                    previous_membership_tags: &[],
+                    discovery: &DiscoveryConfig::default(),
+                    identity: &node.identity,
+                    packet_plane: &mut PacketPlaneRuntime::disabled(),
+                    packet_plane_quic: None,
+                    packet_plane_negotiator: &mut PacketPlaneNegotiator::default(),
+                    path_probe_tracker: &mut PathProbeTracker::default(),
+                    packet_plane_session_ttl: Duration::from_secs(60),
+                    packet_plane_replay_windows_per_session: 1,
+                    pairing_replay_tokens: &mut PairingReplayTokens::default(),
+                    code_pairing_sessions: &mut sessions,
+                    pairing_state_store: Some(&store),
+                    active_connections: &mut HashMap::new(),
+                    connection_epochs: &mut ConnectionEpochs::default(),
+                    membership_probe_connections: &mut MembershipProbeConnections::default(),
+                    kademlia_maintenance: &mut KademliaMaintenance::new(now),
+                },
+                peer,
+                None,
+                request_id,
+                PairingCodeResponse::Accepted {
+                    response: Box::new(response),
+                },
+            )
+            .unwrap();
+            fs::remove_dir_all(state_path.parent().unwrap()).unwrap();
+            assert_eq!(routes.calls, usize::from(!persistence_failure));
+            assert!(sessions.join_completion(&started.operation_id).is_none());
+            assert!(forwarder.config().peers.is_empty());
+            assert!(sessions.due_pending_submission(now).is_none());
+            assert!(sessions.due_remote_poll(now).is_none());
+            let later = Instant::now() + Duration::from_secs(10);
+            if poll {
+                assert!(sessions.due_remote_poll(later).is_some(), "poll must retry");
+            } else {
+                assert!(
+                    sessions.due_pending_submission(later).is_some(),
+                    "submit must retry"
+                );
+            }
+        }
     }
 
     #[test]

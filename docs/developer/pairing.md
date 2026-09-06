@@ -57,6 +57,10 @@ Completed cancellation preserves the enrollment, completion artifacts, and accep
 polling receipt. It does not revoke membership. See the
 [transaction review](pairing-transaction-review.md) for persistence evidence and open cases.
 
+Accepted Submit and Poll responses release their matching in-flight retry state
+before local application. A recoverable persistence or route error retains the
+existing retry delay; successful completion clears pending state.
+
 ## Code and Locator
 
 The code contains 80 random bits.
