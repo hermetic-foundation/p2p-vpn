@@ -16,6 +16,7 @@ Earlier milestones remain historical evidence, not automatic proof for later cha
 | Static analysis | Required correctness, suspicious, and performance Clippy groups pass. | Existing non-fatal style warnings remain. |
 | Formatting | Changed Rust files pass rustfmt; whitespace checks pass. | Not proof of the complete flake `fmt` target. |
 | Nix source parity | `rust-test-sources` built successfully. | Verifies packaged test inclusion, not execution. |
+| Nix consumer evaluation | `nixos-consumer-flake-eval` built; all 15 configuration contracts pass. | Does not build the consumer OS or execute the service. |
 | Membership VM | Earlier four-node run passed 18 subtests. | Predates later ownership changes. |
 | Storage repair VM | Current-at-test binary recovered automatically after permission repair. | Predates `0acbd725`; tests startup rejection, not ENOSPC or power loss. |
 | Android | Emulator lifecycle, always-on, and underlay recovery passed earlier. | JNI must be rebuilt and relevant scenarios repeated after shared runtime changes. |
@@ -29,7 +30,7 @@ Inventory source:
 nix eval --offline --json .#checks.x86_64-linux --apply builtins.attrNames
 ```
 
-The 32 exported names below include aliases. A passing manual equivalent does
+The 33 exported names below include aliases. A passing manual equivalent does
 not imply that the corresponding Nix derivation was built successfully.
 
 | Exported Check Names | Current Review Evidence |
@@ -38,6 +39,7 @@ not imply that the corresponding Nix derivation was built successfully.
 | `clippy`, `fmt` | Local checks as described above; full derivation results not established. |
 | `package` | Offline workspace build/tests pass; complete package check not established at this revision. |
 | `releaseArchive`, `releaseArchiveSanity` | Current archive and sanity outputs not verified. |
+| `nixos-consumer-flake-eval` | Built offline; evaluates minimal upstream-module consumer contracts without realizing the OS closure. |
 | `nixos-module`, `nixos-consumer-flake` | Current full derivation results not verified. |
 | `nixos-vm-smoke` | Current result not verified. |
 | `nixos-vm-minimal-lan`, `nixos-vm-mesh` | Aliases of the same VM derivation; current result not verified. |
@@ -57,6 +59,21 @@ not imply that the corresponding Nix derivation was built successfully.
 An offline, substitution-disabled dry run for the two public-VPN verifier checks
 planned 967 derivations, including ShellCheck's source dependency chain. No build
 was started. This is not an estimate of work required with available binary substitutes.
+
+### Lightweight Consumer Check
+
+```bash
+nix build --offline --option substitute false --max-jobs 1 --cores 2 \
+  --no-link .#checks.x86_64-linux.nixos-consumer-flake-eval
+```
+
+- Checks generated defaults, identity/state paths, service arguments, and minimal consumer source.
+- Deliberate wrong-network, embedded-secret, and consumer-mechanics mutations were rejected.
+- The check planned and built one derivation using cached dependencies, with no downloads.
+
+The existing full consumer check remains unchanged and requires the NixOS system output.
+A combined offline, substitution-disabled dry run for it and `nixos-module` planned
+595 derivations. Those full checks were not built during this verification pass.
 
 ## Outstanding Acceptance Work
 

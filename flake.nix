@@ -5928,6 +5928,11 @@
           android-e2e-structure = androidE2eStructure;
         }
         // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+          nixos-consumer-flake-eval = import ./tests/nixos/consumer-eval.nix {
+            inherit pkgs;
+            config = consumerEval.config;
+            source = ./tests/nixos/consumer-flake/flake.nix;
+          };
           nixos-consumer-flake =
             pkgs.runCommand "p2p-vpn-nixos-consumer-flake"
               {
