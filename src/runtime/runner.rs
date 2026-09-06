@@ -19020,6 +19020,22 @@ fn path_kind_for_endpoint(endpoint: &ConnectedPoint) -> PathKind {
     }
 }
 
+// A simultaneous-open socket is outbound at both ends; use its negotiated role.
+fn connection_is_handshake_initiator(endpoint: &ConnectedPoint) -> bool {
+    let ConnectedPoint::Dialer {
+        role_override,
+        port_use,
+        ..
+    } = endpoint
+    else {
+        return false;
+    };
+    *role_override == libp2p::core::Endpoint::Dialer
+        // The pinned QUIC transport dials as a client whenever it reuses a port.
+        || (path_kind_for_endpoint(endpoint) == PathKind::DirectQuicStream
+            && *port_use == libp2p::core::transport::PortUse::Reuse)
+}
+
 fn redundant_direct_connection_ids(
     local_peer: Libp2pPeerId,
     remote_peer: Libp2pPeerId,
@@ -19039,27 +19055,27 @@ fn redundant_direct_connection_ids(
                     .then_some((*connection_id, endpoint))
             })
             .collect::<Vec<_>>();
-        let desired_is_outbound = local_is_preferred_initiator;
+        let desired_is_initiator = local_is_preferred_initiator;
         let desired = direct_connections
             .iter()
             .filter_map(|(connection_id, endpoint)| {
-                let is_outbound = matches!(endpoint, ConnectedPoint::Dialer { .. });
-                (is_outbound == desired_is_outbound).then_some(*connection_id)
+                let is_initiator = connection_is_handshake_initiator(endpoint);
+                (is_initiator == desired_is_initiator).then_some(*connection_id)
             })
             .collect::<Vec<_>>();
 
         if desired.is_empty() {
-            let outbound = direct_connections
+            let initiated = direct_connections
                 .iter()
                 .filter_map(|(connection_id, endpoint)| {
-                    matches!(endpoint, ConnectedPoint::Dialer { .. }).then_some(*connection_id)
+                    connection_is_handshake_initiator(endpoint).then_some(*connection_id)
                 })
                 .collect::<Vec<_>>();
-            let latest_outbound = outbound.iter().max().copied();
+            let latest_initiated = initiated.iter().max().copied();
             redundant.extend(
-                outbound
+                initiated
                     .into_iter()
-                    .filter(|connection_id| Some(*connection_id) != latest_outbound),
+                    .filter(|connection_id| Some(*connection_id) != latest_initiated),
             );
             continue;
         }
@@ -19068,11 +19084,11 @@ fn redundant_direct_connection_ids(
             direct_connections
                 .iter()
                 .filter_map(|(connection_id, endpoint)| {
-                    let is_outbound = matches!(endpoint, ConnectedPoint::Dialer { .. });
-                    (is_outbound != desired_is_outbound).then_some(*connection_id)
+                    let is_initiator = connection_is_handshake_initiator(endpoint);
+                    (is_initiator != desired_is_initiator).then_some(*connection_id)
                 }),
         );
-        if desired_is_outbound {
+        if desired_is_initiator {
             let latest_desired = desired.iter().max().copied();
             redundant.extend(
                 desired
@@ -19185,8 +19201,7 @@ fn handle_behaviour_event(
     context: &mut BehaviourEventContext<'_>,
     event: BehaviourEvent,
 ) {
-    if let Some(connection_id) = behaviour_event_connection_id(&event)
-        && !context.connection_epochs.is_usable(connection_id)
+    if let Some(connection_id) = stale_behaviour_event_connection(&event, context.connection_epochs)
     {
         log_stale_connection_event("behaviour", connection_id);
         return;
@@ -19396,13 +19411,23 @@ fn handle_behaviour_event(
     }
 }
 
-fn behaviour_event_connection_id(event: &BehaviourEvent) -> Option<ConnectionId> {
-    match event {
+fn stale_behaviour_event_connection(
+    event: &BehaviourEvent,
+    epochs: &ConnectionEpochs,
+) -> Option<ConnectionId> {
+    let connection_id = match event {
         BehaviourEvent::Identify(event) => Some(event.connection_id()),
         BehaviourEvent::Ping(event) => Some(event.connection),
         BehaviourEvent::Dcutr(event) => event.result.as_ref().ok().copied(),
         _ => None,
-    }
+    }?;
+    // DCUtR reports a completed attempt, not authority to reuse its connection.
+    let accepted = if matches!(event, BehaviourEvent::Dcutr(_)) {
+        epochs.is_current(connection_id)
+    } else {
+        epochs.is_usable(connection_id)
+    };
+    (!accepted).then_some(connection_id)
 }
 
 fn ping_failure_requires_connection_close(error: &ping::Failure) -> bool {
@@ -30722,6 +30747,118 @@ mod tests {
         assert!(
             redundant_direct_connection_ids(other, preferred, &nonpreferred_connections, &epochs,)
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn direct_connection_deduplication_agrees_across_hole_punch_roles() {
+        let mut peers = [peer_id(), peer_id()];
+        peers.sort_by_key(|peer| peer.to_bytes());
+        let [preferred, other] = peers;
+        let ordinary = ConnectionId::new_unchecked(1);
+        let punched = ConnectionId::new_unchecked(2);
+        let outbound = |role_override| ConnectedPoint::Dialer {
+            address: "/ip4/127.0.0.1/tcp/4001".parse().expect("address"),
+            role_override,
+            port_use: PortUse::Reuse,
+        };
+        let inbound = ConnectedPoint::Listener {
+            local_addr: "/ip4/127.0.0.1/tcp/4001".parse().expect("local"),
+            send_back_addr: "/ip4/127.0.0.1/tcp/5001".parse().expect("remote"),
+        };
+        let mut epochs = ConnectionEpochs::default();
+        epochs.record_started(ordinary);
+        epochs.record_started(punched);
+        for preferred_role in [Endpoint::Dialer, Endpoint::Listener] {
+            let other_role = match preferred_role {
+                Endpoint::Dialer => Endpoint::Listener,
+                Endpoint::Listener => Endpoint::Dialer,
+            };
+            let a = HashMap::from([
+                ((other, ordinary), outbound(Endpoint::Dialer)),
+                ((other, punched), outbound(preferred_role)),
+            ]);
+            let b = HashMap::from([
+                ((preferred, ordinary), inbound.clone()),
+                ((preferred, punched), outbound(other_role)),
+            ]);
+            let removed_a = redundant_direct_connection_ids(preferred, other, &a, &epochs);
+            let removed_b = redundant_direct_connection_ids(other, preferred, &b, &epochs);
+            let kept_a: HashSet<_> = [ordinary, punched]
+                .into_iter()
+                .filter(|id| !removed_a.contains(id))
+                .collect();
+            let kept_b: HashSet<_> = [ordinary, punched]
+                .into_iter()
+                .filter(|id| !removed_b.contains(id))
+                .collect();
+            assert!(
+                !kept_a.is_disjoint(&kept_b),
+                "both peers must retain a common connection for {preferred_role:?}"
+            );
+            if preferred_role == Endpoint::Listener {
+                assert_eq!(kept_a, HashSet::from([ordinary]));
+                assert_eq!(kept_b, HashSet::from([ordinary]));
+            }
+        }
+    }
+
+    #[test]
+    fn deduplication_initiator_matches_tcp_and_quic_role_realization() {
+        for (address, quic) in [
+            ("/ip4/127.0.0.1/tcp/4001", false),
+            ("/ip4/127.0.0.1/udp/4001/quic-v1", true),
+        ] {
+            for role in [Endpoint::Dialer, Endpoint::Listener] {
+                for port_use in [PortUse::New, PortUse::Reuse] {
+                    let endpoint = ConnectedPoint::Dialer {
+                        address: address.parse().expect("address"),
+                        role_override: role,
+                        port_use,
+                    };
+                    assert_eq!(
+                        connection_is_handshake_initiator(&endpoint),
+                        role == Endpoint::Dialer || (quic && port_use == PortUse::Reuse),
+                        "{endpoint:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn dcutr_success_survives_duplicate_retirement_but_not_network_change() {
+        let peer = peer_id();
+        let id = ConnectionId::new_unchecked(7);
+        let success = BehaviourEvent::Dcutr(dcutr::Event {
+            remote_peer_id: peer,
+            result: Ok(id),
+        });
+        let ping = BehaviourEvent::Ping(ping::Event {
+            peer,
+            connection: id,
+            result: Ok(Duration::from_millis(1)),
+        });
+        let mut epochs = ConnectionEpochs::default();
+        assert_eq!(
+            stale_behaviour_event_connection(&success, &epochs),
+            Some(id)
+        );
+        epochs.record_started(id);
+        epochs.record_established(id);
+        assert_eq!(stale_behaviour_event_connection(&success, &epochs), None);
+        epochs.mark_retiring(id);
+        assert_eq!(
+            stale_behaviour_event_connection(&success, &epochs),
+            None,
+            "retiring a duplicate must not erase a completed hole punch"
+        );
+        assert_eq!(stale_behaviour_event_connection(&ping, &epochs), Some(id));
+        assert!(!epochs.is_usable(id));
+        epochs.advance();
+        assert_eq!(
+            stale_behaviour_event_connection(&success, &epochs),
+            Some(id)
         );
     }
 

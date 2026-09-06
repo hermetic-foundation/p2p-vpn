@@ -224,6 +224,17 @@ exists.
 QUIC and relay stream packets and health probes are pinned to the selected
 connection. A stale connection failure cannot demote a healthy replacement.
 
+Direct-connection deduplication uses the negotiated handshake role. During TCP
+simultaneous open, both sockets are outbound, but one acts as the handshake
+listener. Socket direction alone cannot make both peers choose the same survivor.
+
+With `PortUse::Reuse`, the pinned QUIC transport acts as a client despite a listener
+override. `PortUse::New` selects its listener-side hole-punch path instead.
+
+A DCUtR success for a current-epoch, retiring duplicate remains diagnostic evidence
+of a completed attempt. It does not reactivate the connection. Ping and Identify
+events still require a usable connection; old-epoch success events are discarded.
+
 | Path Kind | Relative Preference |
 | --- | --- |
 | Direct QUIC datagram | highest when negotiated and healthy |

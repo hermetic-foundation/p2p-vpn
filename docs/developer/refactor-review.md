@@ -338,6 +338,43 @@ Retained failure: `/tmp/p2p-vpn-relay-promotion-tun-e2e-732272`. Neither the new
 timeout-retry branch nor stale-response branch ran in that failure trace.
 Inbound handshake ordering and the broader session-ownership audit also remain open.
 
+### Hole-Punch Deduplication Review
+
+Two deterministic defects were found while tracing the relay-promotion failure:
+
+| Defect | Evidence | Correction |
+| --- | --- | --- |
+| Socket direction substitutes for handshake role | Two-peer regression left no common surviving connection during simultaneous open. | Use the transport-realized handshake role; ordinary listeners remain responders. |
+| Duplicate retirement erases completed DCUtR evidence | Success from a current, retiring connection was filtered before metrics/logging. | Accept current-epoch completion evidence without making the connection usable. |
+
+Both regressions failed before their fixes. Existing ordinary-connection
+deduplication checks still pass. Ping/Identify eligibility remains unchanged;
+unknown and old-epoch DCUtR success events remain rejected.
+
+The pinned libp2p core documents role override specifically for simultaneous open.
+Its DCUtR behavior queues success during outbound establishment, so application
+deduplication can retire the connection before that queued result is consumed.
+
+QUIC is tested separately: the pinned transport still dials as a client for
+`PortUse::Reuse`, including listener overrides. Only a listener override with
+`PortUse::New` selects its receive-side hole-punch operation.
+
+| Verification | Result |
+| --- | --- |
+| Offline workspace tests | 1,155 passed; 14 intentionally ignored. |
+| Explicit serial namespace suite | All 11 passed, including relay promotion and network movement. |
+| Additional isolated relay-promotion run | Passed in 22.07 seconds. |
+| Format and whitespace checks | Passed. |
+| Workspace/all-target Clippy | Passed; existing style warnings remain. |
+
+The direct-datagram fixture also needed explicit readiness before its finite ping
+burst. One failure sent the entire burst over TCP before UDP negotiation finished,
+then waited for datagram counters without generating further traffic.
+
+Both direct fixtures now wait for sessions and selected datagram paths on both
+nodes. Traffic and acceptance assertions remain intact. The reproduced defects
+above are fixed; isolated tests do not establish traversal of real public NATs.
+
 ### Update Failure Audit
 
 | Path | Observed Behavior | Follow-up |
