@@ -312,9 +312,14 @@ sudo p2p-vpn daemon-shutdown \
 | Datagram path missing | packet-plane listener, endpoints, direct path. |
 | Public discovery idle | bootstrap peers, Kademlia, AutoNAT status. |
 | Mesh inventory differs | membership record count and sync failure counters. |
+| `membership_sync_history_pressure` in logs | New membership syncs are temporarily delayed; wait for `retry_after_ms`, then inspect repeated `membership_record_sync_failed` events. |
 | Learned routes vanish on restart | membership state path and `membership_state_load_*`. |
 | Overlay name does not resolve | `dns status`, `dns list`, and `resolvectl query`. |
 | DNS conflict | `dns resolve` reports `status=conflict`; use peer fallbacks. |
 | Rejected peer reconnects continuously | `unauthorized_connections_dropped`, `public_routing_peers`, and quarantine journal events. |
 
 See [Network Membership](membership.md) for convergence and state recovery.
+
+Sync-history pressure affects new syncs in that instance, not existing packet
+paths or other instances. Avoid restarting just to clear it; the backoff protects
+against repeated failed membership requests and expires automatically.

@@ -5,6 +5,7 @@ pub mod control_socket;
 pub mod dns;
 pub mod forward;
 pub mod membership_store;
+mod membership_sync_history;
 pub mod p2p;
 pub mod packet;
 pub mod packet_plane;

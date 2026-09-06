@@ -139,6 +139,11 @@ use crate::runtime::tun::IpCommand;
 #[cfg(target_os = "linux")]
 use crate::runtime::tun::TunDevice;
 
+use super::membership_sync_history::MembershipSyncHistory;
+#[cfg(test)]
+use super::membership_sync_history::{
+    CAPACITY as MEMBERSHIP_SYNC_HISTORY_CAPACITY, RETRY_DELAY as MEMBERSHIP_SYNC_RETRY_DELAY,
+};
 use super::recovery_queries::RecoveryQueries;
 #[cfg(test)]
 use super::recovery_queries::{
@@ -153,7 +158,6 @@ const PAIRING_GLOBAL_RATE_MULTIPLIER: u32 = 8;
 const MEMBERSHIP_PAGE_REQUESTS_PER_SECOND: u32 = 256;
 const MAX_CONCURRENT_MEMBERSHIP_SYNCS: usize = 4;
 const MAX_MEMBERSHIP_SYNC_RESTARTS: u8 = 3;
-const MEMBERSHIP_SYNC_RETRY_DELAY: Duration = Duration::from_secs(30);
 const MEMBERSHIP_PROBE_CONNECTION_TTL: Duration = Duration::from_secs(30);
 const MEMBERSHIP_PROBE_QUARANTINE_BASE: Duration = Duration::from_secs(30);
 const MEMBERSHIP_PROBE_QUARANTINE_MAX: Duration = Duration::from_mins(10);
@@ -558,8 +562,7 @@ impl PendingMembershipRecordSync {
 struct MembershipRecordSyncs {
     pending: HashMap<request_response::OutboundRequestId, PendingMembershipRecordSync>,
     active_by_peer: HashMap<Libp2pPeerId, request_response::OutboundRequestId>,
-    completed_snapshots: HashMap<Libp2pPeerId, String>,
-    retry_after: HashMap<Libp2pPeerId, Instant>,
+    history: MembershipSyncHistory,
     checked_policy_revision: Option<(u64, u64)>,
 }
 
@@ -571,14 +574,7 @@ impl MembershipRecordSyncs {
     fn can_start(&self, peer: Libp2pPeerId, snapshot: &str, now: Instant) -> bool {
         self.pending.len() < MAX_CONCURRENT_MEMBERSHIP_SYNCS
             && !self.active_by_peer.contains_key(&peer)
-            && self
-                .completed_snapshots
-                .get(&peer)
-                .is_none_or(|completed| completed != snapshot)
-            && self
-                .retry_after
-                .get(&peer)
-                .is_none_or(|retry_after| now >= *retry_after)
+            && self.history.allows(peer, snapshot, now)
     }
 
     fn insert(
@@ -603,13 +599,23 @@ impl MembershipRecordSyncs {
     }
 
     fn mark_completed(&mut self, peer: Libp2pPeerId, snapshot: String) {
-        self.completed_snapshots.insert(peer, snapshot);
-        self.retry_after.remove(&peer);
+        self.history.mark_completed(peer, snapshot, Instant::now());
     }
 
     fn mark_failed(&mut self, peer: Libp2pPeerId, now: Instant) {
-        self.retry_after
-            .insert(peer, now + MEMBERSHIP_SYNC_RETRY_DELAY);
+        if let Some(deadline) = self.history.mark_failed(peer, now) {
+            log_runtime_event(
+                LogLevel::Warn,
+                "membership_sync_history_pressure",
+                &[(
+                    "retry_after_ms",
+                    &deadline
+                        .saturating_duration_since(now)
+                        .as_millis()
+                        .to_string(),
+                )],
+            );
+        }
     }
 
     fn remove_peer(&mut self, peer: Libp2pPeerId) {
@@ -643,6 +649,8 @@ impl MembershipRecordSyncs {
                 fail_membership_record_sync(self, metrics, pending.peer, "authorization_withdrawn");
             }
         }
+        self.history
+            .retain_peers(|peer| forwarder.authorizes_membership_sync(peer));
         self.checked_policy_revision = Some(revision);
         retired.len()
     }
@@ -34406,7 +34414,7 @@ mod tests {
                 .membership_record_sync_failures,
             1
         );
-        let retry_at = syncs.retry_after[&remote_peer];
+        let retry_at = syncs.history.retry_deadline(remote_peer).unwrap();
         assert!(!syncs.can_start(
             remote_peer,
             "new-snapshot",
@@ -34430,7 +34438,7 @@ mod tests {
         .await;
         assert!(syncs.contains(newer_request));
         assert_eq!(syncs.active_by_peer.get(&remote_peer), Some(&newer_request));
-        assert_eq!(syncs.retry_after[&remote_peer], retry_at);
+        assert_eq!(syncs.history.retry_deadline(remote_peer), Some(retry_at));
         assert_eq!(
             metrics
                 .snapshot(crate::queue::QueueStats::default())
@@ -34518,7 +34526,7 @@ mod tests {
                 "{response_kind}: retired request continued"
             );
             assert!(syncs.active_by_peer.is_empty());
-            assert!(syncs.completed_snapshots.is_empty());
+            assert_eq!(syncs.history.completed_snapshot(remote_peer), None);
             assert_eq!(
                 forwarder.member_records(),
                 retained,
@@ -34591,6 +34599,7 @@ mod tests {
         assert_eq!(syncs.reconcile_authorization(&forwarder, &metrics), 1);
         assert!(syncs.pending.is_empty());
         assert!(syncs.active_by_peer.is_empty());
+        assert_eq!(syncs.history.entry_counts(), (0, 0));
         assert_eq!(syncs.reconcile_authorization(&forwarder, &metrics), 0);
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
         assert_eq!(snapshot.membership_record_sync_failures, 1);
@@ -34629,6 +34638,7 @@ mod tests {
             ControlCapabilities::local("lab", None, 1280).with_membership_record_inventory(&[]);
         let metrics = RuntimeMetrics::default();
         let mut syncs = MembershipRecordSyncs::default();
+        syncs.mark_completed(remote_peer, "older-snapshot".to_owned());
         send_membership_record_sync_request(
             &mut node.swarm,
             &mut syncs,
@@ -34636,6 +34646,7 @@ mod tests {
             PendingMembershipRecordSync::first(remote_peer, &capabilities, &capabilities),
         );
         assert_eq!(syncs.reconcile_authorization(&forwarder, &metrics), 0);
+        assert_eq!(syncs.history.entry_counts(), (1, 0));
         let packet_revision = forwarder.authorization_revision();
         let membership_revision = forwarder.membership_revision();
         config.peers.clear();
@@ -34650,6 +34661,7 @@ mod tests {
         assert_eq!(syncs.reconcile_authorization(&forwarder, &metrics), 1);
         assert!(syncs.pending.is_empty());
         assert!(syncs.active_by_peer.is_empty());
+        assert_eq!(syncs.history.entry_counts(), (0, 0));
         assert_eq!(syncs.reconcile_authorization(&forwarder, &metrics), 0);
         assert_eq!(
             metrics
@@ -34750,8 +34762,8 @@ mod tests {
         assert_eq!(membership.len(), records.len());
         assert!(membership.allows(remote_peer));
         assert_eq!(
-            syncs.completed_snapshots.get(&remote_peer),
-            Some(&membership_records_snapshot(&records))
+            syncs.history.completed_snapshot(remote_peer),
+            Some(membership_records_snapshot(&records).as_str())
         );
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
         assert_eq!(snapshot.membership_record_page_requests_sent, 2);
@@ -34864,7 +34876,7 @@ mod tests {
         assert_eq!(forwarder.member_records(), &records[..3]);
         assert_eq!(membership.len(), 3);
         assert!(syncs.pending.is_empty());
-        assert!(syncs.retry_after.contains_key(&remote_peer));
+        assert!(syncs.history.retry_deadline(remote_peer).is_some());
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
         assert_eq!(snapshot.membership_record_pages_received, 2);
         assert_eq!(snapshot.membership_record_syncs_completed, 0);
@@ -34917,7 +34929,7 @@ mod tests {
         );
 
         assert!(syncs.pending.is_empty());
-        assert!(syncs.completed_snapshots.is_empty());
+        assert_eq!(syncs.history.entry_counts(), (0, 0));
         assert_eq!(
             metrics
                 .snapshot(crate::queue::QueueStats::default())
@@ -35004,7 +35016,7 @@ mod tests {
         );
         let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
         let mut membership = OverlayMembership::from_config(&config).expect("membership");
-        syncs.completed_snapshots.clear();
+        syncs.history = MembershipSyncHistory::default();
         send_membership_record_sync_request(
             &mut node.swarm,
             &mut syncs,
@@ -35052,6 +35064,29 @@ mod tests {
             u64::from(MAX_MEMBERSHIP_SYNC_RESTARTS)
         );
         assert_eq!(snapshot.membership_record_sync_failures, 1);
+    }
+
+    #[test]
+    fn membership_record_sync_bounds_completed_history_across_disconnects() {
+        let mut syncs = MembershipRecordSyncs::default();
+        for _ in 0..=MEMBERSHIP_SYNC_HISTORY_CAPACITY {
+            let peer = peer_id();
+            syncs.mark_completed(peer, "snapshot".to_owned());
+            syncs.remove_peer(peer);
+        }
+        assert!(syncs.history.entry_counts().0 <= MEMBERSHIP_SYNC_HISTORY_CAPACITY);
+    }
+
+    #[test]
+    fn membership_record_sync_bounds_retry_history_across_disconnects() {
+        let mut syncs = MembershipRecordSyncs::default();
+        let now = Instant::now();
+        for _ in 0..=MEMBERSHIP_SYNC_HISTORY_CAPACITY {
+            let peer = peer_id();
+            syncs.mark_failed(peer, now);
+            syncs.remove_peer(peer);
+        }
+        assert!(syncs.history.entry_counts().1 <= MEMBERSHIP_SYNC_HISTORY_CAPACITY);
     }
 
     #[test]

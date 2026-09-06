@@ -6,9 +6,9 @@ Source review at `f026342f`, covering outbound membership paging and its owner
 maps in `src/runtime/runner.rs`. A read-only review agent identified these cases;
 parent inspection confirmed the dispatch order and map retention behavior.
 
-Wrong-type response dispatch and authorization withdrawal are reproduced and
-fixed. History bounds and stale-connection ordering remain open acceptance work,
-not approved deferrals or packet-admission bypass claims.
+Wrong-type response dispatch, authorization withdrawal, and history growth are
+reproduced and fixed. Stale-connection ordering remains open acceptance work,
+not an approved deferral or a packet-admission bypass claim.
 
 ## Resolved: Wrong-Type Response Ownership
 
@@ -55,7 +55,7 @@ was run for this patch; final affected platform gates remain in the acceptance m
 
 The runtime releases application ownership before awaiting another event.
 It does not cancel the underlying libp2p request; a later response cannot resume
-the retired sync. Historical retry and completion maps remain a separate finding.
+the retired sync. Historical retry and completion bounds are covered below.
 
 ### Regression Evidence
 
@@ -79,11 +79,41 @@ new authority guard.
 Logs use `/tmp/p2p-vpn-review-sync-authority-*`. Final Android and VM gates remain
 in the acceptance map; this patch has no protocol or configuration changes.
 
-## Open Findings
+## Resolved: Bounded Sync History
+
+`MembershipSyncHistory` owns completion caching and retry retention in
+`src/runtime/membership_sync_history.rs`. Pending request ownership remains in
+`MembershipRecordSyncs`; no protocol or configuration fields changed.
+
+| State | Bound and Policy |
+| --- | --- |
+| Completed snapshots | 1,024 peers; evict the least recently completed/refreshed entry. Refreshing an existing peer does not evict another. |
+| Per-peer retry deadlines | 1,024 peers; reclaim expired entries before evicting a live deadline. |
+| Overflow deadline | One deadline per network instance covers evicted live retries. New sync admission waits for it; existing packet paths are unaffected. |
+| Reconnect | Disconnect cleanup preserves history, so reconnecting does not erase backoff. |
+| Authorization | Policy reconciliation removes unauthorized completion/retry entries. The shared deadline remains until expiry because it may cover an authorized evicted peer. |
+| Diagnostics | `membership_sync_history_pressure` reports `retry_after_ms` when a live retry entry must be evicted. |
+
+The shared deadline preserves the maximum deadline among evicted retries. Each
+eviction can defer new syncs for at most the existing 30-second retry interval;
+retained peers can still have later individual deadlines.
+
+### Evidence
+
+- Before the fix, both disconnect-churn tests retained 1,025 entries and failed the proposed bound.
+- Six history-owner tests cover refresh, overflow, exact retry boundaries, expired-entry reclamation, and authorization pruning.
+- Runtime tests verify disconnect retention and history cleanup after expiry or static-peer removal.
+- The workspace passes 1,207 tests, with 18 opt-in tests ignored.
+- Namespace code pairing passes in 13.21 seconds; required Clippy groups, formatting, and Nix source parity also pass.
+
+These tests establish entry bounds and retry behavior, not daemon RSS or live
+overload performance. Logs use `/tmp/p2p-vpn-review-sync-history-*`.
+
+## Open Review Gap
 
 | Priority | Finding | Source |
 | --- | --- | --- |
-| P2 | Completed snapshots and retry deadlines lack an explicit retention bound; disconnect cleanup retains both maps. | `MembershipRecordSyncs::mark_completed`, `mark_failed`, `remove_peer` |
+| Unreproduced | Stale-connection filtering precedes membership request retirement. Validate terminal response ordering and owner cleanup. | `handle_control_event`, `request_response_message_is_usable` |
 
 ### Regression Cases
 
@@ -91,8 +121,8 @@ in the acceptance map; this patch has no protocol or configuration changes.
    request ID; verify owner release, retry boundaries, and late-reply isolation.
 2. **Passed:** withdraw remote authority during paging; verify no continuation,
    restart, or merge, plus retirement without a reply and local-recovery preservation.
-3. Cycle distinct peer identities through failure/completion and disconnection.
-   Verify explicit retention bounds while preserving intended reconnect backoff.
+3. **Passed:** cycle peer identities through failure/completion and disconnection;
+   verify entry bounds and preserve backoff for retained and evicted peers.
 4. Deliver a queued response from a retiring connection while another survives.
    Verify stale-event filtering does not strand the request owner.
 
