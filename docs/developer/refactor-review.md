@@ -11,7 +11,7 @@ security audit. Source inspection is distinguished from reproduced behavior.
 | --- | --- | --- |
 | Correctness review | Findings with source references and disposition | In progress |
 | Authorization consistency | Shared policy and cross-consumer regression tests | In progress |
-| Runtime ownership | Cohesive state owners and testable recovery decisions | Pending |
+| Runtime ownership | Cohesive state owners and testable recovery decisions | In progress |
 | Operational verification | Restart, revocation, minimal LAN/relay recovery, isolation | Pending |
 | Resource behavior | Comparable idle CPU, memory, connection, and retry measurements | Pending |
 | Documentation | Architecture and user instructions match verified behavior | Pending |
@@ -87,8 +87,9 @@ inventory ordering now use its local eligibility and static/signed precedence.
 
 Forwarding derives the packet allowlist from its transport-peer map, eliminating
 one repeated ledger evaluation per construction, merge, and configuration update.
-Record evaluation is still repeated between routes and other runtime consumers;
-consolidating the evaluated snapshot remains part of the ownership work.
+Forwarding now also shares one evaluated ledger between route compilation and
+transport admission. Other runtime consumers still evaluate independently;
+cross-runtime snapshot ownership remains part of the review.
 
 New policy tests cover unknown versus configured identities, exact grant expiry,
 and local expiry/resignation without erasing surviving network membership.
@@ -254,20 +255,86 @@ No absence-of-bug claim follows from these partial inspections.
 Each change must have one reviewable purpose and an atomic Conventional Commit.
 Push each verified commit to `main`; preserve user changes and wire/config formats.
 
-### Next Ownership Milestone
+### Forwarding Snapshot Milestone
 
-Consolidate the evaluated membership snapshot before extracting more runtime handlers.
+`ForwardingAuthorization` groups routes, transport IDs, and packet admission.
+Construction, membership merge, and prepared reconfiguration each build a complete
+replacement from one evaluated ledger and timestamp before mutating live state.
 
-| Boundary | Required Work |
+| Boundary | Result or Remaining Work |
 | --- | --- |
-| Evaluation | Share one ledger evaluation and timestamp across route compilation and transport authorization. |
-| Forwarder state | Group derived routes, transport IDs, and packet admission into one replaceable snapshot. |
-| Prepared updates | Audit `ForwarderUpdate` provenance and stale-update behavior before changing commit semantics. |
-| Revision handling | Distinguish ledger changes from expiry-driven effective changes and configuration updates. |
-| Regression tests | Failed preparation preserves the old snapshot; expiry and revocation change every derived view together. |
+| Evaluation | One ledger evaluation feeds both forwarding routes and transport authorization. |
+| Forwarder state | One private snapshot replaces derived authority; history and replay state remain separate. |
+| Prepared updates | Runtime call sites prepare and commit synchronously; no intervening forwarder mutation was found. |
+| Revision handling | Merge still detects history or effective-authority changes; reconfiguration retains its existing history-change rule. |
+| Regression tests | Failed preparation preserves forwarding; local/remote expiry removes routes and packet authority together. |
 
 Keep existing public constructors and serialized contracts. Do not equate an audit
 entry with operational authority or erase history to simplify the snapshot.
+
+`ForwarderUpdate` remains a replacement, not a merge or generation-checked token.
+The public API does not prevent callers from committing a stale or foreign update.
+Runtime callers do not do this; changing that contract needs separate design and
+coverage rather than silently ignoring updates in this refactor.
+
+Remaining ownership work includes sharing evaluation with TUN/runtime membership,
+reviewing revision consumers, and extracting recovery decisions and timer effects.
+
+### Snapshot Validation and Recovery Finding
+
+| Check | Result |
+| --- | --- |
+| Forwarder tests | 47 passed, including failed preparation and exact local/remote expiry. |
+| Workspace | 1,151 passed; 14 ignored. |
+| Required Clippy groups and formatting | Passed; existing style warnings remain. |
+| Serial namespace suite | 10 passed; network-move recovery failed. |
+| Isolated network-move repeat | Failed at the outer 90-second deadline. |
+| Unchanged `95bbcb44` comparison | Also failed at the outer 90-second deadline. |
+
+The suite failure timed out restoring `direct_udp_datagram` after relay fallback.
+The last state retained a selected relay and an unconfirmed UDP path. Later log
+entries reported UDP promotion. The isolated changed and baseline runs also showed
+pending-hello expiry followed by delayed renegotiation.
+
+Retained local evidence:
+
+- `/tmp/p2p-vpn-network-move-tun-e2e-712261`: changed full-suite failure and daemon snapshots.
+- `/tmp/p2p-vpn-network-move-tun-e2e-717537`: unchanged-baseline timeout and node logs.
+
+This is an unresolved, reproduced recovery-test failure, not a waived gate or
+proof of a production outage. The fixture forces three-second session lifetimes;
+probe scheduling and handshake retry ownership need deterministic investigation.
+Do not increase deadlines merely to conceal this behavior.
+
+### Update Failure Audit
+
+| Path | Observed Behavior | Follow-up |
+| --- | --- | --- |
+| Prepared pairing/revocation | Install routes before committing forwarding and runtime membership. | Preserve failed-preparation and route rollback coverage. |
+| Expiry timer | Refresh forwarding first; TUN reconciliation errors propagate out of the runtime. | Test supervisor restart and persisted expiry behavior. |
+| Revision consumers | DNS refresh and membership persistence use the same revision counter. | Review whether effective-only changes need separate dirty tracking. |
+
+The expiry path consumes its pending-change flag before installing routes, but
+the caller exits on error. Source inspection does not establish a stale-authority
+retry defect: no in-process retry occurs on that path today.
+
+### Next Recovery Review Target: Address Retention
+
+`DiscoveredPeerAddresses::insert_at` (`runner.rs:8899` at this milestone) appends
+each distinct peer/address pair without an entry cap. Entries have a one-hour
+TTL. The admission path restricts retained entries to authorized overlay peers,
+but that does not bound repeated address changes from an authorized peer.
+
+| State | Current Bound |
+| --- | --- |
+| Recovery dial attempts | Explicit maximum and periodic pruning |
+| Recovery discovery queries | Explicit total and concurrent maxima |
+| Retained discovered addresses | TTL only; no total or per-peer entry limit found |
+
+Next: reproduce repeated-address growth through admission, then design bounded
+retention that preserves fresh LAN candidates and relay recovery. Include address
+bytes, per-peer fairness, rejection metrics, and downstream Kademlia/AutoNAT effects.
+This is source-review evidence, not a measured memory-exhaustion reproduction.
 
 ## Verification and Resource Plan
 

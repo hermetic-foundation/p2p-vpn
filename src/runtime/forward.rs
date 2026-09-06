@@ -16,9 +16,9 @@ use crate::{
     },
     identity::NodeIdentity,
     membership::{
-        MAX_MEMBERSHIP_RECORDS, MembershipRecordError, MembershipRecordMergeStats,
-        SignedMembershipRecord, effective_membership_at, membership_trust_anchors,
-        merge_membership_records_at,
+        EffectiveMembership, MAX_MEMBERSHIP_RECORDS, MembershipRecordError,
+        MembershipRecordMergeStats, SignedMembershipRecord, effective_membership_at,
+        membership_trust_anchors, merge_membership_records_at,
     },
     queue::{EnqueueError, Packet, PeerQueues},
     route::{IpCidr, RouteError, RouteTable},
@@ -36,9 +36,7 @@ pub struct Forwarder {
     config: Config,
     member_records: Vec<SignedMembershipRecord>,
     hostname_records: Vec<SignedHostnameRecord>,
-    routes: RouteTable,
-    peers: HashMap<PeerId, Libp2pPeerId>,
-    authorized_peers: AuthorizedPeers,
+    authorization: ForwardingAuthorization,
     membership_revision: u64,
     membership_effective_refresh_pending: bool,
     replay_windows: HashMap<(PeerId, SessionId), ReplayWindow>,
@@ -53,10 +51,34 @@ pub struct Forwarder {
 pub struct ForwarderUpdate {
     config: Config,
     member_records: Vec<SignedMembershipRecord>,
+    authorization: ForwardingAuthorization,
+    mtu: usize,
+}
+
+// Replace derived forwarding authority together; retained history is not admission state.
+#[derive(Debug, PartialEq, Eq)]
+struct ForwardingAuthorization {
     routes: RouteTable,
     peers: HashMap<PeerId, Libp2pPeerId>,
     authorized_peers: AuthorizedPeers,
-    mtu: usize,
+}
+
+impl ForwardingAuthorization {
+    fn from_records(
+        config: &Config,
+        records: &[SignedMembershipRecord],
+        now_unix_seconds: u64,
+    ) -> Result<Self, ConfigError> {
+        let membership = effective_membership_at(records, &config.network.name, now_unix_seconds)?;
+        let routes = config.compile_routes_with_membership(&membership)?;
+        let peers = transport_peers_from_membership(config, &membership)?;
+        let authorized_peers = authorized_peers_from_transport_peers(&peers);
+        Ok(Self {
+            routes,
+            peers,
+            authorized_peers,
+        })
+    }
 }
 
 const REPLAY_WINDOW_BITS: u64 = 64;
@@ -131,19 +153,15 @@ impl Forwarder {
         let now_unix_seconds = current_unix_seconds_lossy();
 
         let local_peer = config.local_peer_id()?;
-        let peers =
-            transport_peers_from_config_and_records(config, &member_records, now_unix_seconds)?;
-        let authorized_peers = authorized_peers_from_transport_peers(&peers);
+        let authorization =
+            ForwardingAuthorization::from_records(config, &member_records, now_unix_seconds)?;
 
         Ok(Self {
             local_peer,
             config: config.clone(),
-            member_records: member_records.clone(),
+            member_records,
             hostname_records: Vec::new(),
-            routes: config
-                .compile_routes_with_member_records_at(&member_records, now_unix_seconds)?,
-            peers,
-            authorized_peers,
+            authorization,
             membership_revision: 0,
             membership_effective_refresh_pending: false,
             replay_windows: HashMap::new(),
@@ -193,6 +211,7 @@ impl Forwarder {
         peer_mtu: u16,
     ) -> Result<request_response::OutboundRequestId, ForwardError> {
         let peer = self
+            .authorization
             .peers
             .get(&packet.peer())
             .ok_or(ForwardError::NoTransportPeer(packet.peer()))?;
@@ -219,15 +238,18 @@ impl Forwarder {
 
     #[must_use]
     pub fn is_configured_transport_peer(&self, peer: Libp2pPeerId) -> bool {
-        self.peers.values().any(|configured| *configured == peer)
+        self.authorization
+            .peers
+            .values()
+            .any(|configured| *configured == peer)
     }
 
     pub fn configured_overlay_peers(&self) -> impl Iterator<Item = PeerId> + '_ {
-        self.peers.keys().copied()
+        self.authorization.peers.keys().copied()
     }
 
     pub fn configured_transport_peers(&self) -> impl Iterator<Item = Libp2pPeerId> + '_ {
-        self.peers.values().copied()
+        self.authorization.peers.values().copied()
     }
 
     pub fn merge_membership_records(
@@ -290,26 +312,15 @@ impl Forwarder {
             trusted_issuers,
             MAX_RETAINED_MEMBERSHIP_RECORDS,
         )?;
-        let routes = self
-            .config
-            .compile_routes_with_member_records_at(&member_records, now_unix_seconds)?;
-        let peers = transport_peers_from_config_and_records(
-            &self.config,
-            &member_records,
-            now_unix_seconds,
-        )?;
-        let authorized_peers = authorized_peers_from_transport_peers(&peers);
+        let authorization =
+            ForwardingAuthorization::from_records(&self.config, &member_records, now_unix_seconds)?;
         let records_changed = member_records != self.member_records;
-        let effective_changed = routes != self.routes
-            || peers != self.peers
-            || authorized_peers != self.authorized_peers;
+        let effective_changed = authorization != self.authorization;
         if records_changed || effective_changed {
             self.membership_revision = self.membership_revision.wrapping_add(1);
         }
         self.membership_effective_refresh_pending |= effective_changed;
-        self.peers = peers;
-        self.routes = routes;
-        self.authorized_peers = authorized_peers;
+        self.authorization = authorization;
         self.member_records = member_records;
         Ok(stats)
     }
@@ -381,19 +392,14 @@ impl Forwarder {
         }
 
         let member_records = config.network.member_records.clone();
-        let routes =
-            config.compile_routes_with_member_records_at(&member_records, now_unix_seconds)?;
-        let peers =
-            transport_peers_from_config_and_records(&config, &member_records, now_unix_seconds)?;
-        let authorized_peers = authorized_peers_from_transport_peers(&peers);
+        let authorization =
+            ForwardingAuthorization::from_records(&config, &member_records, now_unix_seconds)?;
         let mtu = usize::from(config.effective_packet_mtu());
 
         Ok(ForwarderUpdate {
             config,
             member_records,
-            routes,
-            peers,
-            authorized_peers,
+            authorization,
             mtu,
         })
     }
@@ -404,9 +410,7 @@ impl Forwarder {
         }
         self.config = update.config;
         self.member_records = update.member_records;
-        self.routes = update.routes;
-        self.peers = update.peers;
-        self.authorized_peers = update.authorized_peers;
+        self.authorization = update.authorization;
         self.membership_effective_refresh_pending = false;
         self.mtu = update.mtu;
     }
@@ -474,19 +478,21 @@ impl Forwarder {
 
     #[must_use]
     pub fn transport_peer_for_overlay(&self, peer: PeerId) -> Option<Libp2pPeerId> {
-        self.peers.get(&peer).copied()
+        self.authorization.peers.get(&peer).copied()
     }
 
     #[must_use]
     pub fn local_advertised_routes(&self) -> Vec<ControlRoute> {
-        self.routes
+        self.authorization
+            .routes
             .routes_for(self.local_peer)
             .map(|route| ControlRoute::new(route.prefix.to_string(), route.metric))
             .collect()
     }
 
     pub fn local_advertised_route_prefixes(&self) -> impl Iterator<Item = IpCidr> + '_ {
-        self.routes
+        self.authorization
+            .routes
             .routes_for(self.local_peer)
             .map(|route| route.prefix)
     }
@@ -507,7 +513,7 @@ impl Forwarder {
                 return false;
             };
 
-            self.routes.authorizes_route(owner, prefix)
+            self.authorization.routes.authorizes_route(owner, prefix)
         })
     }
 
@@ -527,6 +533,7 @@ impl Forwarder {
         payload: &[u8],
     ) -> Result<request_response::OutboundRequestId, ForwardError> {
         let transport_peer = self
+            .authorization
             .peers
             .get(&peer)
             .copied()
@@ -574,10 +581,11 @@ impl Forwarder {
 
         let destination = packet_destination(&packet)?;
         let route = self
+            .authorization
             .routes
             .resolve(destination)
             .ok_or(ForwardError::NoRoute(destination))?;
-        if !self.peers.contains_key(&route.owner) {
+        if !self.authorization.peers.contains_key(&route.owner) {
             return Err(ForwardError::NoTransportPeer(route.owner));
         }
         let sequence = self.next_sequence;
@@ -587,7 +595,8 @@ impl Forwarder {
     }
 
     fn authorize_local_source(&self, source: IpAddr) -> Result<(), ForwardError> {
-        self.routes
+        self.authorization
+            .routes
             .authorize_source(self.local_peer, source)
             .map_err(|_| ForwardError::UnauthorizedLocalSource { source })
     }
@@ -601,7 +610,9 @@ impl Forwarder {
 
         let overlay_peer = PeerId::from_libp2p(peer);
         let source = packet_source(&frame.payload)?;
-        self.routes.authorize_source(overlay_peer, source)?;
+        self.authorization
+            .routes
+            .authorize_source(overlay_peer, source)?;
         let destination = packet_destination(&frame.payload)?;
         self.authorize_local_destination(destination)?;
         self.accept_sequence(overlay_peer, frame.header.session_id, frame.header.sequence)?;
@@ -617,7 +628,9 @@ impl Forwarder {
         self.validate_inbound_frame_metadata(peer, frame, PayloadType::IpPacket)?;
         let overlay_peer = PeerId::from_libp2p(peer);
         let source = packet_source(&frame.payload)?;
-        self.routes.authorize_source(overlay_peer, source)?;
+        self.authorization
+            .routes
+            .authorize_source(overlay_peer, source)?;
         let destination = packet_destination(&frame.payload)?;
         self.authorize_local_destination(destination)?;
 
@@ -653,7 +666,7 @@ impl Forwarder {
         frame: &Frame,
         expected_payload_type: PayloadType,
     ) -> Result<(), ForwardError> {
-        if !self.authorized_peers.allows(&peer) {
+        if !self.authorization.authorized_peers.allows(&peer) {
             return Err(ForwardError::UnauthorizedPeer(peer));
         }
         if frame.header.payload_type != expected_payload_type {
@@ -738,7 +751,8 @@ impl Forwarder {
     }
 
     fn authorize_local_destination(&self, destination: IpAddr) -> Result<(), ForwardError> {
-        self.routes
+        self.authorization
+            .routes
             .authorize_source(self.local_peer, destination)
             .map_err(|_| ForwardError::UnauthorizedLocalDestination { destination })
     }
@@ -755,14 +769,11 @@ impl Forwarder {
     }
 }
 
-fn transport_peers_from_config_and_records(
+fn transport_peers_from_membership(
     config: &Config,
-    member_records: &[SignedMembershipRecord],
-    now_unix_seconds: u64,
+    effective: &EffectiveMembership,
 ) -> Result<HashMap<PeerId, Libp2pPeerId>, ConfigError> {
     let local_peer = config.local_peer_id()?;
-    let effective =
-        effective_membership_at(member_records, &config.network.name, now_unix_seconds)?;
     let mut peers = HashMap::new();
     let authorization = effective.authorization_for(local_peer);
     for peer in &config.peers {
@@ -1673,6 +1684,98 @@ mod tests {
         assert_eq!(forwarder.session_id, original_session);
         assert_eq!(forwarder.next_sequence, 41);
         assert_eq!(forwarder.replay_window_count(), 1);
+    }
+
+    #[test]
+    fn failed_reconfigure_preserves_forwarding_authority_and_revision() {
+        let remote = Keypair::generate_ed25519().public().to_peer_id();
+        let config = config_for(remote);
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut next = config.clone();
+        next.peers[0].routes.push(RouteConfig {
+            prefix: "invalid-prefix".to_owned(),
+            metric: 0,
+        });
+        assert!(forwarder.prepare_reconfigure(next, 1_000).is_err());
+        assert_eq!(forwarder.config(), &config);
+        assert_eq!(forwarder.membership_revision(), 0);
+        assert!(forwarder.is_configured_transport_peer(remote));
+        let remote_ip = builtin_ipv4(PeerId::from_libp2p(remote));
+        assert!(
+            forwarder
+                .prepare_tun_packet(ipv4_packet(local_ipv4(&config), remote_ip))
+                .is_ok()
+        );
+        let frame =
+            Frame::packet(1, 1, ipv4_packet(remote_ip, local_ipv4(&config))).expect("frame");
+        assert!(forwarder.accept_inbound_packet(remote, &frame).is_ok());
+    }
+
+    #[test]
+    fn expiry_replaces_routes_transport_and_packet_authority_together() {
+        for expire_local in [false, true] {
+            let local = NodeIdentity::generate_ed25519().expect("local");
+            let remote = NodeIdentity::generate_ed25519().expect("remote");
+            let transport = remote.peer_id.parse::<Libp2pPeerId>().expect("remote peer");
+            let remote_ip = builtin_ipv4(PeerId::from_libp2p(transport));
+            let mut config = config_for(transport);
+            config.network.local_peer = local.peer_id.clone();
+            config.network.private_key = Some(local.private_key.clone());
+            let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+            for (member, expires) in [(local.clone(), expire_local), (remote, !expire_local)] {
+                config.network.member_records.push(
+                    issue_membership_record_at(
+                        &local,
+                        MembershipRecordOptions {
+                            network_name: "lab".to_owned(),
+                            member,
+                            membership_epoch: 1,
+                            sequence: 1,
+                            roles: vec![MembershipRole::OverlayMember],
+                            route_grants: Vec::new(),
+                            expires_at_unix_seconds: expires.then_some(1_100),
+                        },
+                        1_000,
+                    )
+                    .expect("record"),
+                );
+            }
+            let update = forwarder
+                .prepare_reconfigure(config.clone(), 1_099)
+                .expect("update");
+            forwarder.commit_reconfigure(update);
+            let revision = forwarder.membership_revision();
+            let advertised = [ControlRoute::new(format!("{remote_ip}/32"), 0)];
+            assert!(forwarder.authorizes_advertised_routes(transport, &advertised));
+            let outbound = ipv4_packet(local_ipv4(&config), remote_ip);
+            assert!(forwarder.prepare_tun_packet(outbound.clone()).is_ok());
+            let frame =
+                Frame::packet(1, 1, ipv4_packet(remote_ip, local_ipv4(&config))).expect("frame");
+            assert!(forwarder.accept_inbound_packet(transport, &frame).is_ok());
+
+            let (_, changed) = forwarder.refresh_membership_records(1_100).expect("expiry");
+            assert!(changed);
+            assert_eq!(forwarder.membership_revision(), revision.wrapping_add(1));
+            assert_eq!(forwarder.member_records(), config.network.member_records);
+            assert!(!forwarder.is_configured_transport_peer(transport));
+            assert!(!forwarder.authorizes_advertised_routes(transport, &advertised));
+            assert!(matches!(
+                forwarder.prepare_tun_packet(outbound),
+                Err(ForwardError::NoRoute(_))
+            ));
+            let frame =
+                Frame::packet(1, 2, ipv4_packet(remote_ip, local_ipv4(&config))).expect("frame");
+            assert!(
+                matches!(forwarder.accept_inbound_packet(transport, &frame), Err(ForwardError::UnauthorizedPeer(peer)) if peer == transport)
+            );
+            assert!(
+                !forwarder
+                    .refresh_membership_records(1_100)
+                    .expect("stable refresh")
+                    .1
+            );
+            assert_eq!(forwarder.membership_revision(), revision.wrapping_add(1));
+        }
     }
 
     #[test]

@@ -89,6 +89,15 @@ impl Config {
         member_records: &[SignedMembershipRecord],
         now_unix_seconds: u64,
     ) -> Result<RouteTable, ConfigError> {
+        let membership =
+            effective_membership_at(member_records, &self.network.name, now_unix_seconds)?;
+        self.compile_routes_with_membership(&membership)
+    }
+
+    pub(crate) fn compile_routes_with_membership(
+        &self,
+        membership: &EffectiveMembership,
+    ) -> Result<RouteTable, ConfigError> {
         let mut table = RouteTable::new();
         let local_peer = self.local_peer_id()?;
         table.insert_authorized(Route {
@@ -116,9 +125,7 @@ impl Config {
             })?;
         }
 
-        let effective_membership =
-            effective_membership_at(member_records, &self.network.name, now_unix_seconds)?;
-        let authorization = effective_membership.authorization_for(local_peer);
+        let authorization = membership.authorization_for(local_peer);
         for peer in &self.peers {
             let owner = peer.peer_id()?;
             if !authorization.authorizes_configured_peer(owner) {

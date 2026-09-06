@@ -93,7 +93,10 @@ The effective state for each member is ordered by:
 
 Merge runs transactionally against a cloned record set.
 
-The forwarder commits routes, peers, and authorization only after validation succeeds.
+The forwarder builds one private authorization snapshot from a single evaluated
+ledger and timestamp. Routes, transport IDs, and packet admission are replaced
+together only after validation succeeds. Retained history and packet replay state
+are owned separately; rejected preparation leaves live forwarding unchanged.
 
 | Comparison | Result |
 | --- | --- |
