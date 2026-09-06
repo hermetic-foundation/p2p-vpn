@@ -6473,6 +6473,7 @@
               ''
                 artifact_dir="$TMPDIR/debug-bundle"
                 cd ${./.}
+                bash tests/debug-bundle/privacy.sh
                 P2P_VPN_DEBUG_BUNDLE_DIR="$artifact_dir" p2p-vpn-debug-bundle > "$TMPDIR/stdout" 2> "$TMPDIR/stderr"
                 test -s "$artifact_dir/debug-summary.json"
                 jq -e '.schema_version == 1 and .artifacts.daemon_packet_plane_summary != null' "$artifact_dir/debug-summary.json"

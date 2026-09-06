@@ -6,6 +6,10 @@ Capture artifacts before changing the environment.
 
 ## Debug Bundle
 
+Process arguments are excluded because they can contain pairing codes.
+Bundles still contain hostnames, addresses, routes, paths, and optional daemon
+state or check output. Review them before sharing; they are not anonymized.
+
 ```sh
 nix run .#debug-bundle
 ```

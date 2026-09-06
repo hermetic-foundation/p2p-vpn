@@ -80,8 +80,8 @@ capture_host() {
     echo "[ss -lunpt]"
     ss -lunpt || true
     echo
-    echo "[ps -o pid,ppid,stat,comm,args -C p2p-vpn]"
-    ps -o pid,ppid,stat,comm,args -C p2p-vpn || true
+    echo "[ps -o pid,ppid,stat,comm -C p2p-vpn]"
+    ps -o pid,ppid,stat,comm -C p2p-vpn || true
   } >"$host" 2>&1
 }
 
