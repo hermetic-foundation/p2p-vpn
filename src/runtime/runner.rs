@@ -40089,6 +40089,22 @@ mod tests {
             let latest_connection = ConnectionId::new_unchecked(42);
             let mut paths = PathSet::new();
             for connection_id in [first_connection, latest_connection] {
+                let endpoint = libp2p::core::ConnectedPoint::Listener {
+                    local_addr: "/memory/1".parse().unwrap(),
+                    send_back_addr: "/memory/2".parse().unwrap(),
+                };
+                libp2p::swarm::NetworkBehaviour::on_swarm_event(
+                    &mut node.swarm.behaviour_mut().pinned_packet_stream,
+                    libp2p::swarm::FromSwarm::ConnectionEstablished(
+                        libp2p::swarm::behaviour::ConnectionEstablished {
+                            peer_id: remote,
+                            connection_id,
+                            endpoint: &endpoint,
+                            failed_addresses: &[],
+                            other_established: 0,
+                        },
+                    ),
+                );
                 paths.record_established_with_details(
                     remote_overlay,
                     path_kind,

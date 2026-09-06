@@ -11,7 +11,7 @@ inspection. These findings do not establish the cause of the retained Android
 | Priority | Finding | Source |
 | --- | --- | --- |
 | P2 | Direct-TCP dispatch ignored selected connection; reproduced and corrected | Original: `src/runtime/runner.rs:9904`, `src/runtime/forward.rs:280` |
-| P2 | Pinned-stream connection closure has no terminal request event | `src/runtime/pinned_packet_stream.rs:165`, `:234` |
+| P2 | Pinned-stream connection closure lacked terminal request events; corrected with lifecycle regressions | Original: `src/runtime/pinned_packet_stream.rs:165`, `:234` |
 
 ### Direct TCP Selection
 
@@ -51,8 +51,8 @@ notifications but does not establish those synthetic connections over sockets.
 ### Pinned Closure
 
 The pinned behaviour owns queued notifications, while its connection handler
-owns pending frames. `on_swarm_event` currently ignores connection closure;
-destroying a handler can discard pending requests without outbound-failure events.
+owns pending frames. Previously, `on_swarm_event` ignored connection closure;
+destroying a handler could discard requests without outbound-failure events.
 
 Required regression: close a connection with queued and in-progress requests.
 Each request must get exactly one terminal outcome; unaffected connections must
@@ -61,6 +61,55 @@ retain their requests. Include closure before handler notification is delivered.
 This is not a promise to retransmit every lost IP packet. Distinguish definitely
 unsent frames from ambiguous delivery before considering requeue; preserve
 bounded memory, duplicate protection, and accurate drop accounting.
+
+#### Correction and Evidence
+
+The behaviour now tracks request ID, peer, and connection ownership separately
+from payloads. Closure removes queued notifications for that connection and
+emits one outbound failure for each outstanding request, including handler-owned work.
+
+- Matching success or failure removes ownership before queuing its terminal event.
+- Duplicate, late, wrong-peer, and wrong-connection terminal events are ignored.
+- Already-queued terminal outcomes and requests on other connections survive closure.
+- Unknown, closed, and wrong-peer targets fail without retaining request ownership.
+- Existing framing, failure variants, and retransmission semantics are unchanged.
+
+`closure_completes_queued_and_delivered_requests_once` reproduced a notification
+targeting the closed connection before the fix. It now covers queued dispatch
+and a real handler emitting an outbound upgrade request before being dropped.
+
+`terminal_events_require_exact_owner_and_survive_later_closure` covers success
+and failure, mismatched owners, duplicates, and closure before terminal delivery.
+These are deterministic lifecycle tests, not socket-level race or formal proofs.
+
+- Workspace: 1,219 tests passed; 18 opt-in tests ignored.
+- Required Clippy groups and changed-file Rust formatting passed.
+- All 11 namespace scenarios passed on final code in 187.50 seconds.
+- Nix `rust-test-sources` passed with offline, single-job execution.
+- Logs: `/tmp/p2p-vpn-review-closure-*`.
+- Rebuilt Android recovery validation remains outstanding; no loss-causality claim follows from these checks.
+
+#### Remaining Resource Review
+
+Ownership holds metadata only, with logarithmic insertion/removal and linear
+closure scanning. Established-connection events govern admission, preventing
+orphan ownership when callers target nonexistent or already-closed connections.
+
+Runtime packet windows constrain normal admission. Independent hard bounds
+for public-behaviour callers and handler overload still need review, including
+queue residence before the existing ten-second outbound upgrade timeout.
+
+`src/runtime/p2p.rs` passes `max_concurrent_packet_streams` to the request-response
+packet behaviour, but constructs the pinned behaviour with MTU only. Verify and
+enforce the corresponding limits for pinned inbound/outbound work next.
+
+Next resource-bound checks:
+
+1. Apply the existing packet-stream limit to pinned admission without new required configuration.
+2. Bound pending frames, retained inbound streams, and concurrent response writes.
+3. Cover timeout, overload, closure, and capacity reuse with deterministic tests.
+4. Verify stale response filtering releases runtime in-flight accounting without promoting closed paths.
+5. Measure queue/ownership retention and rerun recovery scenarios under saturation.
 
 ## Implementation Plan
 

@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{BTreeMap, HashMap, VecDeque},
     fmt, io,
     task::{Context, Poll},
     time::Duration,
@@ -84,6 +84,8 @@ pub struct ResponseChannel {
 pub struct Behaviour {
     max_payload_len: usize,
     next_outbound_request_id: u64,
+    connections: BTreeMap<ConnectionId, PeerId>,
+    outbound_owners: BTreeMap<u64, (PeerId, ConnectionId)>,
     pending_events: VecDeque<ToSwarm<Event, HandlerCommand>>,
 }
 
@@ -93,6 +95,8 @@ impl Behaviour {
         Self {
             max_payload_len,
             next_outbound_request_id: 1,
+            connections: BTreeMap::new(),
+            outbound_owners: BTreeMap::new(),
             pending_events: VecDeque::new(),
         }
     }
@@ -105,6 +109,18 @@ impl Behaviour {
     ) -> RequestId {
         let request_id = RequestId(self.next_outbound_request_id);
         self.next_outbound_request_id = self.next_outbound_request_id.wrapping_add(1).max(1);
+        if self.connections.get(&connection_id) != Some(&peer) {
+            self.pending_events
+                .push_back(ToSwarm::GenerateEvent(Event::OutboundFailure {
+                    peer,
+                    connection_id,
+                    request_id,
+                    error: Failure::Io("connection is not established".to_owned()),
+                }));
+            return request_id;
+        }
+        self.outbound_owners
+            .insert(request_id.0, (peer, connection_id));
         self.pending_events.push_back(ToSwarm::NotifyHandler {
             peer_id: peer,
             handler: NotifyHandler::One(connection_id),
@@ -162,7 +178,41 @@ impl NetworkBehaviour for Behaviour {
         Ok(Handler::new(peer, connection_id, self.max_payload_len))
     }
 
-    fn on_swarm_event(&mut self, _event: FromSwarm) {}
+    fn on_swarm_event(&mut self, event: FromSwarm) {
+        if let FromSwarm::ConnectionEstablished(established) = event {
+            self.connections
+                .insert(established.connection_id, established.peer_id);
+            return;
+        }
+        let FromSwarm::ConnectionClosed(closed) = event else {
+            return;
+        };
+        if self.connections.get(&closed.connection_id) != Some(&closed.peer_id) {
+            return;
+        }
+        self.connections.remove(&closed.connection_id);
+        let owner = (closed.peer_id, closed.connection_id);
+        self.pending_events.retain(|event| {
+            !matches!(event, ToSwarm::NotifyHandler {
+                peer_id, handler: NotifyHandler::One(connection_id), ..
+            } if (*peer_id, *connection_id) == owner)
+        });
+        // Handlers disappear on closure, including requests already handed to them.
+        // Retain only ownership metadata here, never another copy of the payload.
+        self.outbound_owners.retain(|id, request_owner| {
+            if *request_owner != owner {
+                return true;
+            }
+            self.pending_events
+                .push_back(ToSwarm::GenerateEvent(Event::OutboundFailure {
+                    peer: closed.peer_id,
+                    connection_id: closed.connection_id,
+                    request_id: RequestId(*id),
+                    error: Failure::Io("connection closed".to_owned()),
+                }));
+            false
+        });
+    }
 
     fn on_connection_handler_event(
         &mut self,
@@ -170,6 +220,14 @@ impl NetworkBehaviour for Behaviour {
         connection_id: ConnectionId,
         event: HandlerEvent,
     ) {
+        if let HandlerEvent::OutboundResponse { request_id, .. }
+        | HandlerEvent::OutboundFailure { request_id, .. } = &event
+        {
+            if self.outbound_owners.get(&request_id.0) != Some(&(peer, connection_id)) {
+                return;
+            }
+            self.outbound_owners.remove(&request_id.0);
+        }
         match event {
             HandlerEvent::InboundRequest { request_id, frame } => {
                 self.pending_events
@@ -551,6 +609,205 @@ mod tests {
 
     use super::*;
 
+    fn establish_connection(behaviour: &mut Behaviour, peer: PeerId, connection_id: ConnectionId) {
+        let endpoint = libp2p::core::ConnectedPoint::Listener {
+            local_addr: "/memory/1".parse().unwrap(),
+            send_back_addr: "/memory/2".parse().unwrap(),
+        };
+        behaviour.on_swarm_event(FromSwarm::ConnectionEstablished(
+            libp2p::swarm::behaviour::ConnectionEstablished {
+                peer_id: peer,
+                connection_id,
+                endpoint: &endpoint,
+                failed_addresses: &[],
+                other_established: 0,
+            },
+        ));
+    }
+
+    fn close_connection(behaviour: &mut Behaviour, peer: PeerId, connection_id: ConnectionId) {
+        let endpoint = libp2p::core::ConnectedPoint::Listener {
+            local_addr: "/memory/1".parse().unwrap(),
+            send_back_addr: "/memory/2".parse().unwrap(),
+        };
+        behaviour.on_swarm_event(FromSwarm::ConnectionClosed(
+            libp2p::swarm::behaviour::ConnectionClosed {
+                peer_id: peer,
+                connection_id,
+                endpoint: &endpoint,
+                cause: None,
+                remaining_established: 1,
+            },
+        ));
+    }
+
+    #[test]
+    fn unavailable_targets_fail_without_retaining_ownership() {
+        let peer = Keypair::generate_ed25519().public().to_peer_id();
+        let stranger = Keypair::generate_ed25519().public().to_peer_id();
+        let connection = ConnectionId::new_unchecked(1);
+        let mut behaviour = Behaviour::new(1280);
+        let mut cx = Context::from_waker(futures::task::noop_waker_ref());
+        for target in [peer, stranger, peer] {
+            let request = behaviour.send_request_on_connection(
+                target,
+                connection,
+                Frame::packet(1, 7, vec![0x45, 0, 0, 20]).unwrap(),
+            );
+            assert!(
+                matches!(behaviour.poll(&mut cx), Poll::Ready(ToSwarm::GenerateEvent(Event::OutboundFailure { request_id, .. })) if request_id == request)
+            );
+            assert!(behaviour.outbound_owners.is_empty());
+            assert!(behaviour.poll(&mut cx).is_pending());
+            if target == stranger {
+                close_connection(&mut behaviour, peer, connection);
+            } else {
+                establish_connection(&mut behaviour, peer, connection);
+            }
+        }
+    }
+
+    #[test]
+    fn closure_completes_queued_and_delivered_requests_once() {
+        for delivered in [false, true] {
+            let peer = Keypair::generate_ed25519().public().to_peer_id();
+            let closed = ConnectionId::new_unchecked(1);
+            let healthy = ConnectionId::new_unchecked(2);
+            let mut behaviour = Behaviour::new(1280);
+            let mut cx = Context::from_waker(futures::task::noop_waker_ref());
+            let frame = Frame::packet(1, 7, vec![0x45, 0, 0, 20]).unwrap();
+            establish_connection(&mut behaviour, peer, closed);
+            establish_connection(&mut behaviour, peer, healthy);
+            let request = behaviour.send_request_on_connection(peer, closed, frame.clone());
+            if delivered {
+                let Poll::Ready(ToSwarm::NotifyHandler { event, .. }) = behaviour.poll(&mut cx)
+                else {
+                    panic!("expected queued request");
+                };
+                let mut handler = Handler::new(peer, closed, 1280);
+                handler.on_behaviour_event(event);
+                assert!(matches!(
+                    handler.poll(&mut cx),
+                    Poll::Ready(ConnectionHandlerEvent::OutboundSubstreamRequest { .. })
+                ));
+                drop(handler);
+            }
+            let other = behaviour.send_request_on_connection(peer, healthy, frame);
+            close_connection(&mut behaviour, peer, closed);
+            let mut failures = Vec::new();
+            let mut notifications = Vec::new();
+            while let Poll::Ready(event) = behaviour.poll(&mut cx) {
+                match event {
+                    ToSwarm::GenerateEvent(Event::OutboundFailure {
+                        peer: owner,
+                        connection_id,
+                        request_id,
+                        ..
+                    }) => {
+                        assert_eq!((owner, connection_id), (peer, closed));
+                        failures.push(request_id);
+                    }
+                    ToSwarm::NotifyHandler {
+                        handler: NotifyHandler::One(id),
+                        event: HandlerCommand::OutboundRequest { request_id, .. },
+                        ..
+                    } => {
+                        assert_eq!(id, healthy);
+                        notifications.push(request_id);
+                    }
+                    event => panic!("unexpected event: {event:?}"),
+                }
+            }
+            assert_eq!(failures, [request]);
+            assert_eq!(notifications, [other]);
+            close_connection(&mut behaviour, peer, closed);
+            behaviour.on_connection_handler_event(
+                peer,
+                closed,
+                HandlerEvent::OutboundResponse {
+                    request_id: request,
+                    response: PacketResponse::Accepted,
+                },
+            );
+            behaviour.on_connection_handler_event(
+                peer,
+                closed,
+                HandlerEvent::OutboundFailure {
+                    request_id: request,
+                    error: Failure::Io("late".into()),
+                },
+            );
+            assert!(behaviour.poll(&mut cx).is_pending());
+            behaviour.on_connection_handler_event(
+                peer,
+                healthy,
+                HandlerEvent::OutboundResponse {
+                    request_id: other,
+                    response: PacketResponse::Accepted,
+                },
+            );
+            assert!(
+                matches!(behaviour.poll(&mut cx), Poll::Ready(ToSwarm::GenerateEvent(Event::OutboundResponse { request_id, .. })) if request_id == other)
+            );
+        }
+    }
+
+    #[test]
+    fn terminal_events_require_exact_owner_and_survive_later_closure() {
+        for success in [false, true] {
+            let peer = Keypair::generate_ed25519().public().to_peer_id();
+            let stranger = Keypair::generate_ed25519().public().to_peer_id();
+            let connection = ConnectionId::new_unchecked(1);
+            let other_connection = ConnectionId::new_unchecked(2);
+            let mut behaviour = Behaviour::new(1280);
+            establish_connection(&mut behaviour, peer, connection);
+            let mut cx = Context::from_waker(futures::task::noop_waker_ref());
+            let request = behaviour.send_request_on_connection(
+                peer,
+                connection,
+                Frame::packet(1, 7, vec![0x45, 0, 0, 20]).unwrap(),
+            );
+            assert!(matches!(
+                behaviour.poll(&mut cx),
+                Poll::Ready(ToSwarm::NotifyHandler { .. })
+            ));
+            let terminal = || {
+                if success {
+                    HandlerEvent::OutboundResponse {
+                        request_id: request,
+                        response: PacketResponse::Accepted,
+                    }
+                } else {
+                    HandlerEvent::OutboundFailure {
+                        request_id: request,
+                        error: Failure::Io("failed".into()),
+                    }
+                }
+            };
+            for (wrong_peer, wrong_connection) in [(stranger, connection), (peer, other_connection)]
+            {
+                behaviour.on_connection_handler_event(wrong_peer, wrong_connection, terminal());
+                close_connection(&mut behaviour, wrong_peer, wrong_connection);
+                assert!(behaviour.poll(&mut cx).is_pending());
+                assert_eq!(behaviour.outbound_owners.len(), 1);
+            }
+            behaviour.on_connection_handler_event(peer, connection, terminal());
+            behaviour.on_connection_handler_event(peer, connection, terminal());
+            close_connection(&mut behaviour, peer, connection);
+            match behaviour.poll(&mut cx) {
+                Poll::Ready(ToSwarm::GenerateEvent(Event::OutboundResponse {
+                    request_id, ..
+                })) if success => assert_eq!(request_id, request),
+                Poll::Ready(ToSwarm::GenerateEvent(Event::OutboundFailure {
+                    request_id, ..
+                })) if !success => assert_eq!(request_id, request),
+                event => panic!("unexpected terminal event: {event:?}"),
+            }
+            assert!(behaviour.poll(&mut cx).is_pending());
+            assert!(behaviour.outbound_owners.is_empty());
+        }
+    }
+
     #[tokio::test]
     async fn outbound_request_targets_selected_connection() {
         let peer = Keypair::generate_ed25519().public().to_peer_id();
@@ -558,6 +815,7 @@ mod tests {
         let frame = Frame::packet(1, 7, vec![0x45, 0, 0, 20]).expect("frame");
         let mut behaviour = Behaviour::new(1280);
 
+        establish_connection(&mut behaviour, peer, connection_id);
         let request_id = behaviour.send_request_on_connection(peer, connection_id, frame.clone());
 
         let event = poll_fn(|cx| match behaviour.poll(cx) {
