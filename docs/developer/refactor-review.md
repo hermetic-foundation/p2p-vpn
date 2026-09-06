@@ -348,7 +348,7 @@ require explicit fileset inclusion.
 
 ### R11: Android Destruction Can Discard Native Cleanup
 
-Priority: P2. Status: scoped dispatcher implemented and unit-tested; device validation pending.
+Priority: P2. Status: fixed; owner tests and Android emulator lifecycle validation passed.
 
 The previous per-service executor queued native cleanup behind ongoing work, waited six
 seconds, then discarded pending tasks with `shutdownNow()`. A blocked worker could
@@ -362,7 +362,9 @@ The [Android lifecycle review](android-lifecycle-review.md) records source refer
 reproduction steps, and the process-wide ownership implementation. Five owner tests
 cover teardown ordering, replacement isolation, retired admission, and timer cleanup.
 The current-source API 35 emulator passed always-on ownership, APK replacement,
-lockdown stop, and recovery. Same-process replacement with stalled JNI remains outstanding.
+lockdown stop, and recovery. Instrumentation also passed same-process replacement
+with an occupied worker and real native cleanup; an indefinitely stuck JNI call
+remains outside that test's scope.
 
 ### NixOS Membership VM Evidence
 

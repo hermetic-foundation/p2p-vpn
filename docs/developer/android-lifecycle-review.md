@@ -1,12 +1,12 @@
 # Android Lifecycle Review
 
 Originally reviewed against `bb0c164b` on 2026-09-06. The service now uses a
-process-wide scoped dispatcher. Current-source emulator always-on validation passed;
-same-process replacement with stalled JNI remains outstanding.
+process-wide scoped dispatcher. Current-source emulator always-on, underlay recovery,
+and occupied-worker service replacement validation passed.
 
 ## R11: Lost Cleanup
 
-Priority: P2. Executor defect reproduced and fixed; device impact unverified.
+Priority: P2. Executor defect reproduced and fixed; emulator lifecycle tests passed.
 
 Previously, `onDestroy()` submitted `stopNativeRuntime` to the service's worker, waited
 six seconds, then called `shutdownNow()`. If existing work outlasted that wait,
@@ -94,8 +94,8 @@ Debug APK assembly also passed; this local Gradle build had no JNI libraries,
 so it is Java/resource packaging evidence, not a deployable native VPN validation.
 
 These owner tests are separate from the current-source always-on emulator run below.
-Same-process destroy/recreate with stalled JNI remains to be exercised. Current-source
-emulator network-transition evidence is recorded below.
+Same-process destroy/recreate with an occupied worker and real native runtime is
+covered by instrumentation below. An indefinitely stalled JNI call is not tested.
 
 ## Validation Sequence
 
@@ -238,4 +238,62 @@ SHA-256, CLI followed by E2E fixture:
 ```text
 be23fc0a459ac5cc9116abb933b142ca41002bc7698fc2797c85bb08f893bf14
 55bd4e26400ea8c25d7d97728684318807ce4fb68561012af36d2a4463e4ca26
+```
+
+## Occupied-Worker Instrumentation
+
+`ServiceLifecycleInstrumentation` passed on API 35 x86_64 on 2026-09-06.
+It lives in the instrumentation APK, not the production app, and requires an
+explicit emulator opt-in plus an empty profile store.
+
+| Assertion | Evidence |
+| --- | --- |
+| Real native runtime before retirement | Native status reaches `running` |
+| Android lifecycle while worker occupied | Latch holds worker; service is revoked, stopped, and unbound |
+| Prompt teardown | Scope closes within two seconds while latch remains held |
+| Retired work rejected | Queued task cancelled; late task never executes |
+| Replacement ordering | Replacement task remains pending until old cleanup completes |
+| Native cleanup | Native status is `stopped` before replacement starts it |
+| Identity continuity | Replacement reaches `running` with the same peer ID |
+| Final cleanup | Replacement scope retires and native status is `stopped` |
+
+The worker stall is a latch, not an intentionally wedged JNI call. Native startup,
+status, and shutdown are real. This verifies service/dispatcher integration, not
+a hard deadline for arbitrary blocked native code.
+
+An active VPN has a system-owned service binding. The test withdraws emulator
+consent and re-prepares the VPN to revoke that binding before unbinding its own.
+This follows [Android 15's preparation logic](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/android15-release/services/core/java/com/android/server/connectivity/Vpn.java).
+
+Initial test setup attempts omitted VPN preparation, then omitted system-binding
+revocation. Those attempts failed before proving the requested lifecycle ordering;
+both setup errors were corrected without changing production service behavior.
+
+### Run It
+
+Start a fresh emulator with the current JNI-bearing app using `.#android-emulator`.
+From the repository root, in the Android development shell:
+
+```sh
+export ANDROID_SERIAL=EMULATOR_SERIAL
+gradle -p android :app:assembleDebugAndroidTest
+adb install -r android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+adb shell am instrument -w -r -e isolated_emulator true \
+  org.hermeticfoundation.p2pvpn.debug.test/org.hermeticfoundation.p2pvpn.ServiceLifecycleInstrumentation
+```
+
+Require `INSTRUMENTATION_RESULT: passed=true` and `INSTRUMENTATION_CODE: -1`.
+ADB's own exit status is insufficient. The test leaves its disposable profile;
+use a fresh emulator for another success run.
+
+### Recorded Results
+
+- Final runner passed: `/tmp/p2p-vpn-review-service-lifecycle.txt`.
+- Existing-profile refusal passed: `/tmp/p2p-vpn-review-service-lifecycle-existing-profile.txt`.
+- Android unit suite, instrumentation APK assembly, and lint passed offline.
+
+Final instrumentation APK SHA-256:
+
+```text
+e194b24ac59eea2292164d4225b678cfb9747b5a184fa88e492b99228525ac43
 ```
