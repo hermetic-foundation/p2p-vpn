@@ -114,7 +114,7 @@ Logs use `/tmp/p2p-vpn-review-startup-snapshot-*`.
 | --- | --- |
 | Recovery ownership | Finish timer/event and stale-completion review beyond the extracted targeted-query owner. |
 | Session lifecycle | [Membership-sync review](membership-sync-review.md) cases are fixed. Reconcile broader session-lifecycle review and final platform evidence. |
-| Android lifecycle ownership | Reproduce and resolve [three source-reviewed cases](android-event-ownership-review.md): superseded stops, lost health polls, and deferred connect intent. |
+| Android lifecycle ownership | [Lost health polling](android-event-ownership-review.md) reproduced and fixed with JVM coverage. Superseded stops and deferred connect intent remain open; native-failure recovery still needs platform coverage. |
 | Pairing orchestration | Assess transaction ownership across preparation, persistence, and finalization. |
 | Address resources | Identify admission is bounded. [Internal growth is reproduced](kademlia-retention-review.md) in both DHT modes; enforcement and query-memory measurements remain. |
 | Resource comparison | Signed-ledger RSS sampled through 256 records; timer refresh reuses valid evaluations. Isolate retained allocations and establish release-profile/daemon impact. |

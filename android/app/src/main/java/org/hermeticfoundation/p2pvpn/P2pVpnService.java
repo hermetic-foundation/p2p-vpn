@@ -318,6 +318,9 @@ public final class P2pVpnService extends VpnService {
         if (desiredConnected && !connected && !operationInProgress) {
             startConnection("Restoring after VPN mode changed");
         } else {
+            if (connected) {
+                scheduleStatusPoll();
+            }
             publishSnapshot();
         }
     }

@@ -4,10 +4,11 @@
 
 Source reviewed at `6dbb680c` on 2026-09-06. A read-only reviewer identified
 the cases below; parent inspection checked the relevant control flow.
-This initial source-review record precedes deterministic regression results.
+The initial source review preceded regression work. A2 is now reproduced and
+fixed with JVM coverage; A1 and A3 remain open.
 
-Successful workflow tests do not exercise every event ordering. These cases remain
-open even when the [network workflow](android-network-workflow-review.md) or
+Successful workflow tests do not exercise every event ordering. Unresolved cases
+remain open even when the [network workflow](android-network-workflow-review.md) or
 [multi-network scenario](android-multi-network-review.md) passes.
 
 ## Findings
@@ -48,6 +49,27 @@ An already-running poll is a different ordering and must be tested separately.
 Required regression: deliver the mode event before a pending poll fires, advance
 a controlled scheduler, and verify recurring status reads. Inject native failure
 afterward and require the ordinary bounded recovery path.
+
+#### Implemented Fix and Evidence
+
+The connected non-lockdown branch now calls `scheduleStatusPoll`. The existing
+delay and cancellation owner are reused; lockdown behavior is unchanged.
+
+| Check | Result |
+| --- | --- |
+| Before fix | Real service mode handler cancelled the pending timer without replacement; JVM assertion failed |
+| After fix | Three consecutive manual-mode events each retain a live poll and cancel superseded timers |
+| Queue bound | At most the executing test task and one pending poll remain in the scope |
+| Android build | Unit suite, lint, debug APK, and instrumentation APK assembly passed offline |
+
+`ServiceHealthPollingTest` invokes the service handler on its real scoped worker.
+Android methods use the existing JVM stubs; the test checks pending ownership
+before the poll executes, not recurring JNI reads or native-failure recovery.
+
+- Before log: `/tmp/p2p-vpn-review-health-poll-before.log`.
+- After log: `/tmp/p2p-vpn-review-health-poll-after.log`.
+- Android delivery and native-failure recovery still require platform coverage.
+- This fix is not evidence that the separate multi-network underlay failure is resolved.
 
 ### A3: Deferred Connect Intent
 
