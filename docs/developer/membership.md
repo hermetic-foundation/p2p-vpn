@@ -339,8 +339,15 @@ Live route reconciliation does not evaluate the ledger or read the clock. It cop
 committed forwarding routes, excludes local-owned routes, and preserves local TUN
 address configuration. Failed route application leaves the installed snapshot unchanged.
 
-Record-based public constructors remain unchanged. Prepared TUN route derivation
-still evaluates records separately, using the preparation transaction's timestamp.
+Prepared TUN views copy routes from `ForwarderUpdate` rather than reevaluating history.
+Public record-based constructors remain unchanged.
+
+Pairing computes its command delta against the installed TUN snapshot immediately
+before applying it. It permits local-address additions and remote-route withdrawal,
+but rejects identity/MTU changes and removal of local addresses.
+
+Adding a preferred local address also updates the source of retained routes.
+Rollback restores old routes and sources before deleting newly added local addresses.
 
 Kernel route commands have inverse operations for rollback.
 

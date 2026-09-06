@@ -2793,13 +2793,10 @@ fn reconcile_persisted_pairing_enrollments_with_route_update(
     }
 
     let now = current_unix_seconds_lossy();
-    let next_tun = TunRuntimeConfig::from_config_with_member_records_at(
-        &next_config,
-        &next_config.network.member_records,
-        now,
-    )?;
-    let tun_update = next_tun.additive_update_from(tun_runtime)?;
     let update = forwarder.prepare_reconfigure(next_config, now)?;
+    let next_tun =
+        TunRuntimeConfig::from_config_with_routes(update.config(), update.authorized_routes())?;
+    let tun_update = next_tun.pairing_reconciliation_from(tun_runtime)?;
     let next_membership = OverlayMembership::from_forwarder_update(&update)?;
     apply(tun_runtime, &next_tun, &tun_update)?;
     forwarder.commit_reconfigure(update);
@@ -14683,7 +14680,6 @@ fn install_pairing_response_membership(
 struct PreparedPairingRuntimeEnrollment {
     forwarder: ForwarderUpdate,
     membership: OverlayMembership,
-    tun_update: TunRouteUpdate,
     tun_runtime: TunRuntimeConfig,
     membership_tag: Option<String>,
     remote_peer: Libp2pPeerId,
@@ -14718,25 +14714,15 @@ fn prepare_pairing_runtime_enrollment(
             .parse::<Libp2pPeerId>()
             .map_err(crate::pairing::PairingError::from)?
     };
-    let current_tun = TunRuntimeConfig::from_config_with_member_records_at(
-        &current_config,
-        &current_config.network.member_records,
-        now_unix_seconds,
-    )?;
-    let next_tun = TunRuntimeConfig::from_config_with_member_records_at(
-        &next_config,
-        &next_config.network.member_records,
-        now_unix_seconds,
-    )?;
-    let tun_update = next_tun.additive_update_from(&current_tun)?;
     let membership_tag = next_config.membership_tag()?;
     let update = forwarder.prepare_reconfigure(next_config, now_unix_seconds)?;
+    let next_tun =
+        TunRuntimeConfig::from_config_with_routes(update.config(), update.authorized_routes())?;
     let membership = OverlayMembership::from_forwarder_update(&update)?;
 
     Ok(PreparedPairingRuntimeEnrollment {
         forwarder: update,
         membership,
-        tun_update,
         tun_runtime: next_tun,
         membership_tag,
         remote_peer,
@@ -14792,7 +14778,10 @@ fn commit_pairing_runtime_enrollment_with_route_update(
         &TunRouteUpdate,
     ) -> Result<(), RunnerError>,
 ) -> Result<Libp2pPeerId, RunnerError> {
-    apply(tun_runtime, &prepared.tun_runtime, &prepared.tun_update)?;
+    let tun_update = prepared
+        .tun_runtime
+        .pairing_reconciliation_from(tun_runtime)?;
+    apply(tun_runtime, &prepared.tun_runtime, &tun_update)?;
 
     let remote_peer = prepared.remote_peer;
     forwarder.commit_reconfigure(prepared.forwarder);
@@ -15568,14 +15557,13 @@ fn apply_local_membership_revocation(
     next_config.network.member_records = forwarder.member_records().to_vec();
     next_config.network.member_records.push(record.clone());
     let forwarder_update = forwarder
-        .prepare_reconfigure(next_config.clone(), now_unix_seconds)
+        .prepare_reconfigure(next_config, now_unix_seconds)
         .map_err(|error| format!("failed to prepare membership revocation: {error:?}"))?;
     let next_membership = OverlayMembership::from_forwarder_update(&forwarder_update)
         .map_err(|error| format!("failed to refresh membership authorization: {error:?}"))?;
-    let next_tun = TunRuntimeConfig::from_config_with_member_records_at(
-        &next_config,
-        &next_config.network.member_records,
-        now_unix_seconds,
+    let next_tun = TunRuntimeConfig::from_config_with_routes(
+        forwarder_update.config(),
+        forwarder_update.authorized_routes(),
     )
     .map_err(|error| format!("failed to prepare membership routes: {error:?}"))?;
     let route_update = next_tun
@@ -21925,6 +21913,82 @@ mod tests {
         )
         .expect("pairing response");
         (config, inviter, joiner, offer, request, response)
+    }
+
+    #[test]
+    fn pairing_commit_removes_routes_expired_since_installation() {
+        let (mut config, inviter, _, offer, _, response) = code_pairing_runtime_fixture();
+        let expired_member = NodeIdentity::generate_ed25519().unwrap();
+        config.network.member_records.push(
+            issue_membership_record_at(
+                &inviter,
+                MembershipRecordOptions {
+                    network_name: "lab".to_owned(),
+                    member: expired_member,
+                    membership_epoch: 1,
+                    sequence: 1,
+                    roles: vec![
+                        MembershipRole::OverlayMember,
+                        MembershipRole::RouteAuthority,
+                    ],
+                    route_grants: vec![RouteConfig {
+                        prefix: "10.88.0.0/24".to_owned(),
+                        metric: 100,
+                    }],
+                    expires_at_unix_seconds: Some(1_010),
+                },
+                1_000,
+            )
+            .unwrap(),
+        );
+        let mut forwarder = Forwarder::from_config(&config).unwrap();
+        forwarder.commit_reconfigure(
+            forwarder
+                .prepare_reconfigure(config.clone(), 1_009)
+                .unwrap(),
+        );
+        let mut tun_runtime = TunRuntimeConfig::from_config_with_member_records_at(
+            &config,
+            &config.network.member_records,
+            1_009,
+        )
+        .unwrap();
+        assert!(
+            tun_runtime
+                .routes
+                .iter()
+                .any(|route| route.prefix.to_string() == "10.88.0.0/24")
+        );
+        let mut membership = OverlayMembership::default();
+        membership.replace_from_forwarder(&forwarder).unwrap();
+        let mut capabilities = ControlCapabilities::local("lab", None, 1280);
+        let prepared =
+            prepare_pairing_runtime_enrollment(&forwarder, &offer, &response, &inviter, 1_011)
+                .unwrap();
+        let mut commands = Vec::new();
+        commit_pairing_runtime_enrollment_with(
+            &mut forwarder,
+            &mut membership,
+            &mut tun_runtime,
+            &mut capabilities,
+            prepared,
+            |command| {
+                commands.push(command.to_string());
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert!(
+            commands
+                .iter()
+                .any(|command| command.contains("route del 10.88.0.0/24"))
+        );
+        assert!(
+            !tun_runtime
+                .routes
+                .iter()
+                .any(|route| route.prefix.to_string() == "10.88.0.0/24")
+        );
     }
 
     #[test]

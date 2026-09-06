@@ -317,6 +317,46 @@ impl TunRuntimeConfig {
             ));
         }
 
+        Ok(self.route_update_from(current))
+    }
+
+    pub(crate) fn pairing_reconciliation_from(
+        &self,
+        current: &Self,
+    ) -> Result<TunRouteUpdate, TunRuntimeError> {
+        if self.name != current.name
+            || self.mtu != current.mtu
+            || self.addresses != current.addresses
+            || current
+                .additional_addresses
+                .iter()
+                .any(|address| !self.additional_addresses.contains(address))
+        {
+            return Err(TunRuntimeError::NonAdditiveUpdate(
+                "pairing cannot change the running TUN identity, MTU, or remove local addresses",
+            ));
+        }
+        let mut update = TunRouteUpdate {
+            apply: Vec::new(),
+            rollback: Vec::new(),
+        };
+        for address in &self.additional_addresses {
+            if !current.additional_addresses.contains(address) {
+                update
+                    .apply
+                    .push(IpCommand::addr_replace(self.name.clone(), *address));
+                update
+                    .rollback
+                    .push(IpCommand::addr_delete(self.name.clone(), *address));
+            }
+        }
+        let routes = self.route_update_from(current);
+        update.apply.extend(routes.apply);
+        update.rollback.extend(routes.rollback);
+        Ok(update)
+    }
+
+    fn route_update_from(&self, current: &Self) -> TunRouteUpdate {
         let mut apply = Vec::new();
         let mut rollback = Vec::new();
         for route in &self.routes {
@@ -324,7 +364,9 @@ impl TunRuntimeConfig {
                 .routes
                 .iter()
                 .find(|candidate| candidate.prefix == route.prefix);
-            if previous == Some(route) {
+            if previous == Some(route)
+                && self.route_source(route.prefix) == current.route_source(route.prefix)
+            {
                 continue;
             }
             apply.push(IpCommand::route_replace(
@@ -362,7 +404,7 @@ impl TunRuntimeConfig {
             ));
         }
 
-        Ok(TunRouteUpdate { apply, rollback })
+        TunRouteUpdate { apply, rollback }
     }
 
     fn route_source(&self, prefix: IpCidr) -> IpAddr {
@@ -972,6 +1014,89 @@ mod tests {
             renamed.additive_update_from(&current),
             Err(TunRuntimeError::NonAdditiveUpdate(_))
         ));
+        assert!(removed.pairing_reconciliation_from(&current).is_err());
+        assert!(renamed.pairing_reconciliation_from(&current).is_err());
+    }
+
+    #[test]
+    fn pairing_reconciliation_updates_sources_and_withdraws_routes_with_inverses() {
+        let local = PeerId::from_bytes([1; 32]);
+        let remote = PeerId::from_bytes([2; 32]);
+        let retained = Route {
+            owner: remote,
+            prefix: IpCidr::new("10.42.0.2".parse().unwrap(), 32).unwrap(),
+            metric: 0,
+        };
+        let expired = Route {
+            prefix: IpCidr::new("10.88.0.0".parse().unwrap(), 24).unwrap(),
+            ..retained
+        };
+        let current = TunRuntimeConfig {
+            name: "pv0".to_owned(),
+            mtu: 1280,
+            addresses: TunAddresses::for_peer(local),
+            additional_addresses: Vec::new(),
+            routes: vec![retained, expired],
+        };
+        let address = IpCidr::new("10.42.0.1".parse().unwrap(), 32).unwrap();
+        let next = TunRuntimeConfig {
+            additional_addresses: vec![address],
+            routes: vec![retained],
+            ..current.clone()
+        };
+        let update = next.pairing_reconciliation_from(&current).unwrap();
+        assert_eq!(
+            update.apply_commands(),
+            &[
+                IpCommand::addr_replace("pv0".to_owned(), address),
+                IpCommand::route_replace(
+                    "pv0".to_owned(),
+                    retained.prefix,
+                    address.address(),
+                    1280
+                ),
+                IpCommand::route_delete("pv0".to_owned(), expired.prefix),
+            ]
+        );
+        assert_eq!(
+            update.rollback_commands(),
+            &[
+                IpCommand::addr_delete("pv0".to_owned(), address),
+                IpCommand::route_replace(
+                    "pv0".to_owned(),
+                    retained.prefix,
+                    builtin_ipv4(local).into(),
+                    1280
+                ),
+                IpCommand::route_replace(
+                    "pv0".to_owned(),
+                    expired.prefix,
+                    builtin_ipv4(local).into(),
+                    1280
+                ),
+            ]
+        );
+        assert!(
+            next.pairing_reconciliation_from(&next)
+                .unwrap()
+                .apply_commands()
+                .is_empty()
+        );
+        for incompatible in [
+            TunRuntimeConfig {
+                mtu: 1400,
+                ..next.clone()
+            },
+            TunRuntimeConfig {
+                addresses: TunAddresses {
+                    ipv4: Ipv4Addr::new(100, 64, 1, 1),
+                    ..current.addresses
+                },
+                ..next.clone()
+            },
+        ] {
+            assert!(incompatible.pairing_reconciliation_from(&current).is_err());
+        }
     }
 
     #[test]

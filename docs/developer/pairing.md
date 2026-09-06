@@ -200,7 +200,7 @@ This ordering prevents an acknowledged response from being lost before applicati
 
 | Persisted State | Startup Action |
 | --- | --- |
-| `Prepared` | Revalidate, apply additive routes and authority, mark `Applied`. |
+| `Prepared` | Revalidate, reconcile installed routes and authority, mark `Applied`. |
 | `Applied` | Reconstruct forwarding and membership state idempotently. |
 | Receipt only | Keep replay evidence; no enrollment payload to apply. |
 

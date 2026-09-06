@@ -93,8 +93,8 @@ Forwarding derives the packet allowlist from its transport-peer map, eliminating
 one repeated ledger evaluation per construction, merge, and configuration update.
 Forwarding now also shares one evaluated ledger between route compilation and
 transport admission. Internal prepared and post-commit runtime membership views
-now copy that snapshot. Live TUN reconciliation copies committed routes. Prepared
-TUN, DNS, and inventory ownership remain part of the review; public constructors are preserved.
+now copy that snapshot. Live and prepared TUN views also copy forwarding routes.
+DNS and inventory ownership remain part of the review; public constructors are preserved.
 
 New policy tests cover unknown versus configured identities, exact grant expiry,
 and local expiry/resignation without erasing surviving network membership.
@@ -111,8 +111,8 @@ read wall-clock time again. Persisted-enrollment recovery also mixed clock reads
 - Both paths now pass one captured timestamp to membership, TUN, and forwarding evaluation.
 - The regression checks joiner membership, TUN routes, and committed transport authorization.
 
-This fixes inconsistent evaluation times, not repeated ledger evaluation. Deriving
-all prepared consumers from one immutable authorization snapshot remains outstanding.
+This initially fixed inconsistent evaluation times, not repeated ledger evaluation.
+The later prepared-membership and TUN changes now share forwarding authority as well.
 No clock-skew exploit or physical network failure is claimed from this unit reproduction.
 
 ### R3: Recovery State Has Distributed Ownership
@@ -385,6 +385,33 @@ lockdown stop, and recovery. Instrumentation also passed same-process replacemen
 with an occupied worker and real native cleanup; an indefinitely stuck JNI call
 remains outside that test's scope.
 
+### R12: Pairing Route Deltas Could Omit Installed Expired Routes
+
+Priority: correctness. Status: reproduced and corrected in runtime transaction ownership.
+
+| Responsibility | Source |
+| --- | --- |
+| Prepared state and commit | `src/runtime/runner.rs`: `prepare_pairing_runtime_enrollment`, `commit_pairing_runtime_enrollment_with_route_update` |
+| Kernel command delta and inverses | `src/runtime/tun.rs`: `pairing_reconciliation_from`, `route_update_from` |
+| Evaluated route authority | `src/runtime/forward.rs`: `ForwarderUpdate::authorized_routes` |
+
+`prepare_pairing_runtime_enrollment` reconstructed current routes from the ledger.
+Expiry could remove a route from that reconstruction while the route remained installed.
+Linux then applied an incomplete additive delta and recorded the route as already absent.
+
+- The regression installs a grant at time 1009, expires it at 1010, and pairs at 1011.
+- Before the fix, pairing committed without issuing `route del 10.88.0.0/24`.
+- The command delta now uses the installed snapshot immediately before application.
+- Prepared TUN views use the route table in the exact `ForwarderUpdate` being committed.
+
+Pairing reconciliation permits adding local addresses and replacing/removing remote
+routes. It rejects identity/MTU changes or removing local addresses. If an added
+address changes a retained route's preferred source, that route is replaced too.
+
+Tests check command inverses, no-op reconciliation, protected metadata, expiry cleanup,
+and existing transaction failure behavior. Forwarding already rejected withdrawn
+authority; this reproduces stale kernel-route intent, not an overlay admission bypass.
+
 ### NixOS Membership VM Evidence
 
 The four-VM `nixos-vm-membership-convergence` check passed all 18 subtests.
@@ -547,8 +574,8 @@ The public API does not prevent callers from committing a stale or foreign updat
 Runtime callers do not do this; changing that contract needs separate design and
 coverage rather than silently ignoring updates in this refactor.
 
-Remaining ownership work includes sharing evaluation with prepared TUN updates,
-reviewing revision consumers, and extracting recovery decisions and timer effects.
+Remaining ownership work includes DNS/inventory evaluation, reviewing revision
+consumers, and extracting recovery decisions and timer effects.
 
 ### Runtime Membership Snapshot Plan
 
@@ -559,7 +586,7 @@ reviewing revision consumers, and extracting recovery decisions and timer effect
 
 This removes independent ledger evaluation after a forwarding commit. The follow-up
 below also covers prepared runtime membership and live TUN reconciliation.
-Prepared TUN route derivation remains separate.
+R12 extends snapshot sharing to prepared TUN views and corrects command-delta ownership.
 
 Implemented `OverlayMembership::replace_from_forwarder` for all six internal
 post-commit refresh paths. Public record-based APIs remain unchanged. Both paths
@@ -600,7 +627,7 @@ earlier than the forwarding refresh, despite committed transport authorization b
 
 This aligns kernel route intent with committed forwarding policy. It does not make
 forwarding policy itself monotonic under system-clock changes, or prove a NAT/recovery fix.
-Prepared TUN updates still need their own ownership review.
+The later R12 follow-up covers prepared TUN snapshot and command-delta ownership.
 
 ### Snapshot Validation and Recovery Finding
 

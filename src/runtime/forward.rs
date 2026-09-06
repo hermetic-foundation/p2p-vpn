@@ -64,6 +64,10 @@ impl ForwarderUpdate {
     pub(crate) fn configured_transport_peers(&self) -> impl Iterator<Item = Libp2pPeerId> + '_ {
         self.authorization.peers.values().copied()
     }
+
+    pub(crate) fn authorized_routes(&self) -> &[Route] {
+        self.authorization.routes.routes()
+    }
 }
 
 // Replace derived forwarding authority together; retained history is not admission state.
