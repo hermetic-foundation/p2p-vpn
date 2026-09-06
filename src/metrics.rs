@@ -340,8 +340,12 @@ impl RuntimeMetrics {
     }
 
     pub fn record_outbound_drop(&self, reason: PacketDropReason) {
+        self.record_outbound_drops(reason, 1);
+    }
+
+    pub(crate) fn record_outbound_drops(&self, reason: PacketDropReason, packets: u64) {
         self.outbound_dropped_packets
-            .fetch_add(1, Ordering::Relaxed);
+            .fetch_add(packets, Ordering::Relaxed);
         match reason {
             PacketDropReason::MalformedPacket
             | PacketDropReason::Replay
@@ -350,22 +354,22 @@ impl RuntimeMetrics {
             | PacketDropReason::UnexpectedPayload
             | PacketDropReason::RateLimited => self
                 .outbound_drop_malformed_packets
-                .fetch_add(1, Ordering::Relaxed),
+                .fetch_add(packets, Ordering::Relaxed),
             PacketDropReason::NoRoute => self
                 .outbound_drop_no_route_packets
-                .fetch_add(1, Ordering::Relaxed),
+                .fetch_add(packets, Ordering::Relaxed),
             PacketDropReason::NoTransportPeer => self
                 .outbound_drop_no_transport_peer_packets
-                .fetch_add(1, Ordering::Relaxed),
+                .fetch_add(packets, Ordering::Relaxed),
             PacketDropReason::PacketTooLarge => self
                 .outbound_drop_packet_too_large_packets
-                .fetch_add(1, Ordering::Relaxed),
+                .fetch_add(packets, Ordering::Relaxed),
             PacketDropReason::QueueFull => self
                 .outbound_drop_queue_full_packets
-                .fetch_add(1, Ordering::Relaxed),
+                .fetch_add(packets, Ordering::Relaxed),
             PacketDropReason::UnauthorizedSource => self
                 .outbound_drop_unauthorized_source_packets
-                .fetch_add(1, Ordering::Relaxed),
+                .fetch_add(packets, Ordering::Relaxed),
         };
     }
 

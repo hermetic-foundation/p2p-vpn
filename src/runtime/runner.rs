@@ -1568,7 +1568,13 @@ where
 
     let mut packet_authorization_revision = None;
     loop {
-        if packet_authorization_revision != Some(forwarder.membership_revision()) {
+        if packet_authorization_revision != Some(forwarder.authorization_revision()) {
+            reconcile_packet_cache_authorization(
+                &forwarder,
+                &mut queues,
+                &mut peer_capabilities,
+                &metrics,
+            );
             reconcile_packet_plane_authorization(
                 &forwarder,
                 &mut packet_plane,
@@ -1577,7 +1583,7 @@ where
                 &mut paths,
                 &mut path_probe_tracker,
             );
-            packet_authorization_revision = Some(forwarder.membership_revision());
+            packet_authorization_revision = Some(forwarder.authorization_revision());
         }
         tokio::select! {
             reason = &mut shutdown => {
@@ -17500,6 +17506,30 @@ fn complete_packet_plane_quic_responder(
         ],
     );
     Ok(())
+}
+
+fn reconcile_packet_cache_authorization(
+    forwarder: &Forwarder,
+    queues: &mut PeerQueues,
+    capabilities: &mut PeerCapabilities,
+    metrics: &RuntimeMetrics,
+) {
+    let authorized = |peer| forwarder.transport_peer_for_overlay(peer).is_some();
+    let discarded = queues.retain_peers(authorized);
+    let removed_capabilities = capabilities.retain_peers(authorized);
+    if discarded > 0 {
+        metrics.record_outbound_drops(PacketDropReason::NoTransportPeer, discarded);
+    }
+    if discarded > 0 || removed_capabilities > 0 {
+        log_runtime_event(
+            LogLevel::Info,
+            "packet_cache_authorization_removed",
+            &[
+                ("queued_packets", &discarded.to_string()),
+                ("capabilities", &removed_capabilities.to_string()),
+            ],
+        );
+    }
 }
 
 fn reconcile_packet_plane_authorization(
@@ -36934,6 +36964,89 @@ mod tests {
         .expect("reverse-dial receive should not time out")
         .expect("reverse-dial receive");
         assert_eq!(received.frame, frame);
+    }
+
+    #[test]
+    fn authorization_cleanup_discards_queued_packets_and_cached_capabilities() {
+        let identity = NodeIdentity::generate_ed25519().unwrap();
+        let allowed = peer_id();
+        let denied = peer_id();
+        let denied_transport = denied;
+        let mut config = config_with_peer(&identity, allowed);
+        config
+            .peers
+            .extend(config_with_peer(&identity, denied).peers);
+        let mut forwarder = Forwarder::from_config(&config).unwrap();
+        let allowed = PeerId::from_libp2p(allowed);
+        let denied = PeerId::from_libp2p(denied);
+        let capability_only = PeerId::from_libp2p(peer_id());
+        let mut queues = PeerQueues::new(4, 4096);
+        let mut capabilities = PeerCapabilities::default();
+        let metrics = RuntimeMetrics::default();
+        for peer in [allowed, denied, denied] {
+            forwarder
+                .enqueue_tun_packet(
+                    &mut queues,
+                    ipv4_packet(
+                        builtin_ipv4(config.local_peer_id().unwrap()),
+                        builtin_ipv4(peer),
+                    ),
+                )
+                .unwrap();
+            capabilities.record(peer, ControlCapabilities::local("lab", None, 1280));
+        }
+        reconcile_packet_cache_authorization(&forwarder, &mut queues, &mut capabilities, &metrics);
+        assert_eq!(queues.total_stats().queued_packets, 3);
+        assert!(capabilities.contains(denied));
+        let unchanged_revision = forwarder.authorization_revision();
+        forwarder.commit_reconfigure(
+            forwarder
+                .prepare_reconfigure(config.clone(), 1_000)
+                .unwrap(),
+        );
+        assert_eq!(forwarder.authorization_revision(), unchanged_revision);
+        capabilities.record(
+            capability_only,
+            ControlCapabilities::local("lab", None, 1280),
+        );
+
+        config.peers.pop();
+        let authorization_revision = forwarder.authorization_revision();
+        let history_revision = forwarder.membership_revision();
+        forwarder.commit_reconfigure(forwarder.prepare_reconfigure(config, 1_000).unwrap());
+        assert_ne!(forwarder.authorization_revision(), authorization_revision);
+        assert_eq!(forwarder.membership_revision(), history_revision);
+        for _ in 0..2 {
+            reconcile_packet_cache_authorization(
+                &forwarder,
+                &mut queues,
+                &mut capabilities,
+                &metrics,
+            );
+        }
+        assert!(capabilities.contains(allowed));
+        assert!(!capabilities.contains(denied));
+        assert!(!capabilities.contains(capability_only));
+        record_peer_capabilities(
+            &forwarder,
+            &mut capabilities,
+            denied_transport,
+            ControlCapabilities::local("lab", None, 1280),
+        );
+        assert!(!capabilities.contains(denied));
+        let snapshot = metrics.snapshot(queues.total_stats());
+        assert_eq!(snapshot.outbound_dropped_packets, 2);
+        assert_eq!(snapshot.outbound_drop_no_transport_peer_packets, 2);
+        assert_eq!(queues.total_stats().dropped_packets, 2);
+        assert_eq!(queues.total_stats().expired_packets, 0);
+        let remaining = queues.dequeue().unwrap();
+        assert_eq!(remaining.peer(), allowed);
+        assert!(
+            forwarder
+                .queued_packet_frame_with_mtu(&remaining, 1280)
+                .is_ok()
+        );
+        assert!(queues.dequeue().is_none());
     }
 
     #[tokio::test]

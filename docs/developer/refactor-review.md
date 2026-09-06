@@ -217,7 +217,7 @@ described as a demonstrated inbound TUN-authorization bypass.
 
 ### R8: Owned Sessions Outlive Authorization Changes
 
-Priority: P2 lifecycle/resource issue. Status: packet-session cleanup implemented;
+Priority: P2 lifecycle/resource issue. Status: packet-session/cache cleanup implemented;
 broader authorization-driven runtime cleanup remains open.
 
 Transport disconnect handling intentionally retains active owned packet sessions
@@ -225,7 +225,7 @@ for ordinary recovery. Previously, membership changes had no equivalent teardown
 boundary, so removed members could retain session and negotiation state until expiry.
 
 The runtime now reconciles owned packet state before selecting the next event
-after a forwarder membership revision changes. Unchanged revisions do not scan
+after a forwarder effective-authorization revision changes. Unchanged revisions do not scan
 session maps. The current forwarder authorization is the policy source.
 
 | Removed State | Preserved State |
@@ -234,6 +234,8 @@ session maps. The current forwarder authorization is the policy source.
 | Unauthorized QUIC sessions and connection handles | Authorized sessions; QUIC endpoint |
 | Pending initiator/responder negotiations and task handles | Authorized pending work |
 | Healthy owned-datagram path status and pending probes | Public libp2p connections and other transport paths |
+| Unauthorized queues, including empty historical entries | Aggregate lifetime queue drop and expiry counters |
+| Cached capabilities for unauthorized peers | Authorized peer capabilities and queued traffic |
 
 Cancelled task generations cannot install late QUIC results. Tests cover both
 negotiation roles, idempotent UDP removal, shared endpoints, authorized-session
@@ -241,12 +243,25 @@ retention, and cleanup of established UDP and QUIC sessions.
 
 | Validation | Result |
 | --- | --- |
-| Offline workspace tests | 1,165 passed; 15 intentionally ignored. |
-| Explicit serial namespace suite | All 11 passed in 188.24 seconds. |
+| Offline workspace tests | 1,167 passed; 15 intentionally ignored. |
+| Explicit serial namespace suite | All 11 passed in 238.77 seconds after the authorization-revision correction. |
 | Formatting and whitespace | Passed. |
 | Required Clippy groups | Passed; non-fatal style warnings remain. |
 
-Remaining: discovery/retry ownership, queued state, peer-capability cleanup, and
+Queue retirement removes scheduled entries and records unsent packets as
+missing-transport drops, without misclassifying them as expired. Repeated cleanup
+does not double-count; reauthorization starts a fresh per-peer queue history.
+
+Tests also cover fair scheduling of remaining peers, retirement of empty queues,
+retained historical drop/expiry totals, and rejected late capability insertion.
+Already-issued requests remain tracked for normal completion or timeout.
+
+The original cleanup trigger used the membership-history revision, which misses
+static peer/route reconfiguration. A separate internal authorization revision now
+tracks effective snapshot replacement, including signed expiry and configuration
+changes. History-only updates and unchanged authority do not trigger rescans.
+
+Remaining: discovery/retry ownership, in-flight request lifecycle, and
 restart/convergence scenarios. This boundary reacts to committed authorization;
 it does not itself discover or propagate membership changes.
 

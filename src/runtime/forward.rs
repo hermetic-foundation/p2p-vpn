@@ -38,6 +38,7 @@ pub struct Forwarder {
     hostname_records: Vec<SignedHostnameRecord>,
     authorization: ForwardingAuthorization,
     membership_revision: u64,
+    authorization_revision: u64,
     membership_effective_refresh_pending: bool,
     replay_windows: HashMap<(PeerId, SessionId), ReplayWindow>,
     replay_session_ttl: Duration,
@@ -163,6 +164,7 @@ impl Forwarder {
             hostname_records: Vec::new(),
             authorization,
             membership_revision: 0,
+            authorization_revision: 0,
             membership_effective_refresh_pending: false,
             replay_windows: HashMap::new(),
             replay_session_ttl: DEFAULT_REPLAY_SESSION_TTL,
@@ -333,6 +335,9 @@ impl Forwarder {
         if records_changed || effective_changed {
             self.membership_revision = self.membership_revision.wrapping_add(1);
         }
+        if effective_changed {
+            self.authorization_revision = self.authorization_revision.wrapping_add(1);
+        }
         self.membership_effective_refresh_pending |= effective_changed;
         self.authorization = authorization;
         self.member_records = member_records;
@@ -419,6 +424,9 @@ impl Forwarder {
     }
 
     pub fn commit_reconfigure(&mut self, update: ForwarderUpdate) {
+        if self.authorization != update.authorization {
+            self.authorization_revision = self.authorization_revision.wrapping_add(1);
+        }
         if self.member_records != update.member_records {
             self.membership_revision = self.membership_revision.wrapping_add(1);
         }
@@ -457,6 +465,10 @@ impl Forwarder {
     #[must_use]
     pub const fn membership_revision(&self) -> u64 {
         self.membership_revision
+    }
+
+    pub(crate) const fn authorization_revision(&self) -> u64 {
+        self.authorization_revision
     }
 
     #[must_use]
@@ -1713,6 +1725,7 @@ mod tests {
         assert!(forwarder.prepare_reconfigure(next, 1_000).is_err());
         assert_eq!(forwarder.config(), &config);
         assert_eq!(forwarder.membership_revision(), 0);
+        assert_eq!(forwarder.authorization_revision(), 0);
         assert!(forwarder.is_configured_transport_peer(remote));
         let remote_ip = builtin_ipv4(PeerId::from_libp2p(remote));
         assert!(
@@ -1759,6 +1772,7 @@ mod tests {
                 .expect("update");
             forwarder.commit_reconfigure(update);
             let revision = forwarder.membership_revision();
+            let authorization_revision = forwarder.authorization_revision();
             let advertised = [ControlRoute::new(format!("{remote_ip}/32"), 0)];
             assert!(forwarder.authorizes_advertised_routes(transport, &advertised));
             let outbound = ipv4_packet(local_ipv4(&config), remote_ip);
@@ -1777,6 +1791,10 @@ mod tests {
             let (_, changed) = forwarder.refresh_membership_records(1_100).expect("expiry");
             assert!(changed);
             assert_eq!(forwarder.membership_revision(), revision.wrapping_add(1));
+            assert_eq!(
+                forwarder.authorization_revision(),
+                authorization_revision.wrapping_add(1)
+            );
             assert_eq!(forwarder.member_records(), config.network.member_records);
             assert!(!forwarder.is_configured_transport_peer(transport));
             assert!(matches!(
@@ -1800,6 +1818,10 @@ mod tests {
                     .1
             );
             assert_eq!(forwarder.membership_revision(), revision.wrapping_add(1));
+            assert_eq!(
+                forwarder.authorization_revision(),
+                authorization_revision.wrapping_add(1)
+            );
         }
     }
 
@@ -1837,6 +1859,7 @@ mod tests {
                 .prepare_reconfigure(config, 1_000)
                 .expect("withdraw route");
             forwarder.commit_reconfigure(update);
+            assert_eq!(forwarder.authorization_revision(), 1);
             assert!(forwarder.is_configured_transport_peer(remote));
             assert!(
                 forwarder

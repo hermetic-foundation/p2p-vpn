@@ -334,6 +334,12 @@ impl PeerCapabilities {
         self.peers.remove(&peer);
     }
 
+    pub(crate) fn retain_peers(&mut self, mut retain: impl FnMut(PeerId) -> bool) -> usize {
+        let previous = self.peers.len();
+        self.peers.retain(|peer, _| retain(*peer));
+        previous - self.peers.len()
+    }
+
     #[must_use]
     pub fn contains(&self, peer: PeerId) -> bool {
         self.peers.contains_key(&peer)

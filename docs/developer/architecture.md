@@ -192,7 +192,18 @@ endpoint associations, QUIC handles, datagram path health, and pending probes ar
 cleaned together. Cancelled task generations cannot reinstall a late connection.
 
 This does not disconnect public libp2p infrastructure or remove listeners.
-Unchanged authorization revisions do not rescan session maps.
+Unchanged authorization revisions do not rescan session or packet-cache maps.
+The internal authorization revision tracks effective route/peer changes separately
+from membership history, including static reconfiguration and signed-record expiry.
+
+The same boundary discards unauthorized queued packets and cached capabilities.
+Retired queues release per-peer storage while retaining aggregate drop/expiry
+counters. Discarded packets count as missing-transport drops, not queue expiries.
+Reauthorized peers start fresh per-peer counters; aggregate counters remain cumulative.
+
+`packet_cache_authorization_removed` reports discarded packets and capability
+entries. Already-issued transport requests remain tracked until their normal
+completion or timeout; retiring queue state does not cancel those requests.
 
 Pending handshakes expire after 25 seconds. The expiry timer retries eligible
 initiators using cached capabilities; it does not require a fresh connection or

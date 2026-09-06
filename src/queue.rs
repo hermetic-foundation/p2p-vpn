@@ -252,6 +252,7 @@ pub struct PeerQueues {
     max_packet_age: Duration,
     queues: HashMap<PeerId, PeerQueue>,
     ready: VecDeque<PeerId>,
+    retired_stats: QueueStats,
 }
 
 impl PeerQueues {
@@ -276,6 +277,7 @@ impl PeerQueues {
             max_packet_age,
             queues: HashMap::new(),
             ready: VecDeque::new(),
+            retired_stats: QueueStats::default(),
         }
     }
 
@@ -372,9 +374,27 @@ impl PeerQueues {
     pub fn total_stats_at(&self, now: Instant) -> QueueStats {
         self.queues
             .values()
-            .fold(QueueStats::default(), |total, queue| {
+            .fold(self.retired_stats, |total, queue| {
                 total.add(queue.stats_at(now))
             })
+    }
+
+    pub(crate) fn retain_peers(&mut self, mut retain: impl FnMut(PeerId) -> bool) -> u64 {
+        let mut discarded = 0;
+        self.queues.retain(|peer, queue| {
+            if retain(*peer) {
+                return true;
+            }
+            while let Some(packet) = queue.dequeue() {
+                queue.record_drop(packet.len());
+                discarded += 1;
+            }
+            // Release per-peer storage without resetting lifetime aggregate counters.
+            self.retired_stats = self.retired_stats.add(queue.stats());
+            false
+        });
+        self.ready.retain(|peer| self.queues.contains_key(peer));
+        discarded
     }
 
     pub fn queued_peers(&self) -> impl Iterator<Item = PeerId> + '_ {
@@ -492,6 +512,50 @@ mod tests {
         packet[20..22].copy_from_slice(&source_port.to_be_bytes());
         packet[22..24].copy_from_slice(&destination_port.to_be_bytes());
         packet
+    }
+
+    #[test]
+    fn retired_queues_preserve_totals_without_retaining_peer_storage() {
+        let now = Instant::now();
+        let mut queues = PeerQueues::with_packet_ttl(2, 10, Duration::from_secs(1));
+        queues
+            .enqueue(Packet::new_at(peer(1), 1, vec![0; 3], now))
+            .unwrap();
+        queues.drop_expired(now + Duration::from_secs(2));
+        assert!(
+            queues
+                .enqueue(Packet::new(peer(1), 2, vec![0; 11]))
+                .is_err()
+        );
+        queues.enqueue(Packet::new(peer(1), 3, vec![0; 4])).unwrap();
+        queues.enqueue(Packet::new(peer(2), 4, vec![0; 2])).unwrap();
+        queues.enqueue(Packet::new(peer(3), 5, vec![0; 1])).unwrap();
+        queues.enqueue(Packet::new(peer(2), 6, vec![0; 2])).unwrap();
+
+        assert_eq!(queues.retain_peers(|id| id != peer(1)), 1);
+        assert!(!queues.queues.contains_key(&peer(1)));
+        assert_eq!(queues.peer_stats(peer(1)), QueueStats::default());
+        let totals = queues.total_stats();
+        assert_eq!(totals.queued_packets, 3);
+        assert_eq!(totals.queued_bytes, 5);
+        assert_eq!(totals.dropped_packets, 3);
+        assert_eq!(totals.dropped_bytes, 18);
+        assert_eq!(totals.expired_packets, 1);
+        assert_eq!(totals.expired_bytes, 3);
+        assert_eq!(queues.retain_peers(|id| id != peer(1)), 0);
+        for expected in [4, 5, 6] {
+            assert_eq!(queues.dequeue().unwrap().sequence(), expected);
+        }
+        assert_eq!(queues.total_stats().oldest_packet_age_millis, 0);
+
+        queues.enqueue(Packet::new(peer(1), 7, vec![0; 5])).unwrap();
+        assert_eq!(queues.peer_stats(peer(1)).dropped_packets, 0);
+        assert_eq!(queues.retain_peers(|_| false), 1);
+        assert!(queues.queues.is_empty());
+        assert!(queues.ready.is_empty());
+        assert_eq!(queues.total_stats().dropped_packets, 4);
+        assert_eq!(queues.total_stats().dropped_bytes, 23);
+        assert_eq!(queues.total_stats().expired_packets, 1);
     }
 
     #[test]
