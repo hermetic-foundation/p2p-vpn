@@ -10,7 +10,7 @@ use crate::{
     config::{Config, ConfigError, RouteConfig, vpn_ip_host_route},
     dns::canonical_dns_label,
     membership::{
-        MembershipState, SignedMembershipRecord, effective_membership_at, membership_audit_at,
+        MembershipAuditMember, MembershipState, SignedMembershipRecord, membership_views_at,
     },
     path::PathOrigin,
     route::{builtin_ipv4, builtin_ipv6},
@@ -488,16 +488,9 @@ fn network_peer_inventory_at(
         insert_host_routes(entry, &configured.routes)?;
     }
 
-    insert_membership_audit(
-        &mut peers,
-        member_records,
-        &config.network.name,
-        hostname_records,
-        now_unix_seconds,
-    )?;
-
-    let effective =
-        effective_membership_at(member_records, &config.network.name, now_unix_seconds)?;
+    let (effective, audit) =
+        membership_views_at(member_records, &config.network.name, now_unix_seconds)?;
+    insert_membership_audit(&mut peers, audit, hostname_records);
     for member in effective.overlay_members() {
         let entry = peer_entry(&mut peers, member.peer, member.transport_peer.to_string());
         entry.peer_id = member.transport_peer.to_string();
@@ -558,12 +551,10 @@ fn network_peer_inventory_at(
 
 fn insert_membership_audit(
     peers: &mut HashMap<PeerId, NetworkPeerBuilder>,
-    member_records: &[SignedMembershipRecord],
-    network_name: &str,
+    members: Vec<MembershipAuditMember>,
     hostname_records: &HashMap<PeerId, String>,
-    now_unix_seconds: u64,
-) -> Result<(), ConfigError> {
-    for member in membership_audit_at(member_records, network_name, now_unix_seconds)? {
+) {
+    for member in members {
         let entry = peer_entry(peers, member.peer, member.transport_peer.to_string());
         entry.peer_id = member.transport_peer.to_string();
         entry.membership_state = Some(match member.state {
@@ -589,7 +580,6 @@ fn insert_membership_audit(
             entry.ipv6.clear();
         }
     }
-    Ok(())
 }
 
 fn peer_entry(

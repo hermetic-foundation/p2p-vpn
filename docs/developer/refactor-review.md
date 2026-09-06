@@ -96,6 +96,12 @@ transport admission. Internal prepared and post-commit runtime membership views
 now copy that snapshot. Live and prepared TUN views also copy forwarding routes.
 DNS and inventory ownership remain part of the review; public constructors are preserved.
 
+Inventory now derives audit and effective views from one ledger evaluation per
+request. It retains revoked/expired provenance; this does not yet make DNS or
+live inventory consume the forwarder's committed evaluation timestamp.
+The [bounded diagnostic](inventory-evaluation-measurement.md) records joint/separate
+evaluation timings and their limits; no daemon-level performance claim follows.
+
 New policy tests cover unknown versus configured identities, exact grant expiry,
 and local expiry/resignation without erasing surviving network membership.
 The cross-consumer integration test exercises minimal configuration, remote

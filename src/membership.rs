@@ -397,7 +397,13 @@ pub fn effective_membership_at(
     validate_membership_record_history(records, network_name)?;
     let anchors = membership_trust_anchors(records, network_name)?;
     let evaluation = evaluate_membership_ledger_at(records, &anchors, now_unix_seconds)?;
+    effective_membership_from_evaluation(records, &evaluation)
+}
 
+fn effective_membership_from_evaluation(
+    records: &[SignedMembershipRecord],
+    evaluation: &MembershipLedgerEvaluation,
+) -> Result<EffectiveMembership, MembershipRecordError> {
     let mut members = HashMap::new();
     let mut governed_peers = HashSet::new();
     for state in evaluation.states.values() {
@@ -437,6 +443,27 @@ pub fn membership_audit_at(
     validate_membership_record_history(records, network_name)?;
     let anchors = membership_trust_anchors(records, network_name)?;
     let evaluation = evaluate_membership_ledger_at(records, &anchors, now_unix_seconds)?;
+    membership_audit_from_evaluation(records, &evaluation, now_unix_seconds)
+}
+
+pub(crate) fn membership_views_at(
+    records: &[SignedMembershipRecord],
+    network_name: &str,
+    now_unix_seconds: u64,
+) -> Result<(EffectiveMembership, Vec<MembershipAuditMember>), MembershipRecordError> {
+    validate_membership_record_history(records, network_name)?;
+    let anchors = membership_trust_anchors(records, network_name)?;
+    let evaluation = evaluate_membership_ledger_at(records, &anchors, now_unix_seconds)?;
+    let audit = membership_audit_from_evaluation(records, &evaluation, now_unix_seconds)?;
+    let effective = effective_membership_from_evaluation(records, &evaluation)?;
+    Ok((effective, audit))
+}
+
+fn membership_audit_from_evaluation(
+    records: &[SignedMembershipRecord],
+    evaluation: &MembershipLedgerEvaluation,
+    now_unix_seconds: u64,
+) -> Result<Vec<MembershipAuditMember>, MembershipRecordError> {
     let mut members = evaluation
         .states
         .iter()
@@ -1713,6 +1740,102 @@ mod tests {
         assert_eq!(members[0].sequence, 2);
         assert!(!members[0].has_role(MembershipRole::RouteAuthority));
         assert!(members[0].route_grants.is_empty());
+    }
+
+    #[test]
+    #[ignore = "opt-in bounded comparison of joint and separate inventory evaluation"]
+    fn measure_membership_inventory_evaluation() {
+        for count in [8, 32, 128] {
+            let root = NodeIdentity::generate_ed25519().unwrap();
+            let mut records = vec![overlay_record(&root, &root, 1, 1_000, None)];
+            for _ in 1..count {
+                let remote = NodeIdentity::generate_ed25519().unwrap();
+                records.push(overlay_record(&root, &remote, 1, 1_000, None));
+            }
+            let expected = membership_views_at(&records, "lab", 1_001).unwrap();
+            let mut joint = std::time::Duration::ZERO;
+            let mut separate = std::time::Duration::ZERO;
+            for round in 0..3 {
+                for combined in [round % 2 == 0, round % 2 != 0] {
+                    let started = std::time::Instant::now();
+                    let result = if combined {
+                        membership_views_at(&records, "lab", 1_001).unwrap()
+                    } else {
+                        let audit = membership_audit_at(&records, "lab", 1_001).unwrap();
+                        let effective = effective_membership_at(&records, "lab", 1_001).unwrap();
+                        (effective, audit)
+                    };
+                    let elapsed = started.elapsed();
+                    if combined {
+                        joint += elapsed;
+                    } else {
+                        separate += elapsed;
+                    }
+                    assert_eq!(result, expected);
+                }
+            }
+            eprintln!(
+                "membership_inventory_evaluation records={count} rounds=3 joint_us={} separate_us={}",
+                joint.as_micros(),
+                separate.as_micros()
+            );
+        }
+    }
+
+    #[test]
+    fn combined_membership_views_preserve_expiry_revocation_and_validation() {
+        let root = NodeIdentity::generate_ed25519().unwrap();
+        let remote = NodeIdentity::generate_ed25519().unwrap();
+        let remote_peer = PeerId::from_libp2p(remote.peer_id.parse().unwrap());
+        let revocation = issue_membership_record_for_subject_at(
+            &root,
+            MembershipRecordIssueOptions {
+                network_name: "lab".to_owned(),
+                member: MembershipRecordSubject::from_identity(&remote).unwrap(),
+                membership_epoch: 1,
+                sequence: 3,
+                revoked: true,
+                roles: Vec::new(),
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_150,
+        )
+        .unwrap();
+        let records = vec![
+            overlay_record(&root, &root, 1, 1_000, None),
+            overlay_record(&root, &remote, 2, 1_000, Some(1_100)),
+            revocation,
+        ];
+        for (now, expected) in [
+            (1_000, MembershipState::Active),
+            (1_099, MembershipState::Active),
+            (1_100, MembershipState::Expired),
+            (1_150, MembershipState::Revoked),
+        ] {
+            let (effective, audit) = membership_views_at(&records, "lab", now).unwrap();
+            assert_eq!(
+                effective,
+                effective_membership_at(&records, "lab", now).unwrap()
+            );
+            assert_eq!(audit, membership_audit_at(&records, "lab", now).unwrap());
+            assert_eq!(
+                audit
+                    .iter()
+                    .find(|member| member.peer == remote_peer)
+                    .unwrap()
+                    .state,
+                expected
+            );
+            assert_eq!(
+                effective.authorizes_configured_peer(remote_peer),
+                expected == MembershipState::Active
+            );
+        }
+        assert!(membership_views_at(&records, "other", 1_100).is_err());
+        let mut tampered = records;
+        tampered[1].payload.sequence += 1;
+        assert!(membership_views_at(&tampered, "lab", 1_100).is_err());
     }
 
     #[test]

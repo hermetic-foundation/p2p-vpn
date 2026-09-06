@@ -201,6 +201,10 @@ Re-admission requires a membership epoch above the revoked or expired epoch.
 Peer inventory projects accepted ledger history without exposing signatures or
 raw records.
 
+`membership_views_at` derives audit details and effective membership from one
+validated ledger evaluation per inventory request. Public audit-only and
+effective-only constructors remain available and preserve their behavior.
+
 | Field | Meaning |
 | --- | --- |
 | `state` | Current signed-ledger state. |
