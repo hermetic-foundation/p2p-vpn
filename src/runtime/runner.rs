@@ -4277,6 +4277,7 @@ fn pairing_rpc_status(
                 false,
             ));
         }
+        let discovery = pair_rpc_effective_discovery(sessions, operation_id, &diagnostics, None);
         return Ok(PairRpcOperationStatus {
             operation_id: operation_id.to_owned(),
             network_name: network_name.to_owned(),
@@ -4284,7 +4285,7 @@ fn pairing_rpc_status(
             role,
             phase: PairRpcPhase::Completed,
             revision: 1,
-            discovery: None,
+            discovery,
             diagnostics,
             expires_at_unix_seconds,
             candidate: None,
@@ -24773,6 +24774,7 @@ mod tests {
         sessions
             .set_pending_approval(approval)
             .expect("set pending approval");
+        sessions.record_open_transport(&operation_id, Some(PairingTransport::Relay));
         sessions
             .prepare_enrollment(
                 "lab",
@@ -24810,6 +24812,15 @@ mod tests {
         sessions
             .mark_enrollment_applied_at(&operation_id, 1_020)
             .expect("apply enrollment");
+
+        let completed = pairing_rpc_status(&sessions, &operation_id, "lab", &inviter.peer_id)
+            .expect("completed relay status");
+        assert_eq!(completed.phase, PairRpcPhase::Completed);
+        assert_eq!(completed.discovery, Some(PairRpcDiscoveryStage::Relay));
+        assert_eq!(
+            completed.diagnostics.selected_transport,
+            Some(PairRpcTransport::Relay)
+        );
 
         let replacement = sessions.open("lab", 600, 1_021, Instant::now()).unwrap();
         sessions = CodePairingSessions::restore_persisted(
@@ -24916,6 +24927,12 @@ mod tests {
                     Instant::now(),
                 )
                 .expect("join pairing");
+            assert!(sessions.select_inviter(
+                &operation_id,
+                inviter.peer_id.parse().expect("inviter peer"),
+                PairingDiscoveryStage::Public,
+                Some(PairingTransport::Relay),
+            ));
             sessions
                 .prepare_enrollment(
                     "lab",
@@ -24936,6 +24953,14 @@ mod tests {
             sessions
                 .mark_enrollment_applied_at(&operation_id, 1_020)
                 .expect("apply enrollment");
+            let completed = pairing_rpc_status(&sessions, &operation_id, "lab", &joiner.peer_id)
+                .expect("completed relay status");
+            assert_eq!(completed.phase, PairRpcPhase::Completed);
+            assert_eq!(completed.discovery, Some(PairRpcDiscoveryStage::Relay));
+            assert_eq!(
+                completed.diagnostics.selected_transport,
+                Some(PairRpcTransport::Relay)
+            );
             sessions
                 .join(
                     "lab",

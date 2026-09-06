@@ -316,6 +316,10 @@ Rendering static `peers` entries would bypass record revocation and is prohibite
 
 Operation status exposes per-operation diagnostics.
 
+- Active and completed enrollments use the same discovery calculation while their operation history remains available.
+- A selected relay transport reports `discovery: relay`; otherwise the retained discovery stage is used.
+- Historical enrollments without their original operation may report no discovery stage. Acknowledged receipts do not retain transport history.
+
 Daemon metrics expose aggregate behavior:
 
 | Metric | Meaning |

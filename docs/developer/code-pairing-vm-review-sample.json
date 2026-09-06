@@ -1,0 +1,49 @@
+{
+  "date": "2026-09-06",
+  "base_revision": "f556c5e3",
+  "runtime": {
+    "path": "/nix/store/1b4fgi6js3691qg95gs3qgmlkwjv9a2a-p2p-vpn-0.1.0/bin/p2p-vpn",
+    "sha256": "649b8ffe2a536df7563d8d4b3cf3dd720883c851f331088e7316e0ba8853eae1"
+  },
+  "source_sha256": {
+    "src/runtime/runner.rs": "f94af27e067ccf6468ac0e7f672aab7a1c56292eaaf977133a5cd84c84195daa",
+    "tests/nixos/code-pairing-relay.nix": "9cc6f870217e23bf50f2a44c2c7a462bf6c41ac2375eec8fad82a43a62aa599d",
+    "tests/nixos/code-pairing-lan.nix": "7d1f87228b96f69a1d9e2895dc257e4d3f3a8f5948088438c1c549e392abc4da"
+  },
+  "checks": [
+    {
+      "check": "nixos-vm-code-pairing-lan",
+      "result": "passed",
+      "derivation": "/nix/store/dkdrzdvq92r2s5fmm9vm11b3r4kh5qhk-vm-test-run-p2p-vpn-nixos-vm-code-pairing-lan.drv",
+      "output": "/nix/store/awvkbk1i7lq3pfj5r66vr69rvla6ymfy-vm-test-run-p2p-vpn-nixos-vm-code-pairing-lan",
+      "log": "/nix/var/log/nix/drvs/dk/drzdvq92r2s5fmm9vm11b3r4kh5qhk-vm-test-run-p2p-vpn-nixos-vm-code-pairing-lan.drv.bz2",
+      "log_sha256": "13b57338adad1928fbd7520974c2bf553e78ec783416c0216256aaa94f7ba082",
+      "script_seconds": 58.09
+    },
+    {
+      "check": "nixos-vm-code-pairing-relay",
+      "result": "passed",
+      "derivation": "/nix/store/2gwwbjfy65mjz7fdi3517r5q6qm2k4gw-vm-test-run-p2p-vpn-nixos-vm-code-pairing-relay.drv",
+      "output": "/nix/store/m7g3i34v82d0jhnjjgxm70hzqjlqmchi-vm-test-run-p2p-vpn-nixos-vm-code-pairing-relay",
+      "log": "/nix/var/log/nix/drvs/2g/wwbjfy65mjz7fdi3517r5q6qm2k4gw-vm-test-run-p2p-vpn-nixos-vm-code-pairing-relay.drv.bz2",
+      "log_sha256": "2ff870748f410b7b8a32af262c32545717796a09337a5cfe2670c53fd3081153",
+      "script_seconds": 56.37
+    }
+  ],
+  "before_fix": {
+    "check": "nixos-vm-code-pairing-relay",
+    "result": "failed",
+    "derivation": "/nix/store/gxkk5yc3d68ccscw0h0y1mkxm1h1bxpl-vm-test-run-p2p-vpn-nixos-vm-code-pairing-relay.drv",
+    "output": null,
+    "log": "/nix/var/log/nix/drvs/gx/kk5yc3d68ccscw0h0y1mkxm1h1bxpl-vm-test-run-p2p-vpn-nixos-vm-code-pairing-relay.drv.bz2",
+    "log_sha256": "020c281ed773d9ffc5c543bf2b5b70008af81317d3d68869f9d2a777fe3160ac",
+    "script_seconds": null,
+    "runtime_source_revision": "f556c5e3",
+    "diagnostic": {
+      "phase": "completed",
+      "discovery": null,
+      "selected_transport": "relay"
+    }
+  },
+  "limitations_document": "pairing-transaction-review.md#completed-discovery-status"
+}

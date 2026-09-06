@@ -203,6 +203,7 @@ pkgs.testers.nixosTest {
             "${pair "approve"} " + open_operation + " " + approval
             + " --vpn-ip ${nodeB.vpnIp} --format json > /tmp/approve.json"
         )
+        print(node_a.succeed("jq '{phase, discovery, selected_transport: .diagnostics.selected_transport}' /tmp/approve.json"))
         node_a.succeed("jq -e '.phase == \"completed\" and .discovery == \"relay\" and .diagnostics.selected_transport == \"relay\"' /tmp/approve.json")
         node_b.wait_until_succeeds(
             "${pair "status"} " + join_operation

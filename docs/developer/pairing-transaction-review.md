@@ -233,6 +233,61 @@ remains open, as does migration of already-invalid saved state.
 
 Android runtime and full NixOS VM gates were not rerun for this incremental fix.
 
+## Completed Discovery Status
+
+### Reproduction and Fix
+
+The code-pairing relay VM at `f556c5e3` completed enrollment on both nodes,
+but the inviter's approval response reported `discovery: null` alongside
+`selected_transport: relay`. A diagnostic-only rerun reproduced the mismatch.
+
+The Applied-enrollment early return in `pairing_rpc_status` bypassed the shared
+discovery calculation. It now uses that calculation, as active operations do.
+No packet protocol, persisted schema, authorization rule, or receipt format changed.
+
+| Regression | Result |
+| --- | --- |
+| Inviter completed relay enrollment | Failed before the fix: `None` instead of `Some(Relay)` |
+| Joiner completed relay enrollment | Failed before the fix with the same mismatch |
+| Full workspace after correction | 1,226 passed; 18 opt-in tests ignored |
+| Required Clippy groups | Correctness, suspicious, and performance checks passed |
+| Packaged LAN code pairing | All 8 subtests passed in 58.09 s |
+| Packaged relay code pairing | All 5 subtests passed in 56.37 s; approval response reports relay discovery and transport |
+| Packaged source inclusion | `rust-test-sources` built successfully |
+
+The artifact tests still cover replacement, restoration, native trust export,
+and acknowledgement. Historical enrollments without their operation slot do not
+gain invented discovery history; acknowledged receipt behavior is unchanged.
+
+### VM Coverage and Limits
+
+- LAN verifies peerless startup, approval, live traffic, restart, native Nix artifacts, secret exclusion, and acknowledgement.
+- Its agenix-style secret paths are fixture files, not actual agenix decryption.
+- Generated Nix is evaluated with the upstream module; resulting JSON runs under `systemd-run`, not a rebuilt/switched OS.
+- Relay verifies local DHT provider discovery, approval, selected relay paths, traffic, and restart across isolated VLANs.
+- Explicit fixture bootstrap/relay addresses are used. This is not public IPFS, carrier NAT, or physical-device evidence.
+- Both VMs use the rebuilt optimized runtime. All drivers cleaned up; no QEMU process remained.
+- The native workspace and required Clippy groups passed; Android and unrelated VM scenarios were not rerun for this status-only correction.
+
+The [artifact record](code-pairing-vm-review-sample.json) identifies runtime,
+sources, successful outputs, and the diagnostic failure log. No applicable Lean
+model exists; these checks are executable evidence, not formal proofs.
+
+Builds used one Nix job and two cores, offline with substitutions disabled.
+The missing Coreutils info output was imported from the official signed cache
+after serial rate-limited downloads; the bootstrap source chain was not built.
+
+### Logs
+
+| Run | Invocation Log |
+| --- | --- |
+| Original relay failure | `/tmp/p2p-vpn-review-code-relay-current.log` |
+| Diagnostic relay failure | `/tmp/p2p-vpn-review-code-relay-diagnostic.log` |
+| Rust negative control | `/tmp/p2p-vpn-review-pairing-discovery-before.log` |
+| Full Rust suite | `/tmp/p2p-vpn-review-pairing-discovery-workspace.log` |
+| Clippy | `/tmp/p2p-vpn-review-pairing-discovery-clippy.log` |
+| Packaged VM verification | `/tmp/p2p-vpn-review-code-fixed-current.log` |
+
 ## Historical Acknowledgement
 
 ### Failure and Correction
