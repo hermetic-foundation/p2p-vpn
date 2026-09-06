@@ -12,7 +12,7 @@ within the [reliability review](refactor-review.md).
 | P1 | Cancel after completion produces unrestorable state | Reproduced for inviter and joiner; cancellation now preserves completed state. |
 | P1 | Prepared enrollment loses recovery dependencies | Live join expiry reproduced and fixed; cancellation, rejection, and replacement remain open. |
 | P2 | Accepted Submit failure leaves submission in flight | Reproduced at response dispatch; release the matching request before applying acceptance. |
-| P2 | New operation prevents acknowledgement of older enrollment | Secondary source review; reproduce across restart and declarative configuration changes. |
+| P2 | New operation prevents acknowledgement of older enrollment | Replacement/restore regression reproduced; acknowledgement now uses Applied ledger state with matching-slot consistency checks. |
 
 ## Completed Cancellation
 
@@ -64,8 +64,8 @@ already corrupted by the old transition. Recovery compatibility remains an open 
    cancellation, rejection, expiry, and same-role replacement before recovery.
 2. Extend retry-eligibility coverage to successful continuation after repair,
    including partial route application and rollback errors.
-3. Separate durable receipt ownership from the replaceable operation slot where
-   reproduction confirms older enrollments cannot be acknowledged.
+3. Extend historical acknowledgement coverage through daemon startup compaction
+   under incompatible declarative authority and multiple sequential pairings.
 4. Reconcile old invalid snapshots without silently dropping committed membership
    or weakening restored-state authorization checks.
 5. Run affected native, namespace, and Android gates after transaction fixes.
@@ -142,3 +142,60 @@ remains open, as does migration of already-invalid saved state.
 | Nix `rust-test-sources` | Built offline; source inclusion only |
 
 Android runtime and full NixOS VM gates were not rerun for this incremental fix.
+
+## Historical Acknowledgement
+
+### Failure and Correction
+
+1. Complete enrollment A and mark it Applied without acknowledging it.
+2. Start pairing B in the same role; it replaces the current-operation slot.
+3. Restore and acknowledge A; the old completion lookup returns `Conflict`.
+
+Applied ledger state and the supplied transcript identify the acknowledgement.
+A matching current slot must still agree with the completion; a different or
+absent slot no longer prevents compaction of the historical enrollment.
+
+The same session-owned readiness check gates artifact export and completed RPC
+status. Historical status takes its expiry from the enrollment response when the
+original operation is absent. RPC fields and native Nix artifact formats are unchanged.
+
+### Coverage
+
+| Case | Assertion |
+| --- | --- |
+| Inviter and joiner replacement | Old acknowledgement succeeds after restore; replacement code remains intact |
+| Wrong transcript | Rejected before compaction |
+| Repeated acknowledgement | Same receipt after another restore |
+| Replay protection | Old rendezvous token remains retained while valid |
+| No current slot | Historical Applied entry can be acknowledged after restore |
+| Incomplete or contradictory matching slot | Prepared, missing completion, changed response, and changed offer are rejected |
+| Native artifacts after replacement/restore | Inviter and joiner exports retain grants, address assignment, and membership-key handling |
+
+The initial replacement test failed with `Conflict` before correction.
+These are session/persistence regressions, not a physical multi-pairing deployment.
+The no-slot case constructs that historical state directly.
+
+The inviter artifact test separately reproduced `InvalidState` before readiness
+was centralized. Artifact assertions also check converged records and exclusion
+of private-key and membership-key material from serialized inviter output.
+
+| Gate after historical-readiness fix | Result |
+| --- | --- |
+| Native workspace | 1,216 passed, 18 opt-in tests ignored |
+| Pairing RPC tests | 16 passed |
+| Code-pairing namespace | Passed, 13.22 seconds |
+| Clippy | Required correctness, suspicious, and performance groups pass |
+| Formatting | Changed Rust and whitespace checks pass |
+| Nix `rust-test-sources` | Built offline; source inclusion only |
+
+Android runtime and full NixOS VM checks remain outstanding for the combined changes.
+
+## Pending Cancellation Decision
+
+The proposed policy is to finish recovery after durable preparation, rejecting
+cancellation that would erase an unresolved commit. Removal afterward uses revocation.
+User confirmation is pending; this policy has not been implemented.
+
+Deleting Prepared state alone is unsafe: runtime routes or membership may already
+have changed. A cancellable transaction would instead need durable abort state and
+verified rollback, including crash recovery.

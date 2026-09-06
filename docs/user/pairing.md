@@ -298,6 +298,10 @@ peer, revoke its membership instead.
 
 Operations and applied enrollments survive daemon restarts.
 
+Starting another pairing does not discard an older completed enrollment. Its status
+and Nix artifacts remain available by operation ID until acknowledged; acknowledging
+it does not cancel the newer pairing.
+
 The state is encrypted and bound to the local identity and network.
 
 ## Security Model

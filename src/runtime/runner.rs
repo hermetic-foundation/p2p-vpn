@@ -4127,18 +4127,7 @@ fn pair_rpc_receipt(receipt: &PairingEnrollmentReceipt, network_name: &str) -> P
 }
 
 fn pairing_rpc_artifacts_ready(sessions: &CodePairingSessions, operation_id: &str) -> bool {
-    sessions.enrollment(operation_id).is_some_and(|enrollment| {
-        enrollment.state == PairingEnrollmentState::Applied
-            && !enrollment.transcript_sha256.is_empty()
-            && match enrollment.role {
-                PairingEnrollmentRole::Inviter => sessions
-                    .open_completion(operation_id)
-                    .is_some_and(|completed| completed == &enrollment.response),
-                PairingEnrollmentRole::Joiner => sessions
-                    .join_completion(operation_id)
-                    .is_some_and(|(_, completed)| completed == &enrollment.response),
-            }
-    })
+    sessions.enrollment_artifacts_ready(operation_id)
 }
 
 fn pairing_rpc_member_routes(records: &[SignedMembershipRecord], peer: &str) -> Vec<PairRpcRoute> {
@@ -4264,6 +4253,42 @@ fn pairing_rpc_status(
             expires_at_unix_seconds,
             candidate: None,
             artifacts_ready: false,
+            failure: None,
+        });
+    }
+    if sessions.enrollment_artifacts_ready(operation_id) {
+        let enrollment = sessions
+            .enrollment(operation_id)
+            .expect("ready enrollment exists");
+        let (role, expected_local) = match enrollment.role {
+            PairingEnrollmentRole::Inviter => (
+                PairRpcRole::Inviter,
+                &enrollment.response.payload.inviter_peer,
+            ),
+            PairingEnrollmentRole::Joiner => (
+                PairRpcRole::Joiner,
+                &enrollment.response.payload.joiner_peer,
+            ),
+        };
+        if expected_local != local_peer {
+            return Err(pair_rpc_error(
+                PairRpcErrorCode::Internal,
+                "pairing enrollment does not match the daemon identity",
+                false,
+            ));
+        }
+        return Ok(PairRpcOperationStatus {
+            operation_id: operation_id.to_owned(),
+            network_name: network_name.to_owned(),
+            local_peer: local_peer.to_owned(),
+            role,
+            phase: PairRpcPhase::Completed,
+            revision: 1,
+            discovery: None,
+            diagnostics,
+            expires_at_unix_seconds,
+            candidate: None,
+            artifacts_ready: true,
             failure: None,
         });
     }
@@ -24473,6 +24498,14 @@ mod tests {
             .mark_enrollment_applied_at(&operation_id, 1_020)
             .expect("apply enrollment");
 
+        let replacement = sessions.open("lab", 600, 1_021, Instant::now()).unwrap();
+        sessions = CodePairingSessions::restore_persisted(
+            &sessions.encode_persisted("lab").unwrap(),
+            "lab",
+            1_022,
+            Instant::now(),
+        )
+        .unwrap();
         let state_path = test_pairing_state_path("artifacts");
         let store = PairingStateStore::new(&state_path);
         let artifacts = pairing_rpc_completion_artifacts(
@@ -24520,6 +24553,17 @@ mod tests {
             .expect("acknowledged status");
         assert_eq!(status.phase, PairRpcPhase::Completed);
         assert!(!status.artifacts_ready);
+        assert_eq!(
+            pairing_rpc_status(
+                &sessions,
+                &replacement.operation_id,
+                "lab",
+                &inviter.peer_id
+            )
+            .unwrap()
+            .phase,
+            PairRpcPhase::Discovering
+        );
         let error = pairing_rpc_completion_artifacts(
             &sessions,
             &operation_id,
@@ -24579,6 +24623,24 @@ mod tests {
             sessions
                 .mark_enrollment_applied_at(&operation_id, 1_020)
                 .expect("apply enrollment");
+            sessions
+                .join(
+                    "lab",
+                    crate::pairing_code::PairingCode::generate(),
+                    None,
+                    Vec::new(),
+                    600,
+                    1_021,
+                    Instant::now(),
+                )
+                .unwrap();
+            sessions = CodePairingSessions::restore_persisted(
+                &sessions.encode_persisted("lab").unwrap(),
+                "lab",
+                1_022,
+                Instant::now(),
+            )
+            .unwrap();
             (sessions, operation_id)
         };
         let (sessions, operation_id) = completed_sessions(false);

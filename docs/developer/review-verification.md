@@ -2,7 +2,7 @@
 
 ## Scope
 
-Audited on 2026-09-06, including live-expiry pairing recovery.
+Audited on 2026-09-06, including historical enrollment readiness.
 This is the current acceptance map for
 the [reliability review](refactor-review.md), not a production certification.
 Earlier milestones remain historical evidence, not automatic proof for later changes.
@@ -11,7 +11,7 @@ Earlier milestones remain historical evidence, not automatic proof for later cha
 
 | Area | Evidence | Limitation |
 | --- | --- | --- |
-| Workspace | Last full run: 1,213 passed, 18 opt-in tests ignored. Diagnostics run separately. | Native Linux toolchain; not an Android device run. |
+| Workspace | Last full run: 1,216 passed, 18 opt-in tests ignored. Diagnostics run separately. | Native Linux toolchain; not an Android device run. |
 | Namespace integration | All 11 pass after terminal stale-response cleanup, in 188.03 seconds. | Controlled topology, not public NAT traversal. |
 | Static analysis | Required correctness, suspicious, and performance Clippy groups pass. | Existing non-fatal style warnings remain. |
 | Formatting | Changed Rust files pass rustfmt; whitespace checks pass. | Not proof of the complete flake `fmt` target. |
@@ -33,6 +33,7 @@ Earlier milestones remain historical evidence, not automatic proof for later cha
 | Pairing cancellation | Both roles preserve completion and persisted state across late cancellation and restore; all 48 session tests pass. | Preventive fix, not repair of existing invalid snapshots; [transaction review](pairing-transaction-review.md) remains open. |
 | Acceptance retry | Four response-dispatch cases cover Submit/Poll persistence and route failures; bounded retry eligibility is restored. | Injected local errors, not partial rollback, restart recovery, or physical retry delivery. |
 | Live join expiry | Prepared remote approval survives expiry/checkpoint/restore; unprepared expiry still clears it. All 50 session tests pass. | Session-state evidence; cancellation and replacement can still invalidate recovery. |
+| Historical enrollments | Both roles retain acknowledgement and native artifacts after replacement/restore; RPC status shares session-owned readiness. | Session/RPC evidence, not physical sequential pairing or incompatible-authority startup compaction. |
 | Startup ownership | Linux and Android pass installed snapshots; expiry deletion and metadata guards pass. Android reactivation asserts its reserved snapshot. | External library integrations must opt into the additive snapshot handoff to avoid config-derived compatibility behavior. |
 
 ## Exported Flake Checks

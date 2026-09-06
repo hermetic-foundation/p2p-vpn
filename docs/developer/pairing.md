@@ -51,6 +51,13 @@ bounded lifecycle.
 
 Mutation methods fail when the daemon has no durable pairing-state path.
 
+Applied enrollments remain acknowledgeable after a newer pairing replaces their
+operation slot. Acknowledgement preserves the newer operation and retains bounded
+receipt and replay state; a matching but contradictory completion is rejected.
+
+Historical Applied enrollments also retain completed status and native Nix artifact
+export until acknowledged. These use the same readiness check as acknowledgement.
+
 `Debug` output redacts the code and secret response material.
 
 Completed cancellation preserves the enrollment, completion artifacts, and accepted
