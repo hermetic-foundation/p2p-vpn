@@ -136,6 +136,25 @@ impl TunRouteUpdate {
 }
 
 impl TunRuntimeConfig {
+    pub(crate) fn from_config_with_routes(
+        config: &Config,
+        routes: &[Route],
+    ) -> Result<Self, TunRuntimeError> {
+        let local_peer = config.local_peer_id()?;
+        let additional_addresses = local_tun_addresses(config)?;
+        Ok(Self {
+            name: config.interface.name.clone(),
+            mtu: effective_packet_mtu(config.interface.mtu),
+            addresses: TunAddresses::for_peer(local_peer),
+            additional_addresses,
+            routes: routes
+                .iter()
+                .copied()
+                .filter(|route| route.owner != local_peer)
+                .collect(),
+        })
+    }
+
     pub fn from_config(config: &Config) -> Result<Self, TunRuntimeError> {
         Self::from_config_with_member_records(config, &config.network.member_records)
     }

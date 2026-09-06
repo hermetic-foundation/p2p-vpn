@@ -93,8 +93,8 @@ Forwarding derives the packet allowlist from its transport-peer map, eliminating
 one repeated ledger evaluation per construction, merge, and configuration update.
 Forwarding now also shares one evaluated ledger between route compilation and
 transport admission. Internal prepared and post-commit runtime membership views
-now copy that snapshot. TUN, DNS, and inventory ownership remain part of the review;
-public record-based constructors are preserved.
+now copy that snapshot. Live TUN reconciliation copies committed routes. Prepared
+TUN, DNS, and inventory ownership remain part of the review; public constructors are preserved.
 
 New policy tests cover unknown versus configured identities, exact grant expiry,
 and local expiry/resignation without erasing surviving network membership.
@@ -547,7 +547,7 @@ The public API does not prevent callers from committing a stale or foreign updat
 Runtime callers do not do this; changing that contract needs separate design and
 coverage rather than silently ignoring updates in this refactor.
 
-Remaining ownership work includes sharing evaluation with TUN,
+Remaining ownership work includes sharing evaluation with prepared TUN updates,
 reviewing revision consumers, and extracting recovery decisions and timer effects.
 
 ### Runtime Membership Snapshot Plan
@@ -558,7 +558,8 @@ reviewing revision consumers, and extracting recovery decisions and timer effect
 4. Verify existing membership, expiry, revocation, and namespace behavior.
 
 This removes independent ledger evaluation after a forwarding commit. The follow-up
-below also covers prepared runtime membership; TUN route derivation remains separate.
+below also covers prepared runtime membership and live TUN reconciliation.
+Prepared TUN route derivation remains separate.
 
 Implemented `OverlayMembership::replace_from_forwarder` for all six internal
 post-commit refresh paths. Public record-based APIs remain unchanged. Both paths
@@ -585,6 +586,21 @@ style warnings remain. No throughput or memory improvement is claimed from these
 Both local and remote expiry withdraw remote overlay admission without erasing
 signed history or promoting configured bootstrap infrastructure into the overlay.
 All membership preparation remains fallible before route application and commit.
+
+#### Committed TUN Route Follow-Up
+
+Live reconciliation previously evaluated retained history independently of forwarding.
+The expiry regression reproduced restored routes when reconciliation received a time
+earlier than the forwarding refresh, despite committed transport authorization being withdrawn.
+
+- Live reconciliation now copies `Forwarder::authorized_routes()` without a clock input.
+- The crate-private TUN adapter excludes local routes and preserves interface/address metadata.
+- Existing failed-command coverage requires the installed route snapshot to remain unchanged.
+- Startup file-based route accounting and public record-based constructors remain unchanged.
+
+This aligns kernel route intent with committed forwarding policy. It does not make
+forwarding policy itself monotonic under system-clock changes, or prove a NAT/recovery fix.
+Prepared TUN updates still need their own ownership review.
 
 ### Snapshot Validation and Recovery Finding
 

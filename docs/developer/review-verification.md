@@ -2,7 +2,7 @@
 
 ## Scope
 
-Audited on 2026-09-06, including prepared membership snapshot ownership.
+Audited on 2026-09-06, including committed TUN route ownership.
 This is the current acceptance map for
 the [reliability review](refactor-review.md), not a production certification.
 Earlier milestones remain historical evidence, not automatic proof for later changes.
@@ -12,7 +12,7 @@ Earlier milestones remain historical evidence, not automatic proof for later cha
 | Area | Evidence | Limitation |
 | --- | --- | --- |
 | Workspace | Last full run: 1,185 passed, 16 opt-in tests ignored. Retention diagnostic runs separately. | Native Linux toolchain; not an Android device run. |
-| Namespace integration | Three code/direct/relayed pairing cases pass after prepared membership sharing; all 11 passed at `0acbd725`. | Other eight not repeated after this change; controlled topology, not public NAT traversal. |
+| Namespace integration | All 11 pass after committed TUN route sharing, in 207.65 seconds. | Controlled topology, not public NAT traversal. |
 | Static analysis | Required correctness, suspicious, and performance Clippy groups pass. | Existing non-fatal style warnings remain. |
 | Formatting | Changed Rust files pass rustfmt; whitespace checks pass. | Not proof of the complete flake `fmt` target. |
 | Nix source parity | `rust-test-sources` built successfully. | Verifies packaged test inclusion, not execution. |
@@ -48,7 +48,7 @@ not imply that the corresponding Nix derivation was built successfully.
 | `nixos-vm-pairing`, `nixos-vm-code-pairing-lan`, `nixos-vm-code-pairing-relay` | Namespace pairing passes; separate current VM outputs not verified. |
 | `nixos-vm-quic-datagram`, `nixos-vm-quic-stream` | Current VM outputs not verified. |
 | `nixos-vm-forced-relay`, `nixos-vm-network-move` | Namespace equivalents pass; current VM outputs not verified. |
-| `namespace-smoke-preflighted` | All 11 passed at `0acbd725`; three affected pairing cases repeated after prepared membership sharing. Derivation result not established. |
+| `namespace-smoke-preflighted` | All 11 pass after committed TUN route sharing. Derivation result not established. |
 | `android`, `android-e2e-fixture` | Earlier offline native/Gradle validation; current derivation results not established. |
 | `android-e2e-structure` | Evaluated check body passed with installed tools earlier, outside a Nix sandbox. |
 | `android-device-audit-structure`, `debug-bundle-structure` | Current result not verified. |
@@ -79,7 +79,7 @@ A combined offline, substitution-disabled dry run for it and `nixos-module` plan
 
 | Workstream | Required Next Evidence |
 | --- | --- |
-| Shared authority | Prepared runtime membership now copies forwarding authority. Review remaining TUN, DNS, and inventory ownership; preserve public constructors. |
+| Shared authority | Prepared membership and live TUN now copy forwarding authority. Review prepared TUN, DNS, and inventory ownership; preserve public constructors. |
 | Recovery ownership | Finish timer/event and stale-completion review beyond the extracted targeted-query owner. |
 | Session lifecycle | Review remaining in-flight requests and authorization-driven retirement. |
 | Pairing orchestration | Assess transaction ownership across preparation, persistence, and finalization. |

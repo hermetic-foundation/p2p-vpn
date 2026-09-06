@@ -14661,7 +14661,7 @@ fn install_pairing_response_membership(
 
     membership.replace_from_forwarder(forwarder)?;
     *local_capabilities = refreshed_local_capabilities(local_capabilities, forwarder);
-    sync_live_tun_routes_at(forwarder, tun_runtime, route_controller, now_unix_seconds)?;
+    sync_live_tun_routes(forwarder, tun_runtime, route_controller)?;
     let accepted = stats.accepted.to_string();
     let ignored = stats.ignored_stale_or_equal.to_string();
     let removed_expired = stats.removed_expired.to_string();
@@ -15014,57 +15014,34 @@ fn sync_live_tun_routes(
     installed: &mut TunRuntimeConfig,
     route_controller: &mut dyn TunRouteController,
 ) -> Result<(), RunnerError> {
-    sync_live_tun_routes_at(
-        forwarder,
-        installed,
-        route_controller,
-        current_unix_seconds_lossy(),
-    )
-}
-
-fn sync_live_tun_routes_at(
-    forwarder: &Forwarder,
-    installed: &mut TunRuntimeConfig,
-    route_controller: &mut dyn TunRouteController,
-    now_unix_seconds: u64,
-) -> Result<(), RunnerError> {
-    sync_live_tun_routes_with_route_update(
-        forwarder,
-        installed,
-        now_unix_seconds,
-        |current, next, update| route_controller.reconcile(current, next, update),
-    )
+    sync_live_tun_routes_with_route_update(forwarder, installed, |current, next, update| {
+        route_controller.reconcile(current, next, update)
+    })
 }
 
 #[cfg(test)]
 fn sync_live_tun_routes_with(
     forwarder: &Forwarder,
     installed: &mut TunRuntimeConfig,
-    now_unix_seconds: u64,
     mut execute: impl FnMut(&IpCommand) -> Result<(), RunnerError>,
 ) -> Result<(), RunnerError> {
-    sync_live_tun_routes_with_route_update(
-        forwarder,
-        installed,
-        now_unix_seconds,
-        |_, _, update| execute_tun_route_update(update, &mut execute),
-    )
+    sync_live_tun_routes_with_route_update(forwarder, installed, |_, _, update| {
+        execute_tun_route_update(update, &mut execute)
+    })
 }
 
 fn sync_live_tun_routes_with_route_update(
     forwarder: &Forwarder,
     installed: &mut TunRuntimeConfig,
-    now_unix_seconds: u64,
     mut apply: impl FnMut(
         &TunRuntimeConfig,
         &TunRuntimeConfig,
         &TunRouteUpdate,
     ) -> Result<(), RunnerError>,
 ) -> Result<(), RunnerError> {
-    let next = TunRuntimeConfig::from_config_with_member_records_at(
+    let next = TunRuntimeConfig::from_config_with_routes(
         forwarder.config(),
-        forwarder.member_records(),
-        now_unix_seconds,
+        forwarder.authorized_routes(),
     )?;
     let update = next.route_reconciliation_from(installed)?;
     let changed = update.apply_commands().len();
@@ -16244,7 +16221,7 @@ fn prune_expired_membership_records(
 ) -> Result<bool, RunnerError> {
     let now_unix_seconds = current_unix_seconds_lossy();
     let (stats, effective_changed) = forwarder.refresh_membership_records(now_unix_seconds)?;
-    sync_live_tun_routes_at(forwarder, tun_runtime, route_controller, now_unix_seconds)?;
+    sync_live_tun_routes(forwarder, tun_runtime, route_controller)?;
     if !effective_changed && stats.removed_untrusted == 0 {
         return Ok(false);
     }
@@ -33390,7 +33367,7 @@ mod tests {
         let installed_before = tun_runtime.clone();
         let mut failed_runtime = tun_runtime.clone();
         assert!(
-            sync_live_tun_routes_with(&forwarder, &mut failed_runtime, after_expiry, |_| Err(
+            sync_live_tun_routes_with(&forwarder, &mut failed_runtime, |_| Err(
                 RunnerError::ControlSocket(io::Error::other("injected failure"))
             ),)
             .is_err()
@@ -33401,7 +33378,6 @@ mod tests {
         sync_live_tun_routes_with_route_update(
             &forwarder,
             &mut tun_runtime,
-            after_expiry,
             |installed, next, update| {
                 controller_called = true;
                 assert_eq!(installed, &installed_before);
@@ -33598,7 +33574,7 @@ mod tests {
         assert_eq!(snapshot.membership_state_load_failures, 0);
         assert_eq!(snapshot.membership_state_persist_failures, 0);
         let mut commands = Vec::new();
-        sync_live_tun_routes_with(&restarted_forwarder, &mut restarted_tun, 1_001, |command| {
+        sync_live_tun_routes_with(&restarted_forwarder, &mut restarted_tun, |command| {
             commands.push(command.to_string());
             Ok(())
         })

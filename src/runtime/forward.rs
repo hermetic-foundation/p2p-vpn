@@ -21,7 +21,7 @@ use crate::{
         membership_trust_anchors, merge_membership_records_at,
     },
     queue::{EnqueueError, Packet, PeerQueues},
-    route::{IpCidr, RouteError, RouteTable},
+    route::{IpCidr, Route, RouteError, RouteTable},
     runtime::{
         control::ControlRoute,
         p2p::Behaviour,
@@ -479,6 +479,10 @@ impl Forwarder {
 
     pub(crate) const fn authorization_revision(&self) -> u64 {
         self.authorization_revision
+    }
+
+    pub(crate) fn authorized_routes(&self) -> &[Route] {
+        self.authorization.routes.routes()
     }
 
     #[must_use]

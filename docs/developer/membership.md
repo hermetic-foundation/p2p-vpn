@@ -324,7 +324,7 @@ An accepted record update changes four runtime surfaces:
 
 1. `Forwarder` recomputes transport peers and authorized routes.
 2. Post-commit `OverlayMembership` refreshes copy the forwarder's authorized peer set.
-3. `TunRuntimeConfig` reconciles kernel routes transactionally.
+3. `TunRuntimeConfig` copies committed forwarding routes and reconciles kernel routes transactionally.
 4. Local control capabilities publish the new snapshot digest.
 
 Post-commit refreshes include restore, pairing-response installation, capability
@@ -335,8 +335,12 @@ Prepared pairing, enrollment recovery, and revocation copy the authorized peer s
 from their `ForwarderUpdate` before applying routes. Prepared and committed views
 share the same constructor; infrastructure peers remain separate from overlay authority.
 
-Record-based public constructors remain unchanged. TUN route derivation still
-evaluates records separately, using the preparation transaction's timestamp.
+Live route reconciliation does not evaluate the ledger or read the clock. It copies
+committed forwarding routes, excludes local-owned routes, and preserves local TUN
+address configuration. Failed route application leaves the installed snapshot unchanged.
+
+Record-based public constructors remain unchanged. Prepared TUN route derivation
+still evaluates records separately, using the preparation transaction's timestamp.
 
 Kernel route commands have inverse operations for rollback.
 
