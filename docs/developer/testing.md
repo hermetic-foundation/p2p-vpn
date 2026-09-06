@@ -960,6 +960,20 @@ These tests require Linux namespace and TUN support.
 | Capability evidence | Check the acceptance counter, covering inbound requests and responses; receipt alone is insufficient. |
 | Datagram evidence | Read sessions, healthy paths, and transmitted packets from `daemon-state`; read accepted inbound packets from `daemon-status`. |
 | Measured datagram traffic | Direct UDP and owned QUIC cases wait for sessions and selected datagram paths on both nodes before sending the finite ping burst. |
+| Network-move isolation | Isolated endpoint bridge ports can reach the relay, but not each other over the relay LAN. Both directions are checked before daemon startup. |
+
+The network-move fixture has a separate direct link. Disabling it must leave
+only circuit-relay reachability. Isolated bridge ports prevent DCUtR from using
+the shared relay LAN as an unintended second direct path; hole punching stays enabled.
+
+On 2026-09-06, the unisolated fixture timed out expecting `circuit_relay` while
+connection 15 carried direct TCP through `10.251.0.2:42402`. Logs recorded a
+successful DCUtR result. This demonstrated incomplete test isolation, not lost connectivity.
+
+- Retained failing suite: `/tmp/p2p-vpn-review-stale-packet-namespace.log` (10 passed, one failed).
+- Node evidence: `/tmp/p2p-vpn-network-move-tun-e2e-1940709/node-a.log`.
+- Corrected fixture keeps the selected-relay and restored-direct assertions unchanged.
+- All 11 namespace tests passed with isolated ports in 192.07 seconds: `/tmp/p2p-vpn-review-stale-packet-isolated-namespace.log`.
 
 The DHT fixture uses simulated public addresses on `11.252.0.0/24` inside isolated
 network namespaces, without a default route to an external network. AutoNAT is off;

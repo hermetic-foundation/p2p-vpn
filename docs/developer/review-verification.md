@@ -11,8 +11,8 @@ Earlier milestones remain historical evidence, not automatic proof for later cha
 
 | Area | Evidence | Limitation |
 | --- | --- | --- |
-| Workspace | Last full run: 1,224 passed, 18 opt-in tests ignored, including pinned resource bounds. Diagnostics run separately. | Native Linux toolchain; not an Android device run. |
-| Namespace integration | All 11 pass with pinned resource bounds, including network move and relay-to-direct promotion. Logs: `/tmp/p2p-vpn-review-stream-bounds-namespace.log`. | Controlled topology, not public NAT traversal or sustained saturation; elapsed time is not a performance benchmark. |
+| Workspace | Last full run: 1,225 passed, 18 opt-in tests ignored, including stale packet-response accounting. Diagnostics run separately. | Native Linux toolchain; not an Android device run. |
+| Namespace integration | All 11 pass with stale-response cleanup and isolated relay-LAN endpoint ports. Logs: `/tmp/p2p-vpn-review-stale-packet-isolated-namespace.log`. | Earlier 10/11 run exposed a direct hole-punch bypass in the fixture; see [isolation evidence](testing.md#namespace-e2e). Controlled topology, not public NAT or saturation evidence. |
 | Static analysis | Required correctness, suspicious, and performance Clippy groups pass. | Existing non-fatal style warnings remain. |
 | Formatting | Changed Rust files pass rustfmt; whitespace checks pass. | Not proof of the complete flake `fmt` target. |
 | Nix source parity | `rust-test-sources` built successfully. | Verifies packaged test inclusion, not execution. |
@@ -123,7 +123,7 @@ Logs use `/tmp/p2p-vpn-review-startup-snapshot-*`.
 | Platform validation | Android multi-network passes at `643d798e`; repeat affected VM gates and targeted Android health recovery on final shared-runtime code. |
 | Android underlay failure | Latest transition passes with independent OS underlay diagnostics. Earlier failure attribution remains unresolved; a pass alone does not establish its cause. |
 | Android update traffic | Latest replacement traffic passes with ping timing and reply sequences retained. Preserve earlier 4/5 evidence and investigate attribution alongside remaining transport ownership work. |
-| Packet stream ownership | [Dispatch, closure, admission, and stream budgets](packet-stream-ownership-review.md) have regressions. Resolve duplicate inbound ownership, stale response accounting, sustained overload measurements, and final platform validation. |
+| Packet stream ownership | [Dispatch, closure, admission, stream budgets, and stale response accounting](packet-stream-ownership-review.md) have regressions. Resolve duplicate inbound ownership, sustained overload measurements, and final platform validation. |
 | Packaging/tooling | Resolve or explicitly account for unverified exported checks without uncontrolled source builds. |
 | Documentation | Reconcile architecture and user workflows with final behavior and evidence. |
 

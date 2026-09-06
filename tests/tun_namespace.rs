@@ -898,6 +898,14 @@ fn run_network_move_orchestrator() {
     configure_network_move_underlay(relay.id(), node_a.id(), node_b.id());
     ns_command(node_a.id(), "ping", &["-c", "1", "-W", "2", "10.251.0.254"]);
     ns_command(node_b.id(), "ping", &["-c", "1", "-W", "2", "10.251.0.254"]);
+    for (pid, remote) in [(node_a.id(), "10.251.0.2"), (node_b.id(), "10.251.0.1")] {
+        let output = ns_command_output(pid, "ping", &["-c", "1", "-W", "2", remote]);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "relay LAN endpoints must be isolated"
+        );
+    }
     ns_command(node_a.id(), "ping", &["-c", "1", "-W", "2", "10.253.0.2"]);
 
     fs::write(&start_relay, b"start").expect("write relay start file");
@@ -2474,6 +2482,22 @@ fn configure_relay_underlay(pid_relay: u32, pid_a: u32, pid_b: u32) {
 
 fn configure_network_move_underlay(pid_relay: u32, pid_a: u32, pid_b: u32) {
     configure_three_node_underlay(pid_relay, pid_a, pid_b, "mv", "10.251.0");
+    // The relay LAN must not become an alternate direct hole-punch path.
+    for port in ["veth-a-host", "veth-b-host"] {
+        run_command(
+            "ip",
+            &[
+                "link",
+                "set",
+                "dev",
+                port,
+                "type",
+                "bridge_slave",
+                "isolated",
+                "on",
+            ],
+        );
+    }
     run_command(
         "ip",
         &[
