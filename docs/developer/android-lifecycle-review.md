@@ -1,17 +1,17 @@
 # Android Lifecycle Review
 
-Reviewed against `bb0c164b` on 2026-09-06. No service behavior has been changed by
-this investigation. The lifecycle finding remains open.
+Originally reviewed against `bb0c164b` on 2026-09-06. The service now uses a
+process-wide scoped dispatcher. Device lifecycle validation remains outstanding.
 
 ## R11: Lost Cleanup
 
-Priority: P2. Executor behavior reproduced; Android device impact unverified.
+Priority: P2. Executor defect reproduced and fixed; device impact unverified.
 
-`onDestroy()` submits `stopNativeRuntime` to the service's single worker, waits
-six seconds, then calls `shutdownNow()`. If existing work outlasts that wait,
+Previously, `onDestroy()` submitted `stopNativeRuntime` to the service's worker, waited
+six seconds, then called `shutdownNow()`. If existing work outlasted that wait,
 the queued cleanup can be discarded before it runs.
 
-| Evidence | Source |
+| Historical Evidence | Source at `bb0c164b` |
 | --- | --- |
 | One executor per service instance | `P2pVpnService.java:148` |
 | Submit cleanup, bounded wait, forced shutdown | `P2pVpnService.java:253-259` |
@@ -25,7 +25,7 @@ device responsiveness has not been measured; this is not a claimed ANR reproduct
 
 ## Why Graceful Shutdown Is Insufficient
 
-Each service instance owns a separate executor, but native stop is not scoped to
+Previously each service instance owned a separate executor, but native stop is not scoped to
 that service instance. Simply retaining old queued cleanup allows a different
 ordering: a replacement starts first, then old cleanup stops the replacement.
 
@@ -57,14 +57,18 @@ demonstrates why deferred unscoped cleanup is unsafe, not an executed JNI race.
 Neither scenario invokes Android framework callbacks or the real native runtime.
 
 A successful exit means these failure orderings were reproduced. It does not mean
-the service passed a regression test. Replace this characterization with tests
-against the actual lifecycle owner when implementing the fix.
+the service passed a regression test. The reproducer is retained as historical
+evidence; `ServiceRuntimeWorkerTest` tests the replacement implementation.
 
-## Ownership Plan
+## Implemented Ownership
 
-Introduce a platform-free lifecycle owner aligned with the process-global runtime.
-Prefer serialized native lifecycle work with per-service scopes over independent
-workers that can start and stop the same runtime concurrently.
+`ServiceRuntimeWorker` serializes native lifecycle work on one process-wide worker.
+Opening a service scope retires its predecessor. Retirement cancels pending tasks
+and queues exactly one cleanup before any replacement work.
+
+`onDestroy()` closes admission without waiting. Posted snapshots, notifications,
+and stop requests check scope liveness on the main thread. Final pairing cleanup
+runs after in-flight service work, preventing late lock acquisition from leaking.
 
 | Invariant | Required Behavior |
 | --- | --- |
@@ -76,9 +80,20 @@ workers that can start and stop the same runtime concurrently.
 | Main-thread behavior | Do not wait six seconds synchronously in `onDestroy()`. |
 | Resource bounds | Do not create replacement threads for indefinitely blocked JNI work. |
 
-Keep pairing operation IDs and per-network supervisor generations intact. Do not
-alter JSON, Nix configuration, pairing protocols, or the JNI ABI without a concrete
-need demonstrated by the ownership implementation.
+Pairing operation IDs, network supervisor generations, configuration, protocols,
+and JNI signatures are unchanged. Closed scopes drop late submissions rather
+than throwing into Android callbacks. The worker can time out when idle.
+
+## Regression Evidence
+
+Five owner tests cover blocked-work cleanup, replacement ordering, late close,
+timer rearming, cancellation retention, and cleanup after task failure.
+The complete Android Java unit suite and lint passed with cached dependencies.
+Debug APK assembly also passed; this local Gradle build had no JNI libraries,
+so it is Java/resource packaging evidence, not a deployable native VPN validation.
+
+These are real owner tests, not Android framework or JNI lifecycle tests.
+Destroy/recreate, always-on recovery, and network transitions remain to be exercised.
 
 ## Validation Sequence
 

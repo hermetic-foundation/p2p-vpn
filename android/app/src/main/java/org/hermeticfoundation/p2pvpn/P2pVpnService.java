@@ -46,9 +46,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -93,7 +91,7 @@ public final class P2pVpnService extends VpnService {
     private final UnderlayRecoveryPolicy underlayRecoveryPolicy = new UnderlayRecoveryPolicy();
     private final DiagnosticEventBuffer diagnosticEvents = new DiagnosticEventBuffer();
 
-    private ScheduledThreadPoolExecutor worker;
+    private ServiceRuntimeWorker.Scope worker;
     private ExecutorService profileJoinWorker;
     private ProfileStore profileStore;
     private File runtimeDirectory;
@@ -145,8 +143,7 @@ public final class P2pVpnService extends VpnService {
         serviceStartedElapsedRealtime = SystemClock.elapsedRealtime();
         recordDiagnosticEvent("service_created");
         debugInstance = this;
-        worker = new ScheduledThreadPoolExecutor(1);
-        worker.setRemoveOnCancelPolicy(true);
+        worker = ServiceRuntimeWorker.open(this::retireServiceRuntime);
         profileJoinWorker =
                 Executors.newSingleThreadExecutor(
                         runnable -> {
@@ -234,6 +231,9 @@ public final class P2pVpnService extends VpnService {
 
     @Override
     public void onDestroy() {
+        if (worker != null) {
+            worker.close();
+        }
         if (connectivityManager != null && networkCallback != null) {
             try {
                 connectivityManager.unregisterNetworkCallback(networkCallback);
@@ -246,22 +246,20 @@ public final class P2pVpnService extends VpnService {
         cancel(statusFuture);
         cancel(pairingFuture);
         cancelProfileJoinBestEffort();
-        if (profileJoinWorker != null) {
-            profileJoinWorker.shutdownNow();
-        }
-        releasePairingMulticastLock();
-        if (worker != null && !worker.isShutdown()) {
-            try {
-                worker.submit(this::stopNativeRuntime).get(6, TimeUnit.SECONDS);
-            } catch (Exception ignored) {
-                releaseMulticastLock();
-            }
-            worker.shutdownNow();
-        }
         if (debugInstance == this) {
             debugInstance = null;
         }
         super.onDestroy();
+    }
+
+    private void retireServiceRuntime() {
+        // An in-flight service task may have started pairing after onDestroy's cancellation.
+        cancelProfileJoinBestEffort();
+        if (profileJoinWorker != null) {
+            profileJoinWorker.shutdownNow();
+        }
+        releasePairingMulticastLock();
+        stopNativeRuntime();
     }
 
     private void connectRequested(boolean systemStart) {
@@ -729,7 +727,7 @@ public final class P2pVpnService extends VpnService {
         if (remainStarted) {
             return;
         }
-        mainHandler.post(
+        postIfActive(
                 () -> {
                     stopForeground(STOP_FOREGROUND_REMOVE);
                     stopSelf();
@@ -1175,11 +1173,7 @@ public final class P2pVpnService extends VpnService {
                         result = ProfileJoinResult.failure(failureMessage(error));
                     }
                     ProfileJoinResult completed = result;
-                    try {
-                        worker.execute(() -> completeProfileJoin(operation.id, completed));
-                    } catch (RejectedExecutionException ignored) {
-                        // Service destruction already cancelled the native operation.
-                    }
+                    worker.execute(() -> completeProfileJoin(operation.id, completed));
                 });
     }
 
@@ -1290,7 +1284,7 @@ public final class P2pVpnService extends VpnService {
             updateForegroundNotification();
             return;
         }
-        mainHandler.post(
+        postIfActive(
                 () -> {
                     stopForeground(STOP_FOREGROUND_REMOVE);
                     stopSelf();
@@ -1487,7 +1481,7 @@ public final class P2pVpnService extends VpnService {
     }
 
     private void stopManualService() {
-        mainHandler.post(
+        postIfActive(
                 () -> {
                     stopForeground(STOP_FOREGROUND_REMOVE);
                     stopSelf();
@@ -2315,12 +2309,23 @@ public final class P2pVpnService extends VpnService {
     }
 
     private void updateForegroundNotification() {
-        NotificationManager manager = getSystemService(NotificationManager.class);
         String message =
                 connected && !activeNetworkIds.isEmpty()
                         ? getString(R.string.notification_connected, activeNetworkLabel())
                         : connectionDetail;
-        manager.notify(NOTIFICATION_ID, notification(message));
+        Notification notification = notification(message);
+        postIfActive(() -> {
+            NotificationManager manager = getSystemService(NotificationManager.class);
+            manager.notify(NOTIFICATION_ID, notification);
+        });
+    }
+
+    private void postIfActive(Runnable action) {
+        mainHandler.post(() -> {
+            if (worker != null && !worker.isClosed()) {
+                action.run();
+            }
+        });
     }
 
     private String activeNetworkLabel() {
@@ -2371,7 +2376,7 @@ public final class P2pVpnService extends VpnService {
                         candidate == null ? null : candidate.requestedHostname,
                         candidate == null ? null : candidate.requestedVpnIp);
         Snapshot current = snapshot;
-        mainHandler.post(
+        postIfActive(
                 () -> {
                     for (Listener listener : listeners) {
                         listener.onSnapshot(current);
@@ -2739,7 +2744,7 @@ public final class P2pVpnService extends VpnService {
         void addListener(Listener listener) {
             listeners.add(listener);
             Snapshot current = snapshot;
-            mainHandler.post(() -> listener.onSnapshot(current));
+            postIfActive(() -> listener.onSnapshot(current));
         }
 
         void removeListener(Listener listener) {
