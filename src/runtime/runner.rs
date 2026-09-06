@@ -3367,7 +3367,7 @@ fn send_stream_path_probe(
 ) -> Result<StreamPathProbeDispatch, String> {
     if !matches!(
         path.kind,
-        PathKind::DirectQuicStream | PathKind::CircuitRelay
+        PathKind::DirectQuicStream | PathKind::DirectTcpStream | PathKind::CircuitRelay
     ) {
         return forwarder
             .send_path_probe_with_mtu(swarm, peer, peer_mtu, PATH_PROBE_PAYLOAD)
@@ -9895,7 +9895,7 @@ fn send_dequeued_stream_fallback(
 ) {
     if matches!(
         path.kind,
-        PathKind::DirectQuicStream | PathKind::CircuitRelay
+        PathKind::DirectQuicStream | PathKind::DirectTcpStream | PathKind::CircuitRelay
     ) {
         send_dequeued_pinned_stream(swarm, forwarder, packet, peer_mtu, path, context);
         return;
@@ -36031,7 +36031,17 @@ mod tests {
             )
             .expect("queued");
         let mut paths = PathSet::new();
-        paths.record_established(remote_overlay, PathKind::DirectTcpStream);
+        paths.record_established_with_details(
+            remote_overlay,
+            PathKind::DirectTcpStream,
+            None,
+            None,
+            PathOrigin::Configured,
+            PathConnectionRole::Dialer,
+            false,
+            Some(ConnectionId::new_unchecked(1)),
+            Some(1),
+        );
         let mut peer_capabilities = PeerCapabilities::default();
         peer_capabilities.record(remote_overlay, ControlCapabilities::local("lab", None, 19));
         let metrics = RuntimeMetrics::default();
@@ -36135,7 +36145,17 @@ mod tests {
             )
             .expect("queued");
         let mut paths = PathSet::new();
-        paths.record_established_with_mtu(remote_overlay, PathKind::DirectTcpStream, Some(19));
+        paths.record_established_with_details(
+            remote_overlay,
+            PathKind::DirectTcpStream,
+            None,
+            Some(19),
+            PathOrigin::Configured,
+            PathConnectionRole::Dialer,
+            false,
+            Some(ConnectionId::new_unchecked(1)),
+            Some(1),
+        );
         let mut peer_capabilities = PeerCapabilities::default();
         peer_capabilities.record(
             remote_overlay,
@@ -36241,7 +36261,17 @@ mod tests {
                 .expect("queued");
         }
         let mut paths = PathSet::new();
-        paths.record_established(remote_overlay, PathKind::DirectTcpStream);
+        paths.record_established_with_details(
+            remote_overlay,
+            PathKind::DirectTcpStream,
+            None,
+            None,
+            PathOrigin::Configured,
+            PathConnectionRole::Dialer,
+            false,
+            Some(ConnectionId::new_unchecked(1)),
+            Some(1),
+        );
         let mut peer_capabilities = PeerCapabilities::default();
         peer_capabilities.record(
             remote_overlay,
@@ -36524,7 +36554,17 @@ mod tests {
             .enqueue_tun_packet(&mut queues, different_flow)
             .expect("different flow packet");
         let mut paths = PathSet::new();
-        paths.record_established(remote_overlay, PathKind::DirectTcpStream);
+        paths.record_established_with_details(
+            remote_overlay,
+            PathKind::DirectTcpStream,
+            None,
+            None,
+            PathOrigin::Configured,
+            PathConnectionRole::Dialer,
+            false,
+            Some(ConnectionId::new_unchecked(1)),
+            Some(1),
+        );
         let mut peer_capabilities = PeerCapabilities::default();
         peer_capabilities.record(
             remote_overlay,
@@ -36603,7 +36643,17 @@ mod tests {
                 .unwrap_or_else(|error| panic!("queued packet {sequence}: {error:?}"));
         }
         let mut paths = PathSet::new();
-        paths.record_established(remote_overlay, PathKind::DirectTcpStream);
+        paths.record_established_with_details(
+            remote_overlay,
+            PathKind::DirectTcpStream,
+            None,
+            None,
+            PathOrigin::Configured,
+            PathConnectionRole::Dialer,
+            false,
+            Some(ConnectionId::new_unchecked(1)),
+            Some(1),
+        );
         let mut peer_capabilities = PeerCapabilities::default();
         peer_capabilities.record(
             remote_overlay,
@@ -36672,7 +36722,17 @@ mod tests {
                 .expect("queued");
         }
         let mut paths = PathSet::new();
-        paths.record_established(remote_overlay, PathKind::DirectTcpStream);
+        paths.record_established_with_details(
+            remote_overlay,
+            PathKind::DirectTcpStream,
+            None,
+            None,
+            PathOrigin::Configured,
+            PathConnectionRole::Dialer,
+            false,
+            Some(ConnectionId::new_unchecked(1)),
+            Some(1),
+        );
         let mut peer_capabilities = PeerCapabilities::default();
         peer_capabilities.record(
             remote_overlay,
@@ -37287,7 +37347,17 @@ mod tests {
             .enqueue_tun_packet(&mut queues, packet)
             .expect("queued");
         let mut paths = PathSet::new();
-        paths.record_established(remote_overlay, PathKind::DirectTcpStream);
+        paths.record_established_with_details(
+            remote_overlay,
+            PathKind::DirectTcpStream,
+            None,
+            None,
+            PathOrigin::Configured,
+            PathConnectionRole::Dialer,
+            false,
+            Some(ConnectionId::new_unchecked(1)),
+            Some(1),
+        );
         paths.record_established(remote_overlay, PathKind::DirectQuicDatagram);
         let mut peer_capabilities = PeerCapabilities::default();
         let capabilities =
@@ -39953,7 +40023,17 @@ mod tests {
             0
         );
 
-        paths.record_established(remote_overlay, PathKind::DirectTcpStream);
+        paths.record_established_with_details(
+            remote_overlay,
+            PathKind::DirectTcpStream,
+            None,
+            None,
+            PathOrigin::Configured,
+            PathConnectionRole::Dialer,
+            false,
+            Some(ConnectionId::new_unchecked(1)),
+            Some(1),
+        );
         peer_capabilities.record(
             remote_overlay,
             ControlCapabilities::local("lab", None, 1280),
@@ -39979,65 +40059,122 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn quic_stream_path_probe_is_pinned_to_the_latest_connection() {
-        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
-        let remote = peer_id();
-        let remote_overlay = PeerId::from_libp2p(remote);
-        let config = config_with_peer(&local_identity, remote);
-        let mut node = build_node(&HostConfig {
-            identity: local_identity,
-            network_name: "lab".to_owned(),
-            membership_tag: None,
-            mtu: 1280,
-            max_concurrent_control_streams: 64,
-            max_concurrent_packet_streams: 256,
-            listen_addresses: Vec::new(),
-            external_addresses: Vec::new(),
-            bootstrap_peers: Vec::new(),
-            known_peers: Vec::new(),
-            relay_reservations: Vec::new(),
-            relay_server: false,
-            relay_resources: crate::config::RelayResourceConfig::default(),
-            resources: crate::config::ResourceConfig::default(),
-            discovery: DiscoveryConfig::default(),
-        })
-        .expect("node");
-        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
-        let first_connection = ConnectionId::new_unchecked(41);
-        let latest_connection = ConnectionId::new_unchecked(42);
-        let mut paths = PathSet::new();
-        for connection_id in [first_connection, latest_connection] {
-            paths.record_established_with_details(
-                remote_overlay,
-                PathKind::DirectQuicStream,
-                None,
-                Some(1280),
-                PathOrigin::Dcutr,
-                PathConnectionRole::Dialer,
-                false,
-                Some(connection_id),
-                Some(1),
-            );
+    async fn stream_dispatch_honors_selected_connection_and_replacement() {
+        for path_kind in [PathKind::DirectQuicStream, PathKind::DirectTcpStream] {
+            let local_identity =
+                crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+            let remote = peer_id();
+            let remote_overlay = PeerId::from_libp2p(remote);
+            let config = config_with_peer(&local_identity, remote);
+            let mut node = build_node(&HostConfig {
+                identity: local_identity,
+                network_name: "lab".to_owned(),
+                membership_tag: None,
+                mtu: 1280,
+                max_concurrent_control_streams: 64,
+                max_concurrent_packet_streams: 256,
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                known_peers: Vec::new(),
+                relay_reservations: Vec::new(),
+                relay_server: false,
+                relay_resources: crate::config::RelayResourceConfig::default(),
+                resources: crate::config::ResourceConfig::default(),
+                discovery: DiscoveryConfig::default(),
+            })
+            .expect("node");
+            let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+            let first_connection = ConnectionId::new_unchecked(41);
+            let latest_connection = ConnectionId::new_unchecked(42);
+            let mut paths = PathSet::new();
+            for connection_id in [first_connection, latest_connection] {
+                paths.record_established_with_details(
+                    remote_overlay,
+                    path_kind,
+                    None,
+                    Some(1280),
+                    PathOrigin::Dcutr,
+                    PathConnectionRole::Dialer,
+                    false,
+                    Some(connection_id),
+                    Some(1),
+                );
+            }
+
+            let peer_capabilities = PeerCapabilities::default();
+            let metrics = RuntimeMetrics::default();
+            let mut packet_in_flight = PacketInFlight::new(256);
+            for expected_connection in [latest_connection, first_connection] {
+                let selected = paths
+                    .best_for(remote_overlay)
+                    .expect("selected stream path");
+                assert_eq!(selected.latest_connection_id, Some(expected_connection));
+                let dispatch = send_stream_path_probe(
+                    &mut node.swarm,
+                    &mut forwarder,
+                    remote_overlay,
+                    1280,
+                    selected,
+                )
+                .expect("path probe");
+                assert!(
+                    matches!(dispatch, StreamPathProbeDispatch::Pinned(_)),
+                    "{path_kind:?} probe used peer-level request-response"
+                );
+
+                let mut queues = PeerQueues::new(4, 4096);
+                forwarder
+                    .enqueue_tun_packet(
+                        &mut queues,
+                        ipv4_packet(
+                            builtin_ipv4(config.local_peer_id().expect("local peer")),
+                            builtin_ipv4(remote_overlay),
+                        ),
+                    )
+                    .expect("queued packet");
+                let packet = queues.dequeue().expect("packet");
+                let mut context = queue_drain_context(
+                    &mut paths,
+                    &peer_capabilities,
+                    &mut packet_in_flight,
+                    &metrics,
+                );
+                send_dequeued_stream_fallback(
+                    &mut node.swarm,
+                    &forwarder,
+                    &packet,
+                    1280,
+                    selected,
+                    &mut context,
+                );
+                for _ in 0..2 {
+                    let event = libp2p::swarm::NetworkBehaviour::poll(
+                        &mut node.swarm.behaviour_mut().pinned_packet_stream,
+                        &mut std::task::Context::from_waker(futures::task::noop_waker_ref()),
+                    );
+                    assert!(
+                        matches!(event, std::task::Poll::Ready(
+                    libp2p::swarm::ToSwarm::NotifyHandler {
+                        peer_id, handler: libp2p::swarm::NotifyHandler::One(connection_id), ..
+                    }
+                ) if peer_id == remote && connection_id == expected_connection),
+                        "{path_kind:?} dispatch did not target the selected connection"
+                    );
+                }
+                if expected_connection == latest_connection {
+                    assert!(!maybe_demote_pinned_stream_fallback_path(
+                        &mut paths,
+                        &metrics,
+                        remote_overlay,
+                        path_kind,
+                        None,
+                        latest_connection,
+                        &pinned_packet_stream::Failure::Io("closed".to_owned()),
+                    ));
+                }
+            }
         }
-
-        let selected = paths.best_for(remote_overlay).expect("selected QUIC path");
-        assert_eq!(
-            pinned_stream_path_probe_connection(remote_overlay, selected)
-                .expect("selected connection"),
-            latest_connection
-        );
-        let dispatch = send_stream_path_probe(
-            &mut node.swarm,
-            &mut forwarder,
-            remote_overlay,
-            1280,
-            selected,
-        )
-        .expect("path probe");
-
-        let StreamPathProbeDispatch::Pinned(_) = dispatch else {
-            panic!("QUIC path probe used generic request-response");
-        };
     }
 
     #[tokio::test]

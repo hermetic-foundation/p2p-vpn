@@ -10,14 +10,14 @@ inspection. These findings do not establish the cause of the retained Android
 
 | Priority | Finding | Source |
 | --- | --- | --- |
-| P2 | Direct-TCP dispatch does not honor the selected connection | `src/runtime/runner.rs:9904`, `src/runtime/forward.rs:280` |
+| P2 | Direct-TCP dispatch ignored selected connection; reproduced and corrected | Original: `src/runtime/runner.rs:9904`, `src/runtime/forward.rs:280` |
 | P2 | Pinned-stream connection closure has no terminal request event | `src/runtime/pinned_packet_stream.rs:165`, `:234` |
 
 ### Direct TCP Selection
 
-`send_dequeued_stream_fallback` pins QUIC-stream and relay traffic, but sends
-direct TCP through peer-level request-response dispatch. The selected path's
-connection ID is not passed to that send; metrics still use the selected path.
+Previously, `send_dequeued_stream_fallback` pinned QUIC-stream and relay traffic,
+but sent direct TCP through peer-level request-response dispatch. The selected
+connection ID was omitted while metrics still used the selected path.
 
 With multiple connections to one peer, dispatch can use a different connection
 from the healthy direct candidate. A stale or relayed connection can therefore
@@ -26,6 +26,27 @@ carry a packet attributed to direct TCP.
 Required regression: establish multiple connections, select one direct TCP
 candidate, dispatch a queued packet, and verify the emitted handler notification
 targets that exact connection. Include fallback after the selected connection fails.
+
+#### Correction and Evidence
+
+Direct-TCP health probes and queued packets now use the existing pinned-stream
+dispatcher, just like QUIC streams and relays. Packet framing, protocol names,
+authorization, MTU checks, queue limits, and public Forwarder APIs are unchanged.
+
+`stream_dispatch_honors_selected_connection_and_replacement` failed before the
+fix with `DirectTcpStream probe used peer-level request-response`. It now checks
+both probes and packets against the selected handler's exact connection ID.
+
+The test models two tracked connections for TCP and QUIC, then fails the newest
+and verifies dispatch to the remaining connection. It polls real behaviour
+notifications but does not establish those synthetic connections over sockets.
+
+- Workspace: 1,216 tests passed; 18 opt-in tests ignored.
+- Eight queue/MTU/probe fixtures now provide connection IDs; their assertions remain unchanged.
+- Required Clippy groups, Rust formatting, and Nix `rust-test-sources` passed.
+- All 11 Linux namespace scenarios passed in 222.43 seconds, including network moves and relay promotion.
+- Logs: `/tmp/p2p-vpn-review-tcp-pin-*`.
+- Rebuilt Android and final multi-network recovery validation remain outstanding.
 
 ### Pinned Closure
 
