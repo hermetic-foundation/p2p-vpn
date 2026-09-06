@@ -350,6 +350,11 @@ Bootstrap and relay infrastructure roles are independent. Removing overlay
 membership does not remove a separately configured infrastructure role or erase
 its retry backoff. Readmission restores overlay address eligibility.
 
+On effective-authorization changes, targeted recovery queries and cooldown records
+for unauthorized members are retired. The runtime finishes only their owned
+Kademlia query IDs, immediately freeing recovery capacity. Unrelated public queries
+and infrastructure dial backoff remain intact.
+
 Public IPFS/libp2p routing is default reachability infrastructure.
 
 Unknown connections are classified after Identify. Exact Kademlia protocol

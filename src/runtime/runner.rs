@@ -1569,6 +1569,11 @@ where
     let mut packet_authorization_revision = None;
     loop {
         if packet_authorization_revision != Some(forwarder.authorization_revision()) {
+            reconcile_recovery_query_authorization(
+                &forwarder,
+                &mut queue_runtime.discovered_peer_addresses,
+                &mut node.swarm.behaviour_mut().kad,
+            );
             reconcile_packet_cache_authorization(
                 &forwarder,
                 &mut queues,
@@ -8946,6 +8951,24 @@ fn record_public_discovery_address_rejected(
 }
 
 impl DiscoveredPeerAddresses {
+    fn retain_recovery_discovery_peers(
+        &mut self,
+        mut authorized: impl FnMut(Libp2pPeerId) -> bool,
+    ) -> Vec<kad::QueryId> {
+        self.recovery_discovery_queries
+            .retain(|peer, _| authorized(*peer));
+        let mut cancelled = Vec::new();
+        self.recovery_discovery_query_peers.retain(|query, peer| {
+            if self.recovery_discovery_queries.contains_key(peer) {
+                true
+            } else {
+                cancelled.push(*query);
+                false
+            }
+        });
+        cancelled
+    }
+
     fn has_pending_recovery_discovery_query(&self) -> bool {
         !self.recovery_discovery_query_peers.is_empty()
     }
@@ -17512,6 +17535,28 @@ fn complete_packet_plane_quic_responder(
         ],
     );
     Ok(())
+}
+
+fn reconcile_recovery_query_authorization(
+    forwarder: &Forwarder,
+    recovery: &mut DiscoveredPeerAddresses,
+    kademlia: &mut kad::Behaviour<kad::store::MemoryStore>,
+) -> usize {
+    let cancelled = recovery
+        .retain_recovery_discovery_peers(|peer| forwarder.is_configured_transport_peer(peer));
+    for query in &cancelled {
+        if let Some(mut pending) = kademlia.query_mut(query) {
+            pending.finish();
+        }
+    }
+    if !cancelled.is_empty() {
+        log_runtime_event(
+            LogLevel::Info,
+            "peer_recovery_discovery_authorization_removed",
+            &[("cancelled_queries", &cancelled.len().to_string())],
+        );
+    }
+    cancelled.len()
 }
 
 fn reconcile_packet_cache_authorization(
@@ -27527,6 +27572,91 @@ mod tests {
 
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
         assert_eq!(snapshot.kademlia_provider_lookups, 1);
+    }
+
+    #[tokio::test]
+    async fn recovery_query_revocation_releases_capacity_without_clearing_infrastructure() {
+        let identity = NodeIdentity::generate_ed25519().unwrap();
+        let local = identity.peer_id.parse().unwrap();
+        let allowed = peer_id();
+        let removed = peer_id();
+        let infrastructure = peer_id();
+        let cooldown_peer = peer_id();
+        let mut config = config_with_peer(&identity, allowed);
+        config
+            .peers
+            .extend(config_with_peer(&identity, removed).peers);
+        let mut forwarder = Forwarder::from_config(&config).unwrap();
+        let mut kad = kad::Behaviour::new(local, kad::store::MemoryStore::new(local));
+        let address: Multiaddr = "/ip4/11.252.0.2/tcp/4001".parse().unwrap();
+        kad.add_address(&infrastructure, address.clone());
+        let mut recovery = DiscoveredPeerAddresses::default();
+        let now = Instant::now();
+        recovery.record_recovery_dial_failure_at(infrastructure, &address, now);
+        assert!(recovery.should_query_recovery_discovery_at(cooldown_peer, now));
+        let completed_query = kad.get_record(kad::RecordKey::new(&b"completed"));
+        recovery.record_recovery_discovery_queries(cooldown_peer, [completed_query], now);
+        kad.query_mut(&completed_query).unwrap().finish();
+        recovery.finish_recovery_discovery_query(completed_query, now);
+        assert!(recovery.should_query_recovery_discovery_at(allowed, now));
+        assert!(recovery.should_query_recovery_discovery_at(removed, now));
+        let removed_query = kad.get_record(kad::RecordKey::new(&b"removed"));
+        recovery.record_recovery_discovery_queries(removed, [removed_query], now);
+        let unrelated_query = kad.get_record(kad::RecordKey::new(&b"infrastructure"));
+        assert!(kad.query(&removed_query).is_some());
+        assert!(kad.query(&unrelated_query).is_some());
+        assert_eq!(
+            reconcile_recovery_query_authorization(&forwarder, &mut recovery, &mut kad),
+            0
+        );
+        assert!(!recovery.should_query_recovery_discovery_at(allowed, now));
+        assert!(
+            !recovery
+                .recovery_discovery_queries
+                .contains_key(&cooldown_peer)
+        );
+
+        let removed_config = config.peers.pop().unwrap();
+        forwarder.commit_reconfigure(
+            forwarder
+                .prepare_reconfigure(config.clone(), 1_000)
+                .unwrap(),
+        );
+        assert_eq!(
+            reconcile_recovery_query_authorization(&forwarder, &mut recovery, &mut kad),
+            1
+        );
+        assert!(kad.query(&removed_query).is_none());
+        assert!(kad.query(&unrelated_query).is_some());
+        assert!(!recovery.recovery_discovery_queries.contains_key(&removed));
+        assert!(recovery.should_query_recovery_discovery_at(allowed, now));
+        assert!(!recovery.should_attempt_recovery_dial_at(infrastructure, &address, now));
+        assert_eq!(recovery.recovery_dial_attempts.len(), 1);
+
+        let allowed_query = kad.get_record(kad::RecordKey::new(&b"allowed"));
+        recovery.record_recovery_discovery_queries(allowed, [allowed_query], now);
+        recovery.finish_recovery_discovery_query(removed_query, now);
+        assert_eq!(
+            reconcile_recovery_query_authorization(&forwarder, &mut recovery, &mut kad),
+            0
+        );
+        assert!(kad.query(&allowed_query).is_some());
+        assert_eq!(
+            recovery.recovery_discovery_queries[&allowed].pending_queries,
+            1
+        );
+        assert!(!recovery.recovery_discovery_queries.contains_key(&removed));
+
+        config.peers.push(removed_config);
+        forwarder.commit_reconfigure(forwarder.prepare_reconfigure(config, 1_000).unwrap());
+        kad.query_mut(&allowed_query).unwrap().finish();
+        recovery.finish_recovery_discovery_query(allowed_query, now);
+        assert!(recovery.should_query_recovery_discovery_at(removed, now));
+        assert_eq!(
+            recovery.recovery_discovery_queries[&removed].attempt_count,
+            0
+        );
+        kad.query_mut(&unrelated_query).unwrap().finish();
     }
 
     #[tokio::test]

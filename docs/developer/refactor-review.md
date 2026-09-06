@@ -299,8 +299,31 @@ data-plane authorization bypass.
 | Formatting and whitespace | Passed. |
 | Required Clippy groups | Passed; non-fatal style warnings remain. |
 
-Outstanding ownership work: cancellation of targeted queries, retirement of
-discovery entries, and separation of overlay/infrastructure dial backoff. The
+#### Targeted Query Cleanup
+
+Outstanding targeted queries had no authorization-removal cleanup. They could
+retain the single recovery-query slot until completion, the one-minute timeout,
+quiet-mode cancellation, or a network reset, delaying another authorized peer.
+
+Effective-authorization changes now retire unauthorized query/cooldown records.
+The state transition returns owned query IDs; the runtime finishes only those
+Kademlia queries before selecting its next event. Unrelated Kademlia queries and
+the shared dial-backoff map are untouched.
+
+Tests exercise immediate slot reuse, actual Kademlia cancellation, retained
+authorized queries, late completion of a cancelled ID, cooldown retirement,
+readmission with fresh attempt state, and preserved infrastructure backoff.
+`peer_recovery_discovery_authorization_removed` reports cancelled-query counts.
+
+| Query Cleanup Validation | Result |
+| --- | --- |
+| Offline workspace tests | 1,169 passed; 15 intentionally ignored. |
+| Explicit serial namespace suite | All 11 passed in 209.09 seconds. |
+| Formatting and whitespace | Passed. |
+| Required Clippy groups | Passed; non-fatal style warnings remain. |
+
+Outstanding ownership work: retirement of discovery entries and separation of
+overlay/infrastructure dial backoff. The
 shared retry map includes infrastructure attempts and must not be cleared merely
 because a peer lacks overlay membership.
 
