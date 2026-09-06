@@ -526,9 +526,13 @@ The run used one Nix build job and two compile cores. Cache and source downloads
 were capped separately at 600 KiB/s, with one cache connection. Filesystem usage
 increased approximately 2 GiB; no additional Cargo target directory was created.
 
-## Review Coverage Still Required
+## Historical Verification Notes
 
 ### Namespace Verification Findings
+
+The failures and counts in this subsection are historical investigation results.
+They were resolved by the follow-ups recorded here; the current all-11 result
+and remaining acceptance work are in [verification coverage](review-verification.md).
 
 The expanded suite exposed stale capability-event assertions and a datagram wait
 for `inbound_accepted_packets` on `daemon-state`, which does not expose that metric.
@@ -553,13 +557,13 @@ The DHT fixture used `10.252.0.0/24` and no prior peer address. Public-discovery
 address admission deliberately rejects third-party private transports. Check fixture
 scope against that security boundary before considering any production-policy change.
 
-The latest mDNS snapshot has one validated peer, one healthy UDP session, five
+The mDNS snapshot from that investigation had one validated peer, one healthy UDP session, five
 transmitted packets, and five accepted inbound packets, but no datagram transmissions.
 Check whether the fixed ping burst precedes path promotion: session existence alone
 does not prove a usable datagram path. Preserve traffic evidence when repairing the test.
 
 Authorization-policy increment's namespace run: 8 passed, 3 failed in 229 seconds.
-The open failures are DHT discovery, mDNS datagram evidence, and relay promotion.
+The failures at that milestone were DHT discovery, mDNS datagram evidence, and relay promotion.
 Direct UDP, owned QUIC, relay forwarding, file/code pairing, invite import, and
 network-move recovery passed. No full-suite or production-readiness claim follows.
 
@@ -582,8 +586,10 @@ datagram counters, route ownership, and relay-promotion assertions.
 The final workspace run passed 1,149 tests with 14 ignored, including the repaired
 infallible allowlist and cross-consumer authorization regression.
 
-Required Clippy groups and formatting pass. The broader VM, Android, persistence,
-and resource-comparison gates remain open; the ownership work is not complete.
+Required Clippy groups and formatting passed at that milestone. The table below
+lists broader review areas, not the disposition of those historical namespace failures.
+
+### Broader Review Areas
 
 | Area | Evidence Inspected | Next Check |
 | --- | --- | --- |
@@ -810,7 +816,7 @@ The complete namespace run was still 10/11: relay promotion established healthy
 direct TCP and UDP paths but failed its explicit DCUtR-success assertion. Node B
 reported `AttemptsExceeded(3)`; neither node reported success. This is not evidence
 of successful hole punching. The following deduplication work resolved this
-failure; the latest complete namespace run also passes relay promotion.
+failure; subsequent complete namespace runs also pass relay promotion.
 
 Retained failure: `/tmp/p2p-vpn-relay-promotion-tun-e2e-732272`. Neither the new
 timeout-retry branch nor stale-response branch ran in that failure trace.

@@ -1,6 +1,35 @@
 # Android Multi-Network Review Run
 
-## Result
+## Latest Attempt
+
+The rerun at `6dbb680c` failed on 2026-09-06 after 456 seconds: 39 steps passed,
+then Wi-Fi-to-emulated-cellular recovery failed. It used the verified APK and
+fixture hashes in the [network-workflow report](android-network-workflow-review.md).
+
+| Completed before failure | Result |
+| --- | --- |
+| Legacy migration and independent pairing | Passed |
+| Concurrent dual-stack traffic | Both networks passed 5/5 packets in every direction and family |
+| Overlap rejection | Passed without changing existing traffic |
+| Independent disable and APK replacement | Beta stayed reachable; disabled alpha remained disabled after replacement |
+| Re-enable | Concurrent dual-stack traffic restored |
+| Cellular transition | Failed; app reported no selected or available underlay |
+
+Final diagnostics showed `underlay.kind=none`, zero available networks, one
+network-change signal, zero peers, and no runtime restart. Transport logs
+reported network-unreachable errors. Root cause is not established.
+
+The harness did not retain Android connectivity-service capabilities. The next
+reproduction must capture OS underlay availability and validation independently
+of the application's tracker before attributing this to routing or the fixture.
+
+- Original report: `/tmp/p2p-vpn-review-history-multi-network/evidence.json`.
+- Sanitized failure summary: [JSON sample](android-multi-network-failure-sample.json).
+- Emulator and both fixtures stopped; private state was removed and logs redacted.
+- Later reboot, lockdown, and single-fixture-failure stages were not reached.
+- The single-network workflow pass does not override this failed gate.
+
+## Historical Result
 
 Passed on 2026-09-06 against runtime revision `f026342f` and its rebuilt x86_64
 debug APK. The run took 837 seconds, including startup and cleanup. All 68

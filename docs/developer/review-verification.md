@@ -19,7 +19,7 @@ Earlier milestones remain historical evidence, not automatic proof for later cha
 | Nix consumer evaluation | `nixos-consumer-flake-eval` built; all 15 configuration contracts pass. | Does not build the consumer OS or execute the service. |
 | Membership VM | Earlier four-node run passed 18 subtests. | Predates later ownership changes. |
 | Storage repair VM | Current-at-test binary recovered automatically after permission repair. | Predates `0acbd725`; tests startup rejection, not ENOSPC or power loss. |
-| Android | Current JNI/Gradle checks and [24 network-workflow steps](android-network-workflow-review.md) pass at `6dbb680c`; [68 multi-network steps](android-multi-network-review.md) remain historical at `f026342f`. | Current run is single-network with a controlled discovery hint, not multi-network, physical cellular/NAT, revocation, or battery evidence. |
+| Android | [24 network-workflow steps](android-network-workflow-review.md) pass at `6dbb680c`. The [multi-network rerun](android-multi-network-review.md) passes 39 steps then fails cellular transition. | No available underlay in app diagnostics; OS capabilities were not captured. Earlier 68-step pass at `f026342f` does not close the current failed gate. |
 | Resources | Two controlled idle samples per compared revision. | Small static topology; see [measurement limits](idle-resource-comparison.md). |
 | Inventory evaluation | [Joint/separate diagnostic](inventory-evaluation-measurement.md) passed at 8, 32, and 128 records. | Single unoptimized run; not daemon throughput or memory evidence. |
 | Retained membership | [Forwarder comparison](forwarder-resource-comparison.md): 12 fresh-process samples at 8, 128, and 256 records. | Larger current samples show higher RSS growth; not exact map allocation cost or release-profile CPU evidence. |
@@ -114,10 +114,12 @@ Logs use `/tmp/p2p-vpn-review-startup-snapshot-*`.
 | --- | --- |
 | Recovery ownership | Finish timer/event and stale-completion review beyond the extracted targeted-query owner. |
 | Session lifecycle | [Membership-sync review](membership-sync-review.md) cases are fixed. Reconcile broader session-lifecycle review and final platform evidence. |
+| Android lifecycle ownership | Reproduce and resolve [three source-reviewed cases](android-event-ownership-review.md): superseded stops, lost health polls, and deferred connect intent. |
 | Pairing orchestration | Assess transaction ownership across preparation, persistence, and finalization. |
 | Address resources | Identify admission is bounded. [Internal growth is reproduced](kademlia-retention-review.md) in both DHT modes; enforcement and query-memory measurements remain. |
 | Resource comparison | Signed-ledger RSS sampled through 256 records; timer refresh reuses valid evaluations. Isolate retained allocations and establish release-profile/daemon impact. |
 | Platform validation | Repeat affected Android and VM gates on final shared-runtime code. |
+| Android underlay failure | Capture OS cellular availability/validation independently of the app tracker, then resolve and rerun the failed multi-network transition. |
 | Packaging/tooling | Resolve or explicitly account for unverified exported checks without uncontrolled source builds. |
 | Documentation | Reconcile architecture and user workflows with final behavior and evidence. |
 
