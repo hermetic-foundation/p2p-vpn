@@ -62,8 +62,8 @@ already corrupted by the old transition. Recovery compatibility remains an open 
 
 1. Inject failure after Prepared persistence and before runtime commit; exercise
    cancellation, rejection, expiry, and same-role replacement before recovery.
-2. Extend retry-eligibility coverage to successful continuation after repair,
-   including partial route application and rollback errors.
+2. Extend response-dispatch and restart coverage through successful continuation
+   after repair; lower-level partial application and rollback retry now pass.
 3. Extend historical acknowledgement coverage through daemon startup compaction
    under incompatible declarative authority and multiple sequential pairings.
 4. Reconcile old invalid snapshots without silently dropping committed membership
@@ -108,6 +108,31 @@ Verification after the retry fix:
 | Formatting | Changed Rust and whitespace checks pass |
 
 Android runtime gates remain outstanding for the combined transaction changes.
+
+### Partial Route Retry
+
+`pairing_commit_retries_after_partial_route_and_rollback_failure` exercises the
+runtime transaction after one route command succeeds and the second fails.
+It tests both successful rollback and an injected failure of that rollback command.
+
+| Boundary | Assertion |
+| --- | --- |
+| Failed application | Only the successful step is rolled back; the original application error is retained |
+| Before retry | Forwarder config, membership, TUN snapshot, and advertised capabilities remain unchanged |
+| Repaired command executor | Fresh preparation replays every apply command, including the step whose rollback failed |
+| Successful commit | Expected config and TUN state are installed; the new peer is authorized |
+
+Both cases pass without a production-code change. The command executor is
+injected: this checks transaction ordering and logical publication, not actual
+kernel state, crash recovery, durable finalization, or automatic retry delivery.
+
+The separate accepted-response test still checks retry eligibility only.
+Combining that path with persisted Prepared state and repair remains open.
+Log: `/tmp/p2p-vpn-review-pairing-partial-routes.log`.
+
+The full workspace passed with 1,226 tests and 18 opt-in tests ignored.
+No runtime implementation changed, so device and namespace deployment tests
+were not repeated for this coverage-only addition.
 
 ## Live Join Expiry
 

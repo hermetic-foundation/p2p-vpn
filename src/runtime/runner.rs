@@ -22415,6 +22415,94 @@ mod tests {
     }
 
     #[test]
+    fn pairing_commit_retries_after_partial_route_and_rollback_failure() {
+        for rollback_fails in [false, true] {
+            let (config, inviter, joiner, offer, _, response) = code_pairing_runtime_fixture();
+            let remote = joiner.peer_id.parse().unwrap();
+            let mut forwarder = Forwarder::from_config(&config).unwrap();
+            let mut membership = OverlayMembership::from_config(&config).unwrap();
+            let mut tun_runtime = TunRuntimeConfig::from_config(&config).unwrap();
+            let mut capabilities = ControlCapabilities::local("lab", None, 1280);
+            let before_membership = membership.clone();
+            let before_tun = tun_runtime.clone();
+            let before_capabilities = capabilities.clone();
+            let prepared =
+                prepare_pairing_runtime_enrollment(&forwarder, &offer, &response, &inviter, 1_011)
+                    .unwrap();
+            let expected_config = prepared.forwarder.config().clone();
+            let expected_tun = prepared.tun_runtime.clone();
+            let update = expected_tun
+                .pairing_reconciliation_from(&tun_runtime)
+                .unwrap();
+            assert!(
+                update.apply_commands().len() >= 2,
+                "fixture must require partial application"
+            );
+            let mut commands = Vec::new();
+            let result = commit_pairing_runtime_enrollment_with(
+                &mut forwarder,
+                &mut membership,
+                &mut tun_runtime,
+                &mut capabilities,
+                prepared,
+                |command| {
+                    commands.push(command.clone());
+                    match commands.len() {
+                        2 => Err(RunnerError::ControlSocket(io::Error::other(
+                            "primary apply failure",
+                        ))),
+                        3 if rollback_fails => Err(RunnerError::ControlSocket(io::Error::other(
+                            "rollback failure",
+                        ))),
+                        _ => Ok(()),
+                    }
+                },
+            );
+            let Err(RunnerError::ControlSocket(error)) = result else {
+                panic!("partial route failure must abort runtime commit");
+            };
+            assert_eq!(error.to_string(), "primary apply failure");
+            assert_eq!(
+                commands,
+                vec![
+                    update.apply_commands()[0].clone(),
+                    update.apply_commands()[1].clone(),
+                    update.rollback_commands()[0].clone(),
+                ]
+            );
+            assert_eq!(forwarder.config(), &config);
+            assert_eq!(membership, before_membership);
+            assert_eq!(tun_runtime, before_tun);
+            assert_eq!(capabilities, before_capabilities);
+            assert!(!forwarder.is_configured_transport_peer(remote));
+
+            // Retry from unchanged logical state must replay even the step whose rollback failed.
+            let retry =
+                prepare_pairing_runtime_enrollment(&forwarder, &offer, &response, &inviter, 1_011)
+                    .unwrap();
+            commands.clear();
+            let committed = commit_pairing_runtime_enrollment_with(
+                &mut forwarder,
+                &mut membership,
+                &mut tun_runtime,
+                &mut capabilities,
+                retry,
+                |command| {
+                    commands.push(command.clone());
+                    Ok(())
+                },
+            )
+            .unwrap();
+            assert_eq!(commands, update.apply_commands());
+            assert_eq!(committed, remote);
+            assert_eq!(forwarder.config(), &expected_config);
+            assert_eq!(tun_runtime, expected_tun);
+            assert!(membership.allows(remote));
+            assert!(forwarder.is_configured_transport_peer(remote));
+        }
+    }
+
+    #[test]
     fn failed_runtime_commit_keeps_durable_prepared_enrollment() {
         let (config, inviter, joiner, offer, request, response) = code_pairing_runtime_fixture();
         let operation_id = crate::runtime::pairing_sessions::fresh_pairing_operation_id();
