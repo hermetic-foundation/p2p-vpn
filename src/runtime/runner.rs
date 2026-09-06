@@ -12463,7 +12463,9 @@ fn handle_pinned_packet_stream_event(
                 .packet_in_flight
                 .complete(PacketInFlightId::PinnedPacketStream(request_id));
             context.metrics.record_outbound_failure();
-            if let Some(request) = in_flight {
+            if let Some(request) = in_flight
+                && !error.is_capacity_exhausted()
+            {
                 let demoted = maybe_demote_pinned_stream_fallback_path(
                     context.paths,
                     context.metrics,
@@ -18966,6 +18968,9 @@ fn maybe_demote_pinned_stream_fallback_path(
     connection_id: ConnectionId,
     error: &pinned_packet_stream::Failure,
 ) -> bool {
+    if error.is_capacity_exhausted() {
+        return false;
+    }
     let failure = paths.record_failed_connection(peer, path, relay_peer, connection_id);
     if !failure.connection_was_tracked {
         return false;
@@ -32536,6 +32541,18 @@ mod tests {
         }
 
         let selected = paths.best_for(peer).expect("selected relay path");
+        assert!(!maybe_demote_pinned_stream_fallback_path(
+            &mut paths,
+            &metrics,
+            peer,
+            selected.kind,
+            selected.relay_peer,
+            failed_connection,
+            &pinned_packet_stream::Failure::capacity_exhausted(),
+        ));
+        let selected = paths.best_for(peer).expect("capacity does not fail a path");
+        assert_eq!(selected.latest_connection_id, Some(failed_connection));
+        assert_eq!(selected.established_connections, 2);
         assert!(!maybe_demote_pinned_stream_fallback_path(
             &mut paths,
             &metrics,

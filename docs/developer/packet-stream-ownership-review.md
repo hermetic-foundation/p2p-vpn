@@ -89,27 +89,88 @@ These are deterministic lifecycle tests, not socket-level race or formal proofs.
 - Logs: `/tmp/p2p-vpn-review-closure-*`.
 - Rebuilt Android recovery validation remains outstanding; no loss-causality claim follows from these checks.
 
-#### Remaining Resource Review
+### Pinned Resource Ownership
 
 Ownership holds metadata only, with logarithmic insertion/removal and linear
 closure scanning. Established-connection events govern admission, preventing
 orphan ownership when callers target nonexistent or already-closed connections.
 
-Runtime packet windows constrain normal admission. Independent hard bounds
-for public-behaviour callers and handler overload still need review, including
-queue residence before the existing ten-second outbound upgrade timeout.
+Previously, `src/runtime/p2p.rs` passed `max_concurrent_packet_streams` only to
+request-response packet transport. Pinned handlers had no configured capacity
+and retained inbound streams and response writes without a response deadline.
 
-`src/runtime/p2p.rs` passes `max_concurrent_packet_streams` to the request-response
-packet behaviour, but constructs the pinned behaviour with MTU only. Verify and
-enforce the corresponding limits for pinned inbound/outbound work next.
+The same setting now configures pinned transport. A Tokio semaphore belongs to
+each handler and is shared with inbound upgrades. Permits follow the actual
+work and release on completion, read/write failure, timeout, or cancellation.
 
-Next resource-bound checks:
+| Owner | Bound / Lifetime |
+| --- | --- |
+| Behaviour outbound notifications | At most the configured limit of outstanding requests per connection |
+| Handler outbound requests | Permit held across queueing and outbound upgrade |
+| Admitted inbound frame read | Permit acquired before reading packet bytes |
+| Overload response | Drain through a 256-byte buffer; return existing `RateLimited` without retaining a payload |
+| Inbound response worker | Retains the read permit through application wait and response write |
+| Response deadline | Ten seconds from admitting a fully read inbound packet |
+| Closed handler | Dropped workers and request records release permits |
 
-1. Apply the existing packet-stream limit to pinned admission without new required configuration.
-2. Bound pending frames, retained inbound streams, and concurrent response writes.
-3. Cover timeout, overload, closure, and capacity reuse with deterministic tests.
-4. Verify stale response filtering releases runtime in-flight accounting without promoting closed paths.
-5. Measure queue/ownership retention and rerun recovery scenarios under saturation.
+The public constructor remains available with the existing resource default of
+256; host construction supplies the configured limit. Framing and failure enum
+variants are unchanged. A local I/O marker distinguishes capacity exhaustion.
+
+Local capacity failures release runtime in-flight accounting but do not demote
+the path or start redialing. They still count as outbound failures. Remote
+capacity rejection uses the existing packet-level `RateLimited` response.
+
+Resetting an overloaded inbound stream was rejected during review: simultaneous
+outbound requests could fill both peers' budgets and make healthy connections
+look failed. Rejection now drains one validated, MTU-bounded frame before replying.
+
+Protocol negotiation and overload-drain concurrency remain governed by libp2p's
+bounded inbound-upgrade pool and upgrade timeout. Overload drains retain no
+packet payload and never enter the application response-worker queue.
+
+Regression coverage includes:
+
+- Per-connection admission, zero-limit normalization, and reuse after completion or closure.
+- Outbound capacity held until upgrade success or failure.
+- Inbound admission before parsing, parse failure, and read-future cancellation.
+- Response success, write failure, omitted response, stalled write, and handler destruction.
+- Capacity exhaustion preserving the selected relay connection and its replacement.
+- A TCP/QUIC exchange with an occupied one-slot receiver budget returns `RateLimited`, then completes its outstanding request without disconnecting.
+
+#### Inbound Owner Boundary
+
+The default host advertises `/p2p-vpn/packet/1` through both request-response and
+pinned behaviours. The socket regression initially received the request through
+request-response, not the pinned receiver, and dropped that unhandled response channel.
+
+The overload regression therefore disables request-response inbound support
+on its two test nodes. It exercises real TCP and QUIC sockets with a pinned
+receiver, but does not prove default-host inbound dispatch selects that receiver.
+
+Default-host request-response inbound work has its existing independent budget.
+Pinned outbound work now has its own bound. Review duplicate protocol ownership
+and event compatibility separately before consolidating the default inbound owner.
+
+#### Remaining Evidence
+
+1. Verify stale response filtering releases runtime in-flight accounting without promoting closed paths.
+2. Measure sustained queue/ownership retention and recovery under saturation.
+3. Rerun rebuilt Android recovery; retain earlier packet-loss evidence.
+4. Resolve duplicate inbound protocol ownership without silently changing supported event consumers.
+
+#### Verification
+
+- Workspace: 1,224 tests passed; 18 opt-in tests ignored.
+- Required Clippy groups, changed-file Rust formatting, and Nix source parity passed.
+- TCP and QUIC overload regression passed with isolated pinned receivers.
+- All 11 namespace scenarios passed with the default host, including network move and relay promotion.
+- Logs: `/tmp/p2p-vpn-review-stream-bounds-*`.
+- Android is not rebuilt for this change yet; sustained-overload recovery remains a separate gate.
+
+These limits bound admitted payload/stream work, not arbitrary accumulation of
+terminal events by an embedding caller that never polls the public behaviour.
+Unit tests exercise ownership transitions; they are not formal verification.
 
 ## Implementation Plan
 

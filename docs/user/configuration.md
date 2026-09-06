@@ -44,6 +44,22 @@ Set it only to assert the key belongs to an expected peer ID.
 | `queue` | `256` packets, `512 KiB`, `3000 ms` packet age |
 | `resources` | built-in connection and stream limits |
 
+## Packet Stream Limits
+
+No resource settings are required for the default profile.
+
+| Setting | Default | Scope |
+| --- | --- | --- |
+| `resources.max_concurrent_packet_streams` | `256` | Work per packet transport handler; also bounds the runtime's per-peer in-flight packet window |
+
+The stream limit applies to TCP, QUIC streams, and circuit-relay packet traffic.
+The request-response and pinned handlers each have their own budget. Local
+pinned overload drops work without redialing that connection.
+
+The pinned receiver sends a rate-limit response when full. Its response must
+finish within ten seconds after reading a packet. This setting does not
+configure QUIC DATAGRAM or UDP packet queues.
+
 ## Minimal Shapes
 
 ### Identity And Membership

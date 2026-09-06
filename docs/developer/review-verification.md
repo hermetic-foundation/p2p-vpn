@@ -11,8 +11,8 @@ Earlier milestones remain historical evidence, not automatic proof for later cha
 
 | Area | Evidence | Limitation |
 | --- | --- | --- |
-| Workspace | Last full run: 1,216 passed, 18 opt-in tests ignored. Diagnostics run separately. | Native Linux toolchain; not an Android device run. |
-| Namespace integration | All 11 pass at `6dbb680c`, in 213.88 seconds, including network move and relay-to-direct promotion. | Controlled topology, not public NAT traversal; elapsed time is not a performance benchmark. |
+| Workspace | Last full run: 1,224 passed, 18 opt-in tests ignored, including pinned resource bounds. Diagnostics run separately. | Native Linux toolchain; not an Android device run. |
+| Namespace integration | All 11 pass with pinned resource bounds, including network move and relay-to-direct promotion. Logs: `/tmp/p2p-vpn-review-stream-bounds-namespace.log`. | Controlled topology, not public NAT traversal or sustained saturation; elapsed time is not a performance benchmark. |
 | Static analysis | Required correctness, suspicious, and performance Clippy groups pass. | Existing non-fatal style warnings remain. |
 | Formatting | Changed Rust files pass rustfmt; whitespace checks pass. | Not proof of the complete flake `fmt` target. |
 | Nix source parity | `rust-test-sources` built successfully. | Verifies packaged test inclusion, not execution. |
@@ -62,7 +62,7 @@ not imply that the corresponding Nix derivation was built successfully.
 | `nixos-vm-pairing`, `nixos-vm-code-pairing-lan`, `nixos-vm-code-pairing-relay` | Namespace pairing passes; separate current VM outputs not verified. |
 | `nixos-vm-quic-datagram`, `nixos-vm-quic-stream` | Current VM outputs not verified. |
 | `nixos-vm-forced-relay`, `nixos-vm-network-move` | Namespace equivalents pass; current VM outputs not verified. |
-| `namespace-smoke-preflighted` | All 11 pass at `6dbb680c`. Derivation result not established. |
+| `namespace-smoke-preflighted` | All 11 pass with pinned resource bounds. Derivation result not established. |
 | `android`, `android-e2e-fixture` | Current offline x86_64 JNI/Gradle validation; full Nix derivation results not established. |
 | `android-e2e-structure` | Evaluated check body passed with installed tools earlier, outside a Nix sandbox. |
 | `android-device-audit-structure`, `debug-bundle-structure` | Current result not verified. |
@@ -121,7 +121,7 @@ Logs use `/tmp/p2p-vpn-review-startup-snapshot-*`.
 | Platform validation | Repeat affected Android and VM gates on final shared-runtime code. |
 | Android underlay failure | Capture OS cellular availability/validation independently of the app tracker, then resolve and rerun the failed multi-network transition. |
 | Android update traffic | Investigate the retained 4/5 reverse IPv4 result after APK replacement, including packet timing and path changes. |
-| Packet stream ownership | [Selected TCP dispatch, closure, and invalid-target admission](packet-stream-ownership-review.md) have deterministic regressions. Review independent queue/lifetime bounds, finish platform validation, and investigate Android loss without assuming causality. |
+| Packet stream ownership | [Dispatch, closure, admission, and stream budgets](packet-stream-ownership-review.md) have regressions. Resolve duplicate inbound ownership, stale response accounting, sustained overload measurements, and final platform validation. |
 | Packaging/tooling | Resolve or explicitly account for unverified exported checks without uncontrolled source builds. |
 | Documentation | Reconcile architecture and user workflows with final behavior and evidence. |
 

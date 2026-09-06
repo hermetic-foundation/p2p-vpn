@@ -212,6 +212,16 @@ pub(crate) async fn read_futures_frame<R>(
 where
     R: AsyncRead + Unpin + Send,
 {
+    let header = read_futures_header(reader, max_payload_len).await?;
+    let mut payload = vec![0; usize::from(header.payload_len)];
+    reader.read_exact(&mut payload).await?;
+    Ok(Frame { header, payload })
+}
+
+async fn read_futures_header<R>(reader: &mut R, max_payload_len: usize) -> io::Result<Header>
+where
+    R: AsyncRead + Unpin + Send,
+{
     let mut header_bytes = [0; HEADER_LEN];
     reader.read_exact(&mut header_bytes).await?;
     let header = Header::decode(&header_bytes).map_err(invalid_data)?;
@@ -224,9 +234,25 @@ where
         ));
     }
 
-    let mut payload = vec![0; payload_len];
-    reader.read_exact(&mut payload).await?;
-    Ok(Frame { header, payload })
+    Ok(header)
+}
+
+pub(crate) async fn discard_futures_frame<R>(
+    reader: &mut R,
+    max_payload_len: usize,
+) -> io::Result<()>
+where
+    R: AsyncRead + Unpin + Send,
+{
+    let header = read_futures_header(reader, max_payload_len).await?;
+    let mut remaining = usize::from(header.payload_len);
+    let mut buffer = [0; 256];
+    while remaining > 0 {
+        let size = remaining.min(buffer.len());
+        reader.read_exact(&mut buffer[..size]).await?;
+        remaining -= size;
+    }
+    Ok(())
 }
 
 pub(crate) async fn write_futures_frame<W>(writer: &mut W, frame: &Frame) -> io::Result<()>

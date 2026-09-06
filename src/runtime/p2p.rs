@@ -223,7 +223,8 @@ pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
                     pairing: pairing::behaviour(control_streams),
                     pairing_code: pairing_code::behaviour(control_streams),
                     pairing_code_v2: pairing_code::behaviour_v2(control_streams),
-                    pinned_packet_stream: pinned_packet_stream::Behaviour::new(usize::from(mtu)),
+                    pinned_packet_stream: pinned_packet_stream::Behaviour::new(usize::from(mtu))
+                        .with_max_concurrent_streams(packet_streams),
                     service: service::behaviour(control_streams),
                 })
             },
@@ -633,10 +634,10 @@ mod tests {
             build_pairing_request_at, build_pairing_response_at, export_pairing_offer_at,
         },
         runtime::control::{ControlCapabilities, ControlRequest, ControlResponse},
-        runtime::pinned_packet_stream,
         runtime::service::{
             ServiceRequest, ServiceResponse, ServiceStatusRequest, ServiceStatusResponse,
         },
+        runtime::{packet::PacketResponse, pinned_packet_stream},
         wire::{Frame, PayloadType},
     };
 
@@ -1501,6 +1502,140 @@ mod tests {
 
         assert!(listener.swarm.is_connected(&dialer_peer));
         assert!(dialer.swarm.is_connected(&listener_peer));
+    }
+
+    #[tokio::test]
+    async fn pinned_overload_replies_without_resetting_tcp_or_quic_connection() {
+        for address in ["/ip4/127.0.0.1/tcp/0", "/ip4/127.0.0.1/udp/0/quic-v1"] {
+            let config = |limit, listen_addresses| HostConfig {
+                identity: NodeIdentity::generate_ed25519().unwrap(),
+                network_name: "bounded-streams".to_owned(),
+                membership_tag: None,
+                mtu: 1280,
+                max_concurrent_control_streams: 64,
+                max_concurrent_packet_streams: limit,
+                listen_addresses,
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                known_peers: Vec::new(),
+                relay_reservations: Vec::new(),
+                relay_server: false,
+                relay_resources: crate::config::RelayResourceConfig::default(),
+                resources: crate::config::ResourceConfig::default(),
+                discovery: DiscoveryConfig::default(),
+            };
+            let mut listener = build_node(&config(2, vec![address.parse().unwrap()])).unwrap();
+            let address = next_listen_address(&mut listener.swarm).await;
+            let mut dialer = build_node(&config(1, Vec::new())).unwrap();
+            // The default host also advertises request-response on this protocol.
+            // Isolate the pinned receiver so this test exercises its own budget.
+            for node in [&mut listener, &mut dialer] {
+                node.swarm.behaviour_mut().packet = request_response::Behaviour::with_codec(
+                    packet::PacketCodec::new(1280),
+                    [(
+                        libp2p::StreamProtocol::new(packet::PACKET_PROTOCOL),
+                        request_response::ProtocolSupport::Outbound,
+                    )],
+                    request_response::Config::default(),
+                );
+            }
+            dialer
+                .swarm
+                .dial(address.with(Protocol::P2p(listener.local_peer_id)))
+                .unwrap();
+            let connection = next_connection_to_peer(
+                &mut listener.swarm,
+                &mut dialer.swarm,
+                listener.local_peer_id,
+            )
+            .await;
+            let frame = Frame::packet(1, 7, vec![0x45; 1024]).unwrap();
+            let first = dialer
+                .swarm
+                .behaviour_mut()
+                .pinned_packet_stream
+                .send_request_on_connection(listener.local_peer_id, connection, frame.clone());
+            tokio::time::timeout(Duration::from_secs(10), async {
+                let mut held_response = None;
+                let mut second = None;
+                let mut overload_seen = false;
+                loop {
+                    let (at_listener, event) = tokio::select! {
+                        event = listener.swarm.select_next_some() => (true, event),
+                        event = dialer.swarm.select_next_some() => (false, event),
+                    };
+                    let SwarmEvent::Behaviour(BehaviourEvent::PinnedPacketStream(event)) = event
+                    else {
+                        continue;
+                    };
+                    match event {
+                        pinned_packet_stream::Event::InboundRequest {
+                            peer,
+                            connection_id,
+                            request_id,
+                            frame: received,
+                        } => {
+                            assert!(at_listener, "full dialer admitted an inbound packet");
+                            assert_eq!(received, frame);
+                            held_response =
+                                Some(pinned_packet_stream::Behaviour::response_channel(
+                                    peer,
+                                    connection_id,
+                                    request_id,
+                                ));
+                            second = Some(
+                                listener
+                                    .swarm
+                                    .behaviour_mut()
+                                    .pinned_packet_stream
+                                    .send_request_on_connection(peer, connection_id, frame.clone()),
+                            );
+                        }
+                        pinned_packet_stream::Event::OutboundResponse {
+                            request_id,
+                            response,
+                            ..
+                        } if at_listener => {
+                            assert_eq!(Some(request_id), second);
+                            assert_eq!(
+                                response,
+                                PacketResponse::Rejected(
+                                    super::super::packet::PacketRejectionReason::RateLimited
+                                )
+                            );
+                            overload_seen = true;
+                            listener
+                                .swarm
+                                .behaviour_mut()
+                                .pinned_packet_stream
+                                .send_response(
+                                    held_response.take().unwrap(),
+                                    PacketResponse::Accepted,
+                                );
+                        }
+                        pinned_packet_stream::Event::OutboundResponse {
+                            request_id,
+                            response,
+                            ..
+                        } => {
+                            assert_eq!(request_id, first);
+                            assert_eq!(response, PacketResponse::Accepted);
+                            assert!(overload_seen);
+                            break;
+                        }
+                        pinned_packet_stream::Event::InboundFailure { error, .. }
+                        | pinned_packet_stream::Event::OutboundFailure { error, .. } => {
+                            panic!("overload reset a stream: {error:?}")
+                        }
+                        pinned_packet_stream::Event::ResponseSent { .. } => {}
+                    }
+                }
+            })
+            .await
+            .expect("overload exchange timed out");
+            assert!(listener.swarm.is_connected(&dialer.local_peer_id));
+            assert!(dialer.swarm.is_connected(&listener.local_peer_id));
+        }
     }
 
     #[tokio::test]
