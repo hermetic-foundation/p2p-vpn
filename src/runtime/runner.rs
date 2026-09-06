@@ -33510,6 +33510,87 @@ mod tests {
     }
 
     #[test]
+    fn membership_checkpoint_retries_failed_hostname_only_updates_and_restores_them() {
+        let local = NodeIdentity::generate_ed25519().expect("local identity");
+        let config = config_with_peer(&local, peer_id());
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut persisted_revision = forwarder.membership_revision();
+        let original_revision = persisted_revision;
+        let hostname =
+            crate::hostname::issue_hostname_record_at(&local, "lab", "renamed-local", 1, 1_000)
+                .expect("hostname record");
+        forwarder
+            .merge_hostname_records(std::slice::from_ref(&hostname))
+            .expect("hostname-only change");
+        assert_ne!(forwarder.membership_revision(), original_revision);
+        assert!(forwarder.member_records().is_empty());
+
+        let root = test_pairing_state_path("hostname-checkpoint")
+            .parent()
+            .expect("test root")
+            .to_path_buf();
+        let directory = root.join("not-created-yet");
+        let store = MembershipStateStore::new(directory.join("membership-state.json"));
+        let metrics = RuntimeMetrics::default();
+        persist_membership_records_if_changed(
+            Some(&store),
+            &forwarder,
+            &local.peer_id,
+            &mut persisted_revision,
+            &metrics,
+        )
+        .expect_err("missing parent must fail the checkpoint");
+        assert_eq!(persisted_revision, original_revision);
+        let failed = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(failed.membership_state_persist_failures, 1);
+        assert_eq!(failed.membership_state_persists, 0);
+
+        fs::create_dir(&directory).expect("repair storage");
+        persist_membership_records_if_changed(
+            Some(&store),
+            &forwarder,
+            &local.peer_id,
+            &mut persisted_revision,
+            &metrics,
+        )
+        .expect("retry checkpoint");
+        assert_eq!(persisted_revision, forwarder.membership_revision());
+        persist_membership_records_if_changed(
+            Some(&store),
+            &forwarder,
+            &local.peer_id,
+            &mut persisted_revision,
+            &metrics,
+        )
+        .expect("unchanged checkpoint is a no-op");
+        let saved = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(saved.membership_state_persist_failures, 1);
+        assert_eq!(saved.membership_state_persists, 1);
+
+        let mut restarted = Forwarder::from_config(&config).expect("restart forwarder");
+        let mut membership = OverlayMembership::from_config(&config).expect("membership");
+        load_persisted_membership_records(
+            Some(&store),
+            &mut restarted,
+            &mut membership,
+            &local.peer_id,
+            &metrics,
+        )
+        .expect("restore hostname-only checkpoint");
+        assert_eq!(restarted.hostname_records(), &[hostname]);
+        assert!(restarted.member_records().is_empty());
+        assert_eq!(
+            restarted
+                .configured_transport_peers()
+                .collect::<HashSet<_>>(),
+            forwarder
+                .configured_transport_peers()
+                .collect::<HashSet<_>>()
+        );
+        fs::remove_dir_all(root).expect("remove test directory");
+    }
+
+    #[test]
     fn membership_state_failures_are_counted() {
         let local = NodeIdentity::generate_ed25519().expect("local identity");
         let config = config_with_peer(&local, peer_id());

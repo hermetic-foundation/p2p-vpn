@@ -653,9 +653,21 @@ All nine store tests pass using the cached Nix Rust toolchain, offline, with two
 build jobs. The injected sync error tests visibility and error propagation, not
 power-loss durability or filesystem crash recovery.
 
-Source inspection of `persist_membership_records_if_changed` confirms that a
-failed save returns before advancing the persisted revision. Runtime consumers
-must still propagate that error; this store test does not prove every caller.
+The runtime test
+`membership_checkpoint_retries_failed_hostname_only_updates_and_restores_them`
+exercises the checkpoint and restoration helpers with a real temporary store.
+
+| Runtime Boundary | Verified Behavior |
+| --- | --- |
+| Hostname-only update | Advances the checkpoint revision despite an unchanged membership ledger. |
+| Missing storage directory | Save fails, increments failure metrics, and leaves the persisted revision unchanged. |
+| Storage repaired | Retrying saves once; a subsequent unchanged checkpoint performs no additional save. |
+| Restart restoration | Restores the signed hostname and preserves the configured transport-peer set. |
+
+Source inspection finds error propagation at initial persistence, local
+revocation, pairing approval, and the event-loop checkpoint. The live runtime
+exits on checkpoint failure; the test's explicit retry is not an automatic
+in-process recovery claim. Supervisor restart after a storage failure remains untested.
 
 ### Address Retention: Confirmed Growth
 
