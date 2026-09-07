@@ -5697,6 +5697,96 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "diagnoses unresolved Prepared mutation policy; not a recovery guarantee"]
+    fn diagnose_prepared_pairing_mutation_restore() {
+        for role in [
+            PairingEnrollmentRole::Inviter,
+            PairingEnrollmentRole::Joiner,
+        ] {
+            for action in ["cancel", "cancel_and_replace", "reject"] {
+                if role == PairingEnrollmentRole::Joiner && action == "reject" {
+                    continue;
+                }
+                let (mut sessions, enrollment, now) = match role {
+                    PairingEnrollmentRole::Inviter => {
+                        let (sessions, enrollment, _, _, now) = prepared_open_fixture(600);
+                        (sessions, enrollment, now)
+                    }
+                    PairingEnrollmentRole::Joiner => prepared_join_fixture(600),
+                };
+                let before = sessions
+                    .encode_persisted("runners")
+                    .expect("encode baseline");
+                CodePairingSessions::restore_persisted(&before, "runners", 1_001, now)
+                    .expect("Prepared baseline is restorable");
+                if action == "reject" {
+                    sessions
+                        .reject(
+                            &enrollment.operation_id,
+                            enrollment.approval_id.as_deref().unwrap(),
+                        )
+                        .expect("current policy permits rejection");
+                } else {
+                    sessions
+                        .cancel(&enrollment.operation_id)
+                        .expect("current policy permits cancellation");
+                    if action == "cancel_and_replace" {
+                        match role {
+                            PairingEnrollmentRole::Inviter => {
+                                sessions
+                                    .open("runners", 600, 1_001, now)
+                                    .expect("replacement inviter");
+                            }
+                            PairingEnrollmentRole::Joiner => {
+                                sessions
+                                    .join(
+                                        "runners",
+                                        PairingCode::generate(),
+                                        None,
+                                        Vec::new(),
+                                        600,
+                                        1_001,
+                                        now,
+                                    )
+                                    .expect("replacement joiner");
+                            }
+                        }
+                    }
+                }
+                assert_eq!(
+                    sessions.enrollment(&enrollment.operation_id),
+                    Some(&enrollment)
+                );
+                let after = sessions
+                    .encode_persisted("runners")
+                    .expect("encode mutated state");
+                assert_ne!(before, after);
+                match CodePairingSessions::restore_persisted(&after, "runners", 1_002, now) {
+                    Err(error) => eprintln!("{role:?} {action}: restore rejected: {error:?}"),
+                    Ok(mut restored) => {
+                        let recovery = match role {
+                            PairingEnrollmentRole::Inviter => restored
+                                .recover_prepared_open("runners", &enrollment)
+                                .map(|_| ()),
+                            PairingEnrollmentRole::Joiner => {
+                                restored.recover_prepared_join("runners", &enrollment)
+                            }
+                        };
+                        match recovery {
+                            Err(error) => eprintln!(
+                                "{role:?} {action}: restore accepted; recovery rejected: {error:?}"
+                            ),
+                            Ok(()) => panic!(
+                                "{role:?} {action}: diagnostic no longer reproduces; review recovery"
+                            ),
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn enrollment_ledger_round_trips_multiple_roles_and_states() {
         let inviter = peer(1);
         let joiner = peer(2);

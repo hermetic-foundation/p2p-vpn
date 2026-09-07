@@ -345,6 +345,40 @@ Deleting Prepared state alone is unsafe: runtime routes or membership may alread
 have changed. A cancellable transaction would instead need durable abort state and
 verified rollback, including crash recovery.
 
+### Mutation Diagnostic
+
+Against the runtime at `461894ad`, an opt-in diagnostic exercises mutations after Prepared enrollment,
+then serializes, reloads, and invokes the appropriate recovery function.
+All five cases retain the original Prepared ledger entry but lose recoverability.
+
+| Role | Mutation | Decode | Prepared Recovery |
+| --- | --- | --- | --- |
+| Inviter | Cancel | Accepted | `Conflict` |
+| Inviter | Cancel, then replace | Accepted | `Conflict` |
+| Inviter | Reject approval | Accepted | `Conflict` |
+| Joiner | Cancel | Accepted | `Conflict` |
+| Joiner | Cancel, then replace | Accepted | `Conflict` |
+
+The initial diagnostic incorrectly expected decoding itself to fail. It instead
+decoded successfully; invoking recovery exposed the failure. Do not describe
+these snapshots as syntactically unrestorable or claim that decoding proves recovery.
+
+```bash
+cargo test --offline --lib diagnose_prepared_pairing_mutation_restore \
+  -- --ignored --nocapture
+```
+
+- The diagnostic passed in 0.01 s, meaning it reproduced the defect in all five cases.
+- It is deliberately opt-in and expects today's broken behavior; replace it with prevention/recovery assertions when policy is implemented.
+- All 53 normal session tests pass; the diagnostic is ignored by default and run separately.
+- Required Clippy groups, Rust formatting, whitespace checks, and Nix test-source inclusion pass.
+- Full workspace and platform tests were not rerun for this test-only diagnostic; their earlier results remain separately recorded.
+- Fixtures exercise serialization and session recovery, not a restarted daemon, disk failure, actual route rollback, or cryptographic interoperability.
+- No runtime code or production state changed. The cancellation/replacement decision remains pending.
+
+Logs: `/tmp/p2p-vpn-review-prepared-mutation-recovery-final.log` and
+`/tmp/p2p-vpn-review-prepared-mutation-sessions.log`.
+
 ## Platform Follow-Up
 
 The [Android network workflow](android-network-workflow-review.md) passed at
