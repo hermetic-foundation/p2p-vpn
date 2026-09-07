@@ -441,6 +441,7 @@ pub(super) fn controlled_kademlia_config(protocol: StreamProtocol) -> kad::Confi
     );
     config
         .set_parallelism(KADEMLIA_QUERY_PARALLELISM)
+        .set_background_query_limits(NonZeroUsize::new(2).unwrap(), NonZeroUsize::MIN)
         .set_address_limits(address_limits)
         .set_query_limits(kad::QueryLimits::new(
             NonZeroUsize::new(KADEMLIA_QUERY_CANDIDATES).unwrap(),
@@ -1545,6 +1546,134 @@ mod tests {
             assert_eq!(dials, expected);
             assert!(kad.query(&query).is_none());
         }
+    }
+
+    #[test]
+    fn kademlia_background_jobs_share_remaining_query_capacity() {
+        use libp2p::{kad::store::RecordStore, swarm::NetworkBehaviour};
+        use std::task::Context;
+
+        let local = PeerId::random();
+        let mut config = kad::Config::new(StreamProtocol::new(
+            crate::config::PUBLIC_IPFS_KADEMLIA_PROTOCOL,
+        ));
+        config
+            .set_periodic_bootstrap_interval(None)
+            .set_automatic_bootstrap_throttle(None)
+            .set_provider_publication_interval(Some(Duration::from_millis(1)))
+            .set_replication_interval(Some(Duration::from_millis(1)))
+            .set_publication_interval(Some(Duration::from_millis(1)));
+        let mut kad =
+            kad::Behaviour::with_config(local, kad::store::MemoryStore::new(local), config);
+        kad.add_address(&PeerId::random(), "/memory/1".parse().unwrap());
+        for _ in 0..99 {
+            kad.get_closest_peers(PeerId::random());
+        }
+        for index in 0..10 {
+            let key = kad::RecordKey::new(&[index]);
+            kad.store_mut()
+                .add_provider(kad::ProviderRecord::new(key.clone(), local, Vec::new()))
+                .unwrap();
+            kad.store_mut().put(kad::Record::new(key, vec![1])).unwrap();
+        }
+        std::thread::sleep(Duration::from_millis(5));
+        let waker = futures::task::noop_waker();
+        let _ = kad.poll(&mut Context::from_waker(&waker));
+        assert!(
+            kad.iter_queries().count() <= 100,
+            "background jobs reused the same remaining capacity"
+        );
+    }
+
+    #[test]
+    fn kademlia_background_jobs_yield_to_foreground_and_both_resume() {
+        use libp2p::{
+            kad::store::RecordStore,
+            swarm::{DialError, FromSwarm, NetworkBehaviour, ToSwarm},
+        };
+        use std::{
+            collections::HashSet,
+            task::{Context, Poll},
+        };
+
+        let local = PeerId::random();
+        let mut config = controlled_kademlia_config(StreamProtocol::new(
+            crate::config::PUBLIC_IPFS_KADEMLIA_PROTOCOL,
+        ));
+        config
+            .set_provider_publication_interval(Some(Duration::from_millis(1)))
+            .set_replication_interval(Some(Duration::from_millis(1)))
+            .set_publication_interval(Some(Duration::from_millis(1)));
+        let mut kad =
+            kad::Behaviour::with_config(local, kad::store::MemoryStore::new(local), config);
+        kad.add_address(&PeerId::random(), "/memory/1".parse().unwrap());
+        let foreground = [
+            kad.get_closest_peers(PeerId::random()),
+            kad.get_closest_peers(PeerId::random()),
+        ];
+        for index in 0..10 {
+            let key = kad::RecordKey::new(&[index]);
+            kad.store_mut()
+                .add_provider(kad::ProviderRecord::new(key.clone(), local, Vec::new()))
+                .unwrap();
+            kad.store_mut().put(kad::Record::new(key, vec![1])).unwrap();
+        }
+        std::thread::sleep(Duration::from_millis(5));
+        let waker = futures::task::noop_waker();
+        let mut cx = Context::from_waker(&waker);
+        for _ in 0..10 {
+            let _ = kad.poll(&mut cx);
+            assert_eq!(
+                kad.iter_queries()
+                    .map(|query| query.id())
+                    .collect::<HashSet<_>>(),
+                HashSet::from(foreground)
+            );
+        }
+        for query in foreground {
+            kad.query_mut(&query).unwrap().finish();
+        }
+        let mut seen_queries = HashSet::from(foreground);
+        let mut providers = HashSet::new();
+        let mut records = HashSet::new();
+        for _ in 0..500 {
+            let action = kad.poll(&mut cx);
+            let mut new_queries = 0;
+            for query in kad.iter_queries() {
+                new_queries += usize::from(seen_queries.insert(query.id()));
+                match query.info() {
+                    kad::QueryInfo::AddProvider { key, .. } => {
+                        providers.insert(key.clone());
+                    }
+                    kad::QueryInfo::PutRecord { record, .. } => {
+                        records.insert(record.key.clone());
+                    }
+                    _ => {}
+                }
+            }
+            assert!(
+                new_queries <= 1,
+                "background jobs exceeded the per-poll allowance"
+            );
+            assert!(
+                kad.iter_queries().count() <= 2,
+                "background jobs exceeded the shared ceiling"
+            );
+            if let Poll::Ready(ToSwarm::Dial { opts }) = action {
+                kad.on_swarm_event(FromSwarm::DialFailure(
+                    libp2p::swarm::behaviour::DialFailure {
+                        peer_id: opts.get_peer_id(),
+                        connection_id: opts.connection_id(),
+                        error: &DialError::NoAddresses,
+                    },
+                ));
+            }
+            if providers.len() == 10 && records.len() == 10 {
+                break;
+            }
+        }
+        assert_eq!(providers.len(), 10, "provider publication starved");
+        assert_eq!(records.len(), 10, "record publication starved");
     }
 
     #[test]

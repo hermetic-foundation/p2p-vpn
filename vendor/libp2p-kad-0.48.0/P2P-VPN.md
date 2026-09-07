@@ -19,11 +19,12 @@ changelog, generated protocol source, and tests.
 
 | File | Patch |
 | --- | --- |
-| `src/behaviour.rs` | Expose automatic-bootstrap control; apply routing-address limits to explicit, confirmed, and pending entries; support protected seeds. |
+| `src/behaviour.rs` | Bootstrap controls, routing/query admission, protected seeds, and shared background-job scheduling. |
 | `src/addresses.rs` | Bounded insertion/replacement, category-aware churn rotation, size rejection, and explicit seed protection. |
 | `src/lib.rs` | Export optional address/query limits and query resource usage. |
 | `src/query.rs` | Enforce deadlines and initial candidate admission; share retention accounting with iterative discovery. |
 | `src/query/retained.rs` | Bound candidate identities and address bytes across learning, migration, failure, and result extraction. |
+| `src/jobs.rs` | Document the shared background batch default. |
 
 The library configuration defaults are unchanged. p2p-vpn disables automatic and periodic bootstrap
 explicitly so its scheduler owns bootstrap initiation. Explicit `bootstrap()` is
@@ -40,6 +41,11 @@ prevents repeated responses from replacing failed identities indefinitely.
 Excess candidates are ignored, so heavily branching lookups can return fewer
 results. Fixed-peer operations preserve their original quorum requirement.
 `QueryRef::resource_usage()` exposes admission, encoded bytes, and rejection counts.
+
+Provider and record jobs share background admission capacity and alternate first
+access. Defaults remain a 100-query ceiling and batch size ten, but the batch is
+now shared across both jobs. p2p-vpn selects a ceiling of two and batch size one.
+Foreground API calls count against admission but are not capped by this setting.
 
 Expired queries stop issuing new requests when the pool next examines them,
 even if uncontacted candidates remain. Already queued or dispatched requests are

@@ -78,7 +78,7 @@ use crate::record::{self, store::RecordStore, ProviderRecord, Record};
 /// are allowed to start new queries on an invocation of
 /// `Behaviour::poll`.
 pub(crate) const JOBS_MAX_QUERIES: usize = 100;
-/// The maximum number of new queries started by a background job
+/// The default shared maximum number of new queries started by background jobs
 /// per invocation of `Behaviour::poll`.
 pub(crate) const JOBS_MAX_NEW_QUERIES: usize = 10;
 /// A background job run periodically.

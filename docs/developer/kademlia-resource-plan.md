@@ -209,6 +209,56 @@ fixed-peer queries use the replication factor. Both default counts are 20.
 
 Aggregate limits and comparable resource measurements remain open.
 
+### Background Job Admission
+
+Provider and record jobs previously reused the same available query capacity
+when the provider job filled its batch. With 99 existing queries, one poll
+could exceed the default 100-query background admission ceiling.
+
+- Negative control: `kademlia_background_jobs_share_remaining_query_capacity` failed before the fix.
+- Log: `/tmp/p2p-vpn-kad-jobs-before.log`.
+- Both jobs now consume a shared allowance and alternate which job runs first.
+- p2p-vpn allows one new background query per poll, only below two existing queries.
+
+All active queries count against background admission. Foreground API calls
+are not capped or canceled by this setting. The library default ceiling stays
+100; its default batch of ten is now shared instead of available to each job.
+
+The second regression fills the foreground allowance, verifies no background
+queries start, retires the foreground queries, and injects dial failures until
+all ten provider keys and ten record keys have received background work.
+It checks the two-query ceiling and one-new-query allowance after every poll.
+
+#### Verified Background Checks
+
+| Check | Result |
+| --- | --- |
+| Negative control | Shared-capacity regression failed before the fix |
+| Admission/fairness regressions | Both passed; foreground preserved and both record classes resumed |
+| Workspace | 1,261 passed; 22 opt-in tests ignored |
+| DHT, forced-relay pairing, peerless pairing namespaces | Passed |
+| Owned QUIC and relay/direct network-move namespaces | Passed |
+| Clippy correctness, suspicious, performance groups | Passed; nonfatal style warnings remain |
+| Nix source parity | Passed with cached tools and unchanged assertions |
+| Android native x86_64 | Built offline with the patched library |
+| Root/changed-vendor formatting and whitespace | Passed |
+
+Logs use `/tmp/p2p-vpn-kad-jobs-` with `before.log`, `after.log`,
+`workspace.log`, `clippy.log`, `dht.log`, `relay.log`, `code-pairing.log`,
+`quic.log`, `move.log`, `nix.log`, and `android.log` suffixes.
+
+The admission tests inject failures without opening sockets. These checks do
+not establish aggregate foreground admission, long-duration healthy settling,
+socket rates, public-WAN behavior, or physical-device acceptance.
+Full Nix package and ARM64 native builds were not repeated.
+
+#### Next Ownership Check
+
+Pairing cleanup clears provider query IDs while returning stop-provider locators.
+The runner calls `stop_providing` for those locators. Verify retirement under
+cancel/reopen churn before treating one current pairing session as a bound on
+its outstanding Kademlia queries.
+
 ### Per-Query Retention
 
 All three production DHT constructors enable shared candidate/address accounting.

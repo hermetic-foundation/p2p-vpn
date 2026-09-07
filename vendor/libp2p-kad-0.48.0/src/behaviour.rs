@@ -95,6 +95,9 @@ pub struct Behaviour<TStore> {
     /// Periodic job for (re-)replication and (re-)publishing of
     /// regular (value-)records.
     put_record_job: Option<PutRecordJob>,
+    background_query_limit: usize,
+    background_query_batch: usize,
+    provider_job_first: bool,
 
     /// The TTL of regular (value-)records.
     record_ttl: Option<Duration>,
@@ -180,6 +183,8 @@ pub enum StoreInserts {
 /// The configuration is consumed by [`Behaviour::new`].
 #[derive(Debug, Clone)]
 pub struct Config {
+    background_query_limit: usize,
+    background_query_batch: usize,
     kbucket_config: KBucketConfig,
     query_config: QueryConfig,
     protocol_config: ProtocolConfig,
@@ -227,6 +232,8 @@ impl Config {
         Config {
             kbucket_config: KBucketConfig::default(),
             query_config: QueryConfig::default(),
+            background_query_limit: JOBS_MAX_QUERIES,
+            background_query_batch: JOBS_MAX_NEW_QUERIES,
             protocol_config: ProtocolConfig::new(protocol_name),
             record_ttl: Some(Duration::from_secs(48 * 60 * 60)),
             record_replication_interval: Some(Duration::from_secs(60 * 60)),
@@ -470,6 +477,19 @@ impl Config {
         self.query_config.limits = Some(limits);
         self
     }
+
+    /// Set the shared background-job query ceiling and new queries per poll.
+    /// All currently active queries count against this allowance; foreground
+    /// API calls are not capped by it. Defaults are 100 and 10 respectively.
+    pub fn set_background_query_limits(
+        &mut self,
+        total: NonZeroUsize,
+        per_poll: NonZeroUsize,
+    ) -> &mut Self {
+        self.background_query_limit = total.get();
+        self.background_query_batch = per_poll.get();
+        self
+    }
 }
 
 impl<TStore> Behaviour<TStore>
@@ -520,6 +540,9 @@ where
             connected_peers: Default::default(),
             add_provider_job,
             put_record_job,
+            background_query_limit: config.background_query_limit,
+            background_query_batch: config.background_query_batch,
+            provider_job_first: true,
             record_ttl: config.record_ttl,
             provider_record_ttl: config.provider_record_ttl,
             external_addresses: Default::default(),
@@ -1350,6 +1373,50 @@ where
         let target = kbucket::Key::new(key);
         let peers = self.kbuckets.closest_keys(&target);
         self.queries.add_iter_closest(target.clone(), peers, info);
+    }
+
+    fn poll_background_jobs(&mut self, cx: &mut Context<'_>, now: Instant) {
+        let mut remaining = self
+            .background_query_limit
+            .saturating_sub(self.queries.size())
+            .min(self.background_query_batch);
+        if remaining == 0 {
+            return;
+        }
+
+        let provider_first = self.provider_job_first;
+        self.provider_job_first = !provider_first;
+        for provider in [provider_first, !provider_first] {
+            for _ in 0..remaining {
+                if provider {
+                    let record = self.add_provider_job.as_mut().and_then(|job| {
+                        match job.poll(cx, &mut self.store, now) {
+                            Poll::Ready(record) => Some(record),
+                            Poll::Pending => None,
+                        }
+                    });
+                    let Some(record) = record else { break };
+                    self.start_add_provider(record.key, AddProviderContext::Republish);
+                } else {
+                    let record = self.put_record_job.as_mut().and_then(|job| {
+                        match job.poll(cx, &mut self.store, now) {
+                            Poll::Ready(record) => Some(record),
+                            Poll::Pending => None,
+                        }
+                    });
+                    let Some(record) = record else { break };
+                    let context = if record.publisher.as_ref()
+                        == Some(self.kbuckets.local_key().preimage())
+                    {
+                        PutRecordContext::Republish
+                    } else {
+                        PutRecordContext::Replicate
+                    };
+                    self.start_put_record(record, Quorum::All, context);
+                }
+                remaining -= 1;
+            }
+        }
     }
 
     /// Starts an iterative `PUT_VALUE` query for the given record.
@@ -2591,41 +2658,7 @@ where
     ) -> Poll<ToSwarm<Self::ToSwarm, THandlerInEvent<Self>>> {
         let now = Instant::now();
 
-        // Calculate the available capacity for queries triggered by background jobs.
-        let mut jobs_query_capacity = JOBS_MAX_QUERIES.saturating_sub(self.queries.size());
-
-        // Run the periodic provider announcement job.
-        if let Some(mut job) = self.add_provider_job.take() {
-            let num = usize::min(JOBS_MAX_NEW_QUERIES, jobs_query_capacity);
-            for i in 0..num {
-                if let Poll::Ready(r) = job.poll(cx, &mut self.store, now) {
-                    self.start_add_provider(r.key, AddProviderContext::Republish)
-                } else {
-                    jobs_query_capacity -= i;
-                    break;
-                }
-            }
-            self.add_provider_job = Some(job);
-        }
-
-        // Run the periodic record replication / publication job.
-        if let Some(mut job) = self.put_record_job.take() {
-            let num = usize::min(JOBS_MAX_NEW_QUERIES, jobs_query_capacity);
-            for _ in 0..num {
-                if let Poll::Ready(r) = job.poll(cx, &mut self.store, now) {
-                    let context =
-                        if r.publisher.as_ref() == Some(self.kbuckets.local_key().preimage()) {
-                            PutRecordContext::Republish
-                        } else {
-                            PutRecordContext::Replicate
-                        };
-                    self.start_put_record(r, Quorum::All, context)
-                } else {
-                    break;
-                }
-            }
-            self.put_record_job = Some(job);
-        }
+        self.poll_background_jobs(cx, now);
 
         // Poll bootstrap periodically and automatically.
         if let Poll::Ready(()) = self.bootstrap_status.poll_next_bootstrap(cx) {

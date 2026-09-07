@@ -50,6 +50,7 @@ server duties or advertise itself as a Kademlia server.
 | Configured routing seeds | Protected from address churn; count toward the same limit. |
 | Query candidates | At most 256 identities per query phase, including failed candidates. |
 | Query address storage | At most 256 KiB of encoded addresses per phase, with the same per-peer limits. |
+| Library background jobs | One new query per poll, only below two existing queries; provider and record jobs share the allowance. |
 
 Routing-address limits apply to both DHTs and standalone code pairing, including internally learned addresses.
 At capacity, unprotected addresses rotate while preserving LAN and relay alternatives
