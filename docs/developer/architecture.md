@@ -162,9 +162,13 @@ See [Pairing Implementation](pairing.md) for message fields, limits, and tests.
 
 ## Routing
 
-Routes are statically authorized.
+Route authority comes from local configuration and effective signed membership.
+Accepted membership updates can change authorized peers and route grants at runtime.
+Control-protocol route advertisements are claims, not independent routing authority.
 
-Runtime route advertisements are claims, not dynamic routing authority.
+`ForwardingAuthorization::from_records` derives routes and transport peers from
+the same effective membership. `Config::compile_routes_with_membership` applies
+route policy; the queued-frame boundary rechecks the current owner before sending.
 
 | Check | Behavior |
 | --- | --- |
@@ -299,10 +303,10 @@ Stream fallback evidence is split by selected path:
 | `outbound_direct_tcp_stream_fallback_packets` | Packets sent through selected direct TCP stream fallback. |
 | `outbound_relay_stream_fallback_packets` | Packets sent through selected circuit relay stream fallback. |
 
-Direct QUIC stream and circuit relay egress use the latest libp2p
-`connection_id`.
-
-TCP stream egress still uses the compatibility request-response stream path.
+All three stream paths use the connection ID on the selected path candidate.
+`send_dequeued_stream_fallback` dispatches them through `send_dequeued_pinned_stream`;
+it does not let peer-scoped request-response dispatch choose another connection.
+The compatibility Forwarder API remains available to other callers.
 
 ## Candidate Hygiene
 
@@ -342,6 +346,11 @@ peer, and relay addresses remain protected; eviction does not close active paths
 
 These limits cover `learn_peer_address`, not every internal libp2p address store.
 
+The [retention review](kademlia-retention-review.md) reproduces 65 addresses in
+both a library-owned bucket entry and an active query, outside application
+admission. Finishing a query releases its candidates; strict internal retention
+enforcement and heap bounds remain unresolved.
+
 ## Relay Behavior
 
 Circuit relay is a fallback path.
@@ -354,7 +363,9 @@ It also supports DCUtR setup when the topology and relay allow it.
 | Peer circuit | Open only while no usable direct path exists. |
 | Alternate relay address | Try serially for one peer and relay pair. |
 
-Relay peers are not VPN members unless they also appear in `peers[]`.
+An infrastructure connection grants no VPN membership. The same identity may
+separately be authorized by static configuration or effective signed membership;
+revocation and expiry still apply to its overlay role.
 
 ## Public Discovery
 
@@ -373,10 +384,17 @@ and infrastructure dial backoff remain intact.
 
 Public IPFS/libp2p routing is default reachability infrastructure.
 
-Unknown connections are classified after Identify. Exact Kademlia protocol
-matches remain connected as bounded routing-only peers.
+Identify can classify an unknown connection as routing-only when its Kademlia
+protocol matches exactly and the routing-peer admission budget permits it.
 
-Provider results are dialed only when they match configured overlay peers.
+Advertising pairing support alone does not keep a routing peer on the expiring
+probe path. An active code-pairing session retains its separate probe handling;
+see the [private-bootstrap restart regression](private-discovery-restart-review.md).
+
+Ordinary overlay provider results are dialed only when currently authorized by
+the forwarder, including peers learned through signed membership. Results for an
+active pairing-code lookup instead enter the bounded pairing handshake; discovery
+does not itself authorize those peers for VPN traffic.
 
 Bootstrap peers are runtime defaults for the public DHT profile.
 
