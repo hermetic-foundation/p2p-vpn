@@ -4,6 +4,7 @@
 
 The original broad goal was superseded without being marked complete.
 **Aggregate Resource Bounds**, phase 1 below, is complete.
+Phase 2, [Sustained Recovery And Healthy Settling](kademlia-settling.md), is active.
 This workstream does not complete the broader reliability review.
 Starting revision: `5ecb01ea`. No deployed service or physical device has changed.
 
@@ -12,7 +13,7 @@ Starting revision: `5ecb01ea`. No deployed service or physical device has change
 | Phase | Scope | Acceptance | Status |
 | --- | --- | --- | --- |
 | 1. Aggregate Resource Bounds | Handler pending work, total routing storage, total retained query state | Enforced limits and deterministic saturation/recovery evidence | Complete |
-| 2. Sustained Recovery And Settling | Prolonged failures, churn, transitions, healthy idle behavior | Long-running tests recover without intervention and settle when healthy | Open |
+| 2. Sustained Recovery And Settling | Prolonged failures, churn, transitions, healthy idle behavior | Long-running tests recover without intervention and settle when healthy | Active; acceptance pending |
 | 3. Before/After Measurements | Sockets, dial/query rates, CPU, RSS | Comparable baseline/current captures, commands, and limitations | Open |
 | 4. Final Acceptance | All original requirements, documentation, packaging | Requirement-by-requirement evidence audit and residual risks | Open |
 

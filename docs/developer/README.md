@@ -10,6 +10,7 @@ Use these docs when changing, testing, or debugging `p2p-vpn`.
 | [Reliability Review](refactor-review.md) | Findings, refactoring sequence, and completion evidence. |
 | [Kademlia Resource Plan](kademlia-resource-plan.md) | Completed aggregate bounds and remaining settling/measurement phases. |
 | [Aggregate Ownership Audit](kademlia-final-ownership-audit.md) | Enforced limits, production query owners, compatibility, and final phase-1 evidence. |
+| [Recovery And Settling](kademlia-settling.md) | Phase-2 acceptance matrix, timer contracts, findings, and harness gaps. |
 | [Android Architecture](android.md) | Shared TUN, network isolation, VpnService, persistence, and recovery. |
 | [Feature Matrix](feature-matrix.md) | Current implementation status. |
 | [NixOS Module Design](nixos-module.md) | Modes, secret lifecycle, service contract, and tests. |
