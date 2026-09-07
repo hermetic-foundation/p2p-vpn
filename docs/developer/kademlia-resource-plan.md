@@ -383,9 +383,10 @@ The additive `cancel_query` API supports immediate local retirement. Unlike
 graceful `QueryMut::finish`, it does not emit completion or start another phase.
 Callers must discard ownership of the canceled ID.
 
-Handler queue bounds, aggregate foreground admission,
-and sustained process-resource measurements remain open. These synthetic
-cancellation tests do not measure real sockets or remote record expiry.
+Handler queue enforcement is now covered by the
+[aggregate-bounds checkpoint](kademlia-aggregate-bounds.md#implemented-admission).
+Aggregate routing/query admission and sustained process-resource measurements
+remain open. Synthetic cancellation tests do not measure remote record expiry.
 
 #### Join Lookup Ownership
 

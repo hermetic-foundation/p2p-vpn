@@ -22,30 +22,77 @@ storage. Neither is sufficient evidence of an aggregate bound.
 
 | Source | Observation |
 | --- | --- |
-| `vendor/libp2p-kad-0.48.0/src/handler.rs` | `pending_messages` is an unbounded `VecDeque` of request payloads and query IDs |
-| `Handler::on_behaviour_event` | Five outbound request variants append directly to that queue |
+| Original `handler.rs` | `pending_messages` was an unbounded `VecDeque` of request payloads and query IDs |
+| `Handler::on_behaviour_event` | Five outbound request variants now use the bounded pending-request owner |
 | `Handler::poll` | A pending message advances only when fewer than 32 outbound streams are active |
-| `pending_streams` | Tracks requested stream negotiations separately; retirement needs its own audit |
+| `pending_streams` | FIFO negotiation entries now count against the 32-stream admission limit, even after task timeout |
 | `Behaviour::on_connection_handler_event` | `QueryError` fails that peer's attempt for the matching query, without closing the connection |
 
-The 32-stream limit does not bound queued requests or their payloads. Query
+The original 32-stream limit did not bound queued requests or their payloads. Query
 cancellation removes unsent behaviour actions but cannot recall requests already
 delivered to the handler. A stalled handler can therefore outlive query owners.
 
-### Admission Design
+### Implemented Admission
 
-Proposed, not implemented:
+| Limit | Value | Rationale |
+| --- | ---: | --- |
+| Waiting requests | 64 per handler | Two batches of the existing 32 active streams |
+| Retained waiting payload | 256 KiB | Bounded allowance for keys, records, and provider addresses |
+| Rejection IDs | 64 per handler | Reporting cannot become a second unbounded queue |
+| Pending negotiations | 32 per handler | Preserve FIFO callback association without accumulating expired-task entries |
+| Queue residence | Ten seconds by default | Reuses the existing configurable substream timeout |
 
-1. Apply count and retained-payload-byte limits before enqueueing requests.
-2. Reject new requests at capacity without evicting admitted work.
-3. Bound rejection bookkeeping independently of request storage.
-4. Report tracked rejections through query errors; never close the shared connection solely for queue overload.
-5. Let existing query deadlines retire rejections beyond the error-reporting budget; test this fallback explicitly.
-6. Expire pending requests and release their accounting even when stream negotiation stalls.
+Admission rejects new requests, preserving admitted payloads. Tracked rejection
+IDs emit `QueryError` with `WouldBlock`; additional IDs are discarded and their
+queries retire through existing deadlines. No overload action closes a connection.
 
-Configure the limits through the shared controlled Kademlia constructor so
-desktop, Android, and standalone pairing use the same policy. Preserve existing
-wire messages and minimal JSON/Nix configuration.
+Expiry checks the actual deadline before polling the timer. It releases payload
+accounting and reports `TimedOut`. Negotiation callbacks release their FIFO
+entries; canceled receiver entries cannot be removed early without misassociation.
+
+`HandlerQueueUsage` exposes pending requests, payload bytes, rejection counts,
+expiry, negotiations, and active outbound streams. Payload accounting includes
+vector capacities where available, key/address lengths, and address-vector slots;
+it is not allocator-level RSS accounting or an aggregate process-memory bound.
+
+The shared controlled constructor enables limits for desktop, Android, and
+standalone pairing. Library request limits remain opt-in; negotiation entries
+always share the existing stream ceiling. Wire messages and minimal configs
+are unchanged.
+
+### Regression Coverage
+
+Normal p2p-vpn tests construct the real libp2p handler through its behaviour API.
+They cover count/byte saturation, oversized requests, bounded rejection reports,
+query-deadline fallback, cancellation with handler-owned work, stalled
+negotiations, expiry, and resumed admission.
+
+Root Cargo cannot run vendored crate unit tests because the crate is excluded
+from workspace membership and needs dev-dependencies. This limitation is not
+reported as an upstream test-suite pass. Log:
+`/tmp/p2p-vpn-kad-handler-test-build.log`.
+
+### Handler Checkpoint Evidence
+
+| Check | Result |
+| --- | --- |
+| Offline workspace tests | 1,274 passed; 22 opt-in tests ignored |
+| Namespace DHT discovery | Passed |
+| Namespace peerless code and forced-relay pairing | Both passed |
+| Namespace owned QUIC packet plane | Passed |
+| Namespace relay/direct network move | Passed |
+| Android x86_64 native library | Compiled offline with cached NDK; four existing warnings |
+| Nix desktop/Android source parity | Passed with cached tool overrides |
+| Root and changed vendored Rust formatting | Passed |
+| Workspace Clippy correctness, suspicious, and perf groups | Passed; existing style warnings remain |
+
+Logs use `/tmp/p2p-vpn-kad-handler-` with suffixes
+`workspace-verified.log`, `dht.log`, `code.log`, `relay.log`, `quic.log`,
+`move.log`, `android.log`, `nix-verified.log`, and `clippy-verified.log`.
+
+The namespace checks verify normal VPN operation, not overload while sharing
+a connection. That combined saturation test remains required. Full Nix package,
+APK, ARM64, and physical-device builds/deployments were not performed.
 
 ### Failure Modes To Test
 

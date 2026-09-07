@@ -52,6 +52,7 @@ server duties or advertise itself as a Kademlia server.
 | Query candidates | At most 256 identities per query phase, including failed candidates. |
 | Query address storage | At most 256 KiB of encoded addresses per phase, with the same per-peer limits. |
 | Library background jobs | One new query per poll, only below two existing queries; provider and record jobs share the allowance. |
+| Waiting DHT requests | Per connection: at most 64 requests and 256 KiB of retained payload data; queued requests expire after ten seconds. |
 
 Routing-address limits apply to both DHTs and standalone code pairing, including internally learned addresses.
 At capacity, unprotected addresses rotate while preserving LAN and relay alternatives
@@ -60,6 +61,10 @@ where possible. These limits do not authorize peers or change minimal configurat
 Query limits also apply to standalone code pairing. Excess candidates and
 addresses are ignored; unusually large searches can return fewer results.
 These are per-query limits, not a total process-memory or connection limit.
+
+A full DHT request queue rejects new work without closing the connection used
+by VPN traffic. Rejection reporting is bounded too; extreme overload may wait
+for the query deadline instead of reporting every rejection immediately.
 
 The five-second scheduler does not launch a DHT batch on every tick.
 Changed local addresses still receive a bounded publication while ordinary

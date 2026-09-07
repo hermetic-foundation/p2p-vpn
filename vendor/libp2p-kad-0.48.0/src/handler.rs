@@ -47,6 +47,10 @@ use crate::{
 
 const MAX_NUM_STREAMS: usize = 32;
 
+mod pending;
+use pending::PendingRequests;
+pub use pending::{HandlerQueueLimits, HandlerQueueUsage};
+
 /// Protocol handler that manages substreams for the Kademlia protocol
 /// on a single connection with a peer.
 ///
@@ -74,7 +78,7 @@ pub struct Handler {
 
     /// List of outbound substreams that are waiting to become active next.
     /// Contains the request we want to send, and the user data if we expect an answer.
-    pending_messages: VecDeque<(KadRequestMsg, QueryId)>,
+    pending_messages: PendingRequests,
 
     /// List of active inbound substreams with the state they are in.
     inbound_substreams: SelectAll<InboundSubstreamState>,
@@ -435,6 +439,7 @@ impl Handler {
         endpoint: ConnectedPoint,
         remote_peer_id: PeerId,
         mode: Mode,
+        queue_limits: Option<HandlerQueueLimits>,
     ) -> Self {
         match &endpoint {
             ConnectedPoint::Dialer { .. } => {
@@ -467,9 +472,18 @@ impl Handler {
                 MAX_NUM_STREAMS,
             ),
             pending_streams: Default::default(),
-            pending_messages: Default::default(),
+            pending_messages: PendingRequests::new(queue_limits, substreams_timeout),
             protocol_status: None,
             remote_supported_protocols: Default::default(),
+        }
+    }
+
+    /// Inspect waiting requests, independently of the active stream limit.
+    pub fn pending_request_usage(&self) -> HandlerQueueUsage {
+        HandlerQueueUsage {
+            pending_negotiations: self.pending_streams.len(),
+            active_outbound_streams: self.outbound_substreams.len(),
+            ..self.pending_messages.usage()
         }
     }
 
@@ -629,7 +643,7 @@ impl ConnectionHandler for Handler {
             }
             HandlerIn::FindNodeReq { key, query_id } => {
                 let msg = KadRequestMsg::FindNode { key };
-                self.pending_messages.push_back((msg, query_id));
+                self.pending_messages.push(msg, query_id);
             }
             HandlerIn::FindNodeRes {
                 closer_peers,
@@ -637,7 +651,7 @@ impl ConnectionHandler for Handler {
             } => self.answer_pending_request(request_id, KadResponseMsg::FindNode { closer_peers }),
             HandlerIn::GetProvidersReq { key, query_id } => {
                 let msg = KadRequestMsg::GetProviders { key };
-                self.pending_messages.push_back((msg, query_id));
+                self.pending_messages.push(msg, query_id);
             }
             HandlerIn::GetProvidersRes {
                 closer_peers,
@@ -656,15 +670,15 @@ impl ConnectionHandler for Handler {
                 query_id,
             } => {
                 let msg = KadRequestMsg::AddProvider { key, provider };
-                self.pending_messages.push_back((msg, query_id));
+                self.pending_messages.push(msg, query_id);
             }
             HandlerIn::GetRecord { key, query_id } => {
                 let msg = KadRequestMsg::GetValue { key };
-                self.pending_messages.push_back((msg, query_id));
+                self.pending_messages.push(msg, query_id);
             }
             HandlerIn::PutRecord { record, query_id } => {
                 let msg = KadRequestMsg::PutValue { record };
-                self.pending_messages.push_back((msg, query_id));
+                self.pending_messages.push(msg, query_id);
             }
             HandlerIn::GetRecordRes {
                 record,
@@ -767,8 +781,20 @@ impl ConnectionHandler for Handler {
                 return Poll::Ready(event);
             }
 
-            if self.outbound_substreams.len() < MAX_NUM_STREAMS {
-                if let Some((msg, id)) = self.pending_messages.pop_front() {
+            if let Some(query_id) = self.pending_messages.poll_expired(cx) {
+                return Poll::Ready(ConnectionHandlerEvent::NotifyBehaviour(
+                    HandlerEvent::QueryError {
+                        query_id,
+                        error: HandlerQueryErr::Io(io::ErrorKind::TimedOut.into()),
+                    },
+                ));
+            }
+            // Expired stream tasks can leave FIFO negotiation entries awaiting
+            // their swarm callback; retain ordering without admitting more.
+            if self.outbound_substreams.len() < MAX_NUM_STREAMS
+                && self.pending_streams.len() < MAX_NUM_STREAMS
+            {
+                if let Some((msg, id)) = self.pending_messages.pop() {
                     self.queue_new_stream(id, msg);
                     return Poll::Ready(ConnectionHandlerEvent::OutboundSubstreamRequest {
                         protocol: SubstreamProtocol::new(self.protocol_config.clone(), ()),
@@ -776,6 +802,14 @@ impl ConnectionHandler for Handler {
                 }
             }
 
+            if let Some(query_id) = self.pending_messages.pop_rejected() {
+                return Poll::Ready(ConnectionHandlerEvent::NotifyBehaviour(
+                    HandlerEvent::QueryError {
+                        query_id,
+                        error: HandlerQueryErr::Io(io::ErrorKind::WouldBlock.into()),
+                    },
+                ));
+            }
             return Poll::Pending;
         }
     }

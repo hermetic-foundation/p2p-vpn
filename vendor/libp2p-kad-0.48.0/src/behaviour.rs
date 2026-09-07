@@ -75,6 +75,8 @@ pub struct Behaviour<TStore> {
     /// Configuration of the wire protocol.
     protocol_config: ProtocolConfig,
 
+    handler_queue_limits: Option<crate::HandlerQueueLimits>,
+
     address_limits: AddressLimits,
 
     /// Configuration of [`RecordStore`] filtering.
@@ -183,6 +185,7 @@ pub enum StoreInserts {
 /// The configuration is consumed by [`Behaviour::new`].
 #[derive(Debug, Clone)]
 pub struct Config {
+    handler_queue_limits: Option<crate::HandlerQueueLimits>,
     background_query_limit: usize,
     background_query_batch: usize,
     kbucket_config: KBucketConfig,
@@ -230,6 +233,7 @@ impl Config {
     /// Builds a new `Config` with the given protocol name.
     pub fn new(protocol_name: StreamProtocol) -> Self {
         Config {
+            handler_queue_limits: None,
             kbucket_config: KBucketConfig::default(),
             query_config: QueryConfig::default(),
             background_query_limit: JOBS_MAX_QUERIES,
@@ -247,6 +251,14 @@ impl Config {
             automatic_bootstrap_throttle: Some(bootstrap::DEFAULT_AUTOMATIC_THROTTLE),
             address_limits: AddressLimits::default(),
         }
+    }
+
+    /// Bounds pending outbound requests and rejection IDs per connection handler.
+    /// Queued requests expire after the configured substream timeout. Rejections
+    /// beyond the bounded error queue are left to the original query deadline.
+    pub fn set_handler_queue_limits(&mut self, limits: crate::HandlerQueueLimits) -> &mut Self {
+        self.handler_queue_limits = Some(limits);
+        self
     }
 
     /// Sets the timeout for a single query.
@@ -527,6 +539,7 @@ where
             .map(AddProviderJob::new);
 
         Behaviour {
+            handler_queue_limits: config.handler_queue_limits,
             store,
             caching: config.caching,
             kbuckets: KBucketsTable::new(local_key, config.kbucket_config),
@@ -2421,6 +2434,7 @@ where
             connected_point,
             peer,
             self.mode,
+            self.handler_queue_limits,
         );
         self.preload_new_handler(&mut handler, connection_id, peer);
 
@@ -2446,6 +2460,7 @@ where
             connected_point,
             peer,
             self.mode,
+            self.handler_queue_limits,
         );
         self.preload_new_handler(&mut handler, connection_id, peer);
 

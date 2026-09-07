@@ -441,6 +441,10 @@ pub(super) fn controlled_kademlia_config(protocol: StreamProtocol) -> kad::Confi
     );
     config
         .set_parallelism(KADEMLIA_QUERY_PARALLELISM)
+        .set_handler_queue_limits(kad::HandlerQueueLimits::new(
+            NonZeroUsize::new(64).unwrap(),
+            NonZeroUsize::new(256 * 1024).unwrap(),
+        ))
         .set_background_query_limits(NonZeroUsize::new(2).unwrap(), NonZeroUsize::MIN)
         .set_address_limits(address_limits)
         .set_query_limits(kad::QueryLimits::new(
@@ -1583,6 +1587,195 @@ mod tests {
             kad.iter_queries().count() <= 100,
             "background jobs reused the same remaining capacity"
         );
+    }
+
+    #[test]
+    fn handler_stalled_negotiations_expire_queued_requests_and_resume() {
+        use libp2p::{
+            core::{ConnectedPoint, Endpoint, transport::PortUse},
+            swarm::{
+                ConnectionHandler, ConnectionHandlerEvent, ConnectionId, NetworkBehaviour, ToSwarm,
+            },
+        };
+        use std::task::Context;
+        let local = PeerId::random();
+        let remote = PeerId::random();
+        let address: Multiaddr = "/memory/1".parse().unwrap();
+        let mut config = controlled_kademlia_config(StreamProtocol::new(
+            crate::config::PUBLIC_IPFS_KADEMLIA_PROTOCOL,
+        ));
+        config.set_substreams_timeout(Duration::from_millis(100));
+        let mut kad =
+            kad::Behaviour::with_config(local, kad::store::MemoryStore::new(local), config);
+        kad.add_address(&remote, address.clone());
+        for index in 0_u64..64 {
+            kad.get_record(kad::RecordKey::new(&index.to_le_bytes()));
+        }
+        let waker = futures::task::noop_waker();
+        let mut cx = Context::from_waker(&waker);
+        for _ in 0..200 {
+            let _ = kad.poll(&mut cx);
+        }
+        let connection = ConnectionId::new_unchecked(1);
+        let mut handler = kad
+            .handle_established_outbound_connection(
+                connection,
+                remote,
+                &address,
+                Endpoint::Dialer,
+                PortUse::Reuse,
+            )
+            .unwrap();
+        for _ in 0..32 {
+            assert!(matches!(
+                handler.poll(&mut cx),
+                std::task::Poll::Ready(ConnectionHandlerEvent::OutboundSubstreamRequest { .. })
+            ));
+        }
+        assert_eq!(handler.pending_request_usage().requests, 32);
+        let canceled = kad
+            .iter_queries()
+            .map(|query| query.id())
+            .collect::<Vec<_>>();
+        assert_eq!(canceled.len(), 64);
+        for query in canceled {
+            assert!(kad.cancel_query(&query));
+        }
+        assert_eq!(handler.pending_request_usage().requests, 32);
+        std::thread::sleep(Duration::from_millis(150));
+        for _ in 0..200 {
+            if let std::task::Poll::Ready(ConnectionHandlerEvent::NotifyBehaviour(event)) =
+                handler.poll(&mut cx)
+            {
+                kad.on_connection_handler_event(remote, connection, event);
+            }
+        }
+        let usage = handler.pending_request_usage();
+        assert_eq!(usage.requests, 0);
+        assert_eq!(usage.bytes, 0);
+        assert_eq!(usage.expired, 32);
+        assert_eq!(usage.pending_negotiations, 32);
+        assert_eq!(usage.active_outbound_streams, 0);
+        let endpoint = ConnectedPoint::Dialer {
+            address: address.clone(),
+            role_override: Endpoint::Dialer,
+            port_use: PortUse::Reuse,
+        };
+        kad.on_swarm_event(libp2p::swarm::FromSwarm::ConnectionEstablished(
+            libp2p::swarm::behaviour::ConnectionEstablished {
+                peer_id: remote,
+                connection_id: connection,
+                endpoint: &endpoint,
+                failed_addresses: &[],
+                other_established: 0,
+            },
+        ));
+        let query = kad.get_record(kad::RecordKey::new(&b"new"));
+        for _ in 0..200 {
+            if let std::task::Poll::Ready(ToSwarm::NotifyHandler { event, .. }) = kad.poll(&mut cx)
+            {
+                handler.on_behaviour_event(event);
+            }
+        }
+        assert_eq!(handler.pending_request_usage().requests, 1);
+        assert!(matches!(handler.poll(&mut cx), std::task::Poll::Pending));
+        assert_eq!(handler.pending_request_usage().pending_negotiations, 32);
+        for _ in 0..32 {
+            handler.on_connection_event(libp2p::swarm::handler::ConnectionEvent::DialUpgradeError(
+                libp2p::swarm::handler::DialUpgradeError {
+                    info: (),
+                    error: libp2p::swarm::StreamUpgradeError::Timeout,
+                },
+            ));
+        }
+        assert!(matches!(
+            handler.poll(&mut cx),
+            std::task::Poll::Ready(ConnectionHandlerEvent::OutboundSubstreamRequest { .. })
+        ));
+        assert_eq!(handler.pending_request_usage().requests, 0);
+        assert_eq!(handler.pending_request_usage().pending_negotiations, 1);
+        assert!(kad.query(&query).is_some());
+    }
+
+    #[test]
+    fn handler_pending_requests_enforce_count_bytes_and_bounded_rejections() {
+        use libp2p::{
+            core::{Endpoint, transport::PortUse},
+            swarm::{
+                ConnectionHandler, ConnectionHandlerEvent, ConnectionId, NetworkBehaviour, ToSwarm,
+            },
+        };
+        use std::task::Context;
+        for (count, bytes, admitted, queued_errors, deferred) in
+            [(4, 4096, 4, 4, 12), (64, 16, 2, 18, 0), (64, 4, 0, 20, 0)]
+        {
+            let local = PeerId::random();
+            let remote = PeerId::random();
+            let address: Multiaddr = "/memory/1".parse().unwrap();
+            let mut config = controlled_kademlia_config(StreamProtocol::new(
+                crate::config::PUBLIC_IPFS_KADEMLIA_PROTOCOL,
+            ));
+            config.set_handler_queue_limits(kad::HandlerQueueLimits::new(
+                NonZeroUsize::new(count).unwrap(),
+                NonZeroUsize::new(bytes).unwrap(),
+            ));
+            config.set_query_timeout(Duration::from_millis(100));
+            let mut kad =
+                kad::Behaviour::with_config(local, kad::store::MemoryStore::new(local), config);
+            kad.add_address(&remote, address.clone());
+            let queries = (0_u64..20)
+                .map(|index| kad.get_record(kad::RecordKey::new(&index.to_le_bytes())))
+                .collect::<Vec<_>>();
+            let waker = futures::task::noop_waker();
+            let mut cx = Context::from_waker(&waker);
+            for _ in 0..100 {
+                let _ = kad.poll(&mut cx);
+            }
+            let connection = ConnectionId::new_unchecked(1);
+            let mut handler = kad
+                .handle_established_outbound_connection(
+                    connection,
+                    remote,
+                    &address,
+                    Endpoint::Dialer,
+                    PortUse::Reuse,
+                )
+                .unwrap();
+            let usage = handler.pending_request_usage();
+            assert_eq!(usage.requests, admitted);
+            assert_eq!(usage.bytes, admitted * 8);
+            assert_eq!(usage.queued_rejections, queued_errors);
+            assert_eq!(usage.rejected, 20 - admitted as u64);
+            assert_eq!(usage.unreported_rejections, deferred);
+            let mut streams = 0;
+            for _ in 0..100 {
+                match handler.poll(&mut cx) {
+                    std::task::Poll::Ready(ConnectionHandlerEvent::OutboundSubstreamRequest {
+                        ..
+                    }) => streams += 1,
+                    std::task::Poll::Ready(ConnectionHandlerEvent::NotifyBehaviour(event)) => {
+                        kad.on_connection_handler_event(remote, connection, event)
+                    }
+                    _ => {}
+                }
+            }
+            assert_eq!(streams, admitted);
+            assert_eq!(handler.pending_request_usage().bytes, 0);
+            assert_eq!(handler.pending_request_usage().queued_rejections, 0);
+            std::thread::sleep(Duration::from_millis(120));
+            for _ in 0..100 {
+                assert!(!matches!(
+                    kad.poll(&mut cx),
+                    std::task::Poll::Ready(ToSwarm::CloseConnection { .. })
+                ));
+            }
+            for query in queries {
+                assert!(
+                    !kad.cancel_query(&query),
+                    "query deadline did not retire deferred rejection"
+                );
+            }
+        }
     }
 
     #[test]

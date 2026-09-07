@@ -25,6 +25,7 @@ changelog, generated protocol source, and tests.
 | `src/query.rs` | Enforce deadlines and initial candidate admission; share retention accounting with iterative discovery; remove canceled queries. |
 | `src/query/retained.rs` | Bound candidate identities and address bytes across learning, migration, failure, and result extraction. |
 | `src/jobs.rs` | Document the shared background batch default; remove stopped providers from pending snapshots. |
+| `src/handler.rs`, `src/handler/pending.rs` | Opt-in request admission/expiry, bounded rejection reporting, and negotiation queue accounting. |
 
 The library configuration defaults are unchanged. p2p-vpn disables automatic and periodic bootstrap
 explicitly so its scheduler owns bootstrap initiation. Explicit `bootstrap()` is
@@ -65,6 +66,16 @@ remote provider records are not recalled; remote records expire normally.
 Canceling a retained bootstrap query also releases its active-bootstrap count.
 Automatic bootstrap stays suppressed while another bootstrap remains active,
 then resumes according to configuration. Repeated cancellation is a no-op.
+
+`set_handler_queue_limits()` bounds pending requests by count and retained
+payload bytes. Requests expire after the substream timeout. Rejection IDs are
+bounded by the same count limit; excess reports defer to query deadlines.
+Overload never requests closure of the shared connection.
+
+p2p-vpn selects 64 waiting requests and 256 KiB per handler. The existing
+32-stream limit also caps FIFO negotiation entries, including entries whose
+stream tasks timed out before the swarm returned their upgrade callbacks.
+`pending_request_usage()` exposes queue, rejection, expiry, and negotiation counts.
 
 ## Build Integration
 
