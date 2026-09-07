@@ -2,6 +2,43 @@
 
 ## Latest Attempt
 
+The network-labelled build at `23e5159d` failed automatic process-death recovery
+on 2026-09-07. It recorded 46 passing steps and one failure from 00:48:01Z
+through 00:56:01Z (480 seconds). Reboot and final isolation were not reached.
+
+| Evidence | Result |
+| --- | --- |
+| Earlier stages | Pairing, concurrent traffic, overlap rejection, disable, APK replacement, and both underlay transitions passed |
+| Restored process | Both networks enabled and running; only one VPN peer connected |
+| Alpha | Relay connection followed by a direct connection and capabilities exchange |
+| Beta recovery queries | Logged at epoch seconds 1788742352.874, 1788742392.434, and 1788742462.433 |
+| Beta query results | Each emitted a final `get_record` event within one second; no beta overlay connection followed |
+| Attribution | `runtime_network` identifies beta independently of Tokio worker IDs |
+| Cleanup | All six safeguards passed; no emulator or fixture process remained |
+
+The result log does not distinguish a missing record from other `get_record`
+outcomes. Recovery timers are running; address lookup and bootstrap behavior
+need a focused restart reproduction before attributing a transport defect.
+
+- Evidence: `/tmp/p2p-vpn-review-scoped-multi-network/evidence.json`.
+- Native rebuild, offline Gradle unit/lint/assembly, and fixture build passed.
+- No manual connection repair or deadline extension occurred.
+- Next: isolate private-bootstrap peer-address lookup across a client restart.
+
+### Labelled Run Artifacts
+
+| Artifact | SHA-256 |
+| --- | --- |
+| Debug APK | `61aad1eefb51748653f15fab6e4cd0a810f653da1d9f87119088a8968d44bb73` |
+| Unstripped x86_64 JNI | `7fd3b998fd24b3f7d6ff17dfe460c11194ec533c4c3b63a087132cec720ba3da` |
+| Stripped JNI | `2b884044e10b77a195db3a2c26ab02815bcc392602216c32be344bb4030bd6e7` |
+| Linux fixture | `436d1ec0beff9cfe04df60979d2092d5ca686695e497a50046227328a35caaad` |
+
+The Linux CLI remains the packaged `461894ad` runtime used in preceding runs;
+it is not the rebuilt fixture or Android runtime.
+
+## Earlier Traced Attempt
+
 The opt-in traced fixture at `bac49191` failed reboot recovery on 2026-09-07,
 before reaching final isolation. It recorded 58 passing steps and one failure
 from 00:25:29Z through 00:37:27Z (718 seconds).
@@ -35,11 +72,12 @@ thread IDs in older Android logs cannot reliably identify a network.
 - Linux and Android use the same additive field, including startup failures.
 - Independent spawned tasks and library logs do not inherit this task-local scope.
 - A fixture's bootstrap and overlay runtimes share a network name; this label alone does not distinguish those roles.
-- This is diagnostic instrumentation, not a recovery fix; device verification remains open.
+- This is diagnostic instrumentation, not a recovery fix; the labelled run above failed recovery.
 
 Verification passed: three focused log tests, the workspace suite (1,231 passed,
 19 opt-in ignored), required Clippy categories, Rust formatting, and the Nix
-`rust-test-sources` check. No emulator or physical-device result covers this change yet.
+`rust-test-sources` check. The labelled emulator run verifies attribution;
+physical-device verification and successful recovery remain open.
 
 ## Earlier Isolation Failure
 

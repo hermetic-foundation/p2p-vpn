@@ -4,8 +4,8 @@
 
 Audited through 2026-09-07, including NixOS lifecycle/LAN/pairing checks at
 `cf18fb51`, membership convergence at `4bb8ff1e`, and Android failures at
-`fe950142` (isolation) and `bac49191` (reboot recovery), following the earlier
-recovery pass at `643d798e`.
+`fe950142` (isolation), `bac49191` (reboot recovery), and `23e5159d`
+(process recovery), following the earlier recovery pass at `643d798e`.
 
 Transport checks at `859b29d5` and the subsequent movement-test repair are
 recorded in the [transport report](nixos-transport-review.md).
@@ -28,7 +28,7 @@ Earlier milestones remain historical evidence, not automatic proof for later cha
 | NixOS workflows | [Four exported VM checks pass at `cf18fb51`](nixos-workflow-review.md): lifecycle, smoke, minimal LAN, and URI pairing. | Pairing evaluates generated Nix but runs its resulting JSON, not a rebuild/switch. Controlled IPv4 LAN, not public WAN or sustained load. |
 | Storage repair VM | Full lifecycle check passes at `cf18fb51`; automatic service/DNS recovery after permission repair preserves identity and membership bytes. | Permission failure, not ENOSPC, interrupted writes, power loss, or OS reboot. |
 | Transport VMs | QUIC-stream, QUIC-datagram, and forced-relay checks pass at `859b29d5`. Strengthened movement test passes twice with selected relay payloads, unchanged invocation IDs/configs, and direct LAN return. | Fixed an invalid exact-one relay-path assertion after a two-path failure. Corrected runs had one path; controlled IPv4 fixtures, not public NAT or saturation evidence. |
-| Android | [Latest multi-network run](android-multi-network-review.md#latest-attempt) at `bac49191`: 58 steps passed, beta failed reboot recovery before isolation. The preceding isolation run received 4/5 replies. Earlier 68-check pass remains historical; [native health recovery](android-event-ownership-review.md#native-health-recovery-instrumentation) passes at `4b90f3bc`. | Recovery and isolation are not verified on latest code. Controlled emulator, not physical carrier/VPN evidence. Failure attribution and sustained overload remain open. |
+| Android | [Latest multi-network run](android-multi-network-review.md#latest-attempt) at `23e5159d`: 46 steps passed, beta failed process recovery despite scheduled discovery queries. Earlier reboot and 4/5 isolation failures remain. Earlier 68-check pass is historical; [native health recovery](android-event-ownership-review.md#native-health-recovery-instrumentation) passes at `4b90f3bc`. | Recovery and isolation are not verified on latest code. Controlled emulator, not physical carrier/VPN evidence. Failure attribution and sustained overload remain open. |
 | Resources | Historical debug comparison plus two current release-profile idle captures at `89709e4f`: 0.133-0.167% of one core per node. | Small static topology; current-only release results are not a release baseline comparison. Connection and drop increments remain visible in [measurement limits](idle-resource-comparison.md#release-profile-follow-up). |
 | Inventory evaluation | [Joint/separate diagnostic](inventory-evaluation-measurement.md) passed at 8, 32, and 128 records. | Single unoptimized run; not daemon throughput or memory evidence. |
 | Retained membership | [Forwarder comparison](forwarder-resource-comparison.md): original debug samples plus 12 release-profile samples comparing `f24831fa` and `89709e4f` at 8, 128, and 256 records. | No memory reduction established; RSS is not exact map allocation cost or whole-daemon footprint. |
