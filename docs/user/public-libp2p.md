@@ -100,6 +100,10 @@ Inbound saturation replaces reusable idle streams in place or rejects new stream
 Stalled inbound requests expire even if no response was admitted to the DHT queue.
 These limits retire individual DHT streams, not the shared VPN connection.
 
+AutoNAT relay lookups retain their own cleanup even when periodic DHT discovery
+is disabled. Completion or timeout releases lookup ownership, allowing later
+relay discovery without restarting the daemon.
+
 Configured bootstrap seeds are protected from routing-address rotation and
 whole-peer bucket replacement. Protection does not increase bucket capacity;
 a full bucket of protected seeds rejects additional peers.
