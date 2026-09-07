@@ -124,7 +124,7 @@ fn sample(role: &str, pid: u32, started: Instant) -> io::Result<ProcessSample> {
     })
 }
 
-fn fingerprint() -> io::Result<String> {
+pub(super) fn fingerprint() -> io::Result<String> {
     let mut file = fs::File::open(env::current_exe()?)?;
     let mut digest = Sha256::new();
     let mut buffer = [0_u8; 8192];

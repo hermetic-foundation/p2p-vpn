@@ -151,6 +151,11 @@ use super::recovery_queries::{
     QUERY_TIMEOUT as RECOVERY_DISCOVERY_QUERY_TIMEOUT,
 };
 
+mod recovery_snapshot;
+use recovery_snapshot::ApplicationRecoverySnapshot;
+mod packet_endpoint_selection;
+use packet_endpoint_selection::packet_capabilities_for_lan_connection;
+
 const TUN_READ_CHANNEL: usize = 1024;
 const REDIAL_INTERVAL: Duration = Duration::from_secs(10);
 const BLOCKED_QUEUE_REDIAL_INTERVAL: Duration = Duration::from_secs(2);
@@ -2084,6 +2089,7 @@ where
                     );
                 }
                 let mut expiry_context = PacketPlaneExpiryContext {
+                    active_connections: &active_connections,
                     swarm: &mut node.swarm,
                     forwarder: &forwarder,
                     paths: &mut paths,
@@ -2446,11 +2452,20 @@ where
                     }
                     request => request,
                 };
+                let diagnostics = matches!(
+                    &request,
+                    RuntimeControlRequest::Status { .. } | RuntimeControlRequest::State { .. }
+                );
                 let control_context = RuntimeControlContext {
-                    kademlia: matches!(
-                        &request,
-                        RuntimeControlRequest::Status { .. } | RuntimeControlRequest::State { .. }
-                    ).then(|| super::kademlia_resources::KademliaResources::capture(node.swarm.behaviour())),
+                    kademlia: diagnostics.then(|| super::kademlia_resources::KademliaResources::capture(node.swarm.behaviour())),
+                    application_recovery: diagnostics.then(|| ApplicationRecoverySnapshot::capture(
+                        &kademlia_maintenance,
+                        &queue_runtime.discovered_peer_addresses,
+                        &public_discovery_backoff,
+                        &connection_epochs,
+                        &packet_plane_negotiator,
+                        Instant::now(),
+                    )),
                     forwarder: &forwarder,
                     paths: &paths,
                     peer_capabilities: &peer_capabilities,
@@ -5022,6 +5037,7 @@ fn handle_runtime_network_change(
 
 struct RuntimeControlContext<'a> {
     kademlia: Option<super::kademlia_resources::KademliaResources>,
+    application_recovery: Option<ApplicationRecoverySnapshot>,
     forwarder: &'a Forwarder,
     paths: &'a PathSet,
     peer_capabilities: &'a PeerCapabilities,
@@ -5061,6 +5077,9 @@ fn handle_runtime_control_request(
             if let Some(kademlia) = &context.kademlia {
                 kademlia.extend_lines(&mut lines);
             }
+            if let Some(recovery) = &context.application_recovery {
+                recovery.extend_lines(&mut lines);
+            }
             if respond_to.send(lines).is_err() {
                 eprintln!("control socket status response receiver dropped");
             }
@@ -5086,6 +5105,9 @@ fn handle_runtime_control_request(
             });
             if let Some(kademlia) = &context.kademlia {
                 kademlia.extend_lines(&mut lines);
+            }
+            if let Some(recovery) = &context.application_recovery {
+                recovery.extend_lines(&mut lines);
             }
             if respond_to.send(lines).is_err() {
                 eprintln!("control socket state response receiver dropped");
@@ -11818,6 +11840,7 @@ async fn handle_swarm_event(
                     peer_id,
                     connection_id,
                     &endpoint,
+                    context.active_connections,
                 );
                 send_control_capabilities(
                     swarm,
@@ -12621,6 +12644,7 @@ async fn handle_control_event(
                     context.identity,
                     context.paths,
                     context.discovery,
+                    context.active_connections,
                 )
             };
             if membership_changed {
@@ -13482,6 +13506,7 @@ async fn handle_control_request(
                         peer,
                         &capabilities,
                         context.metrics,
+                        context.active_connections,
                     );
                     maybe_start_membership_record_sync(
                         swarm,
@@ -13538,6 +13563,7 @@ async fn handle_control_request(
             context.metrics.record_control_request_received();
             let response = packet_plane_accept_response_for_peer(
                 PacketPlaneAcceptContext {
+                    active_connections: context.active_connections,
                     forwarder: context.forwarder,
                     peer_capabilities: context.peer_capabilities,
                     paths: context.paths,
@@ -15434,6 +15460,7 @@ fn promote_authenticated_overlay_connection(
             peer,
             connection_id,
             endpoint,
+            context.active_connections,
         );
     }
 
@@ -16302,6 +16329,7 @@ fn handle_control_response_event(
     identity: &NodeIdentity,
     paths: &mut PathSet,
     discovery: &DiscoveryConfig,
+    active_connections: &HashMap<(Libp2pPeerId, ConnectionId), ConnectedPoint>,
 ) -> bool {
     metrics.record_control_response_received();
     match response {
@@ -16349,6 +16377,7 @@ fn handle_control_response_event(
                     peer,
                     &capabilities,
                     metrics,
+                    active_connections,
                 );
             }
             membership_changed
@@ -17290,6 +17319,7 @@ fn maybe_send_packet_plane_hello(
     peer: Libp2pPeerId,
     remote_capabilities: &ControlCapabilities,
     metrics: &RuntimeMetrics,
+    active_connections: &HashMap<(Libp2pPeerId, ConnectionId), ConnectedPoint>,
 ) {
     let local_overlay = PeerId::from_libp2p(*swarm.local_peer_id());
     let remote_overlay = PeerId::from_libp2p(peer);
@@ -17302,10 +17332,18 @@ fn maybe_send_packet_plane_hello(
     {
         return;
     }
-    let backend = packet_plane_negotiation_backend(
-        paths,
+    let (local_capabilities, remote_capabilities) = packet_capabilities_for_lan_connection(
         local_capabilities,
         remote_capabilities,
+        peer,
+        paths,
+        active_connections,
+        &local_interface_networks(&forwarder.config().interface.name),
+    );
+    let backend = packet_plane_negotiation_backend(
+        paths,
+        &local_capabilities,
+        &remote_capabilities,
         packet_plane,
         packet_plane_quic,
         remote_overlay,
@@ -17317,7 +17355,7 @@ fn maybe_send_packet_plane_hello(
     match signed_packet_plane_handshake(
         PacketPlaneHandshakeKind::Hello,
         identity,
-        local_capabilities,
+        &local_capabilities,
         backend,
     ) {
         Ok((secret, handshake, verified)) => match handshake.encode() {
@@ -17335,7 +17373,7 @@ fn maybe_send_packet_plane_hello(
                         negotiator.start_quic_connection(
                             packet_plane_quic.connector(),
                             remote_overlay,
-                            remote_capabilities.clone(),
+                            remote_capabilities.clone().into_owned(),
                             PacketPlaneQuicNegotiationRole::Initiator,
                             PacketPlaneQuicConnectionDirection::Connect,
                         );
@@ -17579,6 +17617,7 @@ async fn establish_packet_plane_quic_connection(
 }
 
 struct PacketPlaneAcceptContext<'a> {
+    active_connections: &'a HashMap<(Libp2pPeerId, ConnectionId), ConnectedPoint>,
     forwarder: &'a Forwarder,
     peer_capabilities: &'a PeerCapabilities,
     paths: &'a mut PathSet,
@@ -17624,7 +17663,16 @@ async fn accept_packet_plane_hello(
         .peer_capabilities
         .get(remote_overlay)
         .ok_or(PacketPlaneNegotiationError::MissingRemoteCapabilities)?;
-    let backend = packet_plane_accept_backend(context.local_capabilities, remote_capabilities)
+    let (local_capabilities, preferred_remote_capabilities) =
+        packet_capabilities_for_lan_connection(
+            context.local_capabilities,
+            remote_capabilities,
+            peer,
+            context.paths,
+            context.active_connections,
+            &local_interface_networks(&context.forwarder.config().interface.name),
+        );
+    let backend = packet_plane_accept_backend(&local_capabilities, &preferred_remote_capabilities)
         .ok_or(PacketPlaneNegotiationError::MissingRemoteEndpoint)?;
     if !remote_capabilities.supports_datagram_packet_path() {
         return Err(PacketPlaneNegotiationError::MissingRemoteEndpoint);
@@ -17644,7 +17692,7 @@ async fn accept_packet_plane_hello(
     let (secret, accept, verified_accept) = signed_packet_plane_handshake(
         PacketPlaneHandshakeKind::Accept,
         context.identity,
-        context.local_capabilities,
+        &local_capabilities,
         backend,
     )?;
     if backend == PacketDatagramBackend::OwnedQuic {
@@ -17663,7 +17711,7 @@ async fn accept_packet_plane_hello(
         context.negotiator.start_quic_connection(
             connector,
             remote_overlay,
-            remote_capabilities.clone(),
+            preferred_remote_capabilities.into_owned(),
             PacketPlaneQuicNegotiationRole::Responder,
             PacketPlaneQuicConnectionDirection::Accept,
         );
@@ -18079,6 +18127,7 @@ const fn packet_plane_quic_negotiation_role_name(
 }
 
 struct PacketPlaneExpiryContext<'a> {
+    active_connections: &'a HashMap<(Libp2pPeerId, ConnectionId), ConnectedPoint>,
     swarm: &'a mut Swarm<Behaviour>,
     forwarder: &'a Forwarder,
     paths: &'a mut PathSet,
@@ -18151,6 +18200,7 @@ fn retry_packet_plane_negotiation(
             peer,
             capabilities,
             context.metrics,
+            context.active_connections,
         );
     }
 }
@@ -19116,6 +19166,7 @@ fn record_path_established_and_maybe_send_packet_plane_hello(
     peer: Libp2pPeerId,
     connection_id: ConnectionId,
     endpoint: &ConnectedPoint,
+    active_connections: &HashMap<(Libp2pPeerId, ConnectionId), ConnectedPoint>,
 ) {
     let Some(change) =
         record_path_established(paths, forwarder, metrics, peer, connection_id, endpoint)
@@ -19147,6 +19198,7 @@ fn record_path_established_and_maybe_send_packet_plane_hello(
         peer,
         &remote_capabilities,
         metrics,
+        active_connections,
     );
 }
 
@@ -26542,6 +26594,7 @@ mod tests {
             RuntimeControlRequest::Shutdown { respond_to },
             &RuntimeControlContext {
                 kademlia: None,
+                application_recovery: None,
                 forwarder: &forwarder,
                 paths: &paths,
                 peer_capabilities: &peer_capabilities,
@@ -26574,19 +26627,37 @@ mod tests {
             let (config, mut node) = autonat_query_test_node(protocol, Duration::from_secs(60), 32);
             let kad = &mut node.swarm.behaviour_mut().kad;
             let finished = kad.get_closest_peers(peer_id());
-            kad.get_closest_peers(peer_id());
+            let recovery_query = kad.get_closest_peers(peer_id());
             kad.query_mut(&finished).unwrap().finish();
             assert_eq!(kad.iter_queries().count(), 1);
             if let Some(pairing) = node.swarm.behaviour_mut().pairing_kad.as_mut() {
                 pairing.get_closest_peers(peer_id());
             }
             let forwarder = Forwarder::from_config(&config).unwrap();
+            let start = Instant::now();
+            let mut maintenance = KademliaMaintenance::new(start);
+            maintenance.record_started(finished, start);
+            let mut discovered = DiscoveredPeerAddresses::default();
+            let peer = peer_id();
+            assert!(discovered.should_query_recovery_discovery_at(peer, start));
+            discovered.record_recovery_discovery_queries(peer, [recovery_query], start);
+            let application_recovery = ApplicationRecoverySnapshot::capture(
+                &maintenance,
+                &discovered,
+                &PublicDiscoveryBackoff::default(),
+                &ConnectionEpochs::default(),
+                &PacketPlaneNegotiator::default(),
+                start + Duration::from_secs(2),
+            );
+            let mut expected_application_lines = Vec::new();
+            application_recovery.extend_lines(&mut expected_application_lines);
             let context = RuntimeControlContext {
                 kademlia: Some(
                     super::super::kademlia_resources::KademliaResources::capture(
                         node.swarm.behaviour(),
                     ),
                 ),
+                application_recovery: Some(application_recovery),
                 forwarder: &forwarder,
                 paths: &PathSet::new(),
                 peer_capabilities: &PeerCapabilities::default(),
@@ -26615,6 +26686,18 @@ mod tests {
                 assert_eq!(handle_runtime_control_request(request, &context), None);
                 let lines = response.try_recv().unwrap();
                 assert!(lines.iter().any(|line| !line.starts_with("kad_")));
+                let application_lines = lines
+                    .iter()
+                    .filter(|line| line.starts_with("app_"))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                assert_eq!(application_lines, expected_application_lines);
+                assert!(application_lines.contains(&"app_maintenance_queries 1".to_owned()));
+                assert!(application_lines.contains(&"app_recovery_queries 1".to_owned()));
+                assert!(
+                    application_lines
+                        .contains(&"app_recovery_query_oldest_pending_age_millis 2000".to_owned())
+                );
                 let fields = lines
                     .iter()
                     .filter(|line| line.starts_with("kad_"))
@@ -26774,6 +26857,7 @@ mod tests {
             RuntimeControlRequest::NetworkPeers { respond_to },
             &RuntimeControlContext {
                 kademlia: None,
+                application_recovery: None,
                 forwarder: &forwarder,
                 paths: &PathSet::new(),
                 peer_capabilities: &PeerCapabilities::default(),
@@ -26946,6 +27030,7 @@ mod tests {
             RuntimeControlRequest::PeerSnapshot { respond_to },
             &RuntimeControlContext {
                 kademlia: None,
+                application_recovery: None,
                 forwarder: &forwarder,
                 paths: &paths,
                 peer_capabilities: &PeerCapabilities::default(),
@@ -35751,6 +35836,7 @@ mod tests {
         let local_capabilities = packet_plane_test_capabilities(local_endpoint);
 
         let mut expiry_context = PacketPlaneExpiryContext {
+            active_connections: &HashMap::new(),
             swarm: &mut node.swarm,
             forwarder: &forwarder,
             paths: &mut paths,
@@ -35850,6 +35936,7 @@ mod tests {
 
         {
             let mut expiry_context = PacketPlaneExpiryContext {
+                active_connections: &HashMap::new(),
                 swarm: &mut node.swarm,
                 forwarder: &forwarder,
                 paths: &mut paths,
@@ -41489,6 +41576,7 @@ mod tests {
 
         let rejected_response = packet_plane_accept_response_for_peer(
             PacketPlaneAcceptContext {
+                active_connections: &HashMap::new(),
                 forwarder: &responder_forwarder,
                 peer_capabilities: &responder_peer_capabilities,
                 paths: &mut responder_paths,
@@ -41513,6 +41601,7 @@ mod tests {
         initiator_paths.record_established(responder_overlay, PathKind::DirectTcpStream);
         let response = packet_plane_accept_response_for_peer(
             PacketPlaneAcceptContext {
+                active_connections: &HashMap::new(),
                 forwarder: &responder_forwarder,
                 peer_capabilities: &responder_peer_capabilities,
                 paths: &mut responder_paths,
@@ -41791,6 +41880,7 @@ mod tests {
         );
         let response = packet_plane_accept_response_for_peer(
             PacketPlaneAcceptContext {
+                active_connections: &HashMap::new(),
                 forwarder: &responder_forwarder,
                 peer_capabilities: &responder_peer_capabilities,
                 paths: &mut responder_paths,
@@ -42999,6 +43089,91 @@ mod tests {
         assert!(!negotiator.has_pending(peer));
     }
 
+    #[test]
+    fn application_recovery_snapshot_tracks_independent_hello_owners() {
+        let identity = NodeIdentity::generate_ed25519().unwrap();
+        let peer = PeerId::from_bytes([13; 32]);
+        let secret = test_packet_plane_secret(7);
+        let hello = verified_test_packet_plane_handshake(
+            PacketPlaneHandshakeKind::Hello,
+            &identity,
+            &secret,
+            1280,
+            "192.168.0.180:51820".parse().unwrap(),
+        );
+        let responder_secret = test_packet_plane_secret(8);
+        let accept = verified_test_packet_plane_handshake(
+            PacketPlaneHandshakeKind::Accept,
+            &identity,
+            &responder_secret,
+            1280,
+            "192.168.0.181:51820".parse().unwrap(),
+        );
+        let mut negotiator = PacketPlaneNegotiator::default();
+        negotiator.insert(peer, secret, hello.clone(), PacketDatagramBackend::OwnedUdp);
+        negotiator.insert_responder(
+            peer,
+            responder_secret,
+            accept,
+            hello,
+            PacketDatagramBackend::OwnedUdp,
+        );
+        let start = Instant::now();
+        negotiator.pending.get_mut(&peer).unwrap().created_at = start;
+        negotiator
+            .pending_responders
+            .get_mut(&peer)
+            .unwrap()
+            .created_at = start + Duration::from_secs(1);
+        let capture = |negotiator: &PacketPlaneNegotiator| {
+            let mut lines = Vec::new();
+            ApplicationRecoverySnapshot::capture(
+                &KademliaMaintenance::new(start),
+                &DiscoveredPeerAddresses::default(),
+                &PublicDiscoveryBackoff::default(),
+                &ConnectionEpochs::default(),
+                negotiator,
+                start + Duration::from_secs(3),
+            )
+            .extend_lines(&mut lines);
+            lines
+        };
+        let lines = capture(&negotiator);
+        assert_lines_contain(
+            &lines,
+            &[
+                "app_packet_hellos_pending 1",
+                "app_packet_hello_oldest_pending_age_millis 3000",
+                "app_packet_responders_pending 1",
+                "app_packet_responder_oldest_pending_age_millis 2000",
+            ],
+        );
+        negotiator.remove(peer);
+        assert_lines_contain(
+            &capture(&negotiator),
+            &[
+                "app_packet_hellos_pending 0",
+                "app_packet_hello_oldest_pending_age_millis 0",
+                "app_packet_responders_pending 1",
+                "app_packet_responder_oldest_pending_age_millis 2000",
+            ],
+        );
+        assert_eq!(
+            negotiator.expire_stale(
+                start + Duration::from_secs(1) + PACKET_PLANE_PENDING_HELLO_TIMEOUT,
+                PACKET_PLANE_PENDING_HELLO_TIMEOUT,
+            ),
+            vec![(peer, PacketDatagramBackend::OwnedUdp)]
+        );
+        assert_lines_contain(
+            &capture(&negotiator),
+            &[
+                "app_packet_responders_pending 0",
+                "app_packet_responder_oldest_pending_age_millis 0",
+            ],
+        );
+    }
+
     #[tokio::test]
     #[allow(clippy::too_many_lines)]
     async fn expired_packet_plane_hello_retries_without_an_external_event() {
@@ -43076,6 +43251,7 @@ mod tests {
                 .created_at = expired_at;
             let metrics = RuntimeMetrics::default();
             let mut context = PacketPlaneExpiryContext {
+                active_connections: &HashMap::new(),
                 swarm: &mut node.swarm,
                 forwarder: &forwarder,
                 paths: &mut paths,
@@ -43238,6 +43414,7 @@ mod tests {
             remote,
             ConnectionId::new_unchecked(1),
             &relay_endpoint,
+            &HashMap::new(),
         );
         assert!(!negotiator.has_pending(remote_overlay));
 
@@ -43255,6 +43432,7 @@ mod tests {
             remote,
             ConnectionId::new_unchecked(2),
             &direct_endpoint,
+            &HashMap::new(),
         );
 
         assert!(negotiator.has_pending(remote_overlay));

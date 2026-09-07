@@ -32,6 +32,16 @@ The daemon retains at most 32 identified public routing peers per instance.
 Unknown peers have 30 seconds to identify or present membership. Invalid
 overlay capability attempts are disconnected and quarantined with backoff.
 
+### Returning To LAN
+
+After a direct LAN connection returns, packet negotiation prefers endpoints on
+that LAN when both peers already advertise them. A public-looking address does
+not override that peer-specific preference merely because it is public-looking.
+
+- Existing discovery and dial cooldowns can delay promotion.
+- Without a healthy direct LAN connection or mutually advertised endpoints, existing endpoint selection remains in effect.
+- Endpoint signatures, peer authorization, and packet-path health checks remain required.
+
 ## Public DHT Resource Policy
 
 Public IPFS Kademlia always runs in client mode.
@@ -389,6 +399,29 @@ sudo p2p-vpn daemon-status --socket /run/p2p-vpn/control.sock \
 Counters reset when the DHT restarts. Periodic maintenance is normal; nonzero
 counters or retained routing entries alone do not establish a connection storm.
 These fields add no configuration requirements or network authority.
+
+### Recovery Owners
+
+The same commands expose `app_*` fields for work retained by the VPN runtime,
+separately from the DHT query pool. An empty DHT pool does not necessarily mean
+all application work has been cleaned up.
+
+```sh
+sudo p2p-vpn daemon-state --socket /run/p2p-vpn/control.sock | rg '^app_'
+```
+
+| Field Group | Interpretation |
+| --- | --- |
+| `maintenance_*`, `address_publication_*` | Ordinary discovery and signed-address publication have independent owners. |
+| `recovery_queries`, `recovery_query_*` | Pending targeted queries, their oldest age, and retained retry cooldowns. |
+| `discovered_recovery_addresses_*` | Recovery-cache entries and quarantine; not the DHT's routing table. |
+| `recovery_dial_*`, `public_discovery_*` | Retained dial targets and remaining retry delays. |
+| `connection_attempts_pending`, `connections_retiring` | Transport attempts and connections awaiting retirement. |
+| `packet_hello*`, `packet_responder*`, `packet_quic_connection_*` | Packet-handshake and QUIC connection task ownership. |
+
+Times are floored milliseconds. Zero remaining delay means due or absent;
+check the associated count or scheduled flag. A retained cooldown is not an
+active attempt. These snapshots observe state without starting recovery work.
 
 ## More References
 

@@ -39,6 +39,8 @@ mod idle_sample;
 mod kademlia_resources;
 #[path = "support/queue_pressure.rs"]
 mod queue_pressure;
+#[path = "support/recovery_soak.rs"]
+mod recovery_soak;
 const KEEP_TEMP_ENV: &str = "P2P_VPN_TUN_E2E_KEEP_TEMP";
 const ORCHESTRATOR_TIMEOUT_ENV: &str = "P2P_VPN_TUN_E2E_ORCHESTRATOR_TIMEOUT_SECONDS";
 const WAIT_TIMEOUT_SCALE_ENV: &str = "P2P_VPN_TUN_E2E_WAIT_SCALE";
@@ -57,6 +59,16 @@ const NETWORK_MOVE_TEST_NAME: &str = "tun_namespace_recovers_relay_and_direct_af
 const DHT_TEST_NAME: &str = "tun_namespace_ping_crosses_dht_discovered_overlay";
 const NETWORK_NAME: &str = "tun-e2e";
 const NODE_A_LOCAL_ROUTE_ADDRESS: Ipv4Addr = Ipv4Addr::new(10, 41, 0, 9);
+
+#[test]
+#[ignore = "requires isolated Linux namespaces; production-timer recovery can take 25 minutes"]
+fn tun_namespace_automatic_discovery_recovers_after_link_changes() {
+    match env::var(CHILD_ENV).as_deref() {
+        Ok("orchestrator") => recovery_soak::run_orchestrator(),
+        Ok("node") => recovery_soak::run_node(),
+        _ => reexec_orchestrator(recovery_soak::TEST_NAME),
+    }
+}
 
 #[test]
 #[ignore = "requires Linux user and network namespaces plus /dev/net/tun"]
@@ -231,6 +243,11 @@ fn namespace_repro_artifacts_include_replay_commands_and_metadata() {
     assert!(metadata.contains(DIRECT_TEST_NAME));
     assert!(metadata.contains("temp_dir:"));
     assert!(metadata.contains("current_exe:"));
+    assert!(metadata.contains(&format!(
+        "recovery_profile_env: {}",
+        recovery_soak::PROFILE_ENV
+    )));
+    assert!(metadata.contains("recovery_profile:"));
     assert_eq!(
         namespace_replay_env_exports_from([(idle_sample::SAMPLE_ENV, Some("60".to_owned()))]),
         "export P2P_VPN_TUN_E2E_IDLE_SECONDS='60'\n"
@@ -281,6 +298,29 @@ fn namespace_repro_artifacts_include_replay_commands_and_metadata() {
     );
 
     let _ = fs::remove_dir_all(temp_dir);
+}
+
+#[test]
+fn namespace_recovery_replay_exports_preserve_both_profiles() {
+    for profile in ["public", "private"] {
+        let exports = namespace_replay_env_exports_from([(
+            recovery_soak::PROFILE_ENV,
+            Some(profile.to_owned()),
+        )]);
+        assert_eq!(
+            exports,
+            format!("export P2P_VPN_TUN_E2E_RECOVERY_PROFILE='{profile}'\n")
+        );
+        let commands = namespace_repro_commands(
+            &shell_quote(recovery_soak::TEST_NAME),
+            "'/tmp/p2p-vpn-artifacts'",
+            "'/tmp/p2p-vpn-test-bin'",
+            &exports,
+        );
+        let exports_index = commands.find(&exports).expect("recovery profile export");
+        assert!(exports_index < commands.find("nix run .#tun-e2e").unwrap());
+        assert!(exports_index < commands.find(&format!("env -u {CHILD_ENV}")).unwrap());
+    }
 }
 
 #[test]
@@ -361,7 +401,9 @@ fn reexec_orchestrator(test_name: &str) {
         );
         idle_sample::WARMUP + duration
     });
-    let default_timeout = if test_name == RELAY_PROMOTION_TEST_NAME {
+    let default_timeout = if test_name == recovery_soak::TEST_NAME {
+        recovery_soak::WATCHDOG
+    } else if test_name == RELAY_PROMOTION_TEST_NAME {
         Duration::from_secs(150)
     } else if test_name == QUEUE_PRESSURE_TEST_NAME {
         Duration::from_secs(90 * queue_pressure::requested_rounds())
@@ -384,7 +426,7 @@ fn reexec_orchestrator(test_name: &str) {
     .expect("failed to execute unshare");
 
     assert_output_success("unshare tun e2e orchestrator", &output);
-    if idle_extra > Duration::ZERO {
+    if idle_extra > Duration::ZERO || test_name == recovery_soak::TEST_NAME {
         eprint!("{}", String::from_utf8_lossy(&output.stderr));
     }
 }
@@ -1805,6 +1847,18 @@ fn write_namespace_repro_artifacts(temp_dir: &Path, test_name: &str) -> io::Resu
     )
     .expect("write metadata line");
     writeln!(metadata, "wait_timeout_scale: {timeout_scale}").expect("write metadata line");
+    writeln!(
+        metadata,
+        "recovery_profile_env: {}",
+        recovery_soak::PROFILE_ENV
+    )
+    .expect("write metadata line");
+    writeln!(
+        metadata,
+        "recovery_profile: {}",
+        env::var(recovery_soak::PROFILE_ENV).unwrap_or_else(|_| "public".to_owned())
+    )
+    .expect("write metadata line");
     metadata.push_str(&command_metadata("git", &["rev-parse", "HEAD"]));
     metadata.push_str(&command_metadata("git", &["status", "--short"]));
     metadata.push_str(&command_metadata("uname", &["-a"]));
@@ -1844,6 +1898,7 @@ fn namespace_replay_env_exports() -> String {
             WAIT_TIMEOUT_SCALE_ENV,
             idle_sample::SAMPLE_ENV,
             queue_pressure::ROUNDS_ENV,
+            recovery_soak::PROFILE_ENV,
         ]
         .into_iter()
         .map(|name| (name, env::var(name).ok())),
@@ -2604,7 +2659,16 @@ fn configure_relay_underlay(pid_relay: u32, pid_a: u32, pid_b: u32) {
 }
 
 fn configure_network_move_underlay(pid_relay: u32, pid_a: u32, pid_b: u32) {
-    configure_three_node_underlay(pid_relay, pid_a, pid_b, "mv", "10.251.0");
+    configure_network_move_underlay_with_prefix(pid_relay, pid_a, pid_b, "10.251.0");
+}
+
+fn configure_network_move_underlay_with_prefix(
+    pid_relay: u32,
+    pid_a: u32,
+    pid_b: u32,
+    prefix: &str,
+) {
+    configure_three_node_underlay(pid_relay, pid_a, pid_b, "mv", prefix);
     // The relay LAN must not become an alternate direct hole-punch path.
     for port in ["veth-a-host", "veth-b-host"] {
         run_command(

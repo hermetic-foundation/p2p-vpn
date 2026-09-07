@@ -3,10 +3,11 @@
 ## Status
 
 Phase 2 is active. Starting revision: `63a380cbcd1a`.
-Signed freshness, AutoNAT admission, and synchronous relay-error fixes pass
-their checkpoint checks. DHT resource reporting also passes its checkpoint gates.
-No acceptance soak has run. The remaining findings and phase-wide acceptance
-cases below are still open.
+Signed freshness, AutoNAT admission, synchronous relay errors, and resource
+reporting pass their checkpoint checks. Automatic LAN/relay/LAN recovery now
+passes one cycle per DHT profile after fixing packet endpoint selection.
+
+No acceptance soak has run. The remaining phase-wide cases below are open.
 
 See the [workstream plan](kademlia-resource-plan.md) and the completed
 [aggregate ownership audit](kademlia-final-ownership-audit.md).
@@ -24,16 +25,16 @@ See the [workstream plan](kademlia-resource-plan.md) and the completed
 
 | Case | Required Outcome | Status |
 | --- | --- | --- |
-| Unavailable bootstrap/routing peers | Backoff survives long failures; useful discovery resumes automatically | Pending |
+| Unavailable bootstrap/routing peers | Backoff survives long failures; useful discovery resumes automatically | Short startup outage and automatic fallback verified; long-failure case pending |
 | Failed or stale relay | Retire failed attempts; discover or select a usable alternative | Synchronous-error component verified; live remote-failure case pending |
-| Repeated network/address changes | LAN-first discovery, relay fallback, eventual direct recovery where available | Pending |
+| Repeated network/address changes | LAN-first discovery, relay fallback, eventual direct recovery where available | One cycle per profile verified; repeated-fault matrix pending |
 | Foreground/background contention | Preserve unrelated VPN traffic; retire stale owners; resume after release | Pending |
 | All overlay peers healthy | Suppress redundant queries/dials; retain legitimate maintenance and fresh records | Signed freshness and AutoNAT quiet-mode components verified; whole-runtime case pending |
-| Shared-public and separate-public-pairing DHTs | Same bounded behavior with independent budgets | Both profiles covered by component tests; full scenario matrix pending |
+| Shared-public and separate-public-pairing DHTs | Same bounded behavior with independent budgets | Components and one recovery cycle per profile pass; full matrix pending |
 | AutoNAT with periodic maintenance disabled | No stranded owner or event-driven query storm | Cadence, policy, capacity and cleanup tests pass; sustained runtime evidence pending |
 | Deterministic long timeline | At least 24 simulated hours with timer-boundary assertions | Freshness, AutoNAT and synchronous-relay timelines pass; remaining timer interactions pending |
 | Real-runtime soak | At least 30 minutes, five fault/recovery cycles, ten continuous healthy minutes | Pending |
-| Negative control | The tests detect suppressed recovery or uncontrolled retries | Reproduced missing renewal, early AutoNAT retry, policy/capacity bypass, and unaccounted relay errors |
+| Negative control | The tests detect suppressed recovery or uncontrolled retries | Reproduced missing renewal, uncontrolled admission, unaccounted relay errors, and failure to restore LAN UDP |
 
 Topology changes are allowed during fault tests. Daemon restarts, configuration
 edits, peer-address injection, manual dialing, and management-plane rescue are
@@ -65,6 +66,80 @@ Sources: [runner timers and owners](../../src/runtime/runner.rs),
 Before acceptance runs, complete the fixture-specific numeric recovery and
 settling budgets from these timers and the actual topology. Record them here
 and in test assertions; do not widen them after a failure merely to pass.
+
+### Automatic Discovery Fixture
+
+The initial fixture is one cycle, not the acceptance soak. Freeze these deadlines
+before its first run. A failure requires investigation, not a larger timeout.
+These are serviced-loop fixture budgets, not a general public-network recovery SLA.
+
+| Stage | Budget | Derivation / Constraint |
+| --- | --- | --- |
+| Initial LAN | 120 seconds | 60-second discovery window, 10-second redial, 25-second hello, 10-second QUIC attempt, 15-second observation allowance |
+| Lost LAN to discovered relay | 960 seconds | 60-second LAN grace, 600-second bootstrap backoff, 120-second maintenance cadence, 60-second lookup, 30-second reservation, 25-second hello, 10-second redial, 17-second probe, 38-second observation allowance |
+| Relay to restored LAN | 375 seconds | 300-second address retry cap, 10-second redial, 25-second hello, 10-second QUIC attempt, 17-second probe, 13-second observation allowance |
+| Per-stage healthy observation | 30 seconds | Sample every five seconds and require bidirectional 5/5 ICMP plus packet-counter growth |
+| Orchestrator | 1,650 seconds | Stage budgets total 1,545 seconds; 105 seconds for namespace setup, readiness and final diagnostics |
+| Retained ordinary/publication query age | 100 seconds | 90-second owner expiry plus one 10-second cleanup interval |
+| Retained targeted query age | 70 seconds | 60-second expiry plus one 10-second cleanup interval |
+| Pending packet hello age | 35 seconds | 25-second expiry plus one 10-second cleanup interval |
+
+The targeted-query one-hour failure cap still needs its separate long-timeline
+case. This fresh fixture does not claim its 960-second budget bounds every
+possible accumulated cooldown history.
+
+| Fixture Property | Enforcement |
+| --- | --- |
+| Minimal peer configuration | Local identity, network name, remote peer ID; one isolated bootstrap override |
+| Public profile | Default discovery, packet plane, queues, relay policy and runtime entry point |
+| Private profile | Only the primary DHT protocol differs; public pairing DHT remains separate |
+| Initial unavailable infrastructure | Bootstrap/relay bridge port down while peers establish the direct LAN path |
+| Automatic fallback | Remove direct link and restore infrastructure; no addresses, reservations or dials injected |
+| No alternate underlay | Isolated edge bridge ports, forwarding off, bridge-side IPv6 disabled, reachability assertions |
+| No rescue | PID/start-time and serialized configuration checks throughout the cycle |
+| Bounded evidence | 32 MiB kernel file-size limit per child log; bounded samples and latest snapshots |
+
+The controlled infrastructure process serves Kademlia and circuit relay. It is
+not an authorized overlay member. Its server mode and Identify address ingestion
+are infrastructure setup, not recovery actions on the two overlay daemons.
+
+```sh
+nix develop -c cargo test --offline --locked --test tun_namespace --no-run
+# Run the built test executable separately; do not build during observation.
+P2P_VPN_TUN_E2E_KEEP_TEMP=1 P2P_VPN_TUN_E2E_RECOVERY_PROFILE=public \
+  "$TEST_BINARY" --ignored --exact \
+  tun_namespace_automatic_discovery_recovers_after_link_changes --nocapture
+```
+
+Repeat with `P2P_VPN_TUN_E2E_RECOVERY_PROFILE=private`. Timeout/scale overrides
+are rejected. `recovery-summary.json` labels this as `acceptance_soak: false`;
+`recovery-samples.jsonl` retains path, process and resource observations.
+
+### LAN Endpoint Recovery Finding
+
+The first public-profile run established LAN UDP at 6.7 seconds and discovered
+relay fallback at 65.9 seconds. Direct TCP returned after the LAN was restored,
+but UDP did not recover within its unchanged 375-second stage deadline.
+
+| Evidence | Interpretation |
+| --- | --- |
+| Healthy direct TCP plus unhealthy UDP in both final snapshots | Peer discovery and direct transport recovery had succeeded |
+| Repeated signed UDP sessions selected `11.251.0.x`, not reachable `10.253.0.x` | Public-address ranking overrode the working LAN interface |
+| Empty pending hello owners | Negotiations completed, but selected an unusable packet endpoint |
+| Full fixture failed after 477.64 seconds | The gate rejects relay/TCP-only recovery when the preferred UDP path should return |
+
+Failure artifacts:
+`/tmp/p2p-vpn-tun_namespace_automatic_discovery_recovers_after_link_changes.101d1050fb5319e4`.
+Run log: `/tmp/p2p-vpn-settling-auto-public.log`.
+
+The fix uses the existing authenticated direct-connection inventory.
+For an on-link peer, it prefers a mutually advertised LAN endpoint pair for
+negotiation. It does not add addresses, change signatures, or retain another cache.
+
+- Endpoint authority still comes from the original validated capabilities.
+- No healthy direct connection, off-link peer, or one-sided candidate: preserve existing selection.
+- Relay and unrelated-peer connections cannot supply the LAN preference.
+- Both profile reruns and the existing namespace compatibility gates pass; see the checkpoint below.
 
 ### Signed Freshness Gate
 
@@ -422,6 +497,66 @@ the preceding runtime checkpoint covers unchanged native sources.
 
 This is harness validation, not the 30-minute acceptance soak, a resource
 comparison, or physical-device/WAN recovery evidence.
+
+## Automatic Recovery Checkpoint
+
+The new production-entry-point fixture first reproduced a failure to restore
+UDP after relay fallback. The endpoint-selection fix passes both DHT profiles
+without widening deadlines, changing configuration, or restarting a daemon.
+
+| Profile | Initial LAN UDP | Discovered Relay | Restored LAN UDP | Total Test Time |
+| --- | --- | --- | --- | --- |
+| Shared public | 6.7 seconds | 65.9 seconds | 188.0 seconds | 226.04 seconds |
+| Private primary / separate public pairing | 6.7 seconds | 65.9 seconds | 112.9 seconds | 150.86 seconds |
+
+Stage observations are elapsed time from the fixture's ready-daemon baseline,
+not each individual transition's latency. Each path receives a 30-second healthy
+window, bidirectional 5/5 ICMP checks, and accepted-packet counter checks.
+
+### Ownership Evidence
+
+- `app_*` snapshots report 33 fixed numeric application-owner gauges on Status/State requests only.
+- Pending work is distinguished from retained idle caches and future cooldowns.
+- Snapshots report overdue owners rather than pruning them during observation.
+- Recovery-cache counts do not claim to measure `AddressRetention`'s private index.
+- DHT bounds, application query age/count bounds, process identity, and unchanged configs are checked throughout each cycle.
+
+### Artifacts
+
+Both successful profiles used test-binary SHA-256
+`be9273cfa500ff0c3f28af88b39c5c94abfe4032ca8f2548cd9864b20acc774c`.
+
+| Profile | Artifact Directory Suffix |
+| --- | --- |
+| Public | `.875220a29f311fa9` |
+| Private | `.e1388afe77c465f7` |
+
+Directory prefix:
+`/tmp/p2p-vpn-tun_namespace_automatic_discovery_recovers_after_link_changes`.
+Each contains the summary, sampled states, latest packet checks, node logs,
+private fixture configs, and profile-preserving replay commands.
+
+### Verification
+
+| Check | Result |
+| --- | --- |
+| Offline locked workspace suite | 1,371 passed; 24 opt-in tests ignored |
+| New endpoint-selection regressions | Three passed; reciprocal candidates, retained signature authority, stale/unrelated/relay exclusion |
+| Minimal config and replay regressions | Four passed |
+| Public and private automatic recovery | Both passed; same frozen deadlines |
+| Existing namespace regression suite | All 13 passed in 239.97 seconds, including pairing, DHT, mDNS, QUIC, relay promotion, network movement and queue pressure |
+| Required Clippy groups | Passed in 22.00 seconds; advisory warnings include new long functions, naming and duration style |
+| Rust formatting / whitespace | Passed |
+| Android x86_64 native library | Compiled offline in 33.05 seconds; four existing target warnings |
+| Nix source parity | Passed with cached tools and unchanged assertions |
+
+Logs use `/tmp/p2p-vpn-settling-auto-` with `workspace.log`, `clippy.log`,
+`android.log`, `nix.log`, `namespace.log`, `public-fixed.log`, and
+`private-fixed.log` suffixes. Temporary project storage finished at about 5.08 GiB.
+
+No task builds ran during recovery observations. This is not the 30-minute soak,
+the full fault matrix, an APK/ARM64 or full Nix package build, a formal proof,
+a physical-device/WAN test, or a production-readiness claim.
 
 ## Delivery Gates
 

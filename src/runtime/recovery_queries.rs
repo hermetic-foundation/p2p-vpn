@@ -30,7 +30,42 @@ pub(super) struct QueryState {
     retry_after: Instant,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct RecoveryQueriesSnapshot {
+    pub(super) peers_retained: usize,
+    pub(super) queries: usize,
+    pub(super) oldest_pending_age_millis: u64,
+    pub(super) cooldown_peers: usize,
+    pub(super) next_retry_in_millis: u64,
+}
+
 impl RecoveryQueries {
+    pub(super) fn snapshot(&self, now: Instant) -> RecoveryQueriesSnapshot {
+        let mut snapshot = RecoveryQueriesSnapshot {
+            peers_retained: self.peers.len(),
+            queries: self.queries.len(),
+            ..RecoveryQueriesSnapshot::default()
+        };
+        let mut next_retry = None;
+        for state in self.peers.values() {
+            if state.pending_queries > 0 {
+                snapshot.oldest_pending_age_millis = snapshot.oldest_pending_age_millis.max(
+                    u64::try_from(now.saturating_duration_since(state.last_query).as_millis())
+                        .unwrap_or(u64::MAX),
+                );
+            } else if state.retry_after > now {
+                snapshot.cooldown_peers += 1;
+                next_retry = Some(next_retry.map_or(state.retry_after, |retry: Instant| {
+                    retry.min(state.retry_after)
+                }));
+            }
+        }
+        snapshot.next_retry_in_millis = next_retry.map_or(0, |retry| {
+            u64::try_from(retry.saturating_duration_since(now).as_millis()).unwrap_or(u64::MAX)
+        });
+        snapshot
+    }
+
     pub(super) fn retain_peers(
         &mut self,
         mut authorized: impl FnMut(PeerId) -> bool,
@@ -183,6 +218,76 @@ mod tests {
             kad.get_record(kad::RecordKey::new(&b"one")),
             kad.get_record(kad::RecordKey::new(&b"two")),
         )
+    }
+
+    #[test]
+    fn snapshot_separates_pending_owners_from_retained_connected_cooldown() {
+        let start = Instant::now();
+        let peer = PeerId::random();
+        let (first, second) = query_ids();
+        let mut owner = RecoveryQueries::default();
+        assert_eq!(owner.snapshot(start), RecoveryQueriesSnapshot::default());
+        assert!(owner.should_query(peer, start));
+        owner.record(peer, [first, second], start);
+        let now = start + Duration::from_secs(3);
+        assert_eq!(
+            owner.snapshot(now),
+            RecoveryQueriesSnapshot {
+                peers_retained: 1,
+                queries: 2,
+                oldest_pending_age_millis: 3_000,
+                cooldown_peers: 0,
+                next_retry_in_millis: 0,
+            }
+        );
+        owner.finished(first, now);
+        assert_eq!(owner.snapshot(now).queries, 1);
+        owner.finished(second, now);
+        owner.connected(peer, now);
+        let healthy = RecoveryQueriesSnapshot {
+            peers_retained: 1,
+            queries: 0,
+            oldest_pending_age_millis: 0,
+            cooldown_peers: 1,
+            next_retry_in_millis: 10_000,
+        };
+        assert_eq!(owner.snapshot(now), healthy);
+        owner.finished(first, now);
+        assert_eq!(owner.snapshot(now), healthy);
+        assert_eq!(
+            owner.snapshot(now + CONNECTED_RETRY),
+            RecoveryQueriesSnapshot {
+                cooldown_peers: 0,
+                next_retry_in_millis: 0,
+                ..healthy
+            }
+        );
+        // Observing a past-TTL snapshot must not prune retained state.
+        assert_eq!(owner.snapshot(now + STATE_TTL).peers_retained, 1);
+        assert!(owner.retain_peers(|_| false).is_empty());
+        assert_eq!(owner.snapshot(now), RecoveryQueriesSnapshot::default());
+    }
+
+    #[test]
+    fn snapshot_keeps_overdue_ownership_until_explicit_expiry() {
+        let start = Instant::now();
+        let peer = PeerId::random();
+        let (query, _) = query_ids();
+        let mut owner = RecoveryQueries::default();
+        assert!(owner.should_query(peer, start));
+        owner.record(peer, [query], start);
+        let now = start + QUERY_TIMEOUT;
+        let overdue = owner.snapshot(now);
+        assert_eq!(overdue.queries, 1);
+        assert_eq!(overdue.oldest_pending_age_millis, 60_000);
+        assert_eq!(owner.snapshot(now), overdue);
+        assert_eq!(owner.expire(now), vec![query]);
+        let expired = owner.snapshot(now);
+        assert_eq!(expired.queries, 0);
+        assert_eq!(expired.oldest_pending_age_millis, 0);
+        assert_eq!(expired.peers_retained, 1);
+        assert_eq!(expired.cooldown_peers, 1);
+        assert_eq!(expired.next_retry_in_millis, 30_000);
     }
 
     #[test]
