@@ -443,6 +443,10 @@ pub(super) fn controlled_kademlia_config(protocol: StreamProtocol) -> kad::Confi
     config
         .set_parallelism(KADEMLIA_QUERY_PARALLELISM)
         .set_query_pool_capacity(KADEMLIA_QUERY_POOL_CAPACITY)
+        .set_behaviour_queue_limits(kad::BehaviourQueueLimits::new(
+            NonZeroUsize::new(512).unwrap(),
+            NonZeroUsize::new(4 * 1024 * 1024).unwrap(),
+        ))
         .set_query_metadata_limits(Some(kad::QueryMetadataLimits::new(
             NonZeroUsize::new(256 * 1024).unwrap(),
             NonZeroUsize::new(KADEMLIA_QUERY_CANDIDATES).unwrap(),
@@ -670,6 +674,10 @@ mod metadata_tests;
 mod background_tests;
 
 #[cfg(test)]
+#[path = "p2p/queue_tests.rs"]
+mod queue_tests;
+
+#[cfg(test)]
 mod tests {
     use std::time::Duration;
 
@@ -802,6 +810,22 @@ mod tests {
             node.swarm
                 .behaviour()
                 .kad
+                .behaviour_queue_usage()
+                .event_limit,
+            Some(512)
+        );
+        assert_eq!(
+            node.swarm
+                .behaviour()
+                .kad
+                .behaviour_queue_usage()
+                .byte_limit,
+            Some(4 * 1024 * 1024)
+        );
+        assert_eq!(
+            node.swarm
+                .behaviour()
+                .kad
                 .background_job_usage()
                 .bounded_jobs,
             2
@@ -903,6 +927,11 @@ mod tests {
         let behaviour = node.swarm.behaviour_mut();
         for kad in [&mut behaviour.kad, behaviour.pairing_kad.as_mut().unwrap()] {
             assert_eq!(kad.background_job_usage().bounded_jobs, 2);
+            assert_eq!(kad.behaviour_queue_usage().event_limit, Some(512));
+            assert_eq!(
+                kad.behaviour_queue_usage().byte_limit,
+                Some(4 * 1024 * 1024)
+            );
             assert!(matches!(
                 kad.try_get_closest_peers(vec![0; 256 * 1024 + 1]),
                 Err(kad::QueryStartError::InputTooLarge(_))
@@ -1905,16 +1934,16 @@ mod tests {
     }
 
     #[test]
-    fn stopping_provider_discards_queued_dials() {
-        check_provider_queued_dial_cancellation(false);
+    fn stopping_provider_prevents_undispatched_dials() {
+        check_provider_incremental_dial_cancellation(false);
     }
 
     #[test]
-    fn stopping_provider_preserves_shared_queued_dials() {
-        check_provider_queued_dial_cancellation(true);
+    fn stopping_provider_preserves_query_sharing_a_dispatched_peer() {
+        check_provider_incremental_dial_cancellation(true);
     }
 
-    fn check_provider_queued_dial_cancellation(shared: bool) {
+    fn check_provider_incremental_dial_cancellation(shared: bool) {
         use libp2p::swarm::{NetworkBehaviour, ToSwarm};
         use std::task::{Context, Poll};
         let local = PeerId::random();
@@ -1932,7 +1961,6 @@ mod tests {
         }
         let key = kad::RecordKey::new(&b"stopped");
         let query = kad.start_providing(key.clone()).unwrap();
-        let keep = shared.then(|| kad.get_closest_peers(PeerId::random()));
         let waker = futures::task::noop_waker();
         let mut cx = Context::from_waker(&waker);
         let mut dispatched = false;
@@ -1943,20 +1971,31 @@ mod tests {
             }
         }
         assert!(dispatched);
-        assert_eq!(kad.query(&query).unwrap().stats().num_requests(), 2);
+        assert_eq!(kad.query(&query).unwrap().stats().num_requests(), 1);
+        assert_eq!(kad.pending_rpc_usage().requests, 1);
+        let keep = shared.then(|| kad.get_closest_peers(PeerId::random()));
+        if let Some(keep) = keep {
+            for _ in 0..10 {
+                let _ = kad.poll(&mut cx);
+            }
+            assert_eq!(kad.query(&keep).unwrap().stats().num_requests(), 2);
+            assert_eq!(kad.query(&query).unwrap().stats().num_requests(), 2);
+            assert_eq!(kad.pending_rpc_usage().requests, 4);
+        }
         kad.stop_providing(&key);
         assert!(kad.query(&query).is_none());
         if let Some(keep) = keep {
             assert!(kad.query(&keep).is_some());
-            assert!(
-                matches!(kad.poll(&mut cx), Poll::Ready(ToSwarm::Dial { .. })),
-                "shared dial was discarded"
-            );
+            assert_eq!(kad.pending_rpc_usage().requests, 2);
+            assert!(matches!(kad.poll(&mut cx), Poll::Pending));
+            assert!(kad.cancel_query(&keep));
+            assert_eq!(kad.pending_rpc_usage().requests, 0);
         } else {
             assert!(
                 matches!(kad.poll(&mut cx), Poll::Pending),
                 "stopped query left unsent actions"
             );
+            assert_eq!(kad.pending_rpc_usage().requests, 0);
         }
     }
 
@@ -3961,6 +4000,15 @@ mod tests {
 
     #[tokio::test]
     async fn kademlia_overload_preserves_shared_tcp_and_quic_packet_connections() {
+        exercise_kademlia_packet_overload(false).await;
+    }
+
+    #[tokio::test]
+    async fn kademlia_behaviour_queue_overload_preserves_tcp_and_quic_packets() {
+        exercise_kademlia_packet_overload(true).await;
+    }
+
+    async fn exercise_kademlia_packet_overload(bound_behaviour_queue: bool) {
         for listen in ["/ip4/127.0.0.1/tcp/0", "/ip4/127.0.0.1/udp/0/quic-v1"] {
             let mut listener = build_node(&retention_diagnostic_config(false)).unwrap();
             let mut dialer = build_node(&retention_diagnostic_config(false)).unwrap();
@@ -3973,6 +4021,12 @@ mod tests {
                     NonZeroUsize::new(4).unwrap(),
                     NonZeroUsize::new(512).unwrap(),
                 ));
+                if bound_behaviour_queue {
+                    config.set_behaviour_queue_limits(kad::BehaviourQueueLimits::new(
+                        NonZeroUsize::new(4).unwrap(),
+                        NonZeroUsize::new(512).unwrap(),
+                    ));
+                }
                 config.set_query_timeout(Duration::from_millis(200));
                 node.swarm.behaviour_mut().kad = kad::Behaviour::with_config(
                     node.local_peer_id,
@@ -4008,6 +4062,14 @@ mod tests {
                     1
                 };
                 let kad = &mut dialer.swarm.behaviour_mut().kad;
+                if bound_behaviour_queue && overloaded {
+                    let before = kad.behaviour_queue_usage().rejected;
+                    for _ in 0..32 {
+                        kad.add_address(&PeerId::random(), "/memory/1".parse().unwrap());
+                    }
+                    assert_eq!(kad.behaviour_queue_usage().events, 4);
+                    assert!(kad.behaviour_queue_usage().rejected > before);
+                }
                 let mut queries = (0..count)
                     .map(|index| {
                         kad.try_start_query(|kad| {
@@ -4049,6 +4111,12 @@ mod tests {
                 .expect("VPN traffic or DHT failed to retire during overload/recovery");
                 assert_eq!(dialer.swarm.behaviour().kad.query_pool_usage().retained, 0);
                 assert_eq!(dialer.swarm.behaviour().kad.pending_rpc_usage().requests, 0);
+                if bound_behaviour_queue {
+                    for node in [&listener, &dialer] {
+                        let usage = node.swarm.behaviour().kad.behaviour_queue_usage();
+                        assert!(usage.events <= 4 && usage.bytes <= 512);
+                    }
+                }
                 if !overloaded {
                     use libp2p::kad::store::RecordStore;
                     assert!(

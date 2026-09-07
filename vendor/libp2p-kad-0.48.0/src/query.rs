@@ -318,6 +318,24 @@ impl QueryPool {
         query
     }
 
+    /// Start deadlines and find terminal work even while the behaviour queue is busy.
+    pub(crate) fn next_retiring(&mut self, now: Instant) -> Option<QueryId> {
+        let mut retiring = None;
+        for (&id, query) in &mut self.queries {
+            let start = *query.stats.start.get_or_insert(now);
+            if retiring.is_none() && (query.is_finished() || now - start >= self.config.timeout) {
+                retiring = Some(id);
+            }
+        }
+        retiring
+    }
+
+    pub(crate) fn remove_with_end(&mut self, id: &QueryId, now: Instant) -> Option<Query> {
+        let mut query = self.remove(id)?;
+        query.stats.end = Some(now);
+        Some(query)
+    }
+
     /// Polls the pool to advance the queries.
     pub(crate) fn poll(&mut self, now: Instant, cx: &mut Context<'_>) -> QueryPoolState<'_> {
         let mut finished = None;
@@ -353,14 +371,12 @@ impl QueryPool {
         }
 
         if let Some(query_id) = finished {
-            let mut query = self.remove(&query_id).expect("s.a.");
-            query.stats.end = Some(now);
+            let query = self.remove_with_end(&query_id, now).expect("s.a.");
             return QueryPoolState::Finished(query);
         }
 
         if let Some(query_id) = timeout {
-            let mut query = self.remove(&query_id).expect("s.a.");
-            query.stats.end = Some(now);
+            let query = self.remove_with_end(&query_id, now).expect("s.a.");
             return QueryPoolState::Timeout(query);
         }
 

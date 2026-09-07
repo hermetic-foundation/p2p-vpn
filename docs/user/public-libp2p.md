@@ -58,6 +58,7 @@ server duties or advertise itself as a Kademlia server.
 | RPCs awaiting a connection | Per DHT: at most 256 requests and 1 MiB of retained payload; retired with their queries. |
 | Library background jobs | One new query per poll, only below two existing queries; provider and record jobs share the allowance. |
 | Background job storage | Bounded key batches, not full-record snapshots; at most 4 MiB of retained key payload per DHT. |
+| Unsent DHT actions and intermediate results | Per DHT: 512 entries and 4 MiB of charged payload; terminal query results bypass this queue. |
 | Waiting DHT requests | Per connection: at most 64 requests and 256 KiB of retained payload data; queued requests expire after ten seconds. |
 | Aggregate routing storage | Per DHT: 512 retained entry versions and 2 MiB of encoded address buffers, including pending entries and routing snapshots. |
 
@@ -87,7 +88,12 @@ may cause an extra normal replication; it does not drop stored records.
 A full DHT request queue rejects new work without closing the connection used
 by VPN traffic. Rejection reporting is bounded too; extreme overload may wait
 for the query deadline instead of reporting every rejection immediately.
-Query deadlines wake automatically, even when connections are idle.
+Query deadlines wake automatically, even when connections are idle. A busy inbound
+event queue cannot indefinitely postpone query retirement.
+
+Queue overload can discard intermediate lookup results and inbound responses.
+Dropped progress does not count as a delivered record/provider result. Final query
+results remain deliverable, and handler-mode changes coalesce to the latest mode.
 
 Configured bootstrap seeds are protected from routing-address rotation and
 whole-peer bucket replacement. Protection does not increase bucket capacity;

@@ -57,6 +57,7 @@ mod proto {
 use std::num::NonZeroUsize;
 
 pub use addresses::{AddressLimits, Addresses, RoutingLimits, RoutingUsage};
+pub use behaviour::queue::{BehaviourQueueLimits, BehaviourQueueUsage};
 pub use behaviour::{
     AddProviderContext, AddProviderError, AddProviderOk, AddProviderPhase, AddProviderResult,
     Behaviour, BootstrapError, BootstrapOk, BootstrapResult, BucketInserts, Caching, Config, Event,

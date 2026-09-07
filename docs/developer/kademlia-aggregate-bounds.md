@@ -2,7 +2,7 @@
 
 ## Status
 
-Active phase; aggregate enforcement is not complete.
+Active phase; final aggregate ownership and evidence audit remains open.
 Starting revision: `77146fe3`. Existing per-peer, per-query, scheduler, and
 cancellation fixes remain in place.
 
@@ -574,7 +574,7 @@ formal model, physical deployment, or public-network measurement is claimed.
 
 | Owner | Remaining Work |
 | --- | --- |
-| Behaviour event/action queue | Bound query results and unsent actions without stranding terminal query ownership |
+| Behaviour event/action queue | Count/byte enforcement and retirement checkpoint below |
 | Background record/provider jobs | Bounded key batches and skipped-key bookkeeping verified below |
 | Final aggregate audit | Account for container high-water storage, cancellation, phase changes, and every producer |
 
@@ -663,7 +663,100 @@ temporary paths total approximately 4.74 GiB; no downloads occurred.
 
 The source-parity check is not a full Nix package build. No ARM64 native build,
 APK, formal model, physical deployment, or public-network measurement is claimed.
-Query-result and action queues still require bounds; phase 1 is not complete.
+Query-result and action queues were still open at this checkpoint; see below.
+
+## Behaviour Queue Storage
+
+Production enables `set_behaviour_queue_limits()` in the shared public DHT,
+separate public-pairing DHT, and standalone pairing bootstrap constructor.
+The queue rejects new entries when either aggregate allowance is exhausted.
+
+The count ceiling allows 16 slots per maximum retained query; the byte ceiling
+equals 16 maximum-sized query inputs before envelope overhead. Both budgets
+are shared across all producers, not reserved independently for each query.
+
+| Owner | Production Ceiling / Accounting |
+| --- | --- |
+| Queued events and actions | 512 fixed-size slots per DHT |
+| Variable payload | 4 MiB per DHT; vector capacity, keys, and encoded addresses |
+| Routing snapshots | Separate aggregate routing reservations; also consume queue slots |
+| Raw routing notifications | Charged to both queue and routing budgets |
+| Addressless dial options | Fixed-size queue slot; supplied only through the typed dial insertion path |
+| Handler-mode changes | One pending flag, cursor, and scheduling flag; no per-change backlog |
+| Rejection reports | One saturating counter; no rejected-payload backlog |
+
+Key and multiaddress buffers are rebuilt on admission, so shared backing buffers
+cannot hide excess retained payload. Vector spare capacity is charged, including
+empty vectors. Allocator overhead and process RSS are not included in these bytes.
+The deque reserves its configured slot count and never admits an extra entry.
+
+### Delivery And Retirement
+
+1. Admit local/remote record and provider progress before advancing result bookkeeping.
+2. Drop excess progress, reports, or responses; preserve already-admitted work.
+3. Fail an outbound peer attempt if its unsent request cannot fit.
+4. Dispatch each selected query action before selecting another.
+5. Release queue bytes/reservations on dispatch or matching cancellation.
+
+Terminal query results never enter the bounded queue. A finished/expired query
+first drains its own admitted progress, then returns its terminal result directly.
+Other inbound events cannot indefinitely postpone this retirement path. Deadlines
+start when the bounded behaviour is polled, including while its queue is busy.
+
+Late record/provider progress is ignored after graceful finish or expiry. This
+prevents new progress from replenishing the queue while its terminal result waits.
+Cancellation emits no result and does not cancel another query's pending RPCs.
+
+Mode changes reset a cursor over current connections. Alternating dispatch gives
+normal work a turn; every remaining handler receives the latest mode. New handlers
+start in the current mode, and closed connection IDs are skipped. Each cursor
+selection scans current connections; this is not a constant-CPU claim.
+
+### Queue Regression Coverage
+
+| Regression | Required Observation |
+| --- | --- |
+| Count saturation and 16 cancellation/recovery cycles | Exact byte release, unrelated progress preserved, resumed admission |
+| Byte saturation and spare capacity | Excess payload rejected without false record-found state |
+| Filtered provider input | Aggregate payload/count holds without inserting rejected data into the store |
+| Provider progress | Only admitted results advance provider-result bookkeeping |
+| Outbound record/provider rejection | Failure result, no false publication success, later small request accepted |
+| Repeated mode changes with a full queue | Latest mode reaches every handler; query completes; no connection closure |
+| Continuous inbound traffic | Finished/expired queries retire with progress-before-terminal ordering |
+| TCP/QUIC shared connection pressure | Eight VPN frames per wave; two overload/recovery cycles without replacing the connection |
+| Constructor activation | Production count and byte limits enabled in all three DHT configurations |
+
+The packet tests use actual loopback transports and production packet behaviours,
+not TUN or sustained public-WAN measurements. The cancellation regression now
+checks incremental dial dispatch instead of assuming two requests are prequeued.
+
+### Queue Checkpoint Verification
+
+| Check | Result |
+| --- | --- |
+| Queue-focused regressions | Eight passed in the workspace suite |
+| Combined packet pressure and cancellation regressions | Passed; TCP and QUIC share the original connection |
+| Offline workspace tests | 1,317 passed; 22 opt-in tests ignored |
+| Namespace DHT, peerless pairing, forced-relay pairing, owned QUIC | All four passed, 53.89 seconds combined |
+| Namespace relay/direct network move | Passed, 51.53 seconds |
+| Android x86_64 native library | Compiled offline in 40.72 seconds; four existing warnings |
+| Nix desktop/Android source parity | Passed with cached tool overrides, including both new modules |
+| Root and changed vendored Rust formatting / whitespace | Passed |
+| Workspace Clippy correctness, suspicious, and perf groups | Passed; nonfatal style warnings remain |
+
+Logs use `/tmp/p2p-vpn-kad-queue-`: `focused.log`, `workspace.log`,
+`namespace.log`, `move.log`, `android.log`, `nix.log`, and `clippy.log`.
+`cancellation-before.log` records the obsolete batch-dispatch assertion failure;
+the updated regression tests actual incremental dispatch and shared pending RPCs.
+
+The workspace suite includes the final busy-queue retirement regression. Clippy
+also reports a new test-helper reference-style warning; not all warnings predate
+this checkpoint. Readable project temporary paths total approximately 4.83 GiB,
+and all builds used existing cached dependencies with at most two Cargo jobs.
+
+The Nix check verifies source inclusion, not the full package closure. No ARM64
+native build, APK, formal model, physical deployment, or WAN measurement is claimed.
+The final aggregate ownership/evidence audit remains required; phase 1 is active.
 
 ## Implementation Order
 

@@ -29,11 +29,29 @@ changelog, generated protocol source, and tests.
 | `src/handler.rs`, `src/handler/pending.rs` | Opt-in request admission/expiry, bounded rejection reporting, and negotiation queue accounting. |
 | `src/kbucket.rs`, `src/kbucket/bucket.rs` | Preserve protected seed peers during pending replacement; retain and recheck the probed victim identity. |
 | `src/addresses/budget.rs` | Shared aggregate entry-generation and encoded-buffer reservations, including retained snapshots and deferred eviction storage. |
-| `src/behaviour/queue.rs` | Charge raw routing notifications to the same aggregate budget; retire reservations on dispatch or queue removal. |
+| `src/behaviour/queue.rs`, `src/behaviour/queue/payload.rs` | Bound unsent actions and intermediate results by count/bytes; charge routing notifications and release on dispatch/cancellation. |
 
 The library configuration defaults are unchanged. p2p-vpn disables automatic and periodic bootstrap
 explicitly so its scheduler owns bootstrap initiation. Explicit `bootstrap()` is
 unchanged; DHT wire messages and protocol names are unchanged.
+
+### Behaviour Queue
+
+`set_behaviour_queue_limits()` enables aggregate admission for unsent actions
+and intermediate results. Production uses 512 entries and 4 MiB per DHT.
+`behaviour_queue_usage()` reports configured limits, current use, and rejections.
+
+- Charge vector capacity, normalized keys, and encoded addresses; exclude allocator overhead.
+- `RoutingUpdated` snapshots retain their separate aggregate routing reservations.
+- Count addressless dials as fixed-size entries; discard excess reports/responses without closing connections.
+- Rejected record/provider progress does not advance delivered-result bookkeeping.
+- Return terminal results directly, after any already-admitted progress for that query.
+- Check retirement before draining ordinary traffic; reject late progress after finish/expiry.
+- Coalesce handler-mode changes outside the bounded queue and alternate their dispatch with normal work.
+
+Queries now hand off one selected action before advancing another. Connected
+outbound admission failure marks the peer failed instead of reporting dispatch
+success. Cancellation still releases unsent work and preserves unrelated queries.
 
 p2p-vpn opts into 64 retained routing addresses per peer and 2,048 encoded bytes
 per address. Configured seeds count toward the same budget, survive churn, and

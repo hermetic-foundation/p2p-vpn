@@ -20,7 +20,7 @@
 
 //! Implementation of the `Kademlia` network behaviour.
 
-mod queue;
+pub(crate) mod queue;
 mod test;
 
 use std::{
@@ -37,8 +37,7 @@ use libp2p_core::{transport::PortUse, ConnectedPoint, Endpoint, Multiaddr};
 use libp2p_identity::PeerId;
 use libp2p_swarm::{
     behaviour::{AddressChange, ConnectionClosed, ConnectionEstablished, DialFailure, FromSwarm},
-    dial_opts::{self, DialOpts},
-    ConnectionDenied, ConnectionHandler, ConnectionId, DialError, ExternalAddresses,
+    dial_opts, ConnectionDenied, ConnectionHandler, ConnectionId, DialError, ExternalAddresses,
     ListenAddresses, NetworkBehaviour, NotifyHandler, StreamProtocol, THandler, THandlerInEvent,
     THandlerOutEvent, ToSwarm,
 };
@@ -126,6 +125,9 @@ pub struct Behaviour<TStore> {
 
     mode: Mode,
     auto_mode: bool,
+    mode_updates_pending: bool,
+    mode_update_cursor: Option<ConnectionId>,
+    mode_update_turn: bool,
     no_events_waker: Option<Waker>,
 
     /// The record storage.
@@ -193,6 +195,7 @@ pub struct Config {
     background_query_limit: usize,
     background_query_batch: usize,
     background_job_limits: Option<crate::BackgroundJobLimits>,
+    behaviour_queue_limits: Option<crate::BehaviourQueueLimits>,
     kbucket_config: KBucketConfig,
     query_config: QueryConfig,
     protocol_config: ProtocolConfig,
@@ -245,6 +248,7 @@ impl Config {
             background_query_limit: JOBS_MAX_QUERIES,
             background_query_batch: JOBS_MAX_NEW_QUERIES,
             background_job_limits: None,
+            behaviour_queue_limits: None,
             protocol_config: ProtocolConfig::new(protocol_name),
             record_ttl: Some(Duration::from_secs(48 * 60 * 60)),
             record_replication_interval: Some(Duration::from_secs(60 * 60)),
@@ -295,6 +299,13 @@ impl Config {
     /// Values are read from the store only when query admission permits progress.
     pub fn set_background_job_limits(&mut self, limits: crate::BackgroundJobLimits) -> &mut Self {
         self.background_job_limits = Some(limits);
+        self
+    }
+
+    /// Bounds aggregate intermediate results and unsent actions. Terminal query
+    /// results bypass this queue; rejected progress does not mark a record found.
+    pub fn set_behaviour_queue_limits(&mut self, limits: crate::BehaviourQueueLimits) -> &mut Self {
+        self.behaviour_queue_limits = Some(limits);
         self
     }
 
@@ -606,6 +617,7 @@ where
                 config.query_config.replication_factor.get(),
                 routing_budget,
                 config.address_limits,
+                config.behaviour_queue_limits,
             ),
             listen_addresses: Default::default(),
             queries: QueryPool::new(config.query_config),
@@ -622,6 +634,9 @@ where
             connections: Default::default(),
             mode: Mode::Client,
             auto_mode: true,
+            mode_updates_pending: false,
+            mode_update_cursor: None,
+            mode_update_turn: false,
             no_events_waker: None,
             bootstrap_status: bootstrap::Status::new(
                 config.periodic_bootstrap_interval,
@@ -716,7 +731,7 @@ where
                                 .bucket(&key)
                                 .map(|b| b.range())
                                 .expect("Not kbucket::Entry::SelfEntry."),
-                        }))
+                        }));
                 }
                 RoutingUpdate::Success
             }
@@ -765,9 +780,7 @@ where
                         RoutingUpdate::Failed
                     }
                     kbucket::InsertResult::Pending { disconnected } => {
-                        self.queued_events.push_back(ToSwarm::Dial {
-                            opts: DialOpts::peer_id(disconnected.into_preimage()).build(),
-                        });
+                        self.queued_events.push_dial(disconnected.into_preimage());
                         RoutingUpdate::Pending
                     }
                 }
@@ -838,6 +851,10 @@ where
             job.add_usage(&mut usage);
         }
         usage
+    }
+
+    pub fn behaviour_queue_usage(&self) -> crate::BehaviourQueueUsage {
+        self.queued_events.usage()
     }
 
     fn check_query_input(&mut self, bytes: usize) -> Result<(), crate::QueryStartError> {
@@ -1081,20 +1098,11 @@ where
         let step = ProgressStep::first();
 
         let target = kbucket::Key::new(key.clone());
-        let info = if record.is_some() {
-            QueryInfo::GetRecord {
-                key,
-                step: step.next(),
-                found_a_record: true,
-                cache_candidates: BTreeMap::new(),
-            }
-        } else {
-            QueryInfo::GetRecord {
-                key,
-                step: step.clone(),
-                found_a_record: false,
-                cache_candidates: BTreeMap::new(),
-            }
+        let info = QueryInfo::GetRecord {
+            key,
+            step: step.clone(),
+            found_a_record: false,
+            cache_candidates: BTreeMap::new(),
         };
         let peers = self.kbuckets.closest_keys(&target);
         let id = self.queries.add_iter_closest(target.clone(), peers, info);
@@ -1106,13 +1114,26 @@ where
         let stats = QueryStats::empty();
 
         if let Some(record) = record {
-            self.queued_events
-                .push_back(ToSwarm::GenerateEvent(Event::OutboundQueryProgressed {
+            if self.queued_events.push_back(ToSwarm::GenerateEvent(
+                Event::OutboundQueryProgressed {
                     id,
                     result: QueryResult::GetRecord(Ok(GetRecordOk::FoundRecord(record))),
                     step,
                     stats,
-                }));
+                },
+            )) {
+                if let Some(query) = self.queries.get_mut(&id) {
+                    if let QueryInfo::GetRecord {
+                        found_a_record,
+                        step,
+                        ..
+                    } = &mut query.info
+                    {
+                        *found_a_record = true;
+                        *step = step.next();
+                    }
+                }
+            }
         }
 
         id
@@ -1471,12 +1492,8 @@ where
 
         let info = QueryInfo::GetProviders {
             key: key.clone(),
-            providers_found: providers.len(),
-            step: if providers.is_empty() {
-                step.clone()
-            } else {
-                step.next()
-            },
+            providers_found: 0,
+            step: step.clone(),
         };
 
         let target = kbucket::Key::new(key.clone());
@@ -1487,8 +1504,9 @@ where
         let stats = QueryStats::empty();
 
         if !providers.is_empty() && self.query_is_retained(&id) {
-            self.queued_events
-                .push_back(ToSwarm::GenerateEvent(Event::OutboundQueryProgressed {
+            let count = providers.len();
+            if self.queued_events.push_back(ToSwarm::GenerateEvent(
+                Event::OutboundQueryProgressed {
                     id,
                     result: QueryResult::GetProviders(Ok(GetProvidersOk::FoundProviders {
                         key,
@@ -1496,7 +1514,20 @@ where
                     })),
                     step,
                     stats,
-                }));
+                },
+            )) {
+                if let Some(query) = self.queries.get_mut(&id) {
+                    if let QueryInfo::GetProviders {
+                        providers_found,
+                        step,
+                        ..
+                    } = &mut query.info
+                    {
+                        *providers_found = count;
+                        *step = step.next();
+                    }
+                }
+            }
         }
         id
     }
@@ -1512,9 +1543,11 @@ where
     pub fn set_mode(&mut self, mode: Option<Mode>) {
         match mode {
             Some(mode) => {
-                self.mode = mode;
                 self.auto_mode = false;
-                self.reconfigure_mode();
+                if self.mode != mode {
+                    self.mode = mode;
+                    self.reconfigure_mode();
+                }
             }
             None => {
                 self.auto_mode = true;
@@ -1533,30 +1566,33 @@ where
     }
 
     fn reconfigure_mode(&mut self) {
-        if self.connections.is_empty() {
-            return;
+        self.mode_updates_pending = !self.connections.is_empty();
+        self.mode_update_cursor = None;
+    }
+
+    fn next_mode_update(&mut self) -> Option<ToSwarm<Event, HandlerIn>> {
+        if !self.mode_updates_pending {
+            return None;
         }
-
-        let num_connections = self.connections.len();
-
-        tracing::debug!(
-            "Re-configuring {} established connection{}",
-            num_connections,
-            if num_connections > 1 { "s" } else { "" }
-        );
-
-        self.queued_events
-            .extend(
-                self.connections
-                    .iter()
-                    .map(|(conn_id, peer_id)| ToSwarm::NotifyHandler {
-                        peer_id: *peer_id,
-                        handler: NotifyHandler::One(*conn_id),
-                        event: HandlerIn::ReconfigureMode {
-                            new_mode: self.mode,
-                        },
-                    }),
-            );
+        let next = self
+            .connections
+            .iter()
+            .filter(|(id, _)| self.mode_update_cursor.is_none_or(|cursor| **id > cursor))
+            .min_by_key(|(id, _)| **id)
+            .map(|(id, peer)| (*id, *peer));
+        let Some((id, peer_id)) = next else {
+            self.mode_updates_pending = false;
+            self.mode_update_cursor = None;
+            return None;
+        };
+        self.mode_update_cursor = Some(id);
+        Some(ToSwarm::NotifyHandler {
+            peer_id,
+            handler: NotifyHandler::One(id),
+            event: HandlerIn::ReconfigureMode {
+                new_mode: self.mode,
+            },
+        })
     }
 
     fn determine_mode_from_external_addresses(&mut self) {
@@ -1595,9 +1631,8 @@ where
             }
         };
 
-        self.reconfigure_mode();
-
         if old_mode != self.mode {
+            self.reconfigure_mode();
             self.queued_events
                 .push_back(ToSwarm::GenerateEvent(Event::ModeChanged {
                     new_mode: self.mode,
@@ -1792,7 +1827,7 @@ where
                                     .map(|b| b.range())
                                     .expect("Not kbucket::Entry::SelfEntry."),
                             },
-                        ))
+                        ));
                     }
                 }
             }
@@ -1874,10 +1909,7 @@ where
                                 //
                                 // Only try dialing peer if not currently connected.
                                 if !self.connected_peers.contains(disconnected.preimage()) {
-                                    self.queued_events.push_back(ToSwarm::Dial {
-                                        opts: DialOpts::peer_id(disconnected.into_preimage())
-                                            .build(),
-                                    })
+                                    self.queued_events.push_dial(disconnected.into_preimage());
                                 }
                             }
                         }
@@ -2413,7 +2445,7 @@ where
                 value: record.value,
                 request_id,
             },
-        })
+        });
     }
 
     /// Processes a provider record received from a peer.
@@ -2834,6 +2866,11 @@ where
                 provider_peers,
                 query_id,
             } => {
+                if self.queries.get(&query_id).is_none_or(|query| {
+                    query.is_finished() || query.has_expired(self.queries.config().timeout)
+                }) {
+                    return;
+                }
                 let peers = closer_peers.iter().chain(provider_peers.iter());
                 self.discovered(&query_id, &source, peers);
                 if let Some(query) = self.queries.get_mut(&query_id) {
@@ -2845,10 +2882,9 @@ where
                         ..
                     } = query.info
                     {
-                        *providers_found += provider_peers.len();
                         let providers = provider_peers.iter().map(|p| p.node_id).collect();
 
-                        self.queued_events.push_back(ToSwarm::GenerateEvent(
+                        if self.queued_events.push_back(ToSwarm::GenerateEvent(
                             Event::OutboundQueryProgressed {
                                 id: query_id,
                                 result: QueryResult::GetProviders(Ok(
@@ -2860,8 +2896,10 @@ where
                                 step: step.clone(),
                                 stats,
                             },
-                        ));
-                        *step = step.next();
+                        )) {
+                            *providers_found = providers_found.saturating_add(provider_peers.len());
+                            *step = step.next();
+                        }
                     }
                 }
             }
@@ -2930,6 +2968,11 @@ where
                 closer_peers,
                 query_id,
             } => {
+                if self.queries.get(&query_id).is_none_or(|query| {
+                    query.is_finished() || query.has_expired(self.queries.config().timeout)
+                }) {
+                    return;
+                }
                 if let Some(query) = self.queries.get_mut(&query_id) {
                     let stats = query.stats().clone();
                     if let QueryInfo::GetRecord {
@@ -2940,13 +2983,12 @@ where
                     } = &mut query.info
                     {
                         if let Some(record) = record {
-                            *found_a_record = true;
                             let record = PeerRecord {
                                 peer: Some(source),
                                 record,
                             };
 
-                            self.queued_events.push_back(ToSwarm::GenerateEvent(
+                            if self.queued_events.push_back(ToSwarm::GenerateEvent(
                                 Event::OutboundQueryProgressed {
                                     id: query_id,
                                     result: QueryResult::GetRecord(Ok(GetRecordOk::FoundRecord(
@@ -2955,9 +2997,10 @@ where
                                     step: step.clone(),
                                     stats,
                                 },
-                            ));
-
-                            *step = step.next();
+                            )) {
+                                *found_a_record = true;
+                                *step = step.next();
+                            }
                         } else {
                             tracing::trace!(record=?key, %source, "Record not found at source");
                             if let Caching::Enabled { max_peers } = self.caching {
@@ -3036,7 +3079,36 @@ where
     ) -> Poll<ToSwarm<Self::ToSwarm, THandlerInEvent<Self>>> {
         let now = Instant::now();
 
+        self.mode_update_turn = !self.mode_update_turn;
+        if self.mode_update_turn {
+            if let Some(event) = self.next_mode_update() {
+                return Poll::Ready(event);
+            }
+        }
+
         self.poll_background_jobs(cx, now);
+
+        // Inbound work must not indefinitely defer terminal query ownership.
+        // Flush only this query's prior progress before its terminal result.
+        if self.queued_events.is_bounded() {
+            while let Some(id) = self.queries.next_retiring(now) {
+                if let Some(event) = self.queued_events.pop_query_progress(&id) {
+                    return Poll::Ready(event);
+                }
+                let query = self
+                    .queries
+                    .remove_with_end(&id, now)
+                    .expect("retained query");
+                let event = if query.is_finished() {
+                    self.query_finished(query)
+                } else {
+                    self.query_timeout(query)
+                };
+                if let Some(event) = event {
+                    return Poll::Ready(ToSwarm::GenerateEvent(event));
+                }
+            }
+        }
 
         // Poll bootstrap periodically and automatically.
         if let Poll::Ready(()) = self.bootstrap_status.poll_next_bootstrap(cx) {
@@ -3103,22 +3175,28 @@ where
                         );
 
                         if self.connected_peers.contains(&peer_id) {
-                            self.queued_events.push_back(ToSwarm::NotifyHandler {
+                            let admitted = self.queued_events.push_back(ToSwarm::NotifyHandler {
                                 peer_id,
                                 event,
                                 handler: NotifyHandler::Any,
                             });
-                            if provider {
+                            if !admitted {
+                                query.on_failure(&peer_id);
+                            } else if provider {
                                 query.on_success(&peer_id, vec![]);
                             }
                         } else if &peer_id != self.kbuckets.local_key().preimage() {
                             if query.pending_rpcs.push(peer_id, event) {
-                                self.queued_events.push_back(ToSwarm::Dial {
-                                    opts: DialOpts::peer_id(peer_id).build(),
-                                });
+                                if !self.queued_events.push_dial(peer_id) {
+                                    query.on_failure(&peer_id);
+                                }
                             } else {
                                 query.on_failure(&peer_id);
                             }
+                        }
+                        // Hand off each selected action before advancing another query.
+                        if let Some(event) = self.queued_events.pop_front() {
+                            return Poll::Ready(event);
                         }
                     }
                     QueryPoolState::Waiting(None) | QueryPoolState::Idle => break,
@@ -3129,6 +3207,9 @@ where
             // If no new events have been queued either, signal `NotReady` to
             // be polled again later.
             if self.queued_events.is_empty() {
+                if let Some(event) = self.next_mode_update() {
+                    return Poll::Ready(event);
+                }
                 self.no_events_waker = Some(cx.waker().clone());
 
                 return Poll::Pending;
