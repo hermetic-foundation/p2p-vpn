@@ -273,6 +273,16 @@ impl Config {
         self
     }
 
+    /// Caps all retained pool entries, including finished entries awaiting polling.
+    /// Use `Behaviour::try_start_query` for synchronous rejection. Legacy start
+    /// methods can return an unretained ID at capacity, without a completion event;
+    /// `Behaviour::query_is_retained` can inspect such an ID immediately after start.
+    /// Defaults to no aggregate cap for existing library callers.
+    pub fn set_query_pool_capacity(&mut self, capacity: NonZeroUsize) -> &mut Self {
+        self.query_config.capacity = Some(capacity);
+        self
+    }
+
     /// Sets the timeout for a single query.
     ///
     /// > **Note**: A single query usually comprises at least as many requests
@@ -764,6 +774,26 @@ where
             .map_or_else(RoutingUsage::default, RoutingBudget::usage)
     }
 
+    /// Attempts exactly one query-start operation without changing its return type.
+    /// The outer error means the closure was not called and no local side effects
+    /// occurred. The closure's result preserves existing store/bootstrap errors.
+    pub fn try_start_query<T>(
+        &mut self,
+        start: impl FnOnce(&mut Self) -> T,
+    ) -> Result<T, crate::QueryCapacityError> {
+        self.queries.check_capacity()?;
+        Ok(start(self))
+    }
+
+    pub fn query_pool_usage(&self) -> crate::QueryPoolUsage {
+        self.queries.usage()
+    }
+
+    /// Unlike `query`, this includes finished entries which still occupy capacity.
+    pub fn query_is_retained(&self, id: &QueryId) -> bool {
+        self.queries.get(id).is_some()
+    }
+
     /// Removes an address of a peer from the routing table.
     ///
     /// If the given address is the last address of the peer in the
@@ -947,6 +977,9 @@ where
         let id = self.queries.add_iter_closest(target.clone(), peers, info);
 
         // No queries were actually done for the results yet.
+        if !self.query_is_retained(&id) {
+            return id;
+        }
         let stats = QueryStats::empty();
 
         if let Some(record) = record {
@@ -1109,8 +1142,11 @@ where
             self.bootstrap_status.reset_timers();
             Err(NoKnownPeers())
         } else {
-            self.bootstrap_status.on_started();
-            Ok(self.queries.add_iter_closest(local_key, peers, info))
+            let id = self.queries.add_iter_closest(local_key, peers, info);
+            if self.query_is_retained(&id) {
+                self.bootstrap_status.on_started();
+            }
+            Ok(id)
         }
     }
 
@@ -1307,7 +1343,7 @@ where
         // No queries were actually done for the results yet.
         let stats = QueryStats::empty();
 
-        if !providers.is_empty() {
+        if !providers.is_empty() && self.query_is_retained(&id) {
             self.queued_events
                 .push_back(ToSwarm::GenerateEvent(Event::OutboundQueryProgressed {
                     id,
@@ -1524,6 +1560,12 @@ where
     fn poll_background_jobs(&mut self, cx: &mut Context<'_>, now: Instant) {
         let mut remaining = self
             .background_query_limit
+            .min(
+                self.queries
+                    .config()
+                    .capacity
+                    .map_or(usize::MAX, NonZeroUsize::get),
+            )
             .saturating_sub(self.queries.size())
             .min(self.background_query_batch);
         if remaining == 0 {

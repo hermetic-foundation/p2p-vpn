@@ -63,6 +63,16 @@ bypasses the limits. `routing_resource_usage()` exposes usage and rejection atte
 Raw routing notifications share these limits and are dropped when admission fails;
 `RoutingUpdated` snapshots already retain reservations for their data.
 
+`set_query_pool_capacity()` adds opt-in retained-entry admission at the query pool.
+`try_start_query()` checks capacity before invoking exactly one start operation.
+`query_pool_usage()` and `query_is_retained()` include finished entries awaiting
+retirement. Background jobs preserve pending work while capacity is unavailable.
+
+Legacy starts rejected by this opt-in cap return an unretained ID without a
+completion event; local result events and bootstrap suppression are not retained
+for that ID. No rejection queue is created. Production activation is pending
+checked-caller integration and additional query-payload/result bounds.
+
 Provider and record jobs share background admission capacity and alternate first
 access. Defaults remain a 100-query ceiling and batch size ten, but the batch is
 now shared across both jobs. p2p-vpn selects a ceiling of two and batch size one.

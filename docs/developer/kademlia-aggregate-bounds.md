@@ -237,6 +237,75 @@ and physical deployments were not repeated. No RSS or sustained settling claim
 is made. Total query-pool limits and combined overload tests remain open;
 the phase is not complete.
 
+## Query-Pool Admission Foundation
+
+The vendored pool now supports an opt-in retained-entry cap. Both iterative and
+fixed-phase construction enforce it. `query_pool_usage()` counts finished entries
+awaiting polling; `query_is_retained(id)` does not hide them like `query(id)` does.
+
+### Checked Starts
+
+```rust
+config.set_query_pool_capacity(NonZeroUsize::new(32).unwrap());
+let lookup = kad.try_start_query(|kad| kad.get_record(key))?;
+let bootstrap = kad.try_start_query(|kad| kad.bootstrap())??;
+```
+
+The closure must start exactly one query. Capacity errors occur before it runs,
+preserving local storage and caller ownership. The closure's return value keeps
+existing store/bootstrap errors separate from admission failure.
+
+Legacy starts remain available. When a configured cap rejects one, its returned
+ID is not retained and has no completion event. No rejection-result backlog is
+created. Use checked starts when enabling the cap; this is a new opt-in contract,
+not a change to unconfigured library behavior.
+
+### Supporting Ownership Rules
+
+- Local record/provider results are not queued for rejected IDs.
+- Rejected bootstraps do not increment the active-bootstrap suppression counter.
+- Background jobs use the smaller of their allowance and the pool cap before taking work.
+- Cancellation releases capacity immediately; phase transitions reuse the retiring query's slot.
+
+### Admission Regression Coverage
+
+| Scenario | Verified Behavior |
+| --- | --- |
+| Finished entry at capacity | Remains counted until retirement or cancellation |
+| Rejected checked start | Closure is not called; no local side effects |
+| Repeated legacy starts | Rejected IDs are unretained; no local-result backlog |
+| Bootstrap and publication phases | Reuse capacity while an unrelated query remains retained |
+| Background jobs at capacity | Preserve pending records and resume after foreground retirement |
+| Rejected bootstrap | Does not leave automatic bootstrap suppression active |
+
+All four `query_pool_capacity` tests passed with the offline cached toolchain.
+These are deterministic behaviour tests, not production-cap activation evidence.
+Log: `/tmp/p2p-vpn-kad-pool-admission-focused-final.log`.
+
+### Foundation Validation
+
+| Check | Result |
+| --- | --- |
+| Offline workspace tests | 1,284 passed; 22 opt-in tests ignored |
+| Owned QUIC packet-plane namespace | Passed |
+| Relay/direct network-move namespace | Passed |
+| Workspace Clippy correctness, suspicious, and perf groups | Passed; existing style warnings remain |
+| Root Rust formatting | Passed |
+
+Logs use `/tmp/p2p-vpn-kad-pool-admission-` with suffixes
+`workspace-final.log`, `quic.log`, `move.log`, and `clippy-final.log`.
+Normal namespace recovery does not prove recovery under aggregate overload.
+
+### Remaining Integration
+
+The production constructor does **not yet enable this cap**. First update every
+production start site to handle admission errors, including standalone pairing,
+recovery, maintenance, address publication, and diagnostic queries.
+
+Pool-entry count alone does not bound queued query results, query metadata,
+or pending RPC payloads. Those owners, production activation, and combined
+overload/recovery tests remain required before completing this goal.
+
 ## Implementation Order
 
 1. Handler admission, expiry, and bounded rejection reporting.

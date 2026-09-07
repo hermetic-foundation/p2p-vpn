@@ -53,6 +53,20 @@ pub(crate) struct QueryPool {
     next_id: usize,
     config: QueryConfig,
     queries: FnvHashMap<QueryId, Query>,
+    rejected: u64,
+}
+
+/// Synchronous rejection before starting a query in a capacity-limited pool.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("Kademlia query capacity exhausted")]
+pub struct QueryCapacityError;
+
+/// Counts every retained pool entry, including finished-but-not-retired queries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct QueryPoolUsage {
+    pub retained: usize,
+    pub capacity: Option<usize>,
+    pub rejected: u64,
 }
 
 /// The observable states emitted by [`QueryPool::poll`].
@@ -75,6 +89,7 @@ impl QueryPool {
             next_id: 0,
             config,
             queries: Default::default(),
+            rejected: 0,
         }
     }
 
@@ -88,9 +103,29 @@ impl QueryPool {
         self.queries.values()
     }
 
-    /// Gets the current size of the pool, i.e. the number of running queries.
+    /// Counts all retained entries, including finished queries awaiting polling.
     pub(crate) fn size(&self) -> usize {
         self.queries.len()
+    }
+
+    pub(crate) fn usage(&self) -> QueryPoolUsage {
+        QueryPoolUsage {
+            retained: self.queries.len(),
+            capacity: self.config.capacity.map(NonZeroUsize::get),
+            rejected: self.rejected,
+        }
+    }
+
+    pub(crate) fn check_capacity(&mut self) -> Result<(), QueryCapacityError> {
+        if self
+            .config
+            .capacity
+            .is_some_and(|capacity| self.queries.len() >= capacity.get())
+        {
+            self.rejected = self.rejected.saturating_add(1);
+            return Err(QueryCapacityError);
+        }
+        Ok(())
     }
 
     /// Returns an iterator that allows modifying each query in the pool.
@@ -116,6 +151,9 @@ impl QueryPool {
         I: IntoIterator<Item = PeerId>,
     {
         assert!(!self.queries.contains_key(&id));
+        if self.check_capacity().is_err() {
+            return;
+        }
         let parallelism = self.config.replication_factor;
         let mut retained = RetainedPeers::new(self.config.limits);
         let peers = peers
@@ -154,6 +192,10 @@ impl QueryPool {
         T: Into<KeyBytes> + Clone,
         I: IntoIterator<Item = Key<PeerId>>,
     {
+        assert!(!self.queries.contains_key(&id));
+        if self.check_capacity().is_err() {
+            return;
+        }
         let num_results = match info {
             QueryInfo::GetClosestPeers {
                 num_results: val, ..
@@ -274,6 +316,7 @@ impl std::fmt::Display for QueryId {
 /// The configuration for queries in a `QueryPool`.
 #[derive(Debug, Clone)]
 pub(crate) struct QueryConfig {
+    pub(crate) capacity: Option<NonZeroUsize>,
     pub(crate) limits: Option<QueryLimits>,
     /// Timeout of a single query.
     ///
@@ -296,6 +339,7 @@ pub(crate) struct QueryConfig {
 impl Default for QueryConfig {
     fn default() -> Self {
         QueryConfig {
+            capacity: None,
             limits: None,
             timeout: Duration::from_secs(60),
             replication_factor: NonZeroUsize::new(K_VALUE.get()).expect("K_VALUE > 0"),

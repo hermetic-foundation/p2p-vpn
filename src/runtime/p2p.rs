@@ -1933,6 +1933,15 @@ mod tests {
 
     #[test]
     fn kademlia_background_jobs_yield_to_foreground_and_both_resume() {
+        exercise_background_query_admission(None);
+    }
+
+    #[test]
+    fn query_pool_capacity_preserves_background_jobs_until_admission_resumes() {
+        exercise_background_query_admission(NonZeroUsize::new(1));
+    }
+
+    fn exercise_background_query_admission(capacity: Option<NonZeroUsize>) {
         use libp2p::{
             kad::store::RecordStore,
             swarm::{DialError, FromSwarm, NetworkBehaviour, ToSwarm},
@@ -1950,13 +1959,15 @@ mod tests {
             .set_provider_publication_interval(Some(Duration::from_millis(1)))
             .set_replication_interval(Some(Duration::from_millis(1)))
             .set_publication_interval(Some(Duration::from_millis(1)));
+        if let Some(capacity) = capacity {
+            config.set_query_pool_capacity(capacity);
+        }
         let mut kad =
             kad::Behaviour::with_config(local, kad::store::MemoryStore::new(local), config);
         kad.add_address(&PeerId::random(), "/memory/1".parse().unwrap());
-        let foreground = [
-            kad.get_closest_peers(PeerId::random()),
-            kad.get_closest_peers(PeerId::random()),
-        ];
+        let foreground = (0..capacity.map_or(2, NonZeroUsize::get))
+            .map(|_| kad.get_closest_peers(PeerId::random()))
+            .collect::<Vec<_>>();
         for index in 0..10 {
             let key = kad::RecordKey::new(&[index]);
             kad.store_mut()
@@ -1973,13 +1984,13 @@ mod tests {
                 kad.iter_queries()
                     .map(|query| query.id())
                     .collect::<HashSet<_>>(),
-                HashSet::from(foreground)
+                foreground.iter().copied().collect()
             );
         }
-        for query in foreground {
-            kad.query_mut(&query).unwrap().finish();
+        for query in &foreground {
+            kad.query_mut(query).unwrap().finish();
         }
-        let mut seen_queries = HashSet::from(foreground);
+        let mut seen_queries = foreground.iter().copied().collect::<HashSet<_>>();
         let mut providers = HashSet::new();
         let mut records = HashSet::new();
         for _ in 0..500 {
@@ -2002,7 +2013,7 @@ mod tests {
                 "background jobs exceeded the per-poll allowance"
             );
             assert!(
-                kad.iter_queries().count() <= 2,
+                kad.query_pool_usage().retained <= capacity.map_or(2, NonZeroUsize::get),
                 "background jobs exceeded the shared ceiling"
             );
             if let Poll::Ready(ToSwarm::Dial { opts }) = action {
@@ -2020,6 +2031,209 @@ mod tests {
         }
         assert_eq!(providers.len(), 10, "provider publication starved");
         assert_eq!(records.len(), 10, "record publication starved");
+        assert_eq!(
+            kad.query_pool_usage().rejected,
+            0,
+            "background jobs were consumed before capacity was available"
+        );
+    }
+
+    #[test]
+    fn query_pool_capacity_counts_finished_entries_and_rejects_without_side_effects() {
+        use libp2p::kad::store::RecordStore;
+        let local = PeerId::random();
+        let mut config = controlled_kademlia_config(StreamProtocol::new(
+            crate::config::PUBLIC_IPFS_KADEMLIA_PROTOCOL,
+        ));
+        config.set_query_pool_capacity(NonZeroUsize::new(2).unwrap());
+        let mut kad =
+            kad::Behaviour::with_config(local, kad::store::MemoryStore::new(local), config);
+        kad.add_address(&PeerId::random(), "/memory/1".parse().unwrap());
+        let first = kad
+            .try_start_query(|kad| kad.get_record(kad::RecordKey::new(&b"first")))
+            .unwrap();
+        let keep = kad
+            .try_start_query(|kad| kad.get_closest_peers(PeerId::random()))
+            .unwrap();
+        kad.query_mut(&first).unwrap().finish();
+        assert!(kad.query(&first).is_none());
+        assert!(kad.query_is_retained(&first));
+        assert_eq!(kad.query_pool_usage().retained, 2);
+        let attempted = std::cell::Cell::new(false);
+        let rejected = kad.try_start_query(|_| attempted.set(true));
+        assert_eq!(rejected, Err(kad::QueryCapacityError));
+        assert!(!attempted.get());
+        let key = kad::RecordKey::new(&b"local");
+        kad.store_mut()
+            .put(kad::Record::new(key.clone(), vec![1; 32]))
+            .unwrap();
+        kad.store_mut()
+            .add_provider(kad::ProviderRecord::new(key.clone(), local, vec![]))
+            .unwrap();
+        let mut denied = HashSet::new();
+        for _ in 0..100 {
+            denied.insert(kad.get_record(key.clone()));
+            denied.insert(kad.get_providers(key.clone()));
+            assert_eq!(kad.query_pool_usage().retained, 2);
+        }
+        denied.insert(kad.put_record_to(
+            kad::Record::new(key.clone(), vec![1; 32]),
+            [PeerId::random()].into_iter(),
+            kad::Quorum::One,
+        ));
+        assert_eq!(kad.query_pool_usage().retained, 2);
+        assert!(denied.iter().all(|id| !kad.query_is_retained(id)));
+        assert!(kad.cancel_query(&first));
+        assert!(!kad.cancel_query(&first));
+        assert_eq!(kad.query_pool_usage().retained, 1);
+        let admitted = kad.try_start_query(|kad| kad.get_record(key)).unwrap();
+        assert!(kad.query_is_retained(&admitted));
+        assert!(kad.query_is_retained(&keep));
+        let waker = futures::task::noop_waker();
+        let mut cx = std::task::Context::from_waker(&waker);
+        for _ in 0..1000 {
+            let action = kad.poll(&mut cx);
+            if let std::task::Poll::Ready(libp2p::swarm::ToSwarm::GenerateEvent(
+                kad::Event::OutboundQueryProgressed { id, .. },
+            )) = &action
+            {
+                assert!(
+                    !denied.contains(id),
+                    "rejected local results entered the event queue"
+                );
+            }
+            if action.is_pending() {
+                break;
+            }
+        }
+        assert_eq!(kad.query_pool_usage().retained, 2);
+        assert!(kad.query_pool_usage().rejected >= 202);
+    }
+
+    #[test]
+    fn query_pool_capacity_is_reused_across_bootstrap_phases() {
+        let peer_for = |seed| {
+            libp2p::identity::Keypair::ed25519_from_bytes([seed; 32])
+                .unwrap()
+                .public()
+                .to_peer_id()
+        };
+        let local = peer_for(0);
+        let mut config = controlled_kademlia_config(StreamProtocol::new(
+            crate::config::PUBLIC_IPFS_KADEMLIA_PROTOCOL,
+        ));
+        config.set_query_pool_capacity(NonZeroUsize::new(2).unwrap());
+        let mut kad =
+            kad::Behaviour::with_config(local, kad::store::MemoryStore::new(local), config);
+        let near = (1..=255)
+            .map(peer_for)
+            .min_by_key(|peer| kad.kbucket(*peer).unwrap().range().0)
+            .unwrap();
+        kad.add_address(&near, "/memory/1".parse().unwrap());
+        let keep = kad.get_record(kad::RecordKey::new(&b"keep"));
+        let bootstrap = kad
+            .try_start_query(kad::Behaviour::bootstrap)
+            .unwrap()
+            .unwrap();
+        let waker = futures::task::noop_waker();
+        let mut cx = std::task::Context::from_waker(&waker);
+        let mut phases = 0;
+        for _ in 0..1024 {
+            if let Some(mut query) = kad.query_mut(&bootstrap) {
+                query.finish();
+            }
+            if let std::task::Poll::Ready(libp2p::swarm::ToSwarm::GenerateEvent(
+                kad::Event::OutboundQueryProgressed { id, .. },
+            )) = kad.poll(&mut cx)
+                && id == bootstrap
+            {
+                phases += 1;
+            }
+            assert!(kad.query_pool_usage().retained <= 2);
+            assert!(kad.query_is_retained(&keep));
+            if !kad.query_is_retained(&bootstrap) {
+                break;
+            }
+        }
+        assert!(phases > 1, "test did not exercise a bootstrap continuation");
+        assert!(!kad.query_is_retained(&bootstrap));
+        assert_eq!(kad.query_pool_usage().retained, 1);
+        assert_eq!(kad.query_pool_usage().rejected, 0);
+        for provider in [false, true] {
+            let key = kad::RecordKey::new(&b"publish");
+            let publish = kad
+                .try_start_query(|kad| {
+                    if provider {
+                        kad.start_providing(key)
+                    } else {
+                        kad.put_record(kad::Record::new(key, vec![1]), kad::Quorum::One)
+                    }
+                })
+                .unwrap()
+                .unwrap();
+            let mut completed = false;
+            for _ in 0..1024 {
+                if let Some(mut query) = kad.query_mut(&publish) {
+                    query.finish();
+                }
+                if let std::task::Poll::Ready(libp2p::swarm::ToSwarm::GenerateEvent(
+                    kad::Event::OutboundQueryProgressed { id, step, .. },
+                )) = kad.poll(&mut cx)
+                    && id == publish
+                    && step.last
+                {
+                    completed = true;
+                }
+                assert!(kad.query_pool_usage().retained <= 2);
+                assert!(kad.query_is_retained(&keep));
+                if !kad.query_is_retained(&publish) {
+                    break;
+                }
+            }
+            assert!(completed, "fixed publication phase failed to retire");
+            assert_eq!(kad.query_pool_usage().retained, 1);
+            assert_eq!(kad.query_pool_usage().rejected, 0);
+        }
+        assert!(
+            kad.try_start_query(|kad| kad.get_record(kad::RecordKey::new(&b"after")))
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn query_pool_capacity_rejected_bootstrap_does_not_leak_suppression() {
+        let local = PeerId::random();
+        let mut config = controlled_kademlia_config(StreamProtocol::new(
+            crate::config::PUBLIC_IPFS_KADEMLIA_PROTOCOL,
+        ));
+        config
+            .set_query_pool_capacity(NonZeroUsize::MIN)
+            .set_periodic_bootstrap_interval(Some(Duration::from_millis(1)));
+        let mut kad =
+            kad::Behaviour::with_config(local, kad::store::MemoryStore::new(local), config);
+        kad.add_address(&PeerId::random(), "/memory/1".parse().unwrap());
+        let first = kad
+            .try_start_query(kad::Behaviour::bootstrap)
+            .unwrap()
+            .unwrap();
+        let denied = kad.bootstrap().unwrap();
+        assert!(!kad.query_is_retained(&denied));
+        assert!(kad.cancel_query(&first));
+        std::thread::sleep(Duration::from_millis(5));
+        let waker = futures::task::noop_waker();
+        let mut cx = std::task::Context::from_waker(&waker);
+        for _ in 0..10 {
+            let _ = kad.poll(&mut cx);
+        }
+        assert_eq!(
+            kad.query_pool_usage().retained,
+            1,
+            "rejected bootstrap left automatic bootstrap suppressed"
+        );
+        assert!(
+            kad.iter_queries()
+                .all(|query| matches!(query.info(), kad::QueryInfo::Bootstrap { .. }))
+        );
     }
 
     #[test]
