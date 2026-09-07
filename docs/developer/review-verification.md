@@ -18,8 +18,8 @@ Earlier milestones remain historical evidence, not automatic proof for later cha
 
 | Area | Evidence | Limitation |
 | --- | --- | --- |
-| Workspace | Last full run: 1,232 passed, 20 opt-in tests ignored, including historical startup compaction, task-scoped network logs, bounded fixture traces, live pairing retry, and persisted restart after partial route/rollback failure. Private-bootstrap restart regression passed separately. | Native Linux toolchain; not an Android device run. |
-| Namespace integration | All 11 pass with stale-response cleanup and isolated relay-LAN endpoint ports. Logs: `/tmp/p2p-vpn-review-stale-packet-isolated-namespace.log`. | Earlier 10/11 run exposed a direct hole-punch bypass in the fixture; see [isolation evidence](testing.md#namespace-e2e). Controlled topology, not public NAT or saturation evidence. |
+| Workspace | Last full run: 1,232 passed, 23 opt-in tests ignored, including historical startup compaction, task-scoped network logs, bounded fixture traces, live pairing retry, and persisted restart after partial route/rollback failure. Private-bootstrap restart, stream pressure, retention diagnostics, and all 12 namespace scenarios passed separately. | Native Linux toolchain; not an Android device run. |
+| Namespace integration | All 12 pass sequentially in 256.18 seconds, including the new [TCP queue-pressure test](queue-pressure-review.md). Log: `/tmp/p2p-vpn-review-queue-pressure-namespace-suite.log`. | Earlier 10/11 run exposed a direct hole-punch bypass in the fixture; see [isolation evidence](testing.md#namespace-e2e). Controlled topology; packet-limit pressure, not public NAT, independent byte-limit saturation, or a heap bound. |
 | Static analysis | Required correctness, suspicious, and performance Clippy groups pass. | Existing non-fatal style warnings remain. |
 | Formatting | Changed Rust files pass rustfmt; whitespace checks pass. | Not proof of the complete flake `fmt` target. |
 | Nix source parity | `rust-test-sources` built successfully. | Verifies packaged test inclusion, not execution. |
@@ -79,7 +79,7 @@ not imply that the corresponding Nix derivation was built successfully.
 | `nixos-vm-quic-datagram`, `nixos-vm-quic-stream` | Built at `859b29d5`; each passes 2 subtests. Datagram preference and stream-only traffic confirmed by path/session/payload counters. |
 | `nixos-vm-forced-relay` | Built at `859b29d5`; all 5 subtests pass. Controlled VLANs and explicit fixture relay. |
 | `nixos-vm-network-move` | Original pass followed by an exact-one-count failure. Corrected, stronger test passes twice. [Logs, hashes, and limits](nixos-transport-review.md). |
-| `namespace-smoke-preflighted` | All 11 pass with pinned resource bounds. Derivation result not established. |
+| `namespace-smoke-preflighted` | Manual full namespace suite: all 12 pass, including TCP queue pressure. This exported derivation runs only direct-overlay smoke; its build result is not established. |
 | `android`, `android-e2e-fixture` | Current offline x86_64 JNI/Gradle validation; full Nix derivation results not established. |
 | `android-e2e-structure` | Evaluated check body passed with installed tools earlier, outside a Nix sandbox. |
 | `android-device-audit-structure` | Full evaluated check body passed with cached tools outside a Nix sandbox; mock-device evidence only. See tooling follow-up below. |
@@ -175,7 +175,7 @@ Logs use `/tmp/p2p-vpn-review-startup-snapshot-*`.
 | Android underlay failure | Latest transition passes with independent OS underlay diagnostics. Earlier failure attribution remains unresolved; a pass alone does not establish its cause. |
 | Private bootstrap admission | [Delayed changed-port restart](private-discovery-restart-review.md) failed before the Identify classification fix and passed twice afterward. Routing clients no longer expire merely because they advertise pairing support. The Android multi-network scenario also passes with the fix. |
 | Android update traffic | Latest replacement traffic passes with ping timing and reply sequences retained. Preserve earlier 4/5 evidence and investigate attribution alongside remaining transport ownership work. |
-| Packet stream ownership | [Dispatch, closure, admission, stream budgets, stale accounting, and default inbound ownership](packet-stream-ownership-review.md) have regressions. Paced pinned-receiver TCP/QUIC tests pass 1,500 overload/recovery cycles each with zero residual outbound owners. Full-daemon queue saturation, heap measurements, and final platform validation remain open. |
+| Packet stream ownership | [Stream regressions](packet-stream-ownership-review.md) include 1,500 TCP/QUIC overload/recovery cycles each. [TCP namespace pressure](queue-pressure-review.md) reaches the four-packet queue limit, records drops/RSS, and restores 5/5 pings both ways without daemon restart. Other transports, byte-limit saturation, heap trends, and final platform validation remain open. |
 | Packaging/tooling | Resolve or explicitly account for unverified exported checks without uncontrolled source builds. |
 | Documentation | Reconcile architecture and user workflows with final behavior and evidence. |
 

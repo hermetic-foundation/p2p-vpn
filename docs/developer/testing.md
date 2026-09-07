@@ -958,6 +958,11 @@ admission limit and expiry cleanup while preserving an explicitly protected addr
 
 These tests require Linux namespace and TUN support.
 
+The opt-in `tun_namespace_recovers_after_tcp_queue_pressure` case additionally
+requires `tc` with netem support. It constrains only a disposable veth link,
+samples runtime queues/RSS, and checks recovery without restarting either daemon.
+See [parameters, reproduction, and evidence limits](queue-pressure-review.md).
+
 | Harness Behavior | Bound |
 | --- | --- |
 | Child diagnostics | Drain stdout and stderr concurrently; retain at most 1 MiB per stream plus a truncation marker. |

@@ -142,6 +142,11 @@ fn fingerprint() -> io::Result<String> {
     Ok(hex)
 }
 
+pub fn process_observation(role: &str, pid: u32, started: Instant) -> serde_json::Value {
+    serde_json::to_value(sample(role, pid, started).expect("live process observation"))
+        .expect("serializable process observation")
+}
+
 fn daemon_views(temp: &Path, roles: &[(&str, u32)]) -> serde_json::Value {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()

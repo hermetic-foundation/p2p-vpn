@@ -197,7 +197,7 @@ behaviour is unchanged; namespace and Android scenarios were not rerun for this 
 
 #### Remaining Evidence
 
-1. Extend the paced pinned-stream exercise below to full-daemon queue saturation and heap measurements.
+1. Extend the [TCP namespace queue-pressure evidence](queue-pressure-review.md) to longer memory trends, other transports, and independent byte-limit saturation.
 2. Repeat affected platform checks after further runtime changes; retain earlier packet-loss evidence.
 3. Preserve the documented default inbound owner in any future handler consolidation.
 

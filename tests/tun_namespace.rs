@@ -35,10 +35,13 @@ use p2p_vpn::{
 const CHILD_ENV: &str = "P2P_VPN_TUN_E2E_MODE";
 #[path = "support/idle_sample.rs"]
 mod idle_sample;
+#[path = "support/queue_pressure.rs"]
+mod queue_pressure;
 const KEEP_TEMP_ENV: &str = "P2P_VPN_TUN_E2E_KEEP_TEMP";
 const ORCHESTRATOR_TIMEOUT_ENV: &str = "P2P_VPN_TUN_E2E_ORCHESTRATOR_TIMEOUT_SECONDS";
 const WAIT_TIMEOUT_SCALE_ENV: &str = "P2P_VPN_TUN_E2E_WAIT_SCALE";
 const DIRECT_TEST_NAME: &str = "tun_namespace_ping_crosses_two_node_overlay";
+const QUEUE_PRESSURE_TEST_NAME: &str = "tun_namespace_recovers_after_tcp_queue_pressure";
 const DIRECT_QUIC_TEST_NAME: &str = "tun_namespace_ping_crosses_owned_quic_packet_plane";
 const MDNS_TEST_NAME: &str = "tun_namespace_ping_crosses_mdns_discovered_overlay";
 const RELAY_TEST_NAME: &str = "tun_namespace_ping_crosses_relay_overlay";
@@ -52,6 +55,16 @@ const NETWORK_MOVE_TEST_NAME: &str = "tun_namespace_recovers_relay_and_direct_af
 const DHT_TEST_NAME: &str = "tun_namespace_ping_crosses_dht_discovered_overlay";
 const NETWORK_NAME: &str = "tun-e2e";
 const NODE_A_LOCAL_ROUTE_ADDRESS: Ipv4Addr = Ipv4Addr::new(10, 41, 0, 9);
+
+#[test]
+#[ignore = "requires Linux user and network namespaces plus /dev/net/tun"]
+fn tun_namespace_recovers_after_tcp_queue_pressure() {
+    match env::var(CHILD_ENV).as_deref() {
+        Ok("orchestrator") => run_direct_orchestrator(QUEUE_PRESSURE_TEST_NAME),
+        Ok("node") => run_node_child(),
+        _ => reexec_orchestrator(QUEUE_PRESSURE_TEST_NAME),
+    }
+}
 
 #[test]
 #[ignore = "requires Linux user and network namespaces plus /dev/net/tun"]
@@ -429,6 +442,11 @@ fn run_direct_orchestrator(test_name: &str) {
         wait_for_owned_quic_packet_plane_sessions(&temp_dir);
         wait_for_selected_path(&temp_dir, "a", "direct_quic_datagram");
         wait_for_selected_path(&temp_dir, "b", "direct_quic_datagram");
+    } else if test_name == QUEUE_PRESSURE_TEST_NAME {
+        wait_for_peer_ready(&temp_dir, "a");
+        wait_for_peer_ready(&temp_dir, "b");
+        wait_for_selected_path(&temp_dir, "a", "direct_tcp_stream");
+        wait_for_selected_path(&temp_dir, "b", "direct_tcp_stream");
     } else {
         wait_for_packet_plane_sessions(&temp_dir, "a");
         wait_for_packet_plane_sessions(&temp_dir, "b");
@@ -443,6 +461,8 @@ fn run_direct_orchestrator(test_name: &str) {
     let responder_routes = ns_command_output(node_b.id(), "ip", &["route", "show", "table", "all"]);
     if test_name == DIRECT_QUIC_TEST_NAME {
         wait_for_owned_quic_packet_plane_datagrams(&temp_dir);
+    } else if test_name == QUEUE_PRESSURE_TEST_NAME {
+        queue_pressure::capture(&temp_dir, node_a.id(), node_b.id(), address_b);
     } else {
         wait_for_packet_plane_datagrams(&temp_dir);
     }
@@ -473,7 +493,7 @@ fn run_direct_orchestrator(test_name: &str) {
     if test_name == DIRECT_QUIC_TEST_NAME {
         assert_owned_quic_packet_plane_datagrams_used("node A", &initiator_log, &responder_log);
         assert_owned_quic_packet_plane_datagrams_used("node B", &responder_log, &initiator_log);
-    } else {
+    } else if test_name != QUEUE_PRESSURE_TEST_NAME {
         assert_packet_plane_datagrams_used("node A", &initiator_log, &responder_log);
         assert_packet_plane_datagrams_used("node B", &responder_log, &initiator_log);
     }
@@ -2609,7 +2629,7 @@ fn run_node_child() {
         return;
     }
 
-    let config = if is_invite_relay_test_child()
+    let mut config = if is_invite_relay_test_child()
         || is_pairing_test_child()
         || is_pairing_relay_test_child()
         || is_code_pairing_test_child()
@@ -2648,6 +2668,13 @@ fn run_node_child() {
             direct_overlay_config(&role, &local, &remote)
         }
     };
+    if env::args().any(|argument| argument == QUEUE_PRESSURE_TEST_NAME) {
+        config.network.packet_plane.listen.clear();
+        config.network.packet_plane.external_endpoints.clear();
+        config.network.discovery = relay_test_discovery();
+        config.queue.max_packets_per_peer = 4;
+        config.queue.max_bytes_per_peer = 8192;
+    }
     let interface = config.interface.name.clone();
     let runtime = TunRuntimeConfig::from_config(&config).expect("TUN config");
     let effective_mtu = runtime.mtu;
