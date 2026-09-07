@@ -3635,10 +3635,10 @@ impl PathProbeTracker {
 
     fn confirm(&mut self, peer: PeerId, token: u64, now: Instant) -> Option<(PathKind, u16)> {
         self.drop_rtt_expired(now);
-        let probe = self.pending.remove(&token)?;
-        if probe.peer != peer {
+        if self.pending.get(&token)?.peer != peer {
             return None;
         }
+        let probe = self.pending.remove(&token)?;
         let rtt = now.saturating_duration_since(probe.sent_at).as_millis();
         let rtt_ms = u16::try_from(rtt).unwrap_or(u16::MAX);
         Some((probe.path, rtt_ms))
@@ -38679,6 +38679,40 @@ mod tests {
         assert_eq!(snapshot.outbound_path_probe_failures, 1);
         assert_eq!(snapshot.packet_plane_path_demotions, 1);
         assert_eq!(snapshot.path_fallbacks_to_relay, 1);
+    }
+
+    #[test]
+    fn path_probe_wrong_peer_cannot_consume_another_peers_probe() {
+        let owner = PeerId::from_bytes([1; 32]);
+        let other = PeerId::from_bytes([2; 32]);
+        let start = Instant::now();
+        for path in [PathKind::DirectUdpDatagram, PathKind::DirectQuicDatagram] {
+            let mut tracker = PathProbeTracker::default();
+            tracker.record(owner, path, 7, start);
+            tracker.record(other, path, 8, start);
+            for _ in 0..2 {
+                assert_eq!(
+                    tracker.confirm(other, 7, start + Duration::from_millis(1)),
+                    None
+                );
+                assert!(tracker.has_pending(owner, path, start + Duration::from_millis(1)));
+                assert!(tracker.has_pending(other, path, start + Duration::from_millis(1)));
+            }
+            assert_eq!(
+                tracker.confirm(owner, 7, start + Duration::from_millis(2)),
+                Some((path, 2))
+            );
+            assert_eq!(
+                tracker.confirm(owner, 7, start + Duration::from_millis(3)),
+                None
+            );
+            let expired = tracker.expire_unconfirmed(
+                start + PATH_PROBE_TIMEOUT + Duration::from_millis(1),
+                PATH_PROBE_TIMEOUT,
+            );
+            assert_eq!(expired.len(), 1);
+            assert_eq!(expired[0].peer, other);
+        }
     }
 
     #[test]

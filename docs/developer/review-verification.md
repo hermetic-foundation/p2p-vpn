@@ -166,6 +166,7 @@ Logs use `/tmp/p2p-vpn-review-startup-snapshot-*`.
 | Workstream | Required Next Evidence |
 | --- | --- |
 | Recovery ownership | Finish timer/event and stale-completion review beyond the extracted targeted-query owner. |
+| Probe response ownership | [Wrong-peer probe consumption](path-probe-ownership-review.md) is corrected with a failing/passing regression, full native workspace checks, and UDP/QUIC namespace passes. Prepared pairing and the broader timer audit remain separate requirements. |
 | Session lifecycle | [Membership-sync review](membership-sync-review.md) cases are fixed. Reconcile broader session-lifecycle review and final platform evidence. |
 | Android lifecycle ownership | [Three event-ownership findings](android-event-ownership-review.md) have JVM/emulator coverage, including recurring JNI health polling and automatic native-failure recovery at `4b90f3bc`. Reconcile broader lifecycle evidence on final code. |
 | Pairing orchestration | Assess transaction ownership across preparation, persistence, and finalization. |
