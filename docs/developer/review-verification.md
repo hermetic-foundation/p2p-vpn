@@ -64,8 +64,8 @@ not imply that the corresponding Nix derivation was built successfully.
 | --- | --- |
 | `rust-test-sources` | Built at the latest runtime milestone. |
 | `clippy`, `fmt` | Local checks as described above; full derivation results not established. |
-| `package` | Offline workspace build/tests pass; complete package check not established at this revision. |
-| `releaseArchive`, `releaseArchiveSanity` | Current archive and sanity outputs not verified. |
+| `package` | [Release package built at `c9ccbe82`](package-tooling-review.md): 1,151 tests pass, 19 opt-in ignored; installed completion verified. Separate from the workspace suite. |
+| `releaseArchive`, `releaseArchiveSanity` | [Both built at `c9ccbe82`](package-tooling-review.md); archive content/path checks and extracted CLI help pass. Not non-Nix portability proof. |
 | `nixos-consumer-flake-eval` | Built offline; evaluates minimal upstream-module consumer contracts without realizing the OS closure. |
 | `nixos-module`, `nixos-consumer-flake` | Current full derivation results not verified. |
 | `nixos-vm-smoke` | Built at `cf18fb51`; module readiness, status/metrics, and clean stop pass. [Workflow evidence](nixos-workflow-review.md). |
@@ -82,8 +82,8 @@ not imply that the corresponding Nix derivation was built successfully.
 | `android-e2e-structure` | Evaluated check body passed with installed tools earlier, outside a Nix sandbox. |
 | `android-device-audit-structure` | Full evaluated check body passed with cached tools outside a Nix sandbox; mock-device evidence only. See tooling follow-up below. |
 | `debug-bundle-structure` | New process-argument privacy regression passed from working-tree and evaluated Nix source; full wrapper/derivation result remains unverified. |
-| `public-relay-repro-structure`, `public-vpn-capture-structure` | Current result not verified. |
-| `public-vpn-repro-structure`, `public-vpn-repro-evidence-structure` | Current result not verified. |
+| `public-relay-repro-structure`, `public-vpn-capture-structure` | [Both built at `c9ccbe82`](package-tooling-review.md); script structure and synthetic capture evidence pass, not public-network behavior. |
+| `public-vpn-repro-structure`, `public-vpn-repro-evidence-structure` | [Both built at `c9ccbe82`](package-tooling-review.md); generated scripts and synthetic evidence mapping pass. |
 | `public-vpn-evidence-check`, `public-vpn-move-evidence-check` | Both built at `cf18fb51`; positive and rejection fixtures pass. [Exact results](nixos-workflow-review.md). Synthetic reports, not live WAN tests. |
 
 An earlier offline verifier dry run planned 967 derivations. Importing the exact
