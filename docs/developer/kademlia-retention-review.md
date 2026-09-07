@@ -1,8 +1,12 @@
 # Kademlia Retention Review
 
 Current follow-up: [resource-limits workstream](kademlia-resource-plan.md).
-The audit below records the original diagnostics and patch proposal; it does not
-claim the internal retention gaps have been fixed.
+The audit below records the original diagnostics and patch proposal. The current
+workstream distinguishes closed per-peer gaps from remaining aggregate/query limits.
+
+The follow-up now enforces per-peer routing-address count/size limits and protects
+configured seeds. The original measurements below are historical; query-local and
+aggregate resource limits remain separate work in the active plan.
 
 ## Scope
 

@@ -47,7 +47,7 @@ use web_time::Instant;
 
 pub use crate::query::QueryStats;
 use crate::{
-    addresses::Addresses,
+    addresses::{AddressLimits, Addresses},
     bootstrap,
     handler::{Handler, HandlerEvent, HandlerIn, RequestId},
     jobs::*,
@@ -74,6 +74,8 @@ pub struct Behaviour<TStore> {
 
     /// Configuration of the wire protocol.
     protocol_config: ProtocolConfig,
+
+    address_limits: AddressLimits,
 
     /// Configuration of [`RecordStore`] filtering.
     record_filtering: StoreInserts,
@@ -191,6 +193,7 @@ pub struct Config {
     caching: Caching,
     periodic_bootstrap_interval: Option<Duration>,
     automatic_bootstrap_throttle: Option<Duration>,
+    address_limits: AddressLimits,
 }
 
 impl Default for Config {
@@ -235,6 +238,7 @@ impl Config {
             caching: Caching::Enabled { max_peers: 1 },
             periodic_bootstrap_interval: Some(Duration::from_secs(5 * 60)),
             automatic_bootstrap_throttle: Some(bootstrap::DEFAULT_AUTOMATIC_THROTTLE),
+            address_limits: AddressLimits::default(),
         }
     }
 
@@ -448,11 +452,15 @@ impl Config {
     ///   new peer is inserted in the routing table.
     /// * Set to `None` to disable automatic bootstrap (no bootstrap request will be triggered when
     ///   a new peer is inserted in the routing table).
-    pub fn set_automatic_bootstrap_throttle(
-        &mut self,
-        duration: Option<Duration>,
-    ) -> &mut Self {
+    pub fn set_automatic_bootstrap_throttle(&mut self, duration: Option<Duration>) -> &mut Self {
         self.automatic_bootstrap_throttle = duration;
+        self
+    }
+
+    /// Bounds encoded routing addresses, including internally confirmed and
+    /// pending entries. Query-local address caches are separate.
+    pub fn set_address_limits(&mut self, limits: AddressLimits) -> &mut Self {
+        self.address_limits = limits;
         self
     }
 }
@@ -497,6 +505,7 @@ where
             kbuckets: KBucketsTable::new(local_key, config.kbucket_config),
             kbucket_inserts: config.kbucket_inserts,
             protocol_config: config.protocol_config,
+            address_limits: config.address_limits,
             record_filtering: config.record_filtering,
             queued_events: VecDeque::with_capacity(config.query_config.replication_factor.get()),
             listen_addresses: Default::default(),
@@ -583,10 +592,17 @@ where
         let Ok(address) = address.with_p2p(*peer) else {
             return RoutingUpdate::Failed;
         };
+        if !self.address_limits.accepts(&address) {
+            return RoutingUpdate::Failed;
+        }
         let key = kbucket::Key::from(*peer);
         match self.kbuckets.entry(&key) {
             Some(kbucket::Entry::Present(mut entry, _)) => {
-                if entry.value().insert(address) {
+                let inserted = entry.value().insert(address.clone());
+                if !inserted && !entry.value().iter().any(|a| a == &address) {
+                    return RoutingUpdate::Failed;
+                }
+                if inserted {
                     self.queued_events
                         .push_back(ToSwarm::GenerateEvent(Event::RoutingUpdated {
                             peer: *peer,
@@ -603,11 +619,16 @@ where
                 RoutingUpdate::Success
             }
             Some(kbucket::Entry::Pending(mut entry, _)) => {
-                entry.value().insert(address);
-                RoutingUpdate::Pending
+                entry.value().insert(address.clone());
+                if entry.value().iter().any(|a| a == &address) {
+                    RoutingUpdate::Pending
+                } else {
+                    RoutingUpdate::Failed
+                }
             }
             Some(kbucket::Entry::Absent(entry)) => {
-                let addresses = Addresses::new(address);
+                let addresses = Addresses::with_limits(address, self.address_limits)
+                    .expect("address checked against configured limits");
                 let status = if self.connected_peers.contains(peer) {
                     NodeStatus::Connected
                 } else {
@@ -646,6 +667,25 @@ where
             }
             None => RoutingUpdate::Failed,
         }
+    }
+
+    /// Adds an application-configured address protected from churn eviction.
+    /// Protected entries still count toward the address budget and can be
+    /// explicitly removed with `remove_address` or `remove_peer`.
+    pub fn add_protected_address(&mut self, peer: &PeerId, address: Multiaddr) -> RoutingUpdate {
+        let Ok(address) = address.with_p2p(*peer) else {
+            return RoutingUpdate::Failed;
+        };
+        let result = self.add_address(peer, address.clone());
+        if let Some(addresses) = self
+            .kbuckets
+            .entry(&kbucket::Key::from(*peer))
+            .as_mut()
+            .and_then(|entry| entry.value())
+        {
+            addresses.protect(&address);
+        }
+        result
     }
 
     /// Removes an address of a peer from the routing table.
@@ -1324,6 +1364,7 @@ where
         address: Option<Multiaddr>,
         new_status: NodeStatus,
     ) {
+        let address = address.filter(|address| self.address_limits.accepts(address));
         let key = kbucket::Key::from(peer);
         match self.kbuckets.entry(&key) {
             Some(kbucket::Entry::Present(mut entry, old_status)) => {
@@ -1376,7 +1417,8 @@ where
                             }));
                     }
                     (Some(a), BucketInserts::OnConnected) => {
-                        let addresses = Addresses::new(a);
+                        let addresses = Addresses::with_limits(a, self.address_limits)
+                            .expect("connection address checked against configured limits");
                         match entry.insert(addresses.clone(), new_status) {
                             kbucket::InsertResult::Inserted => {
                                 self.bootstrap_on_low_peers();

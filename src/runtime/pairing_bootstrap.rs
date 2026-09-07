@@ -30,7 +30,7 @@ use crate::{
         open_pairing_code_challenge_v2_at, start_pairing_code_hello_v2_at,
     },
     runtime::{
-        p2p::{decode_keypair, kademlia_pairing_code_v2_key},
+        p2p::{controlled_kademlia_config, decode_keypair, kademlia_pairing_code_v2_key},
         pairing_code::{
             self, PAIRING_CODE_PROTOCOL, PAIRING_CODE_V2_PROTOCOL, PairingCodeRejectionReason,
             PairingCodeV2Codec, PairingCodeV2Request, PairingCodeV2Response,
@@ -414,7 +414,10 @@ fn seed_candidate_hints(
         })?;
         strip_trailing_peer(&mut address, peer);
         if state.record_lan_candidate(peer, address.clone(), now) {
-            swarm.behaviour_mut().kad.add_address(&peer, address);
+            swarm
+                .behaviour_mut()
+                .kad
+                .add_protected_address(&peer, address);
         }
     }
     Ok(())
@@ -439,8 +442,9 @@ fn build_bootstrap_swarm(
                 |keypair| -> Result<PairingBootstrapBehaviour, Box<dyn Error + Send + Sync>> {
                     let local_peer = keypair.public().to_peer_id();
                     let store = kad::store::MemoryStore::new(local_peer);
-                    let config =
-                        kad::Config::new(StreamProtocol::new(PUBLIC_IPFS_KADEMLIA_PROTOCOL));
+                    let config = controlled_kademlia_config(StreamProtocol::new(
+                        PUBLIC_IPFS_KADEMLIA_PROTOCOL,
+                    ));
                     let mut kad = kad::Behaviour::with_config(local_peer, store, config);
                     kad.set_mode(Some(kad::Mode::Client));
                     Ok(PairingBootstrapBehaviour {
@@ -467,7 +471,10 @@ fn build_bootstrap_swarm(
                 .peer_address()
                 .map_err(|error| io::Error::other(format!("{error:?}")))?;
             strip_trailing_peer(&mut address, peer);
-            swarm.behaviour_mut().kad.add_address(&peer, address);
+            swarm
+                .behaviour_mut()
+                .kad
+                .add_protected_address(&peer, address);
         }
         let _ = swarm.behaviour_mut().kad.bootstrap();
         swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse::<Multiaddr>()?)?;
@@ -833,6 +840,34 @@ fn current_unix_seconds() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn standalone_bootstrap_bounds_routing_addresses_and_preserves_seed() {
+        let identity = NodeIdentity::generate_ed25519().unwrap();
+        let mut swarm = build_bootstrap_swarm(&identity).unwrap();
+        // Do not poll the swarm or contact public seeds. Exercise the actual
+        // constructor's routing owner, including its seed protection.
+        let (peer, seed) = public_ipfs_bootstrap_peer_configs()[0]
+            .peer_address()
+            .unwrap();
+        let kad = &mut swarm.behaviour_mut().kad;
+        for index in 1..=100 {
+            kad.add_address(&peer, format!("/memory/{index}").parse().unwrap());
+        }
+        let oversized = Multiaddr::empty().with(Protocol::Dns("a".repeat(2048).into()));
+        assert_eq!(
+            kad.add_address(&peer, oversized),
+            kad::RoutingUpdate::Failed
+        );
+        let addresses = kad.remove_peer(&peer).unwrap().node.value;
+        assert_eq!(addresses.len(), 64);
+        assert!(
+            addresses
+                .iter()
+                .any(|a| a == &seed.clone().with_p2p(peer).unwrap())
+        );
+        assert!(addresses.iter().all(|a| a.len() <= 2048));
+    }
 
     #[test]
     fn options_reject_unbounded_timeouts() {

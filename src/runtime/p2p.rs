@@ -366,7 +366,10 @@ fn install_listeners_and_dials(
 
     for (peer, address) in &config.bootstrap_peers {
         if should_seed_kademlia_address_book(&config.discovery, address) {
-            swarm.behaviour_mut().kad.add_address(peer, address.clone());
+            swarm
+                .behaviour_mut()
+                .kad
+                .add_protected_address(peer, address.clone());
         }
         let dial_address = peer_dial_address(*peer, address.clone())?;
         swarm.dial(dial_address)?;
@@ -374,7 +377,10 @@ fn install_listeners_and_dials(
 
     for (peer, address) in &config.known_peers {
         if should_seed_kademlia_address_book(&config.discovery, address) {
-            swarm.behaviour_mut().kad.add_address(peer, address.clone());
+            swarm
+                .behaviour_mut()
+                .kad
+                .add_protected_address(peer, address.clone());
         }
         if is_relayed_address(address) {
             continue;
@@ -425,10 +431,14 @@ fn relay_peer_address_from_reservation(reservation: &Multiaddr) -> Option<(PeerI
     relay_peer.map(|peer| (peer, relay_address))
 }
 
-fn controlled_kademlia_config(protocol: StreamProtocol) -> kad::Config {
+pub(super) fn controlled_kademlia_config(protocol: StreamProtocol) -> kad::Config {
     let mut config = kad::Config::new(protocol);
     config
         .set_parallelism(KADEMLIA_QUERY_PARALLELISM)
+        .set_address_limits(kad::AddressLimits::new(
+            NonZeroUsize::new(super::address_retention::MAX_DISCOVERED_ADDRESSES_PER_PEER).unwrap(),
+            NonZeroUsize::new(super::address_retention::MAX_DISCOVERED_ADDRESS_BYTES).unwrap(),
+        ))
         .set_periodic_bootstrap_interval(None)
         .set_automatic_bootstrap_throttle(None);
     config
@@ -523,7 +533,7 @@ fn seed_public_pairing_kademlia(swarm: &mut Swarm<Behaviour>) -> Result<(), P2pB
         {
             address.pop();
         }
-        public_pairing_kad_mut(swarm.behaviour_mut()).add_address(&peer, address);
+        public_pairing_kad_mut(swarm.behaviour_mut()).add_protected_address(&peer, address);
     }
     Ok(())
 }
@@ -1367,9 +1377,247 @@ mod tests {
         }
     }
 
+    fn bounded_routing_test_dht() -> kad::Behaviour<kad::store::MemoryStore> {
+        let local = libp2p::identity::Keypair::ed25519_from_bytes([0; 32])
+            .unwrap()
+            .public()
+            .to_peer_id();
+        let mut config = controlled_kademlia_config(StreamProtocol::new(
+            crate::config::PUBLIC_IPFS_KADEMLIA_PROTOCOL,
+        ));
+        config.set_address_limits(kad::AddressLimits::new(
+            NonZeroUsize::new(4).unwrap(),
+            NonZeroUsize::new(2048).unwrap(),
+        ));
+        kad::Behaviour::with_config(local, kad::store::MemoryStore::new(local), config)
+    }
+
+    #[test]
+    fn routing_address_limits_preserve_seeds_lan_and_relay_under_churn() {
+        let mut kad = bounded_routing_test_dht();
+        let peer = PeerId::random();
+        let seed: Multiaddr = "/ip4/11.1.1.1/tcp/4001".parse().unwrap();
+        let lan: Multiaddr = "/ip4/192.168.1.2/tcp/4001".parse().unwrap();
+        let relay: Multiaddr = format!(
+            "/ip4/11.1.1.2/tcp/4001/p2p/{}/p2p-circuit",
+            PeerId::random()
+        )
+        .parse()
+        .unwrap();
+        kad.add_protected_address(&peer, seed.clone());
+        kad.add_address(&peer, lan.clone());
+        kad.add_address(&peer, relay.clone());
+        for port in 1..=100 {
+            assert_eq!(
+                kad.add_address(&peer, format!("/ip4/11.1.1.3/tcp/{port}").parse().unwrap()),
+                kad::RoutingUpdate::Success
+            );
+        }
+        let mut addresses = kad.remove_peer(&peer).unwrap().node.value;
+        assert_eq!(addresses.len(), 4);
+        for address in [&seed, &lan, &relay] {
+            let address = address.clone().with_p2p(peer).unwrap();
+            assert!(addresses.iter().any(|a| a == &address));
+        }
+        let seed = seed.with_p2p(peer).unwrap();
+        let moved: Multiaddr = format!("/ip4/11.1.1.4/tcp/4001/p2p/{peer}")
+            .parse()
+            .unwrap();
+        assert!(addresses.replace(&seed, &moved));
+        assert!(addresses.iter().any(|a| a == &seed));
+        assert!(addresses.iter().any(|a| a == &moved));
+        assert_eq!(addresses.len(), 4);
+        let oversized = Multiaddr::empty().with(Protocol::Dns("a".repeat(2048).into()));
+        assert!(!addresses.insert(oversized.clone()));
+        assert!(!addresses.replace(&moved, &oversized));
+        assert!(addresses.iter().any(|a| a == &moved));
+        assert_eq!(
+            kad.add_address(&peer, oversized),
+            kad::RoutingUpdate::Failed
+        );
+        assert!(kad.remove_peer(&peer).is_none());
+        let lan = lan.with_p2p(peer).unwrap();
+        assert!(addresses.replace(&moved, &lan));
+        assert_eq!(addresses.len(), 3, "replacement must not retain duplicates");
+    }
+
+    #[test]
+    fn protected_routing_addresses_cannot_exceed_or_bypass_limits() {
+        let mut kad = bounded_routing_test_dht();
+        let peer = PeerId::random();
+        for port in 1..=4 {
+            assert_eq!(
+                kad.add_protected_address(&peer, format!("/memory/{port}").parse().unwrap()),
+                kad::RoutingUpdate::Success
+            );
+        }
+        assert_eq!(
+            kad.add_address(&peer, "/memory/5".parse().unwrap()),
+            kad::RoutingUpdate::Failed
+        );
+        assert_eq!(
+            kad.add_protected_address(&peer, "/memory/6".parse().unwrap()),
+            kad::RoutingUpdate::Failed
+        );
+        assert_eq!(
+            kad.add_protected_address(&peer, "/memory/1".parse().unwrap()),
+            kad::RoutingUpdate::Success
+        );
+        kad.remove_address(&peer, &"/memory/1".parse().unwrap());
+        assert_eq!(
+            kad.add_address(&peer, "/memory/5".parse().unwrap()),
+            kad::RoutingUpdate::Success
+        );
+        let addresses = kad.remove_peer(&peer).unwrap().node.value;
+        assert_eq!(addresses.len(), 4);
+        assert!(!addresses.iter().any(|a| {
+            a == &"/memory/1"
+                .parse::<Multiaddr>()
+                .unwrap()
+                .with_p2p(peer)
+                .unwrap()
+        }));
+    }
+
+    #[test]
+    fn routing_churn_preserves_singleton_alternatives_and_fresh_migrations() {
+        let mut kad = bounded_routing_test_dht();
+        let peer = PeerId::random();
+        let lan = |port| {
+            format!("/ip4/192.168.1.2/tcp/{port}")
+                .parse::<Multiaddr>()
+                .unwrap()
+                .with_p2p(peer)
+                .unwrap()
+        };
+        let relay = format!(
+            "/ip4/11.1.1.2/tcp/4001/p2p/{}/p2p-circuit/p2p/{peer}",
+            PeerId::random()
+        )
+        .parse::<Multiaddr>()
+        .unwrap();
+        kad.add_address(&peer, relay.clone());
+        for port in 1..=3 {
+            kad.add_address(&peer, lan(port));
+        }
+        let mut addresses = kad.remove_peer(&peer).unwrap().node.value;
+        let wan = "/ip4/11.1.1.3/tcp/4001"
+            .parse::<Multiaddr>()
+            .unwrap()
+            .with_p2p(peer)
+            .unwrap();
+        assert!(addresses.insert(wan));
+        assert!(
+            addresses.iter().any(|a| a == &relay),
+            "a new category must not evict a singleton when alternatives exist"
+        );
+        assert!(addresses.replace(&lan(2), &lan(4)));
+        assert!(addresses.insert(lan(5)));
+        assert!(
+            addresses.iter().any(|a| a == &lan(4)),
+            "migration refreshes recency"
+        );
+        assert_eq!(addresses.len(), 4);
+    }
+
+    #[test]
+    fn pending_routing_entries_enforce_address_limits_without_events() {
+        let mut kad = bounded_routing_test_dht();
+        let peer_for = |seed| {
+            libp2p::identity::Keypair::ed25519_from_bytes([seed; 32])
+                .unwrap()
+                .public()
+                .to_peer_id()
+        };
+        for seed in 1..=128 {
+            kad.add_address(&peer_for(seed), "/memory/1".parse().unwrap());
+        }
+        let endpoint_for = |address| libp2p::core::ConnectedPoint::Dialer {
+            address,
+            role_override: libp2p::core::Endpoint::Dialer,
+            port_use: libp2p::core::transport::PortUse::Reuse,
+        };
+        let endpoint = endpoint_for("/memory/1".parse().unwrap());
+        let peer = (129..=255)
+            .find_map(|seed| {
+                let peer = peer_for(seed);
+                kad.on_swarm_event(libp2p::swarm::FromSwarm::ConnectionEstablished(
+                    libp2p::swarm::behaviour::ConnectionEstablished {
+                        peer_id: peer,
+                        connection_id: libp2p::swarm::ConnectionId::new_unchecked(usize::from(
+                            seed,
+                        )),
+                        endpoint: &endpoint,
+                        failed_addresses: &[],
+                        other_established: 0,
+                    },
+                ));
+                (kad.add_address(&peer, "/memory/1".parse().unwrap())
+                    == kad::RoutingUpdate::Pending)
+                    .then_some(peer)
+            })
+            .expect("connected identity creates a pending entry in a full bucket");
+        let seed: Multiaddr = "/memory/1".parse().unwrap();
+        assert_eq!(
+            kad.add_protected_address(&peer, seed.clone()),
+            kad::RoutingUpdate::Pending
+        );
+        for port in 2..=100 {
+            assert_eq!(
+                kad.add_address(&peer, format!("/memory/{port}").parse().unwrap()),
+                kad::RoutingUpdate::Pending
+            );
+        }
+        let old_address = "/memory/100"
+            .parse::<Multiaddr>()
+            .unwrap()
+            .with_p2p(peer)
+            .unwrap();
+        let old_endpoint = endpoint_for(old_address.clone());
+        let oversized_endpoint = endpoint_for(
+            Multiaddr::empty()
+                .with(Protocol::Dns("a".repeat(2048).into()))
+                .with_p2p(peer)
+                .unwrap(),
+        );
+        let changed_endpoint = endpoint_for(
+            "/memory/101"
+                .parse::<Multiaddr>()
+                .unwrap()
+                .with_p2p(peer)
+                .unwrap(),
+        );
+        for new in [&oversized_endpoint, &changed_endpoint] {
+            kad.on_swarm_event(libp2p::swarm::FromSwarm::AddressChange(
+                libp2p::swarm::behaviour::AddressChange {
+                    peer_id: peer,
+                    connection_id: libp2p::swarm::ConnectionId::new_unchecked(999),
+                    old: &old_endpoint,
+                    new,
+                },
+            ));
+        }
+        let addresses = kad.remove_peer(&peer).unwrap().node.value;
+        assert_eq!(addresses.len(), 4);
+        assert!(
+            addresses
+                .iter()
+                .any(|a| a == &seed.clone().with_p2p(peer).unwrap())
+        );
+        assert!(addresses.iter().any(|a| {
+            a == &"/memory/101"
+                .parse::<Multiaddr>()
+                .unwrap()
+                .with_p2p(peer)
+                .unwrap()
+        }));
+        assert!(!addresses.iter().any(|a| a == &old_address));
+        assert!(addresses.iter().all(|a| a.len() <= 2048));
+    }
+
     #[tokio::test]
-    #[ignore = "opt-in loopback diagnostic for internal Kademlia address retention"]
-    async fn measure_internal_kademlia_connection_address_retention() {
+    #[ignore = "opt-in loopback regression for internal Kademlia address retention"]
+    async fn internal_kademlia_connection_addresses_remain_bounded() {
         for separate in [false, true] {
             Box::pin(exercise_internal_kademlia_connection_address_retention(
                 separate,
@@ -1443,7 +1691,7 @@ mod tests {
                                 _ => None,
                             };
                             if let Some(kad::Event::RoutingUpdated { peer, addresses, .. }) = routing
-                                && peer == remote && addresses.len() == index {
+                                && peer == remote && addresses.len() == index.min(samples - 1) {
                                 break;
                             }
                         }
@@ -1478,7 +1726,7 @@ mod tests {
         eprintln!(
             "internal_kademlia_retention separate={separate} connections={samples} addresses={retained}"
         );
-        assert_eq!(retained, samples);
+        assert_eq!(retained, samples - 1);
     }
 
     #[tokio::test]
@@ -1487,6 +1735,17 @@ mod tests {
         for separate in [false, true] {
             let mut source = build_node(&retention_diagnostic_config(separate)).unwrap();
             let mut client = build_node(&retention_diagnostic_config(separate)).unwrap();
+            // Keep the responder deliberately unbounded so this diagnostic
+            // still tests the client's independent query-cache admission.
+            let mut source_config = controlled_kademlia_config(StreamProtocol::new(
+                crate::config::PUBLIC_IPFS_KADEMLIA_PROTOCOL,
+            ));
+            source_config.set_address_limits(kad::AddressLimits::default());
+            *public_pairing_kad_mut(source.swarm.behaviour_mut()) = kad::Behaviour::with_config(
+                source.local_peer_id,
+                kad::store::MemoryStore::new(source.local_peer_id),
+                source_config,
+            );
             for node in [&mut source, &mut client] {
                 for seed in public_ipfs_bootstrap_peer_configs() {
                     let (peer, _) = seed.peer_address().unwrap();

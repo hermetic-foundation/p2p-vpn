@@ -9,12 +9,12 @@ Starting revision: `5ecb01ea`. No deployed service or physical device has change
 
 | Area | Required Evidence | Status |
 | --- | --- | --- |
-| Internal addresses | Count/byte bounds for present and pending buckets, address changes, and query caches | Open |
+| Internal addresses | Count/byte bounds for present and pending buckets, address changes, and query caches | Per-peer routing verified; aggregate/query limits open |
 | Query state | Bounded candidate identities, active queries, and retained results | Open |
-| Scheduling | Bounded bootstrap, discovery, and dial activity under failure and churn | Open |
+| Scheduling | Bounded bootstrap, discovery, and dial activity under failure and churn | Cooldown and automatic bootstrap fixed; aggregate audit open |
 | Recovery | LAN-first lookup, relay fallback, network-change recovery, and healthy-path settling | Open |
 | Measurements | Comparable before/after CPU, RSS, sockets, dial rates, and query rates | Open |
-| Packaging | Matching Cargo, desktop Nix, and Android source inclusion | Open |
+| Packaging | Matching Cargo, desktop Nix, and Android source inclusion | Source parity and native x86_64 Android verified; final checks open |
 | Delivery | Regression tests, broader validation, documentation, atomic verified pushes | In progress |
 
 ## Baseline Reproduction
@@ -149,6 +149,81 @@ is claimed for this patch.
 The query-local address map is not the only owner. `ClosestPeersIter::on_success`
 also inserts reported identities into its distance-ordered map. Limiting address
 vectors alone would leave cumulative candidate identity retention unbounded.
+
+### Routing-Address Owner
+
+Both runtime DHTs enable a 64-address limit per routing peer and a 2,048-byte
+limit per encoded address. The library's default remains unbounded unless its
+caller opts in. This is not yet an aggregate routing or query-memory budget.
+
+The standalone pre-network code-pairing host also uses this shared configuration,
+including disabled automatic bootstrap and protected seeds/candidate hints.
+Its explicit initial bootstrap remains enabled. A constructor-level test checks
+that seed retention and address limits apply before a network instance exists.
+
+| Mutation | Enforcement |
+| --- | --- |
+| Explicit insertion | Reject oversized input; rotate unprotected entries at capacity |
+| Confirmed connection | Filter oversized endpoints before entry creation; bounded insertion for existing/pending entries |
+| Address change | Bounded replacement, duplicate collapse, no replacement with oversized input |
+| Configured seed | Explicit protection, included in capacity, removable through normal APIs |
+| Churn | Refresh recency; prefer same-category eviction, then a category with multiple addresses |
+
+The loopback regression is now named
+`internal_kademlia_connection_addresses_remain_bounded`. It requires 64 retained
+addresses after 65 connections in both DHT layouts, replacing the old diagnostic's
+65-address expectation.
+
+The query-cache diagnostic uses a deliberately unbounded responder. Otherwise
+limiting the responder could hide the client's independent query-cache gap.
+Its 65-address client expectation remains diagnostic evidence, not desired behavior.
+
+#### Fixture Corrections
+
+- Pending insertion requires a connected candidate and a full bucket of disconnected entries; the fixture now injects that transition with deterministic identities.
+- The existing application-retention fixture now protects its synthetic configured seed in both owners, matching production startup; its expiry assertion is unchanged.
+- The pending-entry test injects oversized and valid address-change events without consuming routing events, then inspects the removed entry.
+
+Initial failed logs remain at `/tmp/p2p-vpn-kad-address-tests.log` and
+`/tmp/p2p-vpn-kad-address-workspace.log`. They are not counted as passing runs.
+
+Review added a regression for singleton-category preservation and migration
+recency. It failed before the eviction correction; the negative-control log is
+`/tmp/p2p-vpn-kad-address-churn-before.log`. Fresh migrations now move to the end
+of the eviction order, and protected entries remain ineligible eviction targets.
+
+#### Verified Routing Checks
+
+| Check | Result |
+| --- | --- |
+| Workspace | 1,254 passed; 23 opt-in tests ignored |
+| Routing/query loopback checks | Both passed in 3.38 seconds; routing bounded at 64, query diagnostic still at 65 |
+| Clippy correctness, suspicious, performance groups | Passed; existing style warnings remain |
+| Direct UDP namespace | Passed, 40.18 seconds |
+| Owned QUIC namespace | Passed, 16.08 seconds |
+| Forced-relay pairing namespace | Passed, 7.61 seconds |
+| Peerless code-pairing namespace | Passed, 13.32 seconds |
+| Native x86_64 Android library | Built in 41.89 seconds using cached Nix Rust and NDK tools |
+| Source parity | Desktop and both Android source inputs match |
+| Formatting / whitespace | Workspace and changed vendor files passed |
+
+Logs use `/tmp/p2p-vpn-kad-address-` with `workspace-verified.log`,
+`retention-verified.log`, `clippy-verified.log`, `udp-verified.log`,
+`quic-verified.log`, `relay-verified.log`, and `code-pairing-verified.log`.
+
+Android output: `/tmp/p2p-vpn-android-target/x86_64-linux-android/debug/libp2p_vpn_android.so`.
+SHA-256: `34124cb7599ac886bcfa6623034ad7828892428d194df6b887c716bc7c7748ef`.
+Log: `/tmp/p2p-vpn-kad-address-android-verified.log`.
+
+Nix source-parity output:
+`/nix/store/8bh8nb3y3kxcva5zn0p41in4h27x18k9-p2p-vpn-rust-test-sources`.
+This uses the cached-tool sandbox method described above, not a full package build.
+Log: `/tmp/p2p-vpn-kad-address-nix-sources-verified.log`.
+
+Namespace durations are smoke-test observations, not comparable performance
+measurements. Targets plus the repaired vendor cache occupy approximately 4.6 GiB.
+No device was deployed, no public-network test ran, and no aggregate memory ceiling
+or upstream standalone test-suite pass is claimed by these application checks.
 
 ## Patch Constraints
 

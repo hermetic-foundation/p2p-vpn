@@ -19,11 +19,17 @@ changelog, generated protocol source, and tests.
 
 | File | Patch |
 | --- | --- |
-| `src/behaviour.rs` | Expose the existing automatic-bootstrap setter outside library tests. |
+| `src/behaviour.rs` | Expose automatic-bootstrap control; apply routing-address limits to explicit, confirmed, and pending entries; support protected seeds. |
+| `src/addresses.rs` | Bounded insertion/replacement, category-aware churn rotation, size rejection, and explicit seed protection. |
+| `src/lib.rs` | Export the optional `AddressLimits` configuration type. |
 
 The library default is unchanged. p2p-vpn disables automatic and periodic bootstrap
 explicitly so its scheduler owns bootstrap initiation. Explicit `bootstrap()` is
 unchanged; DHT wire messages and protocol names are unchanged.
+
+p2p-vpn opts into 64 retained routing addresses per peer and 2,048 encoded bytes
+per address. Configured seeds count toward the same budget, survive churn, and
+remain explicitly removable. Query caches are separate and not bounded by this patch.
 
 ## Build Integration
 
@@ -39,5 +45,5 @@ unchanged; DHT wire messages and protocol names are unchanged.
 3. Reapply only required fixes and update this record.
 4. Run discovery, pairing, recovery, source-parity, and native-target checks.
 
-The bootstrap patch does not impose internal address or query-cache limits.
-Those remain tracked in `docs/developer/kademlia-resource-plan.md` at the repo root.
+Aggregate routing storage, query-cache limits, and sustained measurements remain
+tracked in `docs/developer/kademlia-resource-plan.md` at the repo root.

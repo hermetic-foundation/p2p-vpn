@@ -32556,7 +32556,7 @@ mod tests {
                 node.swarm
                     .behaviour_mut()
                     .kad
-                    .add_address(&remote, configured_address);
+                    .add_protected_address(&remote, configured_address);
             }
             let initial_kad_addresses = kad_address_count(&mut node.swarm);
             eprintln!(

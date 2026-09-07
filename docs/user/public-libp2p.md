@@ -46,6 +46,12 @@ server duties or advertise itself as a Kademlia server.
 | Query timeout | Stale cycle queries are canceled after 90 seconds. |
 | Healthy overlay | Active maintenance is canceled and public discovery rests. |
 | Offline peer recovery | Starts at 10 seconds, then backs off to five minutes. |
+| Routing addresses | At most 64 per peer, each at most 2,048 encoded bytes. |
+| Configured routing seeds | Protected from address churn; count toward the same limit. |
+
+Routing-address limits apply to both DHTs and standalone code pairing, including internally learned addresses.
+At capacity, unprotected addresses rotate while preserving LAN and relay alternatives
+where possible. These limits do not authorize peers or change minimal configuration.
 
 The five-second scheduler only evaluates state.
 
