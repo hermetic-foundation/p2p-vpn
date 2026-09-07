@@ -4822,6 +4822,13 @@ impl PairingAcceptDiagnostics {
         self.discovery_queries = self.discovery_queries.saturating_add(1);
     }
 
+    fn record_discovery_query_start<T, E: std::fmt::Debug>(&mut self, result: Result<T, E>) {
+        match result {
+            Ok(_) => self.record_discovery_query(),
+            Err(error) => self.record_discovery_query_failure(&error),
+        }
+    }
+
     fn record_discovery_query_failure<E: std::fmt::Debug>(&mut self, error: &E) {
         self.discovery_query_failures = self.discovery_query_failures.saturating_add(1);
         self.last_discovery_failure = Some(short_diagnostic_error(error));
@@ -4937,28 +4944,38 @@ fn start_pairing_discovery_queries(
     }
 
     if let Some(rendezvous_key) = node.kademlia_rendezvous_key.clone() {
-        node.swarm.behaviour_mut().kad.get_providers(rendezvous_key);
-        diagnostics.record_discovery_query();
+        diagnostics.record_discovery_query_start(
+            node.swarm
+                .behaviour_mut()
+                .kad
+                .try_start_query(|kad| kad.get_providers(rendezvous_key)),
+        );
     }
 
-    node.swarm
+    diagnostics.record_discovery_query_start(node.swarm.behaviour_mut().kad.try_start_query(
+        |kad| {
+            kad.get_record(p2p_vpn::runtime::p2p::kademlia_peer_addresses_key(
+                &offer.payload.network_name,
+                None,
+                inviter_peer,
+            ))
+        },
+    ));
+
+    diagnostics.record_discovery_query_start(
+        node.swarm
+            .behaviour_mut()
+            .kad
+            .try_start_query(|kad| kad.get_closest_peers(inviter_peer)),
+    );
+
+    match node
+        .swarm
         .behaviour_mut()
         .kad
-        .get_record(p2p_vpn::runtime::p2p::kademlia_peer_addresses_key(
-            &offer.payload.network_name,
-            None,
-            inviter_peer,
-        ));
-    diagnostics.record_discovery_query();
-
-    node.swarm
-        .behaviour_mut()
-        .kad
-        .get_closest_peers(inviter_peer);
-    diagnostics.record_discovery_query();
-
-    match node.swarm.behaviour_mut().kad.bootstrap() {
-        Ok(_) => diagnostics.record_discovery_query(),
+        .try_start_query(kad::Behaviour::bootstrap)
+    {
+        Ok(result) => diagnostics.record_discovery_query_start(result),
         Err(error) => diagnostics.record_discovery_query_failure(&error),
     }
 }
@@ -5014,8 +5031,12 @@ fn handle_pairing_kademlia_query_result(
             diagnostics.record_kademlia_provider_result(providers.len());
             for provider in providers {
                 if provider == inviter_peer {
-                    node.swarm.behaviour_mut().kad.get_closest_peers(provider);
-                    diagnostics.record_discovery_query();
+                    diagnostics.record_discovery_query_start(
+                        node.swarm
+                            .behaviour_mut()
+                            .kad
+                            .try_start_query(|kad| kad.get_closest_peers(provider)),
+                    );
                 } else {
                     diagnostics.record_ignored_kademlia_provider();
                 }

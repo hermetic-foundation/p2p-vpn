@@ -296,15 +296,82 @@ Logs use `/tmp/p2p-vpn-kad-pool-admission-` with suffixes
 `workspace-final.log`, `quic.log`, `move.log`, and `clippy-final.log`.
 Normal namespace recovery does not prove recovery under aggregate overload.
 
-### Remaining Integration
+### Production Integration
 
-The production constructor does **not yet enable this cap**. First update every
-production start site to handle admission errors, including standalone pairing,
-recovery, maintenance, address publication, and diagnostic queries.
+The shared production constructor enables a 32-entry cap per DHT instance.
+It includes finished entries awaiting retirement. A separate public-pairing DHT
+has its own budget; no JSON or Nix override is required.
+
+The cap leaves headroom above the small scheduled foreground/background sets
+while limiting retained query addresses to 8 MiB per DHT (32 times 256 KiB).
+That calculation excludes pending RPCs, metadata, and queued results: this is
+not yet a total query-memory bound.
+
+Standalone pairing uses checked starts: rejected provider lookups retry at the next lookup interval
+without retaining a query ID or consuming the public-lookup attempt budget.
+
+Targeted peer recovery also uses checked starts. Capacity rejection preserves
+retry eligibility and does not record a nonexistent query or start its cooldown.
+Already admitted unrelated foreground queries remain retained.
+
+Address publication returns capacity rejection separately from no-address or
+encoding failures. Rejection preserves the pending update, respects the existing
+retry interval, and regenerates the current address snapshot on retry.
+
+Maintenance provider, membership, bootstrap, and relay queries now use checked
+starts, including AutoNAT-triggered relay discovery. Query-start counters only
+advance after admission; existing store/bootstrap failures remain distinct.
+
+Diagnostic relay scans and membership checks use checked starts. Their existing
+started flags reflect admission; membership publication reports capacity failure
+through its existing error field without writing a local record.
+
+Daemon pairing provider publication uses checked starts. Capacity rejection
+schedules a retry without consuming the publication-attempt budget or retaining
+a query; real publication failures keep their existing backoff and counters.
+Rejected join lookups remain eligible for a later driver tick without owning a
+query or incrementing lookup counters.
+
+The CLI pairing-accept path also uses checked starts for provider, address-record,
+closest-peer, and bootstrap discovery. Diagnostics distinguish rejected starts
+from launched queries, including provider-result-triggered closest-peer queries.
+
+The caller audit now covers `src/main.rs` as well as `src/runtime`. Maintenance
+rotation has a saturation/release regression for relay and provider work.
+Membership publication has a signed-record saturation/release regression.
+Pairing provider drivers cover both versions with shared and separate public
+DHTs, including retry delay, local-store effects, and resumed admission.
+
+Focused logs: `/tmp/p2p-vpn-kad-provider-driver-saturation.log` and
+`/tmp/p2p-vpn-kad-membership-saturation.log`. Both passed; these tests use
+explicit test caps and do not prove production activation.
 
 Pool-entry count alone does not bound queued query results, query metadata,
-or pending RPC payloads. Those owners, production activation, and combined
+or pending RPC payloads. Those owners and combined
 overload/recovery tests remain required before completing this goal.
+
+### Production Admission Evidence
+
+| Check | Result |
+| --- | --- |
+| Offline workspace tests | 1,293 passed; 22 opt-in tests ignored |
+| Namespace DHT discovery, peerless pairing, forced-relay pairing, owned QUIC | All four passed |
+| Namespace relay/direct network move | Passed |
+| Android x86_64 native library | Compiled offline; four existing warnings |
+| Nix desktop/Android source parity | Passed with cached tool overrides |
+| Root Rust formatting and whitespace | Passed |
+| Workspace Clippy correctness, suspicious, and perf groups | Passed; style warnings remain |
+
+Logs use `/tmp/p2p-vpn-kad-production-cap-` with suffixes `workspace.log`,
+`namespace.log`, `move.log`, `android.log`, `nix.log`, and `clippy.log`.
+
+The first activation run exposed a handler-test setup conflict: its 64 requests
+were stopped by the new 32-query limit. That test now explicitly allows 64 queries
+to exercise handler negotiation/expiry; constructor tests assert production caps
+of 32 for primary, separate public-pairing, and standalone pairing DHTs.
+
+No full Nix package, APK, ARM64 build, or physical deployment was performed.
+Normal namespace tests do not prove VPN continuity during aggregate overload.
 
 ## Implementation Order
 

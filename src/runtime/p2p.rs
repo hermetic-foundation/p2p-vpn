@@ -40,6 +40,7 @@ const CONNECTION_PING_TIMEOUT: Duration = Duration::from_secs(20);
 const SWARM_IDLE_CONNECTION_TIMEOUT: Duration = Duration::from_secs(60);
 const DIAL_CONCURRENCY_FACTOR: NonZeroU8 = NonZeroU8::MIN;
 const KADEMLIA_QUERY_PARALLELISM: NonZeroUsize = NonZeroUsize::MIN;
+const KADEMLIA_QUERY_POOL_CAPACITY: NonZeroUsize = NonZeroUsize::new(32).unwrap();
 const KADEMLIA_QUERY_CANDIDATES: usize = 256;
 const KADEMLIA_QUERY_ADDRESS_BYTES: usize = 256 * 1024;
 
@@ -441,6 +442,7 @@ pub(super) fn controlled_kademlia_config(protocol: StreamProtocol) -> kad::Confi
     );
     config
         .set_parallelism(KADEMLIA_QUERY_PARALLELISM)
+        .set_query_pool_capacity(KADEMLIA_QUERY_POOL_CAPACITY)
         .set_handler_queue_limits(kad::HandlerQueueLimits::new(
             NonZeroUsize::new(64).unwrap(),
             NonZeroUsize::new(256 * 1024).unwrap(),
@@ -811,6 +813,10 @@ mod tests {
         assert_eq!(node.swarm.behaviour().kad.mode(), kad::Mode::Client);
         assert!(!node.swarm.behaviour().pairing_kad.is_enabled());
         assert!(public_pairing_uses_primary_kad(node.swarm.behaviour()));
+        assert_eq!(
+            node.swarm.behaviour().kad.query_pool_usage().capacity,
+            Some(32)
+        );
         assert!(!node.startup.kademlia.rendezvous_advertise_started);
         assert!(!node.startup.kademlia.rendezvous_lookup_started);
     }
@@ -843,6 +849,20 @@ mod tests {
 
         assert_eq!(node.swarm.behaviour().kad.mode(), kad::Mode::Server);
         assert!(node.swarm.behaviour().pairing_kad.is_enabled());
+        assert_eq!(
+            node.swarm.behaviour().kad.query_pool_usage().capacity,
+            Some(32)
+        );
+        assert_eq!(
+            node.swarm
+                .behaviour()
+                .pairing_kad
+                .as_ref()
+                .unwrap()
+                .query_pool_usage()
+                .capacity,
+            Some(32)
+        );
     }
 
     #[test]
@@ -1608,6 +1628,8 @@ mod tests {
         let mut config = controlled_kademlia_config(StreamProtocol::new(
             crate::config::PUBLIC_IPFS_KADEMLIA_PROTOCOL,
         ));
+        // Isolate handler retirement with 32 active and 32 waiting requests.
+        config.set_query_pool_capacity(NonZeroUsize::new(64).unwrap());
         config.set_substreams_timeout(Duration::from_millis(100));
         let mut kad =
             kad::Behaviour::with_config(local, kad::store::MemoryStore::new(local), config);

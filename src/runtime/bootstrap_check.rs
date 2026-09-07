@@ -1996,8 +1996,11 @@ fn start_public_relay_closest_peer_lookup(node: &mut P2pNode) -> bool {
     }
 
     let local_peer = *node.swarm.local_peer_id();
-    node.swarm.behaviour_mut().kad.get_closest_peers(local_peer);
-    true
+    node.swarm
+        .behaviour_mut()
+        .kad
+        .try_start_query(|kad| kad.get_closest_peers(local_peer))
+        .is_ok()
 }
 
 async fn poll_public_relay_scan_events(
@@ -2523,11 +2526,15 @@ fn start_bootstrap_membership_record_dht(
     }
 
     let record_key = kademlia_membership_records_key(&config.network.name, membership_tag);
-    result.membership_records.lookup_started = true;
-    node.swarm
+    match node
+        .swarm
         .behaviour_mut()
         .kad
-        .get_record(record_key.clone());
+        .try_start_query(|kad| kad.get_record(record_key.clone()))
+    {
+        Ok(_) => result.membership_records.lookup_started = true,
+        Err(_) => result.membership_records.last_error = Some("lookup:query_capacity".to_owned()),
+    }
 
     let records = config
         .network
@@ -2538,21 +2545,25 @@ fn start_bootstrap_membership_record_dht(
         .collect::<Vec<_>>();
     match encode_bootstrap_membership_records(&config.network.name, membership_tag, records) {
         Ok(value) => {
-            result.membership_records.publish_started = true;
             let record = kad::Record {
                 key: record_key,
                 value,
                 publisher: Some(*node.swarm.local_peer_id()),
                 expires: None,
             };
-            if let Err(error) = node
+            match node
                 .swarm
                 .behaviour_mut()
                 .kad
-                .put_record(record, kad::Quorum::One)
+                .try_start_query(|kad| kad.put_record(record, kad::Quorum::One))
+                .map_err(|_| "publish:query_capacity".to_owned())
+                .and_then(|result| result.map_err(|error| format!("{error:?}")))
             {
-                result.membership_records.publish_failures += 1;
-                result.membership_records.last_error = Some(format!("{error:?}"));
+                Ok(_) => result.membership_records.publish_started = true,
+                Err(error) => {
+                    result.membership_records.publish_failures += 1;
+                    result.membership_records.last_error = Some(error);
+                }
             }
         }
         Err(error) => {
@@ -3848,6 +3859,72 @@ mod tests {
         assert!(lines.contains(&"kademlia membership records found: 0".to_owned()));
         assert!(lines.contains(&"kademlia membership records verified: 0".to_owned()));
         assert!(lines.contains(&"kademlia membership records accepted: 0".to_owned()));
+    }
+
+    #[tokio::test]
+    async fn bootstrap_queries_report_capacity_rejection_and_resume() {
+        use libp2p::kad::store::RecordStore;
+        let mut config = config_with_bootstrap_peer(peer_id(), &"/memory/9".parse().unwrap());
+        config.network.discovery.kademlia = true;
+        let issuer = NodeIdentity::generate_ed25519().unwrap();
+        config.network.member_records.push(
+            issue_membership_record_at(
+                &issuer,
+                MembershipRecordOptions {
+                    network_name: "lab".to_owned(),
+                    member: issuer.clone(),
+                    membership_epoch: 1,
+                    sequence: 1,
+                    roles: vec![MembershipRole::OverlayMember],
+                    route_grants: Vec::new(),
+                    expires_at_unix_seconds: None,
+                },
+                1_000,
+            )
+            .unwrap(),
+        );
+        let mut node = build_node(&bootstrap_check_host_config(&config).unwrap()).unwrap();
+        let local = *node.swarm.local_peer_id();
+        let mut kad_config = crate::runtime::p2p::controlled_kademlia_config(
+            libp2p::StreamProtocol::new(crate::config::PUBLIC_IPFS_KADEMLIA_PROTOCOL),
+        );
+        kad_config.set_query_pool_capacity(std::num::NonZeroUsize::new(2).unwrap());
+        node.swarm.behaviour_mut().kad =
+            kad::Behaviour::with_config(local, kad::store::MemoryStore::new(local), kad_config);
+        let held = [
+            node.swarm.behaviour_mut().kad.get_closest_peers(peer_id()),
+            node.swarm.behaviour_mut().kad.get_closest_peers(peer_id()),
+        ];
+        assert!(!start_public_relay_closest_peer_lookup(&mut node));
+        let mut rejected = BootstrapPollResult::default();
+        start_bootstrap_membership_record_dht(&mut node, &config, None, &mut rejected);
+        assert!(!rejected.membership_records.lookup_started);
+        assert!(!rejected.membership_records.publish_started);
+        assert_eq!(rejected.membership_records.publish_failures, 1);
+        assert_eq!(
+            rejected.membership_records.last_error.as_deref(),
+            Some("publish:query_capacity")
+        );
+        assert_eq!(node.swarm.behaviour().kad.query_pool_usage().retained, 2);
+        let key = kademlia_membership_records_key("lab", None);
+        assert!(
+            node.swarm
+                .behaviour_mut()
+                .kad
+                .store_mut()
+                .get(&key)
+                .is_none()
+        );
+        for query in held {
+            assert!(node.swarm.behaviour_mut().kad.cancel_query(&query));
+        }
+        let mut admitted = BootstrapPollResult::default();
+        start_bootstrap_membership_record_dht(&mut node, &config, None, &mut admitted);
+        assert!(admitted.membership_records.lookup_started);
+        assert!(admitted.membership_records.publish_started);
+        assert_eq!(admitted.membership_records.publish_failures, 0);
+        assert!(admitted.membership_records.last_error.is_none());
+        assert_eq!(node.swarm.behaviour().kad.query_pool_usage().retained, 2);
     }
 
     #[test]

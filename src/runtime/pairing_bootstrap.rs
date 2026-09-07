@@ -476,7 +476,10 @@ fn build_bootstrap_swarm(
                 .kad
                 .add_protected_address(&peer, address);
         }
-        let _ = swarm.behaviour_mut().kad.bootstrap();
+        let _ = swarm
+            .behaviour_mut()
+            .kad
+            .try_start_query(kad::Behaviour::bootstrap);
         swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse::<Multiaddr>()?)?;
         swarm.listen_on("/ip4/0.0.0.0/udp/0/quic-v1".parse::<Multiaddr>()?)?;
         Ok(swarm)
@@ -503,13 +506,15 @@ fn drive_public_lookup(
     {
         return;
     }
-    let query_id = swarm
-        .behaviour_mut()
-        .kad
-        .get_providers(kademlia_pairing_code_v2_key(&code.global_locator()));
+    let query = swarm.behaviour_mut().kad.try_start_query(|kad| {
+        kad.get_providers(kademlia_pairing_code_v2_key(&code.global_locator()))
+    });
+    state.next_public_lookup_at = now + PUBLIC_LOOKUP_INTERVAL;
+    let Ok(query_id) = query else {
+        return;
+    };
     state.public_lookup_ids.insert(query_id);
     state.public_lookup_attempts = state.public_lookup_attempts.saturating_add(1);
-    state.next_public_lookup_at = now + PUBLIC_LOOKUP_INTERVAL;
 }
 
 fn drive_hellos(
@@ -842,6 +847,40 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn standalone_public_lookup_retries_after_query_capacity_is_released() {
+        let identity = NodeIdentity::generate_ed25519().unwrap();
+        let mut swarm = build_bootstrap_swarm(&identity).unwrap();
+        let local = *swarm.local_peer_id();
+        let mut config =
+            controlled_kademlia_config(StreamProtocol::new(PUBLIC_IPFS_KADEMLIA_PROTOCOL));
+        config.set_query_pool_capacity(std::num::NonZeroUsize::MIN);
+        swarm.behaviour_mut().kad =
+            kad::Behaviour::with_config(local, kad::store::MemoryStore::new(local), config);
+        let held = swarm
+            .behaviour_mut()
+            .kad
+            .get_closest_peers(PeerId::random());
+        let now = Instant::now();
+        let mut state = BootstrapState::new(now, Duration::ZERO);
+        let code = PairingCode::generate();
+
+        drive_public_lookup(&mut swarm, &mut state, &code, now);
+        assert!(state.public_lookup_ids.is_empty());
+        assert_eq!(state.public_lookup_attempts, 0);
+        assert_eq!(state.next_public_lookup_at, now + PUBLIC_LOOKUP_INTERVAL);
+        assert!(swarm.behaviour_mut().kad.cancel_query(&held));
+        drive_public_lookup(&mut swarm, &mut state, &code, now);
+        assert!(state.public_lookup_ids.is_empty());
+
+        drive_public_lookup(&mut swarm, &mut state, &code, now + PUBLIC_LOOKUP_INTERVAL);
+        assert_eq!(state.public_lookup_attempts, 1);
+        assert_eq!(state.public_lookup_ids.len(), 1);
+        let query = *state.public_lookup_ids.iter().next().unwrap();
+        assert!(swarm.behaviour().kad.query_is_retained(&query));
+        assert_eq!(swarm.behaviour().kad.query_pool_usage().retained, 1);
+    }
+
+    #[tokio::test]
     async fn standalone_bootstrap_bounds_routing_addresses_and_preserves_seed() {
         let identity = NodeIdentity::generate_ed25519().unwrap();
         let mut swarm = build_bootstrap_swarm(&identity).unwrap();
@@ -851,6 +890,7 @@ mod tests {
             .peer_address()
             .unwrap();
         let kad = &mut swarm.behaviour_mut().kad;
+        assert_eq!(kad.query_pool_usage().capacity, Some(32));
         for index in 1..=100 {
             kad.add_address(&peer, format!("/memory/{index}").parse().unwrap());
         }

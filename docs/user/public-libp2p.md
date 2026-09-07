@@ -51,6 +51,7 @@ server duties or advertise itself as a Kademlia server.
 | Configured routing seeds | Protected from address churn; count toward the same limit. |
 | Query candidates | At most 256 identities per query phase, including failed candidates. |
 | Query address storage | At most 256 KiB of encoded addresses per phase, with the same per-peer limits. |
+| Retained queries | At most 32 per DHT, including finished queries awaiting retirement. |
 | Library background jobs | One new query per poll, only below two existing queries; provider and record jobs share the allowance. |
 | Waiting DHT requests | Per connection: at most 64 requests and 256 KiB of retained payload data; queued requests expire after ten seconds. |
 | Aggregate routing storage | Per DHT: 512 retained entry versions and 2 MiB of encoded address buffers, including pending entries and routing snapshots. |
@@ -61,7 +62,12 @@ where possible. These limits do not authorize peers or change minimal configurat
 
 Query limits also apply to standalone code pairing. Excess candidates and
 addresses are ignored; unusually large searches can return fewer results.
-These are per-query limits, not a total process-memory or connection limit.
+The retained-query cap applies independently to each DHT. Neither it nor the
+per-query limits establish a total process-memory or connection limit.
+
+When the query pool is full, discovery and publication retry later. Pending
+address updates retain the latest state, and pairing publication deferrals do
+not consume the attempt budget. Bootstrap diagnostics report rejected starts.
 
 A full DHT request queue rejects new work without closing the connection used
 by VPN traffic. Rejection reporting is bounded too; extreme overload may wait

@@ -70,8 +70,9 @@ retirement. Background jobs preserve pending work while capacity is unavailable.
 
 Legacy starts rejected by this opt-in cap return an unretained ID without a
 completion event; local result events and bootstrap suppression are not retained
-for that ID. No rejection queue is created. Production activation is pending
-checked-caller integration and additional query-payload/result bounds.
+for that ID. No rejection queue is created. The application constructor enables
+32 retained queries per DHT and application starts use checked admission.
+Additional query-payload/result bounds remain unfinished.
 
 Provider and record jobs share background admission capacity and alternate first
 access. Defaults remain a 100-query ceiling and batch size ten, but the batch is

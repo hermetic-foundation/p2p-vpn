@@ -1966,6 +1966,22 @@ impl CodePairingSessions {
         }
     }
 
+    pub fn defer_open_provider_start(&mut self, locator: &str, now: Instant) {
+        if let Some(operation) = self.open.as_mut()
+            && operation.locator == locator
+            && operation.terminal.is_none()
+            && operation.completed.is_none()
+            && operation.provider_query.is_none()
+        {
+            operation.next_provider_attempt_at = Some(
+                now + code_pairing_retry_delay(
+                    operation.id.as_bytes(),
+                    operation.provider_attempts,
+                ),
+            );
+        }
+    }
+
     pub fn mark_open_provider_start_failed(&mut self, locator: &str, now: Instant) {
         if let Some(operation) = self.open.as_mut()
             && operation.locator == locator
@@ -2036,6 +2052,22 @@ impl CodePairingSessions {
         {
             operation.v2_provider_attempts = operation.v2_provider_attempts.saturating_add(1);
             operation.v2_provider_query = Some(query_id);
+            operation.v2_next_provider_attempt_at = Some(
+                now + code_pairing_retry_delay(
+                    operation.v2_locator.as_bytes(),
+                    operation.v2_provider_attempts,
+                ),
+            );
+        }
+    }
+
+    pub fn defer_open_provider_v2_start(&mut self, locator: &str, now: Instant) {
+        if let Some(operation) = self.open.as_mut()
+            && operation.v2_locator == locator
+            && operation.terminal.is_none()
+            && operation.completed.is_none()
+            && operation.v2_provider_query.is_none()
+        {
             operation.v2_next_provider_attempt_at = Some(
                 now + code_pairing_retry_delay(
                     operation.v2_locator.as_bytes(),
@@ -5073,6 +5105,40 @@ mod tests {
             sessions.lan_addresses(candidate).len(),
             MAX_CODE_PAIRING_LAN_ADDRESSES_PER_PEER
         );
+    }
+
+    #[test]
+    fn provider_capacity_deferral_preserves_attempt_budget() {
+        let mut sessions = CodePairingSessions::new();
+        let now = Instant::now();
+        sessions.open("runners", 600, 1_000, now).unwrap();
+        let mut tick = now + CODE_PAIRING_LAN_GRACE;
+        for _ in 0..=MAX_CODE_PAIRING_PROVIDER_ATTEMPTS {
+            let locator = sessions
+                .should_start_open_provider(tick)
+                .unwrap()
+                .to_owned();
+            let v2_locator = sessions
+                .should_start_open_provider_v2(tick)
+                .unwrap()
+                .to_owned();
+            sessions.defer_open_provider_start(&locator, tick);
+            sessions.defer_open_provider_v2_start(&v2_locator, tick);
+            assert!(sessions.should_start_open_provider(tick).is_none());
+            assert!(sessions.should_start_open_provider_v2(tick).is_none());
+            let operation = sessions.open.as_ref().unwrap();
+            assert_eq!(operation.provider_attempts, 0);
+            assert_eq!(operation.v2_provider_attempts, 0);
+            assert!(operation.provider_query.is_none());
+            assert!(operation.v2_provider_query.is_none());
+            tick = operation
+                .next_provider_attempt_at
+                .unwrap()
+                .max(operation.v2_next_provider_attempt_at.unwrap());
+        }
+        assert!(tick < now + Duration::from_secs(600));
+        assert!(sessions.should_start_open_provider(tick).is_some());
+        assert!(sessions.should_start_open_provider_v2(tick).is_some());
     }
 
     #[test]
