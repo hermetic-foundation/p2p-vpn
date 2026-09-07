@@ -990,6 +990,34 @@ pub async fn run_config_until_with_runtime_platform<Shutdown>(
 where
     Shutdown: Future<Output = ShutdownReason> + Send,
 {
+    RUNTIME_LOG_NETWORK
+        .scope(
+            config.network.name.clone(),
+            run_config_until_with_runtime_platform_scoped(
+                config,
+                platform,
+                metrics_interval,
+                control_socket,
+                pairing_state_path,
+                membership_state_path,
+                shutdown,
+            ),
+        )
+        .await
+}
+
+async fn run_config_until_with_runtime_platform_scoped<Shutdown>(
+    config: Config,
+    platform: RuntimePlatform,
+    metrics_interval: Option<Duration>,
+    control_socket: Option<PathBuf>,
+    pairing_state_path: Option<PathBuf>,
+    membership_state_path: Option<PathBuf>,
+    shutdown: Shutdown,
+) -> Result<(), RunnerError>
+where
+    Shutdown: Future<Output = ShutdownReason> + Send,
+{
     let RuntimePlatform {
         packet_io,
         route_controller,
@@ -6404,6 +6432,10 @@ impl LogLevel {
     }
 }
 
+tokio::task_local! {
+    static RUNTIME_LOG_NETWORK: String;
+}
+
 fn log_runtime_event(level: LogLevel, event: &str, fields: &[(&str, &str)]) {
     let line = runtime_log_line(level, event, fields);
     #[cfg(target_os = "android")]
@@ -6418,6 +6450,10 @@ fn log_runtime_event(level: LogLevel, event: &str, fields: &[(&str, &str)]) {
 
 fn runtime_log_line(level: LogLevel, event: &str, fields: &[(&str, &str)]) -> String {
     let mut line = format!("level={} event={}", level.as_str(), event);
+    let _ = RUNTIME_LOG_NETWORK.try_with(|network| {
+        line.push_str(" runtime_network=");
+        push_log_value(&mut line, network);
+    });
     for (key, value) in fields {
         line.push(' ');
         line.push_str(key);
@@ -26301,6 +26337,53 @@ mod tests {
             ),
             "level=warn event=connection_closed peer=12D3KooWPeer error=\"dial failed \\\"hard\\\"\""
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn runtime_log_network_scope_isolated_across_concurrent_tasks() {
+        let mut tasks = Vec::new();
+        for network in ["alpha", "beta"] {
+            tasks.push(tokio::spawn(RUNTIME_LOG_NETWORK.scope(
+                network.to_owned(),
+                async move {
+                    for _ in 0..32 {
+                        tokio::task::yield_now().await;
+                        assert_eq!(
+                            runtime_log_line(LogLevel::Info, "probe", &[]),
+                            format!("level=info event=probe runtime_network={network}"),
+                        );
+                    }
+                },
+            )));
+        }
+        for task in tasks {
+            task.await.expect("scoped log task");
+        }
+        assert_eq!(
+            runtime_log_line(LogLevel::Info, "probe", &[]),
+            "level=info event=probe"
+        );
+    }
+
+    #[tokio::test]
+    async fn runtime_log_network_scope_quotes_and_restores_nested_context() {
+        RUNTIME_LOG_NETWORK
+            .scope("outer".to_owned(), async {
+                RUNTIME_LOG_NETWORK
+                    .scope("inner\nname".to_owned(), async {
+                        assert_eq!(
+                            runtime_log_line(LogLevel::Info, "probe", &[]),
+                            "level=info event=probe runtime_network=\"inner\\nname\""
+                        );
+                    })
+                    .await;
+                assert_eq!(
+                    runtime_log_line(LogLevel::Info, "probe", &[]),
+                    "level=info event=probe runtime_network=outer"
+                );
+            })
+            .await;
+        assert!(RUNTIME_LOG_NETWORK.try_with(String::clone).is_err());
     }
 
     #[test]

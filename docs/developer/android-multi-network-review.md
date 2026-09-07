@@ -25,6 +25,22 @@ not why fresh reachable addresses failed to restore beta.
 - APK and runtime binaries match the preceding isolation-failure run below.
 - Next: investigate beta's post-reboot address refresh and recovery scheduling.
 
+### Runtime Event Attribution
+
+Runtime event-loop logs now include `runtime_network`, scoped to the runtime
+future rather than its worker thread. Tokio can move a future between workers;
+thread IDs in older Android logs cannot reliably identify a network.
+
+- Network names use the existing log-value escaping; no keys or payloads are added.
+- Linux and Android use the same additive field, including startup failures.
+- Independent spawned tasks and library logs do not inherit this task-local scope.
+- A fixture's bootstrap and overlay runtimes share a network name; this label alone does not distinguish those roles.
+- This is diagnostic instrumentation, not a recovery fix; device verification remains open.
+
+Verification passed: three focused log tests, the workspace suite (1,231 passed,
+19 opt-in ignored), required Clippy categories, Rust formatting, and the Nix
+`rust-test-sources` check. No emulator or physical-device result covers this change yet.
+
 ## Earlier Isolation Failure
 
 The rebuilt APK and Linux fixture at `fe950142` failed the final isolation stage

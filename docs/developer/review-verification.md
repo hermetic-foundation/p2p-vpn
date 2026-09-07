@@ -18,7 +18,7 @@ Earlier milestones remain historical evidence, not automatic proof for later cha
 
 | Area | Evidence | Limitation |
 | --- | --- | --- |
-| Workspace | Last full run: 1,226 passed, 18 opt-in tests ignored, including live pairing retry through durable completion and persisted restart after partial route/rollback failure. Diagnostics run separately. | Native Linux toolchain; not an Android device run. |
+| Workspace | Last full run: 1,231 passed, 19 opt-in tests ignored, including task-scoped network logs, bounded fixture traces, live pairing retry, and persisted restart after partial route/rollback failure. Diagnostics run separately. | Native Linux toolchain; not an Android device run. |
 | Namespace integration | All 11 pass with stale-response cleanup and isolated relay-LAN endpoint ports. Logs: `/tmp/p2p-vpn-review-stale-packet-isolated-namespace.log`. | Earlier 10/11 run exposed a direct hole-punch bypass in the fixture; see [isolation evidence](testing.md#namespace-e2e). Controlled topology, not public NAT or saturation evidence. |
 | Static analysis | Required correctness, suspicious, and performance Clippy groups pass. | Existing non-fatal style warnings remain. |
 | Formatting | Changed Rust files pass rustfmt; whitespace checks pass. | Not proof of the complete flake `fmt` target. |
