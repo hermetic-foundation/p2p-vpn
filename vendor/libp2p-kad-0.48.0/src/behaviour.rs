@@ -2914,7 +2914,7 @@ where
 
             // Look for a finished query.
             loop {
-                match self.queries.poll(now) {
+                match self.queries.poll(now, cx) {
                     QueryPoolState::Finished(q) => {
                         if let Some(event) = self.query_finished(q) {
                             return Poll::Ready(ToSwarm::GenerateEvent(event));

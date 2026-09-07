@@ -2325,6 +2325,45 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn pending_query_deadline_wakes_without_network_events() {
+        use libp2p::swarm::{NetworkBehaviour, ToSwarm};
+        let local = PeerId::random();
+        let mut config = controlled_kademlia_config(StreamProtocol::new(
+            crate::config::PUBLIC_IPFS_KADEMLIA_PROTOCOL,
+        ));
+        config.set_query_timeout(Duration::from_millis(50));
+        let mut kad =
+            kad::Behaviour::with_config(local, kad::store::MemoryStore::new(local), config);
+        let query = kad.put_record_to(
+            kad::Record::new(vec![1], vec![1]),
+            [PeerId::random()].into_iter(),
+            kad::Quorum::One,
+        );
+        let first = futures::future::poll_fn(|cx| kad.poll(cx)).await;
+        assert!(matches!(first, ToSwarm::Dial { .. }));
+        assert_eq!(kad.pending_rpc_usage().requests, 1);
+        // Intentionally never deliver the dial result or a network event.
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            futures::future::poll_fn(|cx| kad.poll(cx)),
+        )
+        .await
+        .expect("idle query must wake itself at its deadline");
+        assert!(
+            matches!(result, ToSwarm::GenerateEvent(kad::Event::OutboundQueryProgressed {
+            id, result: kad::QueryResult::PutRecord(Err(kad::PutRecordError::Timeout { .. })), ..
+        }) if id == query)
+        );
+        assert_eq!(kad.query_pool_usage().retained, 0);
+        assert_eq!(kad.pending_rpc_usage().requests, 0);
+        assert_eq!(kad.pending_rpc_usage().bytes, 0);
+        let next = kad
+            .try_start_query(|kad| kad.get_closest_peers(PeerId::random()))
+            .unwrap();
+        assert!(kad.cancel_query(&next));
+    }
+
     #[test]
     fn query_pool_capacity_counts_finished_entries_and_rejects_without_side_effects() {
         use libp2p::kad::store::RecordStore;
@@ -3877,6 +3916,209 @@ mod tests {
                 started.elapsed().as_millis()
             );
         }
+    }
+
+    #[tokio::test]
+    async fn kademlia_overload_preserves_shared_tcp_and_quic_packet_connections() {
+        for listen in ["/ip4/127.0.0.1/tcp/0", "/ip4/127.0.0.1/udp/0/quic-v1"] {
+            let mut listener = build_node(&retention_diagnostic_config(false)).unwrap();
+            let mut dialer = build_node(&retention_diagnostic_config(false)).unwrap();
+            for node in [&mut listener, &mut dialer] {
+                let mut config = controlled_kademlia_config(StreamProtocol::new(
+                    crate::config::PUBLIC_IPFS_KADEMLIA_PROTOCOL,
+                ));
+                // Small handler payloads isolate overload from the wire/store limits.
+                config.set_handler_queue_limits(kad::HandlerQueueLimits::new(
+                    NonZeroUsize::new(4).unwrap(),
+                    NonZeroUsize::new(512).unwrap(),
+                ));
+                config.set_query_timeout(Duration::from_millis(200));
+                node.swarm.behaviour_mut().kad = kad::Behaviour::with_config(
+                    node.local_peer_id,
+                    kad::store::MemoryStore::new(node.local_peer_id),
+                    config,
+                );
+                node.swarm
+                    .behaviour_mut()
+                    .kad
+                    .set_mode(Some(kad::Mode::Server));
+            }
+            listener.swarm.listen_on(listen.parse().unwrap()).unwrap();
+            let address = next_listen_address(&mut listener.swarm).await;
+            dialer
+                .swarm
+                .dial(address.with(Protocol::P2p(listener.local_peer_id)))
+                .unwrap();
+            let connection = tokio::time::timeout(
+                Duration::from_secs(10),
+                next_connection_to_peer(
+                    &mut listener.swarm,
+                    &mut dialer.swarm,
+                    listener.local_peer_id,
+                ),
+            )
+            .await
+            .expect("loopback connection deadline");
+
+            for (wave, overloaded) in [(0, true), (1, false), (2, true), (3, false)] {
+                let count = if overloaded {
+                    KADEMLIA_QUERY_POOL_CAPACITY.get()
+                } else {
+                    1
+                };
+                let kad = &mut dialer.swarm.behaviour_mut().kad;
+                let mut queries = (0..count)
+                    .map(|index| {
+                        kad.try_start_query(|kad| {
+                            kad.put_record_to(
+                                kad::Record::new(
+                                    vec![wave, u8::try_from(index).unwrap()],
+                                    vec![1; if overloaded { 513 } else { 1 }],
+                                ),
+                                [listener.local_peer_id].into_iter(),
+                                kad::Quorum::One,
+                            )
+                        })
+                        .unwrap()
+                    })
+                    .collect::<HashSet<_>>();
+                assert_eq!(kad.query_pool_usage().retained, count);
+                if overloaded {
+                    assert!(
+                        kad.try_start_query(|_| panic!("full pool admitted a query"))
+                            .is_err()
+                    );
+                    let canceled = *queries.iter().next().unwrap();
+                    assert!(kad.cancel_query(&canceled));
+                    queries.remove(&canceled);
+                    assert!(queries.iter().all(|id| kad.query_is_retained(id)));
+                }
+                tokio::time::timeout(
+                    Duration::from_secs(2),
+                    exchange_packets_during_kademlia_work(
+                        &mut listener.swarm,
+                        &mut dialer.swarm,
+                        connection,
+                        wave,
+                        queries,
+                        overloaded,
+                    ),
+                )
+                .await
+                .expect("VPN traffic or DHT failed to retire during overload/recovery");
+                assert_eq!(dialer.swarm.behaviour().kad.query_pool_usage().retained, 0);
+                assert_eq!(dialer.swarm.behaviour().kad.pending_rpc_usage().requests, 0);
+                if !overloaded {
+                    use libp2p::kad::store::RecordStore;
+                    assert!(
+                        listener
+                            .swarm
+                            .behaviour_mut()
+                            .kad
+                            .store_mut()
+                            .get(&kad::RecordKey::new(&[wave, 0]))
+                            .is_some()
+                    );
+                }
+            }
+        }
+    }
+
+    async fn exchange_packets_during_kademlia_work(
+        listener: &mut Swarm<Behaviour>,
+        dialer: &mut Swarm<Behaviour>,
+        connection: libp2p::swarm::ConnectionId,
+        wave: u8,
+        mut queries: HashSet<kad::QueryId>,
+        overloaded: bool,
+    ) {
+        let mut packets = std::collections::HashMap::new();
+        for sequence in 0..8 {
+            let frame = Frame::packet(u32::from(wave), sequence, vec![0x45; 1024]).unwrap();
+            let id = dialer
+                .behaviour_mut()
+                .pinned_packet_stream
+                .send_request_on_connection(*listener.local_peer_id(), connection, frame.clone());
+            packets.insert(id, frame);
+        }
+        let mut received = HashSet::new();
+        let deadline = tokio::time::sleep(Duration::from_secs(1));
+        tokio::pin!(deadline);
+        while !queries.is_empty() || !packets.is_empty() {
+            let (at_listener, event) = tokio::select! {
+                event = listener.select_next_some() => (true, event),
+                event = dialer.select_next_some() => (false, event),
+                () = &mut deadline => panic!("wave={wave} overloaded={overloaded} queries={} packets={} received={}", queries.len(), packets.len(), received.len()),
+            };
+            match event {
+                SwarmEvent::ConnectionClosed { .. } => {
+                    panic!("Kademlia overload reset a shared connection")
+                }
+                SwarmEvent::ConnectionEstablished {
+                    num_established, ..
+                } => {
+                    assert!(at_listener, "dialer replaced the original connection");
+                    assert_eq!(num_established.get(), 1);
+                }
+                SwarmEvent::Behaviour(BehaviourEvent::Packet(
+                    request_response::Event::Message {
+                        message:
+                            Message::Request {
+                                request, channel, ..
+                            },
+                        peer,
+                        ..
+                    },
+                )) => {
+                    assert!(at_listener);
+                    assert_eq!(peer, *dialer.local_peer_id());
+                    assert!(packets.values().any(|expected| expected == &request));
+                    assert!(received.insert(request.header.sequence));
+                    listener
+                        .behaviour_mut()
+                        .packet
+                        .send_response(channel, PacketResponse::Accepted)
+                        .unwrap();
+                }
+                SwarmEvent::Behaviour(BehaviourEvent::PinnedPacketStream(
+                    pinned_packet_stream::Event::OutboundResponse {
+                        request_id,
+                        connection_id,
+                        response,
+                        ..
+                    },
+                )) => {
+                    assert!(!at_listener);
+                    assert_eq!(connection_id, connection);
+                    assert_eq!(response, PacketResponse::Accepted);
+                    assert!(packets.remove(&request_id).is_some());
+                }
+                SwarmEvent::Behaviour(BehaviourEvent::PinnedPacketStream(
+                    pinned_packet_stream::Event::OutboundFailure { error, .. }
+                    | pinned_packet_stream::Event::InboundFailure { error, .. },
+                )) => panic!("VPN packet failed during Kademlia work: {error:?}"),
+                SwarmEvent::Behaviour(BehaviourEvent::Kad(
+                    kad::Event::OutboundQueryProgressed {
+                        id,
+                        result: kad::QueryResult::PutRecord(result),
+                        stats,
+                        ..
+                    },
+                )) if !at_listener => {
+                    assert!(queries.remove(&id), "unowned or canceled DHT result");
+                    assert_eq!(result.is_err(), overloaded);
+                    if !matches!(result, Err(kad::PutRecordError::Timeout { .. })) {
+                        assert_eq!(stats.num_failures(), u32::from(overloaded));
+                    }
+                    assert_eq!(stats.num_successes(), u32::from(!overloaded));
+                }
+                SwarmEvent::Behaviour(BehaviourEvent::Kad(kad::Event::InboundRequest {
+                    request: kad::InboundRequest::PutRecord { .. },
+                })) if at_listener => assert!(!overloaded, "rejected payload reached the peer"),
+                _ => {}
+            }
+        }
+        assert_eq!(received.len(), 8);
     }
 
     #[tokio::test]

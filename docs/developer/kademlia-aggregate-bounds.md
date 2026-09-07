@@ -424,6 +424,56 @@ Logs use `/tmp/p2p-vpn-kad-pending-` with suffixes `workspace.log`,
 No full Nix package, APK, ARM64 build, formal model, or physical deployment
 is claimed. Query metadata, queued results, and combined overload remain open.
 
+## Idle Deadlines And Shared Traffic
+
+The combined loopback test exposed missing deadline wakeups. With a four-ID
+handler rejection queue and a 200 ms query timeout, all eight VPN frames arrived
+but 27 unreported queries remained after one second without network activity.
+Reproduction: `/tmp/p2p-vpn-kad-shared-overload-deadline-before.log`.
+
+The query pool now arms one timer for its earliest started query deadline.
+It reuses the timer while that deadline is unchanged and removes it when the
+last query retires or is canceled. Deadline expiry does not depend on peer traffic.
+Per-phase timeout values and wire formats are unchanged.
+
+### Combined Regression
+
+| Scenario | Assertion |
+| --- | --- |
+| TCP and QUIC loopback | Real production packet behaviours share a connection with Kademlia |
+| Fill the 32-query pool | Extra checked start is rejected without running its closure |
+| Cancel one admitted query | Other admitted queries remain owned; canceled work emits no result |
+| Exceed handler payload and report budgets | Immediate errors or query deadlines retire all remaining work |
+| Eight packet frames per wave | Every frame is acknowledged on the original connection, without duplicates |
+| Small publication after overload | Remote record storage succeeds after query capacity is released |
+| Repeat overload and recovery | Both cycles complete without replacing or closing the connection |
+
+A separate regression abandons a dial and awaits the behaviour without injecting
+any event. Its timer must emit a timeout and release pending-RPC bytes/count.
+Both focused tests passed in `/tmp/p2p-vpn-kad-shared-overload-fixed.log`.
+
+This exercises the VPN packet protocol, not TUN routing or sustained performance.
+Handler limits are deliberately reduced to isolate payload/report saturation;
+the production 32-query cap is retained.
+Metadata and queued-result bounds remain required for goal completion.
+
+### Idle Deadline Checkpoint Evidence
+
+| Check | Result |
+| --- | --- |
+| Offline workspace tests | 1,298 passed; 22 opt-in tests ignored |
+| Namespace DHT, peerless pairing, forced-relay pairing, owned QUIC | All four passed |
+| Namespace relay/direct network move | Passed |
+| Android x86_64 native library | Compiled offline; four existing warnings |
+| Nix desktop/Android source parity | Passed with cached tool overrides |
+| Root and changed vendored Rust formatting | Passed |
+| Workspace Clippy correctness, suspicious, and perf groups | Passed; style warnings remain |
+
+Logs use `/tmp/p2p-vpn-kad-idle-deadline-` with suffixes `workspace.log`,
+`namespace.log`, `move.log`, `android.log`, `nix.log`, and `clippy.log`.
+No full Nix package, APK, ARM64 build, formal model, or physical deployment
+was performed. No sustained performance or total process-memory claim is made.
+
 ## Implementation Order
 
 1. Handler admission, expiry, and bounded rejection reporting.

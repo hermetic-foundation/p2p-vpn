@@ -27,10 +27,12 @@ pub use pending::{PendingRpcLimits, PendingRpcUsage};
 use retained::RetainedPeers;
 pub use retained::{QueryLimits, QueryResourceUsage};
 
-use std::{num::NonZeroUsize, time::Duration};
+use std::{num::NonZeroUsize, task::Context, time::Duration};
 
 use either::Either;
 use fnv::FnvHashMap;
+use futures::FutureExt;
+use futures_timer::Delay;
 use libp2p_identity::PeerId;
 use peers::{
     closest::{disjoint::ClosestDisjointPeersIter, ClosestPeersIter, ClosestPeersIterConfig},
@@ -56,6 +58,7 @@ pub(crate) struct QueryPool {
     queries: FnvHashMap<QueryId, Query>,
     rejected: u64,
     pending_rpc_budget: Option<PendingRpcBudget>,
+    deadline: Option<(Instant, Delay)>,
 }
 
 /// Synchronous rejection before starting a query in a capacity-limited pool.
@@ -93,6 +96,7 @@ impl QueryPool {
             config,
             queries: Default::default(),
             rejected: 0,
+            deadline: None,
         }
     }
 
@@ -267,11 +271,15 @@ impl QueryPool {
     }
 
     pub(crate) fn remove(&mut self, id: &QueryId) -> Option<Query> {
-        self.queries.remove(id)
+        let query = self.queries.remove(id);
+        if self.queries.is_empty() {
+            self.deadline = None;
+        }
+        query
     }
 
     /// Polls the pool to advance the queries.
-    pub(crate) fn poll(&mut self, now: Instant) -> QueryPoolState<'_> {
+    pub(crate) fn poll(&mut self, now: Instant, cx: &mut Context<'_>) -> QueryPoolState<'_> {
         let mut finished = None;
         let mut timeout = None;
         let mut waiting = None;
@@ -305,20 +313,41 @@ impl QueryPool {
         }
 
         if let Some(query_id) = finished {
-            let mut query = self.queries.remove(&query_id).expect("s.a.");
+            let mut query = self.remove(&query_id).expect("s.a.");
             query.stats.end = Some(now);
             return QueryPoolState::Finished(query);
         }
 
         if let Some(query_id) = timeout {
-            let mut query = self.queries.remove(&query_id).expect("s.a.");
+            let mut query = self.remove(&query_id).expect("s.a.");
             query.stats.end = Some(now);
             return QueryPoolState::Timeout(query);
         }
 
         if self.queries.is_empty() {
+            self.deadline = None;
             QueryPoolState::Idle
         } else {
+            // One timer for the pool also retires work whose handler rejection
+            // report was dropped. No peer traffic is required to drive expiry.
+            let start = self
+                .queries
+                .values()
+                .filter_map(|query| query.stats.start)
+                .min()
+                .expect("waiting queries have started");
+            let remaining = self.config.timeout.saturating_sub(now - start);
+            let (armed_start, timer) = self
+                .deadline
+                .get_or_insert_with(|| (start, Delay::new(remaining)));
+            if *armed_start != start {
+                *armed_start = start;
+                timer.reset(remaining);
+            }
+            if timer.poll_unpin(cx).is_ready() {
+                // The deadline may have elapsed after `now` was sampled.
+                cx.waker().wake_by_ref();
+            }
             QueryPoolState::Waiting(None)
         }
     }

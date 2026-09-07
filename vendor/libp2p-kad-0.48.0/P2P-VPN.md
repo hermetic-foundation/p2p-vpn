@@ -89,10 +89,14 @@ access. Defaults remain a 100-query ceiling and batch size ten, but the batch is
 now shared across both jobs. p2p-vpn selects a ceiling of two and batch size one.
 Foreground API calls count against admission but are not capped by this setting.
 
-Expired queries stop issuing new requests when the pool next examines them,
-even if uncontacted candidates remain. Already queued or dispatched requests are
-not canceled by this check. Multi-stage operations retain their existing timeout
-semantics; this does not establish an aggregate operation-lifetime bound.
+Expired queries stop issuing new requests, even if uncontacted candidates remain.
+One timer per query pool wakes it for the earliest started query deadline;
+idle connections and dropped overload reports no longer postpone retirement.
+The timer is removed when the last query retires or is canceled.
+
+Already queued or dispatched handler requests are not recalled by this check.
+Multi-stage operations retain their existing per-phase timeout semantics;
+this does not establish an aggregate operation-lifetime bound.
 
 `stop_providing()` now retires matching provider queries and removes the key
 from pending republication snapshots. Unlike upstream, it silently discards

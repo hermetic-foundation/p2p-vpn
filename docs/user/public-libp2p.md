@@ -73,6 +73,7 @@ not consume the attempt budget. Bootstrap diagnostics report rejected starts.
 A full DHT request queue rejects new work without closing the connection used
 by VPN traffic. Rejection reporting is bounded too; extreme overload may wait
 for the query deadline instead of reporting every rejection immediately.
+Query deadlines wake automatically, even when connections are idle.
 
 Configured bootstrap seeds are protected from routing-address rotation and
 whole-peer bucket replacement. Protection does not increase bucket capacity;
