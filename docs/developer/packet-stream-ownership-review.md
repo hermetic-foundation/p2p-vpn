@@ -13,6 +13,58 @@ inspection. These findings do not establish the cause of the retained Android
 | P2 | Direct-TCP dispatch ignored selected connection; reproduced and corrected | Original: `src/runtime/runner.rs:9904`, `src/runtime/forward.rs:280` |
 | P2 | Pinned-stream connection closure lacked terminal request events; corrected with lifecycle regressions | Original: `src/runtime/pinned_packet_stream.rs:165`, `:234` |
 | P2 | Stale terminal packet replies stranded runtime window slots; corrected in both stream handlers | `handle_pinned_packet_stream_event`, `handle_packet_event` |
+| P2 | Epoch-valid replies from failed connections could revive paths with no connection; connection-scoped RTT guard added | `handle_packet_response`, `PathSet::record_stream_rtt` |
+
+### Failed-Connection Responses
+
+A stream failure can remove a connection from the path inventory before its
+underlay epoch is retired. A late accepted packet response previously updated
+RTT by peer/path alone, restoring `healthy` even with zero connections.
+
+The deterministic pre-fix regression produced a selectable TCP path with
+`established_connections=0` and `latest_connection_id=None`. It failed before
+the guard was added; this is distinct from closed/retiring-epoch filtering.
+
+Both stream handlers now pass the response connection ID to `record_stream_rtt`.
+The path owner requires that exact connection in the matching peer/path/relay
+inventory before changing RTT or health. Request completion still releases its slot.
+
+| Contract | Coverage |
+| --- | --- |
+| Failed last connection | Late acceptance must not revive a path |
+| Replacement connection | Old acceptance must not alter the replacement path |
+| Duplicate response | Only its own request slot is released; a newer request remains |
+| Valid RTT | Tracked connections, including non-selected ones, can update RTT |
+| Isolation | Wrong peer, relay, or unknown connection cannot update a candidate |
+| Transport scope | Runtime handlers plus TCP, QUIC-stream, and relay path-owner cases |
+
+- Negative-control log: `/tmp/p2p-vpn-review-failed-path-response-before.log`.
+- Existing public datagram RTT methods, wire formats, and configuration are unchanged.
+- No Lean model exists in this repository; these are executable regression checks.
+- The intermittent [queue-pressure failure](queue-pressure-review.md#repetition-evidence) is not yet causally attributed to this defect.
+
+#### Verification
+
+- Native workspace: 1,234 passed; 23 opt-in tests ignored.
+- Runtime regression: 16 cases across both response handlers, including duplicate responses.
+- Path-owner regression: TCP, QUIC-stream, and relay cases preserve valid RTT updates.
+- Required Clippy groups, changed-file rustfmt, whitespace, and offline Nix source inclusion passed.
+- Logs: `/tmp/p2p-vpn-review-failed-path-response-workspace-final.log` and `/tmp/p2p-vpn-review-failed-path-response-clippy.log`.
+- An initial path test incorrectly expected direct paths to match relay metadata; corrected to test relay isolation only on relay paths.
+- No Android deployment or full NixOS package rebuild was performed for this fix.
+
+The full namespace run passed 11/12 in 252.06 seconds, including queue pressure.
+Movement passed its live path/ping checks but failed a log assertion requiring
+an immediate direct-to-relay event rather than direct-to-unavailable-to-relay.
+
+The movement fixture now requires at least five additional relay-forwarded
+packets while the direct link is down, retaining path selection, ping, and
+direct-promotion checks. Its focused rerun passed in 51.58 seconds.
+
+- Suite log: `/tmp/p2p-vpn-review-failed-path-response-namespace.log`.
+- Corrected movement log: `/tmp/p2p-vpn-review-failed-path-response-move-final.log`.
+- Final fixture unit tests: 11 passed, 12 ignored; focused Clippy and Nix source checks passed.
+- The full workspace and 12-scenario suite preceded the test-only movement assertion correction.
 
 ### Stale Response Accounting
 

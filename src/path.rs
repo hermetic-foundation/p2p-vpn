@@ -748,6 +748,24 @@ impl PathSet {
         self.record_rtt_for_relay(peer, kind, None, rtt_ms)
     }
 
+    pub(crate) fn record_stream_rtt(
+        &mut self,
+        peer: PeerId,
+        kind: PathKind,
+        relay_peer: Option<PeerId>,
+        connection_id: ConnectionId,
+        rtt_ms: u16,
+    ) -> Option<PathSelectionChange> {
+        // Epoch-valid connections may already have failed out of this path.
+        if !self.connection_inventories.iter().any(|inventory| {
+            path_inventory_matches(inventory, peer, kind, relay_peer)
+                && inventory.connection_ids.contains(&Some(connection_id))
+        }) {
+            return None;
+        }
+        self.record_rtt_for_relay(peer, kind, relay_peer, rtt_ms)
+    }
+
     pub fn record_rtt_for_relay(
         &mut self,
         peer: PeerId,
@@ -1254,6 +1272,53 @@ mod tests {
         assert_eq!(candidate.established_connections, 0);
         assert_eq!(candidate.latest_connection_id, None);
         assert!(!candidate.healthy);
+    }
+
+    #[test]
+    fn stream_rtt_requires_a_matching_tracked_connection() {
+        for kind in [
+            PathKind::DirectTcpStream,
+            PathKind::DirectQuicStream,
+            PathKind::CircuitRelay,
+        ] {
+            let mut paths = PathSet::new();
+            let relay = (kind == PathKind::CircuitRelay).then_some(peer(10));
+            let first = ConnectionId::new_unchecked(31);
+            let second = ConnectionId::new_unchecked(32);
+            for connection in [first, second] {
+                paths.record_established_with_details(
+                    peer(1),
+                    kind,
+                    relay,
+                    Some(1280),
+                    PathOrigin::Unknown,
+                    PathConnectionRole::Unknown,
+                    relay.is_some(),
+                    Some(connection),
+                    None,
+                );
+            }
+            // A non-selected connection can still provide valid path evidence.
+            paths.record_stream_rtt(peer(1), kind, relay, first, 123);
+            let expected = paths.best_for(peer(1)).unwrap();
+            assert_eq!(expected.latest_connection_id, Some(second));
+            assert_eq!(expected.observed_rtt_ms, Some(123));
+            paths.record_stream_rtt(peer(2), kind, relay, first, 999);
+            if relay.is_some() {
+                paths.record_stream_rtt(peer(1), kind, Some(peer(11)), first, 999);
+            }
+            paths.record_stream_rtt(peer(1), kind, relay, ConnectionId::new_unchecked(99), 999);
+            assert_eq!(paths.best_for(peer(1)), Some(expected));
+            paths.record_failed_connection(peer(1), kind, relay, first);
+            let expected = paths.best_for(peer(1));
+            paths.record_stream_rtt(peer(1), kind, relay, first, 999);
+            assert_eq!(paths.best_for(peer(1)), expected);
+            paths.record_stream_rtt(peer(1), kind, relay, second, 456);
+            assert_eq!(paths.best_for(peer(1)).unwrap().observed_rtt_ms, Some(456));
+            paths.record_failed_connection(peer(1), kind, relay, second);
+            paths.record_stream_rtt(peer(1), kind, relay, second, 999);
+            assert!(paths.best_for(peer(1)).is_none());
+        }
     }
 
     #[test]

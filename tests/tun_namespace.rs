@@ -944,7 +944,27 @@ fn run_network_move_orchestrator() {
     let direct_ping = ping_from_namespace(node_a.id(), "hse2ea", address_b);
     set_network_move_direct_link(node_a.id(), node_b.id(), false);
     wait_for_selected_path(&temp_dir, "a", "circuit_relay");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let relay_status = runtime
+        .block_on(p2p_vpn::runtime::control_socket::query_status(
+            &node_control_socket(&temp_dir, "a"),
+            Duration::from_secs(2),
+        ))
+        .unwrap();
+    let relay_packets_before =
+        state_metric_count(&relay_status, "outbound_relay_stream_fallback_packets")
+            .expect("relay packet counter");
     let relay_ping = ping_from_namespace(node_a.id(), "hse2ea", address_b);
+    wait_for_daemon_status_metric(
+        &temp_dir,
+        "a",
+        Duration::from_secs(5),
+        "outbound_relay_stream_fallback_packets",
+        relay_packets_before + 5,
+    );
 
     set_network_move_direct_link(node_a.id(), node_b.id(), true);
     wait_for_selected_path(&temp_dir, "a", "direct_udp_datagram");
@@ -993,11 +1013,9 @@ fn run_network_move_orchestrator() {
         "relay did not accept a circuit during network move\nrelay log:\n{relay_log}\nnode-a log:\n{initiator_log}\nnode-b log:\n{responder_log}",
     );
     assert!(
-        initiator_log.contains("event=path_fell_back_to_relay")
-            && (initiator_log.contains("previous_path=direct_udp_datagram")
-                || initiator_log.contains("previous_path=direct_tcp_stream"))
-            && initiator_log.contains("current_path=circuit_relay")
-            && initiator_log.contains("event=path_promoted_to_direct")
+        // Direct -> unavailable -> relay is also valid recovery. The live
+        // selected-path and packet-counter checks above prove relay use.
+        initiator_log.contains("event=path_promoted_to_direct")
             && initiator_log.contains("previous_path=circuit_relay")
             && (initiator_log.contains("current_path=direct_udp_datagram")
                 || initiator_log.contains("current_path=direct_tcp_stream"))

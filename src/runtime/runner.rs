@@ -12411,12 +12411,12 @@ fn handle_packet_event(
                     request_id,
                     response,
                 },
-            ..
+            connection_id,
         } => {
             let in_flight = context
                 .packet_in_flight
                 .complete(PacketInFlightId::RequestResponse(request_id));
-            handle_packet_response(context, in_flight, Some(peer), response);
+            handle_packet_response(context, in_flight, Some(peer), connection_id, response);
         }
         request_response::Event::OutboundFailure {
             peer,
@@ -12498,12 +12498,13 @@ fn handle_pinned_packet_stream_event(
         pinned_packet_stream::Event::OutboundResponse {
             request_id,
             response,
+            connection_id,
             ..
         } => {
             let in_flight = context
                 .packet_in_flight
                 .complete(PacketInFlightId::PinnedPacketStream(request_id));
-            handle_packet_response(context, in_flight, None, response);
+            handle_packet_response(context, in_flight, None, connection_id, response);
         }
         pinned_packet_stream::Event::OutboundFailure {
             peer,
@@ -12571,6 +12572,7 @@ fn handle_packet_response(
     context: &mut SwarmEventContext<'_>,
     in_flight: Option<PacketInFlightRequest>,
     transport_peer: Option<Libp2pPeerId>,
+    connection_id: ConnectionId,
     response: PacketResponse,
 ) {
     match response {
@@ -12581,10 +12583,11 @@ fn handle_packet_response(
                     .elapsed()
                     .as_millis()
                     .min(u128::from(u16::MAX)) as u16;
-                let change = context.paths.record_rtt_for_relay(
+                let change = context.paths.record_stream_rtt(
                     request.peer,
                     request.path,
                     request.relay_peer,
+                    connection_id,
                     rtt_ms,
                 );
                 record_path_selection_change(context.metrics, change);
@@ -33323,11 +33326,16 @@ mod tests {
             }
         }
         for pinned in [true, false] {
-            for stale_state in ["closed", "retiring", "previous_epoch"] {
+            for stale_state in ["closed", "retiring", "previous_epoch", "failed", "replaced"] {
                 for response in [
                     PacketResponse::Accepted,
                     PacketResponse::Rejected(PacketRejectionReason::RateLimited),
                 ] {
+                    if matches!(stale_state, "failed" | "replaced")
+                        && !matches!(response, PacketResponse::Accepted)
+                    {
+                        continue;
+                    }
                     let identity = NodeIdentity::generate_ed25519().unwrap();
                     let remote = peer_id();
                     let overlay = PeerId::from_libp2p(remote);
@@ -33342,12 +33350,23 @@ mod tests {
                         "retiring" => {
                             epochs.mark_retiring(connection_id);
                         }
-                        _ => {
+                        "previous_epoch" => {
                             epochs.advance();
                         }
+                        _ => {}
                     }
                     let mut paths = PathSet::new();
-                    paths.record_established(overlay, PathKind::DirectTcpStream);
+                    paths.record_established_with_details(
+                        overlay,
+                        PathKind::DirectTcpStream,
+                        None,
+                        Some(1280),
+                        PathOrigin::Unknown,
+                        PathConnectionRole::Unknown,
+                        false,
+                        Some(connection_id),
+                        None,
+                    );
                     let path_before = paths.best_for(overlay).unwrap();
                     let mut packet_in_flight = PacketInFlight::new(2);
                     let mut requests = Vec::new();
@@ -33372,6 +33391,28 @@ mod tests {
                         requests.push(request);
                     }
                     assert!(!packet_in_flight.can_send(overlay));
+                    if matches!(stale_state, "failed" | "replaced") {
+                        paths.record_failed_connection(
+                            overlay,
+                            PathKind::DirectTcpStream,
+                            None,
+                            connection_id,
+                        );
+                        if stale_state == "replaced" {
+                            paths.record_established_with_details(
+                                overlay,
+                                PathKind::DirectTcpStream,
+                                None,
+                                Some(1280),
+                                PathOrigin::Unknown,
+                                PathConnectionRole::Unknown,
+                                false,
+                                Some(ConnectionId::new_unchecked(42)),
+                                None,
+                            );
+                        }
+                    }
+                    let expected_path = paths.best_for(overlay);
                     let metrics = RuntimeMetrics::default();
                     let mut membership = OverlayMembership::from_config(&config).unwrap();
                     let mut tun_runtime = TunRuntimeConfig::from_config(&config).unwrap();
@@ -33464,7 +33505,11 @@ mod tests {
                         assert!(!context.packet_in_flight.requests.contains_key(&requests[0]));
                         assert!(context.packet_in_flight.requests.contains_key(&requests[1]));
                         assert!(context.packet_in_flight.can_send(overlay));
-                        assert_eq!(context.paths.best_for(overlay), Some(path_before));
+                        assert_eq!(
+                            context.paths.best_for(overlay),
+                            expected_path,
+                            "{pinned:?} {stale_state}: stale reply changed path state"
+                        );
                         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
                         assert_eq!(snapshot.outbound_failures, 0);
                         assert_eq!(snapshot.outbound_dropped_packets, 0);
