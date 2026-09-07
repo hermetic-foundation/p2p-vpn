@@ -175,7 +175,7 @@ Logs use `/tmp/p2p-vpn-review-startup-snapshot-*`.
 | Android underlay failure | Latest transition passes with independent OS underlay diagnostics. Earlier failure attribution remains unresolved; a pass alone does not establish its cause. |
 | Private bootstrap admission | [Delayed changed-port restart](private-discovery-restart-review.md) failed before the Identify classification fix and passed twice afterward. Routing clients no longer expire merely because they advertise pairing support. The Android multi-network scenario also passes with the fix. |
 | Android update traffic | Latest replacement traffic passes with ping timing and reply sequences retained. Preserve earlier 4/5 evidence and investigate attribution alongside remaining transport ownership work. |
-| Packet stream ownership | [Dispatch, closure, admission, stream budgets, stale accounting, and default inbound ownership](packet-stream-ownership-review.md) have regressions. Default Packet events remain compatible; sustained overload and final platform validation remain open. |
+| Packet stream ownership | [Dispatch, closure, admission, stream budgets, stale accounting, and default inbound ownership](packet-stream-ownership-review.md) have regressions. Paced pinned-receiver TCP/QUIC tests pass 1,500 overload/recovery cycles each with zero residual outbound owners. Full-daemon queue saturation, heap measurements, and final platform validation remain open. |
 | Packaging/tooling | Resolve or explicitly account for unverified exported checks without uncontrolled source builds. |
 | Documentation | Reconcile architecture and user workflows with final behavior and evidence. |
 

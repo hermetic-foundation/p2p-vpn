@@ -197,7 +197,7 @@ behaviour is unchanged; namespace and Android scenarios were not rerun for this 
 
 #### Remaining Evidence
 
-1. Measure sustained queue/ownership retention and recovery under saturation.
+1. Extend the paced pinned-stream exercise below to full-daemon queue saturation and heap measurements.
 2. Repeat affected platform checks after further runtime changes; retain earlier packet-loss evidence.
 3. Preserve the documented default inbound owner in any future handler consolidation.
 
@@ -214,6 +214,63 @@ behaviour is unchanged; namespace and Android scenarios were not rerun for this 
 These limits bound admitted payload/stream work, not arbitrary accumulation of
 terminal events by an embedding caller that never polls the public behaviour.
 Unit tests exercise ownership transitions; they are not formal verification.
+
+## Paced Stream Saturation
+
+The opt-in `sustained_pinned_overload_recovers_on_the_same_connection` test
+extends the existing socket overload harness with 1,500 cycles per transport.
+Each cycle waits 20 ms before repeating on the same selected connection.
+The opt-in run has a three-minute overall deadline; each exchange also has
+the original ten-second deadline.
+
+| Stage | Required Assertion |
+| --- | --- |
+| Occupy receiver | A pending outbound request holds its only stream permit |
+| Reverse request | The full receiver replies `RateLimited`, rather than resetting the stream |
+| Release held response | Original request completes with `Accepted` |
+| Per-cycle cleanup | Both behaviours have zero outstanding outbound request owners |
+| Connection continuity | No observed connection closure; both peers remain connected |
+
+```bash
+cargo test --offline --lib sustained_pinned_overload_recovers_on_the_same_connection \
+  -- --ignored --nocapture
+```
+
+### Scope and Limits
+
+- Real loopback TCP and QUIC streams; 1,024-byte synthetic payloads, not kernel TUN traffic.
+- Pinned inbound reception is isolated, as in the original overload regression; default hosts still use the documented Packet event owner.
+- Pacing limits offered packet payload to about 0.82 Mbps before framing; protocol/transport overhead is additional.
+- Public discovery features are disabled and bootstrap entries removed before polling.
+- Counts inspect behaviour-owned request metadata, not handler heap allocations, allocator reclamation, or total daemon memory.
+- The test checks repeated full-budget recovery, not maximum throughput, full-daemon queues, relay saturation, or carrier NAT.
+- No production protocol, configuration, or retry behavior changes; the new ownership accessor is compiled only for tests.
+
+### Initial Measurement
+
+| Transport | Completed Cycles | Duration | Outstanding Owners After Every Cycle |
+| --- | ---: | ---: | ---: |
+| TCP | 1,500 | 37.728 s | 0 on both peers |
+| QUIC | 1,500 | 38.269 s | 0 on both peers |
+
+Both passes required `RateLimited` followed by `Accepted` in every cycle, with
+no observed connection closure. The complete test passed in 76.06 seconds.
+Log: `/tmp/p2p-vpn-review-sustained-pinned-final.log`.
+
+This first run preceded the addition of an overall deadline and transport labels.
+The existing one-cycle regression now shares the same harness and assertions.
+
+### Final Verification
+
+The final p2p-module run passed all 35 tests, including all three opt-in exercises,
+in 76.03 seconds. TCP completed 1,500 cycles in 37.710 seconds and QUIC in
+38.249 seconds; every cycle passed the same cleanup and continuity assertions.
+
+- Final module log: `/tmp/p2p-vpn-review-sustained-pinned-module.log`.
+- Handler lifecycle log: `/tmp/p2p-vpn-review-sustained-pinned-handler.log`.
+- All nine handler tests, required Clippy groups, changed-file formatting, whitespace, and offline Nix test-source inclusion passed; non-fatal style warnings remain.
+- Full workspace and platform deployments were not repeated for this test-only change; their earlier results remain separately scoped.
+- Builds reused existing targets with two Cargo jobs and no downloads; retained build directories remained about 3.6 GiB combined.
 
 ## Implementation Plan
 

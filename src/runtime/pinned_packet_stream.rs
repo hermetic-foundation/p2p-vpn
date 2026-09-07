@@ -119,6 +119,11 @@ impl Default for Behaviour {
 }
 
 impl Behaviour {
+    #[cfg(test)]
+    pub(super) fn pending_outbound_count(&self) -> usize {
+        self.outbound_owners.len()
+    }
+
     #[must_use]
     pub const fn new(max_payload_len: usize) -> Self {
         Self {
