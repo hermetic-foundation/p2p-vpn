@@ -378,15 +378,19 @@ cargo test --offline --lib incompatible -- --nocapture
 Workspace and Clippy logs use
 `/tmp/p2p-vpn-review-historical-compaction-{workspace,clippy}.log`.
 
-## Pending Cancellation Decision
+## Cancellation Decision
 
-The proposed policy is to finish recovery after durable preparation, rejecting
-cancellation that would erase an unresolved commit. Removal afterward uses revocation.
-User confirmation is pending; this policy has not been implemented.
+The user chose cancellation with durable abort and rollback. Cancelling a pending
+pairing must discard it rather than force enrollment to finish. The earlier
+proposal to reject cancellation after preparation was not accepted.
 
 Deleting Prepared state alone is unsafe: runtime routes or membership may already
 have changed. A cancellable transaction would instead need durable abort state and
 verified rollback, including crash recovery.
+
+Implementation and acceptance steps are recorded in the
+[cancellation plan](pairing-cancellation-plan.md). The decision is resolved;
+implementation is not yet complete.
 
 ### Mutation Diagnostic
 
@@ -417,7 +421,7 @@ cargo test --offline --lib diagnose_prepared_pairing_mutation_restore \
 - Required Clippy groups, Rust formatting, whitespace checks, and Nix test-source inclusion pass.
 - Full workspace and platform tests were not rerun for this test-only diagnostic; their earlier results remain separately recorded.
 - Fixtures exercise serialization and session recovery, not a restarted daemon, disk failure, actual route rollback, or cryptographic interoperability.
-- No runtime code or production state changed. The cancellation/replacement decision remains pending.
+- No runtime code or production state changed in that diagnostic. The subsequent decision is durable cancellation, as specified above.
 
 Logs: `/tmp/p2p-vpn-review-prepared-mutation-recovery-final.log` and
 `/tmp/p2p-vpn-review-prepared-mutation-sessions.log`.
