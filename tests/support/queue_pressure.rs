@@ -84,6 +84,12 @@ fn capture_round(
                     Duration::from_secs(2),
                 ))
                 .unwrap();
+            let state = runtime
+                .block_on(p2p_vpn::runtime::control_socket::query_state(
+                    &node_control_socket(temp, role),
+                    Duration::from_secs(2),
+                ))
+                .unwrap();
             let packets =
                 state_metric_count(&lines, "queue_queued_packets").expect("queue packets");
             let bytes = state_metric_count(&lines, "queue_queued_bytes").expect("queue bytes");
@@ -95,6 +101,10 @@ fn capture_round(
                 "process": idle_sample::process_observation(role, pid, started),
                 "queued_packets": packets, "queued_bytes": bytes,
                 "dropped_packets": state_metric_count(&lines, "queue_dropped_packets").expect("queue drops"),
+                "expired_packets": state_metric_count(&lines, "queue_expired_packets").expect("queue expiry"),
+                "stream_in_flight": state_metric_count(&state, "packet_stream_fallback_in_flight").expect("stream owners"),
+                "outbound_failures": state_metric_count(&lines, "outbound_failures").expect("outbound failures"),
+                "inbound_dropped_packets": state_metric_count(&lines, "inbound_dropped_packets").expect("inbound drops"),
             }));
         }
         serde_json::Value::Object(nodes)
@@ -178,14 +188,16 @@ fn capture_round(
     let recovery_deadline = Instant::now() + Duration::from_secs(30);
     loop {
         let snapshot = observe();
-        if snapshot["a"]["queued_packets"] == 0 && snapshot["b"]["queued_packets"] == 0 {
+        if ["a", "b"].into_iter().all(|role| {
+            snapshot[role]["queued_packets"] == 0 && snapshot[role]["stream_in_flight"] == 0
+        }) {
             assert_eq!(snapshot["a"]["queued_bytes"], 0);
             assert_eq!(snapshot["b"]["queued_bytes"], 0);
             break;
         }
         assert!(
             Instant::now() < recovery_deadline,
-            "queues did not drain after pressure"
+            "queues and stream requests did not drain after pressure"
         );
         thread::sleep(Duration::from_millis(250));
     }

@@ -46,7 +46,7 @@ TOKIO_WORKER_THREADS=2 P2P_VPN_TUN_E2E_KEEP_TEMP=1 \
 | Traffic | Up to 3,000 ICMP requests, 1,000-byte payloads, 5 ms interval |
 | Traffic deadline | Ping 20 seconds; fixture supervision 25 seconds |
 | Sampling | Both daemons approximately every 250 ms; 79 sample pairs in this run |
-| Recovery | Delete the test qdisc, await TCP selection and empty queues, then ping both directions |
+| Recovery | Delete the test qdisc, await TCP selection, empty queues and stream-request windows, then ping both directions |
 | Cleanup | Existing child guards kill and reap daemons; no matching test process remained |
 
 The offered ICMP request rate is at most approximately 1.65 Mbps before transport
@@ -123,7 +123,7 @@ TOKIO_WORKER_THREADS=2 P2P_VPN_TUN_E2E_KEEP_TEMP=1 \
 | Multiple cycles | Each saves its own `round-N/` reports and ping summary |
 | Series checkpoint | `queue-pressure-series.json` records requested/completed counts and `complete` |
 | Process continuity | First-cycle start ticks must match every later cycle's final observations |
-| Recovery | Each cycle independently requires queue drops, empty queues, and 5/5 pings both ways |
+| Recovery | Each cycle independently requires queue drops, drained queues/stream windows, and 5/5 pings both ways |
 | Supervision | Default orchestrator budget is 90 seconds per requested cycle; explicit overrides still apply |
 | Replay | Generated commands preserve the pressure-round environment setting |
 | Failure diagnostics | Each recovery ping saves stdout, stderr, exit code, and before/after observations before assertions |
@@ -152,6 +152,69 @@ unchanged daemon start ticks. No production runtime fix was made.
 - Series: `/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-2464869/queue-pressure-series.json`.
 - Namespace unit checks: 11 passed, 12 opt-in scenarios ignored.
 - These observations do not resolve the earlier intermittent recovery failure.
+
+### After Failed-Connection RTT Fix
+
+A five-cycle attempt at `2a1ab1a2` failed in cycle one after 36.81 seconds.
+The first post-pressure request was lost; requests 2-5 returned in 3.11-4.34 ms.
+The connection-scoped RTT fix therefore did not eliminate this symptom.
+
+| Observation | Evidence |
+| --- | --- |
+| Recovery ping | 5 transmitted, 4 received; exit status 0, strict assertion failed |
+| Queue overflow during ping | Unchanged: A 1,427, B 6 |
+| Queue occupancy before / after ping | Zero packets and bytes on both nodes |
+| Process continuity | Start ticks unchanged; sockets decreased from 7 to 6 per node |
+| Connection lifecycle | A timed out connection 12 and established replacement 14; packet-level causality remains unproven |
+
+- Log: `/tmp/p2p-vpn-review-failed-path-pressure-five.log`.
+- Ping and snapshots: `/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-2483559/round-1/recovery-ping-a.*`.
+- Empty application queues and a selected path do not prove all transport work has completed.
+- Samples now also retain queue expiry, stream in-flight owners, outbound failures, and inbound drops.
+- No timing or 5/5 assertion was relaxed; stable recovery versus initial readiness remains under investigation.
+
+### Recovery Boundary Correction
+
+With the additional counters, two cycles passed and the third reproduced 4/5
+replies. Its pre-ping sample showed empty queues but 256 in-flight stream
+requests on A and 24 on B. These are separate stages of the forwarding pipeline.
+
+| Third-Cycle Counter | A Before / After Ping | B Before / After Ping |
+| --- | ---: | ---: |
+| Stream requests in flight | 256 / 0 | 24 / 0 |
+| Queue expiry | 102 / 103 | 20 / 20 |
+| Queue overflow | 4,457 / 4,458 | 39 / 41 |
+| Outbound failures | 773 / 773 | 159 / 159 |
+| Inbound drops | 0 / 0 | 0 / 0 |
+
+The fixture was starting its steady-state assertion while substantial prior
+traffic remained in flight. It now requires both queues and runtime stream
+windows to drain within the existing 30-second recovery deadline.
+
+- The subsequent 5/5 ping requirements remain unchanged; no retries were added to those assertions.
+- This corrects the measurement boundary, not production transport behavior or a promise of lossless traffic during recovery.
+- Runtime windows and libp2p-internal work are distinct; expired runtime owners do not prove every internal task has stopped.
+- Diagnostic run: `/tmp/p2p-vpn-review-pressure-owner-sampling-final.log` (104.42 seconds; cycle three failed).
+- Evidence: `/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-2486328/round-3/recovery-ping-a.json`.
+- The incomplete series checkpoint correctly records two completed cycles, not three.
+- Initial instrumentation queried stream ownership from status instead of state; corrected before this diagnostic run.
+
+The corrected gate passed three cycles in 119.84 seconds. Each cycle retained
+the same daemon processes, ended with zero queued/in-flight packets, and passed
+5/5 pings in both directions. No production runtime change was made.
+
+| Cycle | Transmitted Packets | A Final RSS, KiB | B Final RSS, KiB |
+| --- | ---: | ---: | ---: |
+| 1 | 1,980 | 34,864 | 34,028 |
+| 2 | 1,979 | 35,072 | 34,112 |
+| 3 | 1,982 | 35,344 | 35,124 |
+
+- Run log: `/tmp/p2p-vpn-review-pressure-drain-run.log`.
+- Complete series: `/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-2488364/queue-pressure-series.json`.
+- Namespace unit tests: 11 passed, 12 ignored; focused Clippy, rustfmt, whitespace, and Nix source checks passed.
+- Full workspace, other namespace scenarios, VMs, and Android were not repeated for this test-only change.
+- Status and state are separate sequential queries, not an atomic combined snapshot.
+- RSS still increases across these cycles; this does not establish a plateau or leak-free behavior.
 
 The checkpoints compare current-process RSS under repeated work. They do not
 identify allocating owners or prove an asymptotic heap bound. A plateau over a
