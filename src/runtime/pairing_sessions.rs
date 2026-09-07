@@ -149,6 +149,7 @@ pub enum PairingEnrollmentRole {
 #[serde(rename_all = "snake_case")]
 pub enum PairingEnrollmentState {
     Prepared,
+    Aborting,
     Applied,
 }
 
@@ -167,6 +168,8 @@ pub struct PairingEnrollment {
     pub completed_at_unix_seconds: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub membership_key_preconfigured: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) tun_cleanup: Option<super::tun::PairingTunCleanup>,
     pub state: PairingEnrollmentState,
 }
 
@@ -195,6 +198,8 @@ pub struct PairingEnrollmentReceipt {
 struct PairingReplayToken {
     token: String,
     expires_at_unix_seconds: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    aborted_operation_id: Option<String>,
 }
 
 pub struct CodePairingSessions {
@@ -400,7 +405,7 @@ pub enum CodePairingSessionError {
 impl std::fmt::Display for CodePairingSessionError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Busy => formatter.write_str("another code pairing operation is active"),
+            Self::Busy => formatter.write_str("another code pairing operation is active or awaiting recovery; cancel it before replacing it"),
             Self::InvalidExpiry => write!(
                 formatter,
                 "pairing expiry must be between 1 and {MAX_CODE_PAIRING_EXPIRES_IN_SECONDS} seconds"
@@ -820,6 +825,9 @@ impl CodePairingSessions {
             if operation.completed.is_some() {
                 return Ok(PairingExpiryActions::default());
             }
+            if self.enrollment(operation_id).is_some() {
+                self.begin_enrollment_abort(operation_id)?;
+            }
             if let Some(ticket) = self.inbound_ticket.as_mut() {
                 ticket.outcome =
                     InboundTicketOutcome::Rejected(PairingCodeRejectionReason::Unavailable);
@@ -834,6 +842,9 @@ impl CodePairingSessions {
             if operation.completed.is_some() {
                 return Ok(PairingExpiryActions::default());
             }
+            if self.enrollment(operation_id).is_some() {
+                self.begin_enrollment_abort(operation_id)?;
+            }
             self.deactivate_join(TerminalStatus::Cancelled);
             return Ok(PairingExpiryActions::default());
         }
@@ -845,6 +856,16 @@ impl CodePairingSessions {
         operation_id: &str,
         approval_id: &str,
     ) -> Result<PairingExpiryActions, CodePairingSessionError> {
+        if self.enrollment(operation_id).is_some_and(|entry| {
+            entry.state == PairingEnrollmentState::Aborting
+                && entry.role == PairingEnrollmentRole::Inviter
+                && entry.approval_id.as_deref() == Some(approval_id)
+        }) && self.open.as_ref().is_some_and(|operation| {
+            operation.id == operation_id
+                && matches!(operation.terminal, Some(TerminalStatus::Rejected))
+        }) {
+            return Ok(PairingExpiryActions::default());
+        }
         let approval = self
             .pending_approval
             .as_ref()
@@ -854,6 +875,9 @@ impl CodePairingSessions {
         }
         if approval.approval_id != approval_id {
             return Err(CodePairingSessionError::ApprovalMismatch);
+        }
+        if self.enrollment(operation_id).is_some() {
+            self.begin_enrollment_abort(operation_id)?;
         }
         if let Some(ticket) = self.inbound_ticket.as_mut() {
             ticket.outcome =
@@ -1292,6 +1316,7 @@ impl CodePairingSessions {
             transcript_sha256: preparation.transcript_sha256,
             completed_at_unix_seconds: None,
             membership_key_preconfigured: preparation.membership_key_preconfigured,
+            tun_cleanup: None,
             state: PairingEnrollmentState::Prepared,
         };
         validate_pairing_enrollment(&enrollment, network_name)?;
@@ -1302,12 +1327,20 @@ impl CodePairingSessions {
             .position(|existing| existing.operation_id == enrollment.operation_id)
         {
             let existing = &self.enrollments[index];
-            if existing.has_same_preparation(&enrollment) {
+            if existing.state != PairingEnrollmentState::Aborting
+                && existing.has_same_preparation(&enrollment)
+            {
                 return Ok(existing);
             }
             return Err(CodePairingSessionError::Conflict);
         }
-        if self.receipt(&enrollment.operation_id).is_some() {
+        if self.receipt(&enrollment.operation_id).is_some()
+            || self.replay_tokens.iter().any(|token| {
+                token.aborted_operation_id.as_deref() == Some(&enrollment.operation_id)
+                    || (token.aborted_operation_id.is_some()
+                        && token.token == enrollment.response.payload.rendezvous_token)
+            })
+        {
             return Err(CodePairingSessionError::Conflict);
         }
         if self.enrollments.len() >= MAX_CODE_PAIRING_ENROLLMENTS {
@@ -1319,6 +1352,32 @@ impl CodePairingSessions {
             .enrollments
             .last()
             .expect("the enrollment was appended immediately above"))
+    }
+
+    pub(crate) fn record_tun_cleanup(
+        &mut self,
+        operation_id: &str,
+        cleanup: super::tun::PairingTunCleanup,
+    ) -> Result<(), CodePairingSessionError> {
+        cleanup
+            .validate()
+            .map_err(|error| invalid_enrollment(format!("invalid cleanup ownership: {error:?}")))?;
+        let enrollment = self
+            .enrollments
+            .iter_mut()
+            .find(|enrollment| enrollment.operation_id == operation_id)
+            .ok_or(CodePairingSessionError::NotFound)?;
+        if enrollment.state != PairingEnrollmentState::Prepared {
+            return Err(CodePairingSessionError::Conflict);
+        }
+        if let Some(existing) = &mut enrollment.tun_cleanup {
+            existing.merge(&cleanup).map_err(|error| {
+                invalid_enrollment(format!("incompatible cleanup ownership: {error:?}"))
+            })?;
+        } else {
+            enrollment.tun_cleanup = Some(cleanup);
+        }
+        Ok(())
     }
 
     #[must_use]
@@ -1404,6 +1463,7 @@ impl CodePairingSessions {
         let replay_token = PairingReplayToken {
             token: response.rendezvous_token.clone(),
             expires_at_unix_seconds: response.expires_at_unix_seconds,
+            aborted_operation_id: None,
         };
 
         self.prune_replay_tokens(now_unix_seconds);
@@ -1486,6 +1546,91 @@ impl CodePairingSessions {
         }
     }
 
+    pub(crate) fn begin_enrollment_abort(
+        &mut self,
+        operation_id: &str,
+    ) -> Result<&PairingEnrollment, CodePairingSessionError> {
+        if self.open_completion(operation_id).is_some()
+            || self.join_completion(operation_id).is_some()
+        {
+            return Err(CodePairingSessionError::Conflict);
+        }
+        let enrollment = self
+            .enrollments
+            .iter_mut()
+            .find(|enrollment| enrollment.operation_id == operation_id)
+            .ok_or(CodePairingSessionError::NotFound)?;
+        if enrollment.state == PairingEnrollmentState::Applied {
+            return Err(CodePairingSessionError::Conflict);
+        }
+        enrollment.state = PairingEnrollmentState::Aborting;
+        Ok(enrollment)
+    }
+
+    pub(crate) fn finish_enrollment_abort_with<E: From<CodePairingSessionError>>(
+        &mut self,
+        operation_id: &str,
+        network_name: &str,
+        now_unix_seconds: u64,
+        persist: impl FnOnce(&[u8]) -> Result<(), E>,
+    ) -> Result<(), E> {
+        let enrollment = self
+            .enrollment(operation_id)
+            .ok_or(CodePairingSessionError::NotFound)?;
+        if enrollment.state != PairingEnrollmentState::Aborting
+            || self.open_completion(operation_id).is_some()
+            || self.join_completion(operation_id).is_some()
+            || self.open.as_ref().is_some_and(|operation| {
+                operation.id == operation_id && operation.terminal.is_none()
+            })
+            || self.join.as_ref().is_some_and(|operation| {
+                operation.id == operation_id && operation.terminal.is_none()
+            })
+        {
+            return Err(CodePairingSessionError::Conflict.into());
+        }
+        let mut next = PersistedCodePairingSessions::from_runtime(self, network_name);
+        next.replay_tokens
+            .retain(|token| now_unix_seconds <= token.expires_at_unix_seconds);
+        let response = &enrollment.response.payload;
+        if now_unix_seconds <= response.expires_at_unix_seconds {
+            if let Some(token) = next
+                .replay_tokens
+                .iter_mut()
+                .find(|token| token.token == response.rendezvous_token)
+            {
+                if token
+                    .aborted_operation_id
+                    .as_deref()
+                    .is_some_and(|id| id != operation_id)
+                {
+                    return Err(CodePairingSessionError::Conflict.into());
+                }
+                token.aborted_operation_id = Some(operation_id.to_owned());
+                token.expires_at_unix_seconds = token
+                    .expires_at_unix_seconds
+                    .max(response.expires_at_unix_seconds);
+            } else {
+                if next.replay_tokens.len() >= MAX_CODE_PAIRING_REPLAY_TOKENS {
+                    return Err(CodePairingSessionError::Capacity.into());
+                }
+                next.replay_tokens.push(PairingReplayToken {
+                    token: response.rendezvous_token.clone(),
+                    expires_at_unix_seconds: response.expires_at_unix_seconds,
+                    aborted_operation_id: Some(operation_id.to_owned()),
+                });
+            }
+        }
+        next.enrollments
+            .retain(|entry| entry.operation_id != operation_id);
+        let bytes = serde_json::to_vec_pretty(&next).map_err(CodePairingSessionError::from)?;
+        persist(&bytes)?;
+        self.enrollments
+            .retain(|entry| entry.operation_id != operation_id);
+        self.replay_tokens = next.replay_tokens;
+        Ok(())
+    }
+
     pub fn mark_enrollment_applied(
         &mut self,
         operation_id: &str,
@@ -1511,6 +1656,9 @@ impl CodePairingSessions {
             .ok_or(CodePairingSessionError::NotFound)?;
         let completed_at_unix_seconds =
             completed_at_unix_seconds.max(enrollment.response.payload.issued_at_unix_seconds);
+        if enrollment.state == PairingEnrollmentState::Aborting {
+            return Err(CodePairingSessionError::Conflict);
+        }
         enrollment
             .completed_at_unix_seconds
             .get_or_insert(completed_at_unix_seconds);
@@ -2578,7 +2726,7 @@ impl CodePairingSessions {
         Ok(())
     }
 
-    fn ensure_idle(&self) -> Result<(), CodePairingSessionError> {
+    fn ensure_idle(&mut self) -> Result<(), CodePairingSessionError> {
         let open_active = self
             .open
             .as_ref()
@@ -2587,9 +2735,23 @@ impl CodePairingSessions {
             .join
             .as_ref()
             .is_some_and(|operation| operation.terminal.is_none() && operation.completed.is_none());
-        if open_active || join_active {
+        let prepared = self
+            .enrollments
+            .iter()
+            .filter(|entry| entry.state == PairingEnrollmentState::Prepared)
+            .map(|entry| entry.operation_id.clone())
+            .collect::<Vec<_>>();
+        let prepared_pending = prepared.iter().any(|operation_id| {
+            self.open_completion(operation_id).is_none()
+                && self.join_completion(operation_id).is_none()
+        });
+        if open_active || join_active || prepared_pending {
             Err(CodePairingSessionError::Busy)
         } else {
+            // Preserve a completed transaction before replacing its operation slot.
+            for operation_id in prepared {
+                self.mark_enrollment_applied(&operation_id)?;
+            }
             Ok(())
         }
     }
@@ -2835,6 +2997,11 @@ fn validate_pairing_enrollment(
 ) -> Result<(), CodePairingSessionError> {
     validate_pairing_operation_id(&enrollment.operation_id)?;
     validate_transcript_sha256(&enrollment.transcript_sha256, true)?;
+    if let Some(cleanup) = &enrollment.tun_cleanup {
+        cleanup
+            .validate()
+            .map_err(|error| invalid_enrollment(format!("invalid cleanup ownership: {error:?}")))?;
+    }
     if enrollment.membership_key_preconfigured == Some(true)
         && enrollment.response.payload.membership_key.is_none()
     {
@@ -2998,6 +3165,9 @@ fn validate_restored_replay_tokens(
 
     let mut unique = HashSet::with_capacity(replay_tokens.len());
     for replay_token in &replay_tokens {
+        if let Some(operation_id) = &replay_token.aborted_operation_id {
+            validate_pairing_operation_id(operation_id)?;
+        }
         let decoded = URL_SAFE_NO_PAD
             .decode(&replay_token.token)
             .map_err(|_| invalid_enrollment("pairing replay token is invalid"))?;
@@ -5107,6 +5277,10 @@ mod tests {
         };
         assert_eq!(sessions.poll_response(joiner, &ticket, 1_011), accepted);
         assert_eq!(sessions.retained_inbound_tickets.len(), 1);
+        assert_eq!(
+            sessions.enrollment(&enrollment.operation_id).unwrap().state,
+            PairingEnrollmentState::Applied
+        );
 
         let restored = CodePairingSessions::restore_persisted(
             &sessions.encode_persisted("runners").expect("encode"),
@@ -5697,8 +5871,275 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "diagnoses unresolved Prepared mutation policy; not a recovery guarantee"]
-    fn diagnose_prepared_pairing_mutation_restore() {
+    fn expired_prepared_operation_requires_explicit_cancel_before_replacement() {
+        for role in [
+            PairingEnrollmentRole::Inviter,
+            PairingEnrollmentRole::Joiner,
+        ] {
+            let (mut sessions, enrollment, now) = match role {
+                PairingEnrollmentRole::Inviter => {
+                    let (sessions, enrollment, _, _, now) = prepared_open_fixture(10);
+                    (sessions, enrollment, now)
+                }
+                PairingEnrollmentRole::Joiner => prepared_join_fixture(10),
+            };
+            let later = now + Duration::from_secs(11);
+            sessions.expire(1_011, later);
+            let before = sessions.encode_persisted("runners").unwrap();
+            assert!(matches!(
+                sessions.open("runners", 600, 1_011, later),
+                Err(CodePairingSessionError::Busy)
+            ));
+            assert!(matches!(
+                sessions.join(
+                    "runners",
+                    PairingCode::generate(),
+                    None,
+                    Vec::new(),
+                    600,
+                    1_011,
+                    later
+                ),
+                Err(CodePairingSessionError::Busy)
+            ));
+            assert_eq!(sessions.encode_persisted("runners").unwrap(), before);
+            sessions
+                .validate_prepared_recovery("runners", &enrollment)
+                .unwrap();
+            sessions.cancel(&enrollment.operation_id).unwrap();
+            sessions.open("runners", 600, 1_011, later).unwrap();
+            assert_eq!(
+                sessions.enrollment(&enrollment.operation_id).unwrap().state,
+                PairingEnrollmentState::Aborting
+            );
+        }
+    }
+
+    #[test]
+    fn completed_prepared_operation_cannot_begin_abort() {
+        let (mut inviter, enrollment, _, _, _) = prepared_open_fixture(600);
+        inviter
+            .recover_prepared_open("runners", &enrollment)
+            .unwrap();
+        let before = inviter.encode_persisted("runners").unwrap();
+        assert!(
+            inviter
+                .begin_enrollment_abort(&enrollment.operation_id)
+                .is_err()
+        );
+        assert_eq!(inviter.encode_persisted("runners").unwrap(), before);
+
+        let (mut joiner, enrollment, _) = prepared_join_fixture(600);
+        joiner
+            .recover_prepared_join("runners", &enrollment)
+            .unwrap();
+        let before = joiner.encode_persisted("runners").unwrap();
+        assert!(
+            joiner
+                .begin_enrollment_abort(&enrollment.operation_id)
+                .is_err()
+        );
+        assert_eq!(joiner.encode_persisted("runners").unwrap(), before);
+    }
+
+    #[test]
+    fn abort_intent_survives_cancellation_and_cannot_be_applied() {
+        for role in [
+            PairingEnrollmentRole::Inviter,
+            PairingEnrollmentRole::Joiner,
+        ] {
+            let (mut sessions, enrollment, now) = match role {
+                PairingEnrollmentRole::Inviter => {
+                    let (sessions, enrollment, _, _, now) = prepared_open_fixture(600);
+                    (sessions, enrollment, now)
+                }
+                PairingEnrollmentRole::Joiner => prepared_join_fixture(600),
+            };
+            let cleanup: super::super::tun::PairingTunCleanup =
+                serde_json::from_value(serde_json::json!({
+                    "interface": "pv0",
+                    "addresses": [{"prefix": "10.42.0.1/32"}],
+                    "routes": [{"prefix": "10.42.0.2/32"}]
+                }))
+                .unwrap();
+            sessions
+                .record_tun_cleanup(&enrollment.operation_id, cleanup.clone())
+                .unwrap();
+            sessions
+                .record_tun_cleanup(&enrollment.operation_id, cleanup.clone())
+                .unwrap();
+            for _ in 0..2 {
+                assert_eq!(
+                    sessions
+                        .begin_enrollment_abort(&enrollment.operation_id)
+                        .unwrap()
+                        .state,
+                    PairingEnrollmentState::Aborting
+                );
+            }
+            sessions.cancel(&enrollment.operation_id).unwrap();
+            let bytes = sessions.encode_persisted("runners").unwrap();
+            let mut restored =
+                CodePairingSessions::restore_persisted(&bytes, "runners", 1_002, now).unwrap();
+            let aborted = restored
+                .enrollment(&enrollment.operation_id)
+                .unwrap()
+                .clone();
+            assert_eq!(aborted.state, PairingEnrollmentState::Aborting);
+            assert_eq!(aborted.response, enrollment.response);
+            assert_eq!(aborted.tun_cleanup.as_ref(), Some(&cleanup));
+            assert!(
+                restored
+                    .record_tun_cleanup(&enrollment.operation_id, cleanup)
+                    .is_err()
+            );
+            let mut invalid: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            invalid["enrollments"][0]["tun_cleanup"]["addresses"][0]["prefix"] =
+                serde_json::json!("10.42.0.1/999");
+            assert!(
+                CodePairingSessions::restore_persisted(
+                    &serde_json::to_vec(&invalid).unwrap(),
+                    "runners",
+                    1_002,
+                    now
+                )
+                .is_err()
+            );
+            assert!(
+                restored
+                    .validate_prepared_recovery("runners", &aborted)
+                    .is_err()
+            );
+            assert!(
+                restored
+                    .mark_enrollment_applied(&enrollment.operation_id)
+                    .is_err()
+            );
+            assert!(
+                restored
+                    .prepare_enrollment(
+                        "runners",
+                        PairingEnrollmentPreparation {
+                            operation_id: enrollment.operation_id.clone(),
+                            role,
+                            approval_id: enrollment.approval_id.clone(),
+                            offer: enrollment.offer.clone(),
+                            response: enrollment.response.clone(),
+                            transcript_sha256: enrollment.transcript_sha256.clone(),
+                            membership_key_preconfigured: enrollment.membership_key_preconfigured,
+                        }
+                    )
+                    .is_err()
+            );
+            assert_eq!(
+                restored.enrollment(&enrollment.operation_id),
+                Some(&aborted)
+            );
+        }
+    }
+
+    #[test]
+    fn abort_compaction_persists_before_discard_and_retains_only_replay_protection() {
+        for role in [
+            PairingEnrollmentRole::Inviter,
+            PairingEnrollmentRole::Joiner,
+        ] {
+            let (mut sessions, enrollment, now) = match role {
+                PairingEnrollmentRole::Inviter => {
+                    let (sessions, enrollment, _, _, now) = prepared_open_fixture(600);
+                    (sessions, enrollment, now)
+                }
+                PairingEnrollmentRole::Joiner => prepared_join_fixture(600),
+            };
+            let operation = &enrollment.operation_id;
+            assert!(
+                sessions
+                    .finish_enrollment_abort_with::<CodePairingSessionError>(
+                        operation,
+                        "runners",
+                        1_002,
+                        |_| panic!("cannot compact a prepared enrollment")
+                    )
+                    .is_err()
+            );
+            sessions.begin_enrollment_abort(operation).unwrap();
+            assert!(
+                sessions
+                    .finish_enrollment_abort_with::<CodePairingSessionError>(
+                        operation,
+                        "runners",
+                        1_002,
+                        |_| panic!("cannot compact an active operation")
+                    )
+                    .is_err()
+            );
+            sessions.cancel(operation).unwrap();
+            let before = sessions.encode_persisted("runners").unwrap();
+            let failed = sessions.finish_enrollment_abort_with::<CodePairingSessionError>(
+                operation,
+                "runners",
+                1_002,
+                |_| Err(CodePairingSessionError::Conflict),
+            );
+            assert!(failed.is_err());
+            assert_eq!(sessions.encode_persisted("runners").unwrap(), before);
+            let mut saved = Vec::new();
+            sessions
+                .finish_enrollment_abort_with::<CodePairingSessionError>(
+                    operation,
+                    "runners",
+                    1_002,
+                    |bytes| {
+                        saved = bytes.to_vec();
+                        Ok(())
+                    },
+                )
+                .unwrap();
+            assert_eq!(saved, sessions.encode_persisted("runners").unwrap());
+            let mut restored =
+                CodePairingSessions::restore_persisted(&saved, "runners", 1_002, now).unwrap();
+            assert!(restored.enrollment(operation).is_none());
+            assert!(
+                restored.receipt(operation).is_none(),
+                "abort is not a completed pairing receipt"
+            );
+            assert!(restored.open_completion(operation).is_none());
+            assert!(restored.join_completion(operation).is_none());
+            assert!(
+                restored
+                    .active_replay_tokens(1_002)
+                    .any(|token| token == enrollment.response.payload.rendezvous_token)
+            );
+            let saved: serde_json::Value = serde_json::from_slice(&saved).unwrap();
+            assert_eq!(saved["enrollments"], serde_json::json!([]));
+            assert_eq!(
+                saved["replay_tokens"][0]["aborted_operation_id"],
+                serde_json::json!(operation)
+            );
+            for operation_id in [operation.clone(), fresh_pairing_operation_id()] {
+                assert!(
+                    restored
+                        .prepare_enrollment(
+                            "runners",
+                            PairingEnrollmentPreparation {
+                                operation_id,
+                                role,
+                                approval_id: enrollment.approval_id.clone(),
+                                offer: enrollment.offer.clone(),
+                                response: enrollment.response.clone(),
+                                transcript_sha256: enrollment.transcript_sha256.clone(),
+                                membership_key_preconfigured: enrollment
+                                    .membership_key_preconfigured,
+                            }
+                        )
+                        .is_err()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn prepared_pairing_mutations_persist_abort_instead_of_replaying_enrollment() {
         for role in [
             PairingEnrollmentRole::Inviter,
             PairingEnrollmentRole::Joiner,
@@ -5753,35 +6194,47 @@ mod tests {
                         }
                     }
                 }
-                assert_eq!(
-                    sessions.enrollment(&enrollment.operation_id),
-                    Some(&enrollment)
-                );
+                let aborted = sessions
+                    .enrollment(&enrollment.operation_id)
+                    .unwrap()
+                    .clone();
+                assert_eq!(aborted.state, PairingEnrollmentState::Aborting);
+                assert_eq!(aborted.response, enrollment.response);
                 let after = sessions
                     .encode_persisted("runners")
                     .expect("encode mutated state");
                 assert_ne!(before, after);
-                match CodePairingSessions::restore_persisted(&after, "runners", 1_002, now) {
-                    Err(error) => eprintln!("{role:?} {action}: restore rejected: {error:?}"),
-                    Ok(mut restored) => {
-                        let recovery = match role {
-                            PairingEnrollmentRole::Inviter => restored
-                                .recover_prepared_open("runners", &enrollment)
-                                .map(|_| ()),
-                            PairingEnrollmentRole::Joiner => {
-                                restored.recover_prepared_join("runners", &enrollment)
-                            }
-                        };
-                        match recovery {
-                            Err(error) => eprintln!(
-                                "{role:?} {action}: restore accepted; recovery rejected: {error:?}"
-                            ),
-                            Ok(()) => panic!(
-                                "{role:?} {action}: diagnostic no longer reproduces; review recovery"
-                            ),
-                        }
-                    }
-                }
+                let mut restored =
+                    CodePairingSessions::restore_persisted(&after, "runners", 1_002, now).unwrap();
+                assert_eq!(
+                    restored.enrollment(&enrollment.operation_id),
+                    Some(&aborted)
+                );
+                assert!(
+                    restored
+                        .validate_prepared_recovery("runners", &aborted)
+                        .is_err()
+                );
+                let operations_before: serde_json::Value =
+                    serde_json::from_slice(&restored.encode_persisted("runners").unwrap()).unwrap();
+                restored
+                    .finish_enrollment_abort_with::<CodePairingSessionError>(
+                        &enrollment.operation_id,
+                        "runners",
+                        1_002,
+                        |_| Ok(()),
+                    )
+                    .unwrap();
+                let completed = restored.encode_persisted("runners").unwrap();
+                let operations_after: serde_json::Value =
+                    serde_json::from_slice(&completed).unwrap();
+                assert_eq!(operations_before["open"], operations_after["open"]);
+                assert_eq!(operations_before["join"], operations_after["join"]);
+                let restored =
+                    CodePairingSessions::restore_persisted(&completed, "runners", 1_002, now)
+                        .unwrap();
+                assert!(restored.enrollment(&enrollment.operation_id).is_none());
+                assert!(restored.receipt(&enrollment.operation_id).is_none());
             }
         }
     }
@@ -5848,6 +6301,7 @@ mod tests {
                 transcript_sha256: transcript_sha256.clone(),
                 completed_at_unix_seconds: Some(1_002),
                 membership_key_preconfigured: None,
+                tun_cleanup: None,
                 state: PairingEnrollmentState::Applied,
             })
         );
@@ -5862,6 +6316,7 @@ mod tests {
                 transcript_sha256,
                 completed_at_unix_seconds: None,
                 membership_key_preconfigured: None,
+                tun_cleanup: None,
                 state: PairingEnrollmentState::Prepared,
             })
         );

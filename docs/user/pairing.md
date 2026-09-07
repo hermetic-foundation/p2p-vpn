@@ -293,8 +293,22 @@ Cancel an unfinished local operation:
 sudo p2p-vpn pair cancel OPERATION --instance runners
 ```
 
-Cancelling a completed operation leaves its result unchanged. To remove an admitted
-peer, revoke its membership instead.
+| Operation State | Cancellation |
+| --- | --- |
+| Pending | Discards the local pairing operation |
+| Prepared, not completed | Records abort intent, cleans up partial routes, then discards pending enrollment |
+| Cleanup interrupted | Retries automatically, including after restart; does not enroll the peer |
+| Completed | Leaves the result unchanged; use membership revocation instead |
+
+Cancellation is local. It does not revoke membership already established on another
+device; that device's network revocation policy still applies.
+
+If saving abort intent fails, the command reports an error rather than confirming
+cancellation. Until that save succeeds, restarting can still recover the previously
+saved pending operation. Check storage errors and retry the cancellation.
+
+If an expired operation is still prepared, cancel it before starting another
+pairing. Expiration alone does not discard a partially applied enrollment.
 
 Operations and applied enrollments survive daemon restarts.
 

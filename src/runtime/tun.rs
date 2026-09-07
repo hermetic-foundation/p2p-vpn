@@ -10,7 +10,7 @@ use std::io::{Read as _, Write as _};
 
 use crate::{
     PeerId,
-    config::{Config, effective_packet_mtu, vpn_ip_host_route},
+    config::{Config, RouteConfig, effective_packet_mtu, vpn_ip_host_route},
     route::{IpCidr, Route, builtin_ipv4, builtin_ipv6},
 };
 
@@ -117,13 +117,138 @@ pub struct TunRuntimeConfig {
     pub routes: Vec<Route>,
 }
 
+/// Structured ownership of additions which may survive a failed pairing commit.
+#[derive(Clone, Debug, serde::Deserialize, Eq, PartialEq, serde::Serialize)]
+pub(crate) struct PairingTunCleanup {
+    interface: String,
+    addresses: Vec<RouteConfig>,
+    routes: Vec<RouteConfig>,
+}
+
+impl PairingTunCleanup {
+    pub(crate) fn capture(
+        installed: &TunRuntimeConfig,
+        attempted: &TunRuntimeConfig,
+    ) -> Result<Self, TunRuntimeError> {
+        attempted.pairing_reconciliation_from(installed)?;
+        let prefix_config = |prefix: IpCidr| RouteConfig {
+            prefix: prefix.to_string(),
+            metric: 0,
+        };
+        Ok(Self {
+            interface: installed.name.clone(),
+            addresses: attempted
+                .additional_addresses
+                .iter()
+                .filter(|address| !installed.has_local_address(**address))
+                .map(|address| prefix_config(*address))
+                .collect(),
+            routes: attempted
+                .routes
+                .iter()
+                .filter(|route| {
+                    !installed
+                        .routes
+                        .iter()
+                        .any(|old| old.prefix == route.prefix)
+                })
+                .map(|route| prefix_config(route.prefix))
+                .collect(),
+        })
+    }
+
+    pub(crate) fn validate(&self) -> Result<(), TunRuntimeError> {
+        if self.interface.is_empty() || self.interface.contains('\0') {
+            return Err(TunRuntimeError::NonAdditiveUpdate(
+                "invalid pairing cleanup interface",
+            ));
+        }
+        for (entries, addresses) in [(&self.addresses, true), (&self.routes, false)] {
+            let mut seen = std::collections::BTreeSet::new();
+            for entry in entries {
+                let prefix = entry.prefix().map_err(TunRuntimeError::Config)?;
+                if entry.metric != 0
+                    || !seen.insert(prefix.to_string())
+                    || (addresses
+                        && prefix.prefix_len() != if prefix.address().is_ipv4() { 32 } else { 128 })
+                {
+                    return Err(TunRuntimeError::NonAdditiveUpdate(
+                        "invalid pairing cleanup prefix",
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn merge(&mut self, next: &Self) -> Result<(), TunRuntimeError> {
+        self.validate()?;
+        next.validate()?;
+        if self.interface != next.interface {
+            return Err(TunRuntimeError::NonAdditiveUpdate(
+                "pairing cleanup interface changed",
+            ));
+        }
+        for (existing, additions) in [
+            (&mut self.addresses, &next.addresses),
+            (&mut self.routes, &next.routes),
+        ] {
+            for addition in additions {
+                if !existing.contains(addition) {
+                    existing.push(addition.clone());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn update(
+        &self,
+        surviving: &TunRuntimeConfig,
+    ) -> Result<TunRouteUpdate, TunRuntimeError> {
+        self.validate()?;
+        if self.interface != surviving.name {
+            return Err(TunRuntimeError::NonAdditiveUpdate(
+                "pairing cleanup interface changed",
+            ));
+        }
+        let mut commands = surviving.pairing_abort_commands_from(surviving)?;
+        for route in &self.routes {
+            let prefix = route.prefix().map_err(TunRuntimeError::Config)?;
+            if !surviving.routes.iter().any(|route| route.prefix == prefix) {
+                commands.push(IpCommand::route_delete(self.interface.clone(), prefix));
+            }
+        }
+        for address in &self.addresses {
+            let prefix = address.prefix().map_err(TunRuntimeError::Config)?;
+            if !surviving.has_local_address(prefix) {
+                commands.push(IpCommand::addr_delete(self.interface.clone(), prefix));
+            }
+        }
+        Ok(TunRouteUpdate::abort_cleanup(commands))
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TunRouteUpdate {
     apply: Vec<IpCommand>,
     rollback: Vec<IpCommand>,
+    abort_cleanup: bool,
 }
 
 impl TunRouteUpdate {
+    pub(crate) fn abort_cleanup(apply: Vec<IpCommand>) -> Self {
+        Self {
+            apply,
+            rollback: Vec::new(),
+            abort_cleanup: true,
+        }
+    }
+
+    pub(crate) const fn is_abort_cleanup(&self) -> bool {
+        self.abort_cleanup
+    }
+
     #[must_use]
     pub fn apply_commands(&self) -> &[IpCommand] {
         &self.apply
@@ -136,6 +261,15 @@ impl TunRouteUpdate {
 }
 
 impl TunRuntimeConfig {
+    fn has_local_address(&self, prefix: IpCidr) -> bool {
+        self.additional_addresses.contains(&prefix)
+            || match (prefix.address(), prefix.prefix_len()) {
+                (IpAddr::V4(address), 32) => address == self.addresses.ipv4,
+                (IpAddr::V6(address), 128) => address == self.addresses.ipv6,
+                _ => false,
+            }
+    }
+
     pub(crate) fn from_config_with_routes(
         config: &Config,
         routes: &[Route],
@@ -251,7 +385,7 @@ impl TunRuntimeConfig {
         if current
             .additional_addresses
             .iter()
-            .any(|address| !self.additional_addresses.contains(address))
+            .any(|address| !self.has_local_address(*address))
             || current
                 .routes
                 .iter()
@@ -266,7 +400,7 @@ impl TunRuntimeConfig {
             .additional_addresses
             .iter()
             .copied()
-            .filter(|address| !current.additional_addresses.contains(address))
+            .filter(|address| !current.has_local_address(*address))
             .collect::<Vec<_>>();
         let new_routes = self
             .routes
@@ -300,7 +434,11 @@ impl TunRuntimeConfig {
                 .map(|route| IpCommand::route_delete(self.name.clone(), route.prefix)),
         );
 
-        Ok(TunRouteUpdate { apply, rollback })
+        Ok(TunRouteUpdate {
+            apply,
+            rollback,
+            abort_cleanup: false,
+        })
     }
 
     pub fn route_reconciliation_from(
@@ -330,7 +468,7 @@ impl TunRuntimeConfig {
             || current
                 .additional_addresses
                 .iter()
-                .any(|address| !self.additional_addresses.contains(address))
+                .any(|address| !self.has_local_address(*address))
         {
             return Err(TunRuntimeError::NonAdditiveUpdate(
                 "pairing cannot change the running TUN identity, MTU, or remove local addresses",
@@ -339,9 +477,10 @@ impl TunRuntimeConfig {
         let mut update = TunRouteUpdate {
             apply: Vec::new(),
             rollback: Vec::new(),
+            abort_cleanup: false,
         };
         for address in &self.additional_addresses {
-            if !current.additional_addresses.contains(address) {
+            if !current.has_local_address(*address) {
                 update
                     .apply
                     .push(IpCommand::addr_replace(self.name.clone(), *address));
@@ -354,6 +493,57 @@ impl TunRuntimeConfig {
         update.apply.extend(routes.apply);
         update.rollback.extend(routes.rollback);
         Ok(update)
+    }
+
+    pub(crate) fn pairing_abort_commands_from(
+        &self,
+        attempted: &Self,
+    ) -> Result<Vec<IpCommand>, TunRuntimeError> {
+        if self.name != attempted.name
+            || self.mtu != attempted.mtu
+            || self.addresses != attempted.addresses
+        {
+            return Err(TunRuntimeError::NonAdditiveUpdate(
+                "pairing abort cannot change the running TUN identity or MTU",
+            ));
+        }
+        // Restore surviving sources before routes, then remove pairing-only
+        // addresses. Abort cleanup is retried, not rolled back into enrollment.
+        let mut commands = self
+            .additional_addresses
+            .iter()
+            .copied()
+            .map(|address| IpCommand::addr_replace(self.name.clone(), address))
+            .collect::<Vec<_>>();
+        commands.extend(self.routes.iter().map(|route| {
+            IpCommand::route_replace(
+                self.name.clone(),
+                route.prefix,
+                self.route_source(route.prefix),
+                self.mtu,
+            )
+        }));
+        commands.extend(
+            attempted
+                .routes
+                .iter()
+                .filter(|route| {
+                    !self
+                        .routes
+                        .iter()
+                        .any(|survivor| survivor.prefix == route.prefix)
+                })
+                .map(|route| IpCommand::route_delete(self.name.clone(), route.prefix)),
+        );
+        commands.extend(
+            attempted
+                .additional_addresses
+                .iter()
+                .copied()
+                .filter(|address| !self.has_local_address(*address))
+                .map(|address| IpCommand::addr_delete(self.name.clone(), address)),
+        );
+        Ok(commands)
     }
 
     fn route_update_from(&self, current: &Self) -> TunRouteUpdate {
@@ -404,7 +594,11 @@ impl TunRuntimeConfig {
             ));
         }
 
-        TunRouteUpdate { apply, rollback }
+        TunRouteUpdate {
+            apply,
+            rollback,
+            abort_cleanup: false,
+        }
     }
 
     fn route_source(&self, prefix: IpCidr) -> IpAddr {
@@ -457,6 +651,26 @@ impl RouteConfigExt for crate::config::RouteConfig {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct IpCommand {
     args: Vec<String>,
+    deletion: Option<IpDeletion>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct IpDeletion {
+    interface: String,
+    prefix: IpCidr,
+    route: bool,
+}
+
+#[derive(serde::Deserialize)]
+struct InterfaceAddressListing {
+    ifname: String,
+    addr_info: Vec<ListedAddress>,
+}
+
+#[derive(serde::Deserialize)]
+struct ListedAddress {
+    local: IpAddr,
+    prefixlen: u8,
 }
 
 impl IpCommand {
@@ -482,11 +696,19 @@ impl IpCommand {
         if is_ipv6 {
             args.push("nodad".to_owned());
         }
-        Self { args }
+        Self {
+            args,
+            deletion: None,
+        }
     }
 
     #[must_use]
     pub fn addr_delete(interface: String, prefix: IpCidr) -> Self {
+        let deletion = Some(IpDeletion {
+            interface: interface.clone(),
+            prefix,
+            route: false,
+        });
         let mut args = Vec::new();
         if prefix.address().is_ipv6() {
             args.push("-6".to_owned());
@@ -498,7 +720,7 @@ impl IpCommand {
             "dev".to_owned(),
             interface,
         ]);
-        Self { args }
+        Self { args, deletion }
     }
 
     #[must_use]
@@ -523,11 +745,19 @@ impl IpCommand {
         if let Some(advmss) = route_advmss(prefix, mtu) {
             args.extend(["advmss".to_owned(), advmss.to_string()]);
         }
-        Self { args }
+        Self {
+            args,
+            deletion: None,
+        }
     }
 
     #[must_use]
     pub fn route_delete(interface: String, prefix: IpCidr) -> Self {
+        let deletion = Some(IpDeletion {
+            interface: interface.clone(),
+            prefix,
+            route: true,
+        });
         let mut args = Vec::new();
         if prefix.address().is_ipv6() {
             args.push("-6".to_owned());
@@ -541,7 +771,7 @@ impl IpCommand {
             "metric".to_owned(),
             "3000".to_owned(),
         ]);
-        Self { args }
+        Self { args, deletion }
     }
 
     #[must_use]
@@ -551,6 +781,58 @@ impl IpCommand {
 
     pub fn execute(&self) -> Result<ExitStatus, io::Error> {
         Command::new("ip").args(&self.args).status()
+    }
+
+    pub(crate) fn deletion_is_absent(&self) -> io::Result<bool> {
+        self.deletion_is_absent_with(|args| {
+            let output = Command::new("ip").args(args).output()?;
+            if !output.status.success() {
+                return Err(io::Error::other(format!(
+                    "cannot verify pairing cleanup: {}",
+                    String::from_utf8_lossy(&output.stderr),
+                )));
+            }
+            Ok(output.stdout)
+        })
+    }
+
+    fn deletion_is_absent_with(
+        &self,
+        mut query: impl FnMut(&[String]) -> io::Result<Vec<u8>>,
+    ) -> io::Result<bool> {
+        let Some(target) = &self.deletion else {
+            return Ok(false);
+        };
+        let args = ["-j", "address", "show", "dev", &target.interface].map(str::to_owned);
+        let interfaces: Vec<InterfaceAddressListing> = serde_json::from_slice(&query(&args)?)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        if interfaces.len() != 1 || interfaces[0].ifname != target.interface {
+            return Err(io::Error::other(
+                "pairing cleanup interface is missing or ambiguous",
+            ));
+        }
+        if !target.route {
+            return Ok(!interfaces[0].addr_info.iter().any(|address| {
+                address.local == target.prefix.address()
+                    && address.prefixlen == target.prefix.prefix_len()
+            }));
+        }
+        let mut args = vec![];
+        if target.prefix.address().is_ipv6() {
+            args.push("-6".to_owned());
+        }
+        args.extend(["-j", "route", "show", "exact"].map(str::to_owned));
+        args.extend([
+            target.prefix.to_string(),
+            "dev".to_owned(),
+            target.interface.clone(),
+            "metric".to_owned(),
+            "3000".to_owned(),
+        ]);
+        let routes: Vec<serde_json::Map<String, serde_json::Value>> =
+            serde_json::from_slice(&query(&args)?)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        Ok(routes.is_empty())
     }
 }
 
@@ -839,6 +1121,334 @@ mod tests {
 
     struct TestPacketReader(Vec<u8>);
 
+    #[test]
+    fn pairing_cannot_take_cleanup_ownership_of_builtin_addresses() {
+        let installed = TunRuntimeConfig {
+            name: "pv0".to_owned(),
+            mtu: 1280,
+            addresses: TunAddresses::for_peer(PeerId::from_bytes([1; 32])),
+            additional_addresses: Vec::new(),
+            routes: Vec::new(),
+        };
+        let mut attempted = installed.clone();
+        attempted.additional_addresses = vec![
+            IpCidr::new(installed.addresses.ipv4.into(), 32).unwrap(),
+            IpCidr::new(installed.addresses.ipv6.into(), 128).unwrap(),
+        ];
+        let cleanup = PairingTunCleanup::capture(&installed, &attempted).unwrap();
+        assert!(
+            cleanup.addresses.is_empty(),
+            "built-in addresses are already owned by the TUN"
+        );
+        assert!(
+            attempted
+                .additive_update_from(&installed)
+                .unwrap()
+                .apply_commands()
+                .is_empty()
+        );
+        assert!(
+            attempted
+                .pairing_reconciliation_from(&installed)
+                .unwrap()
+                .apply_commands()
+                .is_empty()
+        );
+        assert!(
+            installed
+                .pairing_abort_commands_from(&attempted)
+                .unwrap()
+                .is_empty()
+        );
+        let recorded = PairingTunCleanup {
+            interface: installed.name.clone(),
+            addresses: attempted
+                .additional_addresses
+                .iter()
+                .map(|prefix| RouteConfig {
+                    prefix: prefix.to_string(),
+                    metric: 0,
+                })
+                .collect(),
+            routes: Vec::new(),
+        };
+        assert!(
+            recorded
+                .update(&installed)
+                .unwrap()
+                .apply_commands()
+                .is_empty(),
+            "even a retained ownership record must preserve built-in addresses"
+        );
+    }
+
+    #[test]
+    fn cleanup_ownership_retains_additions_across_retries_and_preserves_survivors() {
+        let prefix = |ip: &str| IpCidr::new(ip.parse().unwrap(), 32).unwrap();
+        let route = |ip: &str| Route {
+            owner: PeerId::from_bytes([2; 32]),
+            prefix: prefix(ip),
+            metric: 0,
+        };
+        let installed = TunRuntimeConfig {
+            name: "pv0".to_owned(),
+            mtu: 1280,
+            addresses: TunAddresses::for_peer(PeerId::from_bytes([1; 32])),
+            additional_addresses: vec![prefix("10.42.0.1")],
+            routes: vec![route("10.42.0.2")],
+        };
+        let mut attempted = installed.clone();
+        attempted.additional_addresses.push(prefix("10.43.0.1"));
+        attempted.routes.push(route("10.43.0.2"));
+        let mut cleanup = PairingTunCleanup::capture(&installed, &attempted).unwrap();
+        assert_eq!(cleanup.addresses.len(), 1);
+        assert_eq!(cleanup.routes.len(), 1);
+        let original = cleanup.clone();
+        cleanup.merge(&original).unwrap();
+        assert_eq!(cleanup, original);
+        attempted.routes.push(route("10.44.0.2"));
+        cleanup
+            .merge(&PairingTunCleanup::capture(&installed, &attempted).unwrap())
+            .unwrap();
+        assert_eq!(cleanup.routes.len(), 2);
+        let decoded: PairingTunCleanup =
+            serde_json::from_slice(&serde_json::to_vec(&cleanup).unwrap()).unwrap();
+        assert_eq!(decoded, cleanup);
+        let update = decoded.update(&installed).unwrap();
+        let commands = update
+            .apply_commands()
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            &commands[commands.len() - 3..],
+            [
+                "ip route del 10.43.0.2/32 dev pv0 metric 3000",
+                "ip route del 10.44.0.2/32 dev pv0 metric 3000",
+                "ip addr del 10.43.0.1/32 dev pv0",
+            ]
+        );
+        assert!(update.is_abort_cleanup());
+        assert!(update.rollback_commands().is_empty());
+        let surviving = attempted.clone();
+        assert!(
+            decoded
+                .update(&surviving)
+                .unwrap()
+                .apply_commands()
+                .iter()
+                .all(|command| !command.args().iter().any(|arg| arg == "del"))
+        );
+        let mut wrong_interface = installed.clone();
+        wrong_interface.name = "pv1".to_owned();
+        assert!(decoded.update(&wrong_interface).is_err());
+        for invalid in [
+            serde_json::json!({"interface":"", "addresses":[], "routes":[]}),
+            serde_json::json!({"interface":"pv0", "addresses":[{"prefix":"10.0.0.0/24"}], "routes":[]}),
+            serde_json::json!({"interface":"pv0", "addresses":[], "routes":[{"prefix":"10.0.0.0/999"}]}),
+            serde_json::json!({"interface":"pv0", "addresses":[], "routes":[{"prefix":"10.0.0.0/24", "metric":7}]}),
+        ] {
+            let invalid: PairingTunCleanup = serde_json::from_value(invalid).unwrap();
+            assert!(invalid.validate().is_err());
+            assert!(invalid.update(&installed).is_err());
+            let before = cleanup.clone();
+            assert!(cleanup.merge(&invalid).is_err());
+            assert_eq!(cleanup, before);
+        }
+    }
+
+    #[test]
+    fn cleanup_absence_checks_are_exact_and_fail_closed() {
+        let prefix = IpCidr::new("10.42.0.1".parse().unwrap(), 32).unwrap();
+        let delete = IpCommand::addr_delete("pv0".to_owned(), prefix);
+        let listing = |addresses: serde_json::Value| {
+            serde_json::to_vec(&serde_json::json!([
+                {"ifname": "pv0", "addr_info": addresses}
+            ]))
+            .unwrap()
+        };
+        for (addresses, absent) in [
+            (serde_json::json!([]), true),
+            (
+                serde_json::json!([{"local":"10.42.0.1", "prefixlen":32}]),
+                false,
+            ),
+            (
+                serde_json::json!([{"local":"10.42.0.2", "prefixlen":32}]),
+                true,
+            ),
+            (
+                serde_json::json!([{"local":"10.42.0.1", "prefixlen":24}]),
+                true,
+            ),
+        ] {
+            assert_eq!(
+                delete
+                    .deletion_is_absent_with(|_| Ok(listing(addresses.clone())))
+                    .unwrap(),
+                absent
+            );
+        }
+        for invalid in [
+            b"[]".as_slice(),
+            b"null",
+            b"not-json",
+            br#"[{"ifname":"pv1","addr_info":[]}]"#,
+            br#"[{"ifname":"pv0"}]"#,
+        ] {
+            assert!(
+                delete
+                    .deletion_is_absent_with(|_| Ok(invalid.to_vec()))
+                    .is_err()
+            );
+        }
+        assert!(
+            delete
+                .deletion_is_absent_with(|_| Err(io::Error::from(io::ErrorKind::PermissionDenied)))
+                .is_err()
+        );
+        assert!(
+            !IpCommand::addr_replace("pv0".to_owned(), prefix)
+                .deletion_is_absent_with(|_| panic!("replace must not query deletion state"))
+                .unwrap()
+        );
+        for (routes, absent) in [
+            (b"[]".as_slice(), true),
+            (br#"[{"dst":"10.42.0.1"}]"#, false),
+        ] {
+            let mut queries = Vec::new();
+            assert_eq!(
+                IpCommand::route_delete("pv0".to_owned(), prefix)
+                    .deletion_is_absent_with(|args| {
+                        queries.push(args.to_vec());
+                        Ok(if queries.len() == 1 {
+                            listing(serde_json::json!([]))
+                        } else {
+                            routes.to_vec()
+                        })
+                    })
+                    .unwrap(),
+                absent
+            );
+            assert_eq!(
+                queries[1],
+                [
+                    "-j",
+                    "route",
+                    "show",
+                    "exact",
+                    "10.42.0.1/32",
+                    "dev",
+                    "pv0",
+                    "metric",
+                    "3000"
+                ]
+            );
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "requires an isolated Linux user/network namespace and iproute2"]
+    fn cleanup_absence_checks_match_kernel_state() {
+        const PARENT_NAMESPACE: &str = "P2P_VPN_CLEANUP_PARENT_NETNS";
+        let namespace = fs::read_link("/proc/self/ns/net").unwrap();
+        let Some(parent_namespace) = std::env::var_os(PARENT_NAMESPACE) else {
+            let status = Command::new("unshare")
+                .args(["--user", "--map-root-user", "--net"])
+                .arg(std::env::current_exe().unwrap())
+                .args([
+                    "--ignored",
+                    "--exact",
+                    "runtime::tun::tests::cleanup_absence_checks_match_kernel_state",
+                    "--nocapture",
+                ])
+                .env(PARENT_NAMESPACE, namespace)
+                .status()
+                .unwrap();
+            assert!(status.success(), "isolated cleanup test failed");
+            return;
+        };
+        assert_ne!(
+            namespace,
+            PathBuf::from(parent_namespace),
+            "cleanup test must not mutate its parent's network namespace"
+        );
+        for args in [
+            vec!["link", "add", "pv0", "type", "dummy"],
+            vec!["link", "set", "pv0", "up"],
+        ] {
+            assert!(Command::new("ip").args(args).status().unwrap().success());
+        }
+        for (address, destination, bits) in
+            [("10.42.0.1", "10.42.0.2", 32), ("fd42::1", "fd42::2", 128)]
+        {
+            let address = IpCidr::new(address.parse().unwrap(), bits).unwrap();
+            let destination = IpCidr::new(destination.parse().unwrap(), bits).unwrap();
+            let delete_address = IpCommand::addr_delete("pv0".to_owned(), address);
+            let delete_route = IpCommand::route_delete("pv0".to_owned(), destination);
+            assert!(delete_address.deletion_is_absent().unwrap());
+            assert!(delete_route.deletion_is_absent().unwrap());
+            assert!(
+                IpCommand::addr_replace("pv0".to_owned(), address)
+                    .execute()
+                    .unwrap()
+                    .success()
+            );
+            assert!(!delete_address.deletion_is_absent().unwrap());
+            if bits == 128 {
+                assert!(
+                    Command::new("ip")
+                        .args([
+                            "-6",
+                            "addr",
+                            "replace",
+                            &address.to_string(),
+                            "dev",
+                            "pv0",
+                            "nodad"
+                        ])
+                        .status()
+                        .unwrap()
+                        .success()
+                );
+            }
+            assert!(
+                IpCommand::route_replace("pv0".to_owned(), destination, address.address(), 1280)
+                    .execute()
+                    .unwrap()
+                    .success()
+            );
+            assert!(!delete_route.deletion_is_absent().unwrap());
+            assert!(delete_route.execute().unwrap().success());
+            assert!(delete_route.deletion_is_absent().unwrap());
+            assert!(!delete_route.execute().unwrap().success());
+            assert!(delete_route.deletion_is_absent().unwrap());
+            assert!(delete_address.execute().unwrap().success());
+            assert!(delete_address.deletion_is_absent().unwrap());
+            assert!(!delete_address.execute().unwrap().success());
+            assert!(delete_address.deletion_is_absent().unwrap());
+        }
+        assert!(
+            Command::new("ip")
+                .args(["link", "del", "pv0"])
+                .status()
+                .unwrap()
+                .success()
+        );
+        let prefix = IpCidr::new("10.42.0.1".parse().unwrap(), 32).unwrap();
+        assert!(
+            IpCommand::addr_delete("pv0".to_owned(), prefix)
+                .deletion_is_absent()
+                .is_err()
+        );
+        assert!(
+            IpCommand::route_delete("pv0".to_owned(), prefix)
+                .deletion_is_absent()
+                .is_err()
+        );
+    }
+
     impl PacketRead for TestPacketReader {
         fn read_packet(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
             let length = self.0.len();
@@ -1096,6 +1706,97 @@ mod tests {
             },
         ] {
             assert!(incompatible.pairing_reconciliation_from(&current).is_err());
+        }
+    }
+
+    #[test]
+    fn pairing_abort_restores_route_sources_before_removing_addresses() {
+        for (alias, retained_prefix, added_prefix, host_len, subnet_len) in [
+            ("10.42.0.1", "10.42.0.2", "10.43.0.0", 32, 24),
+            ("fd42::1", "fd42::2", "fd43::", 128, 64),
+        ] {
+            let local = PeerId::from_bytes([1; 32]);
+            let retained = Route {
+                owner: PeerId::from_bytes([2; 32]),
+                prefix: IpCidr::new(retained_prefix.parse().unwrap(), host_len).unwrap(),
+                metric: 0,
+            };
+            let added = Route {
+                prefix: IpCidr::new(added_prefix.parse().unwrap(), subnet_len).unwrap(),
+                ..retained
+            };
+            let target = TunRuntimeConfig {
+                name: "pv0".to_owned(),
+                mtu: 1280,
+                addresses: TunAddresses::for_peer(local),
+                additional_addresses: Vec::new(),
+                routes: vec![retained],
+            };
+            let alias = IpCidr::new(alias.parse().unwrap(), host_len).unwrap();
+            let attempted = TunRuntimeConfig {
+                additional_addresses: vec![alias],
+                routes: vec![retained, added],
+                ..target.clone()
+            };
+            assert_eq!(
+                target.pairing_abort_commands_from(&attempted).unwrap(),
+                vec![
+                    IpCommand::route_replace(
+                        "pv0".to_owned(),
+                        retained.prefix,
+                        target.route_source(retained.prefix),
+                        1280
+                    ),
+                    IpCommand::route_delete("pv0".to_owned(), added.prefix),
+                    IpCommand::addr_delete("pv0".to_owned(), alias),
+                ]
+            );
+            assert_eq!(
+                target.pairing_abort_commands_from(&target).unwrap(),
+                vec![IpCommand::route_replace(
+                    "pv0".to_owned(),
+                    retained.prefix,
+                    target.route_source(retained.prefix),
+                    1280
+                ),]
+            );
+
+            let survivor = TunRuntimeConfig {
+                additional_addresses: vec![alias],
+                ..target.clone()
+            };
+            assert_eq!(
+                survivor.pairing_abort_commands_from(&attempted).unwrap(),
+                vec![
+                    IpCommand::addr_replace("pv0".to_owned(), alias),
+                    IpCommand::route_replace(
+                        "pv0".to_owned(),
+                        retained.prefix,
+                        alias.address(),
+                        1280
+                    ),
+                    IpCommand::route_delete("pv0".to_owned(), added.prefix),
+                ]
+            );
+            for incompatible in [
+                TunRuntimeConfig {
+                    name: "pv1".to_owned(),
+                    ..attempted.clone()
+                },
+                TunRuntimeConfig {
+                    mtu: 1400,
+                    ..attempted.clone()
+                },
+                TunRuntimeConfig {
+                    addresses: TunAddresses {
+                        ipv4: Ipv4Addr::new(100, 64, 1, 1),
+                        ..attempted.addresses
+                    },
+                    ..attempted.clone()
+                },
+            ] {
+                assert!(target.pairing_abort_commands_from(&incompatible).is_err());
+            }
         }
     }
 

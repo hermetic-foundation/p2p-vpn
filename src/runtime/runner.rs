@@ -785,7 +785,16 @@ impl TunRouteController for LinuxTunRoutes {
         _next: &TunRuntimeConfig,
         update: &TunRouteUpdate,
     ) -> Result<(), RunnerError> {
-        execute_tun_route_update(update, execute_ip_command)
+        execute_tun_route_update(update, |command| {
+            let result = execute_ip_command(command);
+            if update.is_abort_cleanup()
+                && matches!(&result, Err(RunnerError::TunRouteCommand { .. }))
+                && command.deletion_is_absent().map_err(TunRuntimeError::Io)?
+            {
+                return Ok(());
+            }
+            result
+        })
     }
 }
 
@@ -1530,6 +1539,25 @@ where
         );
     }
     sync_live_tun_routes(&forwarder, &mut tun_runtime, route_controller.as_mut())?;
+    if let Err(error) = cleanup_pending_pairing_aborts_with(
+        &mut code_pairing_sessions,
+        pairing_state_store.as_ref(),
+        &node.network_name,
+        &node.identity.peer_id,
+        &tun_runtime,
+        |installed, next, update| route_controller.reconcile(installed, next, update),
+    ) {
+        log_runtime_event(
+            LogLevel::Warn,
+            "pairing_abort_cleanup_pending",
+            &[
+                ("phase", "startup"),
+                ("reason", &format!("{error:?}")),
+                ("action", "retry_automatically"),
+            ],
+        );
+    }
+    let mut next_pairing_abort_retry = Instant::now() + Duration::from_secs(10);
     persist_membership_records(
         membership_state_store.as_ref(),
         &forwarder,
@@ -2072,6 +2100,17 @@ where
                 let now = Instant::now();
                 refresh_pairing_lan_candidates(&node.swarm, &mut code_pairing_sessions, now);
                 let actions = code_pairing_sessions.expire(now_unix_seconds, now);
+                if now >= next_pairing_abort_retry {
+                    next_pairing_abort_retry = now + Duration::from_secs(10);
+                    if let Err(error) = cleanup_pending_pairing_aborts_with(
+                        &mut code_pairing_sessions, pairing_state_store.as_ref(), &node.network_name,
+                        &node.identity.peer_id, &tun_runtime,
+                        |installed, next, update| route_controller.reconcile(installed, next, update),
+                    ) {
+                        log_runtime_event(LogLevel::Warn, "pairing_abort_cleanup_pending",
+                            &[("reason", &format!("{error:?}")), ("action", "retry_automatically")]);
+                    }
+                }
                 pairing_replay_tokens.replace_code_approval(
                     code_pairing_sessions
                         .active_replay_tokens(now_unix_seconds)
@@ -2659,6 +2698,67 @@ fn persist_code_pairing_sessions(
     Ok(())
 }
 
+fn cleanup_pending_pairing_aborts_with(
+    sessions: &mut CodePairingSessions,
+    store: Option<&PairingStateStore>,
+    network_name: &str,
+    local_peer: &str,
+    surviving: &TunRuntimeConfig,
+    mut apply: impl FnMut(
+        &TunRuntimeConfig,
+        &TunRuntimeConfig,
+        &TunRouteUpdate,
+    ) -> Result<(), RunnerError>,
+) -> Result<(), RunnerError> {
+    let aborted = sessions
+        .enrollments()
+        .filter(|entry| entry.state == PairingEnrollmentState::Aborting)
+        .cloned()
+        .collect::<Vec<_>>();
+    if aborted.is_empty() {
+        return Ok(());
+    }
+    // A failed cancellation save must be retried before any kernel cleanup.
+    persist_code_pairing_sessions(store, sessions, network_name)?;
+    for enrollment in aborted {
+        let expected_local = match enrollment.role {
+            PairingEnrollmentRole::Inviter => &enrollment.response.payload.inviter_peer,
+            PairingEnrollmentRole::Joiner => &enrollment.response.payload.joiner_peer,
+        };
+        if expected_local != local_peer {
+            return Err(CodePairingSessionError::InvalidPersistedState(
+                "pairing abort belongs to a different local peer".to_owned(),
+            )
+            .into());
+        }
+        let cleanup = enrollment.tun_cleanup.as_ref().ok_or_else(|| {
+            CodePairingSessionError::InvalidPersistedState(
+                "legacy pairing abort has no cleanup ownership; automatic cleanup is unsafe"
+                    .to_owned(),
+            )
+        })?;
+        let update = cleanup.update(surviving)?;
+        apply(surviving, surviving, &update)?;
+        sessions.finish_enrollment_abort_with::<RunnerError>(
+            &enrollment.operation_id,
+            network_name,
+            current_unix_seconds_lossy(),
+            |bytes| {
+                if let Some(store) = store {
+                    store.save(bytes)?;
+                }
+                Ok(())
+            },
+        )?;
+        log_runtime_event(
+            LogLevel::Info,
+            "pairing_abort_cleanup_completed",
+            &[("operation_id", &enrollment.operation_id)],
+        );
+    }
+    Ok(())
+}
+
 fn load_persisted_membership_records(
     store: Option<&MembershipStateStore>,
     forwarder: &mut Forwarder,
@@ -2857,7 +2957,7 @@ fn reconcile_persisted_pairing_enrollments_with_route_update(
     if enrollments.is_empty() {
         return Ok(());
     }
-    let prepared = enrollments
+    let mut prepared = enrollments
         .iter()
         .filter(|enrollment| enrollment.state == PairingEnrollmentState::Prepared)
         .cloned()
@@ -2869,7 +2969,11 @@ fn reconcile_persisted_pairing_enrollments_with_route_update(
 
     let mut next_config = forwarder.config().clone();
     let mut incompatible_applied = Vec::new();
+    let now = current_unix_seconds_lossy();
     for enrollment in &enrollments {
+        if enrollment.state == PairingEnrollmentState::Aborting {
+            continue;
+        }
         let expected_local = match enrollment.role {
             PairingEnrollmentRole::Inviter => &enrollment.response.payload.inviter_peer,
             PairingEnrollmentRole::Joiner => &enrollment.response.payload.joiner_peer,
@@ -2894,7 +2998,25 @@ fn reconcile_persisted_pairing_enrollments_with_route_update(
             enrollment.response.payload.issued_at_unix_seconds,
         );
         match replayed {
-            Ok(config) => next_config = config,
+            Ok(config) => {
+                if enrollment.state == PairingEnrollmentState::Prepared {
+                    let before = forwarder.prepare_reconfigure(next_config.clone(), now)?;
+                    let after = forwarder.prepare_reconfigure(config.clone(), now)?;
+                    let before_tun = TunRuntimeConfig::from_config_with_routes(
+                        before.config(),
+                        before.authorized_routes(),
+                    )?;
+                    let after_tun = TunRuntimeConfig::from_config_with_routes(
+                        after.config(),
+                        after.authorized_routes(),
+                    )?;
+                    sessions.record_tun_cleanup(
+                        &enrollment.operation_id,
+                        super::tun::PairingTunCleanup::capture(&before_tun, &after_tun)?,
+                    )?;
+                }
+                next_config = config;
+            }
             Err(error) if enrollment.state == PairingEnrollmentState::Applied => {
                 incompatible_applied.push((
                     enrollment.operation_id.clone(),
@@ -2906,7 +3028,14 @@ fn reconcile_persisted_pairing_enrollments_with_route_update(
         }
     }
 
-    let now = current_unix_seconds_lossy();
+    if !prepared.is_empty() {
+        persist_code_pairing_sessions(store, sessions, &network_name)?;
+        prepared = sessions
+            .enrollments()
+            .filter(|entry| entry.state == PairingEnrollmentState::Prepared)
+            .cloned()
+            .collect();
+    }
     let update = forwarder.prepare_reconfigure(next_config, now)?;
     let next_tun =
         TunRuntimeConfig::from_config_with_routes(update.config(), update.authorized_routes())?;
@@ -3870,6 +3999,13 @@ fn handle_pair_rpc_request(
                     },
                 )
                 .map_err(code_session_pair_rpc)?;
+            sessions
+                .record_tun_cleanup(
+                    &operation_id,
+                    super::tun::PairingTunCleanup::capture(tun_runtime, &prepared.tun_runtime)
+                        .map_err(|error| runner_error_pair_rpc(error.into()))?,
+                )
+                .map_err(code_session_pair_rpc)?;
             persist_code_pairing_sessions(store, sessions, &network_name)
                 .map_err(runner_error_pair_rpc)?;
             let remote_peer = commit_pairing_runtime_enrollment(
@@ -3908,6 +4044,15 @@ fn handle_pair_rpc_request(
                 stop_code_pairing_providers(swarm, &actions);
                 persist_code_pairing_sessions(store, sessions, &network_name)
                     .map_err(runner_error_pair_rpc)?;
+                cleanup_pending_pairing_aborts_with(
+                    sessions,
+                    store,
+                    &network_name,
+                    &local_peer,
+                    tun_runtime,
+                    |installed, next, update| route_controller.reconcile(installed, next, update),
+                )
+                .map_err(runner_error_pair_rpc)?;
                 pairing_rpc_status(sessions, &operation_id, &network_name, &local_peer)
                     .map(|status| PairRpcResult::ActionAccepted(Box::new(status)))
             }),
@@ -3918,6 +4063,15 @@ fn handle_pair_rpc_request(
                 stop_code_pairing_providers(swarm, &actions);
                 persist_code_pairing_sessions(store, sessions, &network_name)
                     .map_err(runner_error_pair_rpc)?;
+                cleanup_pending_pairing_aborts_with(
+                    sessions,
+                    store,
+                    &network_name,
+                    &local_peer,
+                    tun_runtime,
+                    |installed, next, update| route_controller.reconcile(installed, next, update),
+                )
+                .map_err(runner_error_pair_rpc)?;
                 pairing_rpc_status(sessions, &operation_id, &network_name, &local_peer)
                     .map(|status| PairRpcResult::ActionAccepted(Box::new(status)))
             }),
@@ -14469,6 +14623,10 @@ fn handle_pairing_code_response(
                 );
                 return Ok(());
             }
+            context.code_pairing_sessions.record_tun_cleanup(
+                &outbound.operation_id,
+                super::tun::PairingTunCleanup::capture(context.tun_runtime, &prepared.tun_runtime)?,
+            )?;
             if let Err(error) = persist_code_pairing_sessions(
                 context.pairing_state_store,
                 context.code_pairing_sessions,
@@ -14995,6 +15153,9 @@ fn execute_tun_route_update(
 ) -> Result<(), RunnerError> {
     for (applied, command) in update.apply_commands().iter().enumerate() {
         if let Err(error) = execute(command) {
+            if update.is_abort_cleanup() {
+                return Err(error);
+            }
             for rollback in update.rollback_commands()[..applied].iter().rev() {
                 if let Err(rollback_error) = execute(rollback) {
                     log_runtime_event(
@@ -22162,9 +22323,34 @@ mod tests {
             [(false, true), (true, true), (false, false), (true, false)]
         {
             let unix = current_unix_seconds_lossy();
-            let (_, inviter, joiner, offer, request, response) =
+            let (inviter_config, inviter, joiner, offer, mut request, response) =
                 code_pairing_runtime_fixture_at(None, unix - 10);
             let peer = inviter.peer_id.parse().unwrap();
+            let code = crate::pairing_code::PairingCode::generate();
+            let (hello, pending) = crate::pairing_code::start_pairing_code_hello_at(
+                &code,
+                "lab",
+                &joiner,
+                peer,
+                unix - 10,
+            )
+            .unwrap();
+            let (challenge, _) = crate::pairing_code::answer_pairing_code_hello_at(
+                &inviter_config,
+                &code,
+                &hello,
+                joiner.peer_id.parse().unwrap(),
+                PairingOfferOptions {
+                    expires_in_seconds: 600,
+                    rendezvous_token: Some(offer.payload.rendezvous_token.clone()),
+                },
+                unix - 10,
+            )
+            .unwrap();
+            let (authenticated_offer, session) =
+                open_pairing_code_challenge_at(pending, &challenge, peer, unix - 10).unwrap();
+            assert_eq!(authenticated_offer, offer);
+            authenticate_pairing_request(&mut request, &session).unwrap();
             let mut config = config_with_peer(&joiner, peer);
             config.peers.clear();
             let mut forwarder = Forwarder::from_config(&config).unwrap();
@@ -22202,15 +22388,7 @@ mod tests {
             let now = Instant::now();
             let mut sessions = CodePairingSessions::new();
             let started = sessions
-                .join(
-                    "lab",
-                    crate::pairing_code::PairingCode::generate(),
-                    None,
-                    Vec::new(),
-                    600,
-                    unix,
-                    now,
-                )
+                .join("lab", code, None, Vec::new(), 600, unix, now)
                 .unwrap();
             let transcript = pairing_request_transcript_sha256(&request).unwrap();
             sessions
@@ -22254,6 +22432,8 @@ mod tests {
             struct FailingRoutes {
                 calls: usize,
                 fail: bool,
+                state_path: PathBuf,
+                operation_id: String,
             }
             impl TunRouteController for FailingRoutes {
                 fn reconcile(
@@ -22262,6 +22442,20 @@ mod tests {
                     _: &TunRuntimeConfig,
                     _: &TunRouteUpdate,
                 ) -> Result<(), RunnerError> {
+                    let stored = CodePairingSessions::restore_persisted(
+                        &PairingStateStore::new(&self.state_path).load()?.unwrap(),
+                        "lab",
+                        current_unix_seconds_lossy(),
+                        Instant::now(),
+                    )?;
+                    assert!(
+                        stored
+                            .enrollment(&self.operation_id)
+                            .unwrap()
+                            .tun_cleanup
+                            .is_some(),
+                        "cleanup ownership must be durable before the first route command"
+                    );
                     self.calls += 1;
                     if self.fail {
                         Err(io::Error::other("injected route failure").into())
@@ -22273,6 +22467,8 @@ mod tests {
             let mut routes = FailingRoutes {
                 calls: 0,
                 fail: true,
+                state_path: state_path.clone(),
+                operation_id: started.operation_id.clone(),
             };
             struct UnusedPacketIo;
             impl crate::runtime::tun::PacketRead for UnusedPacketIo {
@@ -22560,6 +22756,328 @@ mod tests {
                 "ip addr del 10.42.0.1/32 dev pv0",
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn abort_rpc_acknowledgement_requires_successful_cleanup() {
+        use crate::runtime::control_socket::{PairRpcOutcome, PairRpcRejectionReason};
+
+        struct Routes(bool);
+        impl TunRouteController for Routes {
+            fn reconcile(
+                &mut self,
+                _: &TunRuntimeConfig,
+                _: &TunRuntimeConfig,
+                update: &TunRouteUpdate,
+            ) -> Result<(), RunnerError> {
+                assert!(update.is_abort_cleanup());
+                if self.0 {
+                    Err(io::Error::other("cleanup unavailable").into())
+                } else {
+                    Ok(())
+                }
+            }
+        }
+        for reject in [false, true] {
+            let unix = current_unix_seconds_lossy();
+            let (config, identity, remote, offer, request, response) =
+                code_pairing_runtime_fixture_at(None, unix - 10);
+            let mut node = pairing_test_node(&identity);
+            let mut forwarder = Forwarder::from_config(&config).unwrap();
+            let mut membership = OverlayMembership::from_config(&config).unwrap();
+            let mut tun = TunRuntimeConfig::from_config(&config).unwrap();
+            let prepared =
+                prepare_pairing_runtime_enrollment(&forwarder, &offer, &response, &identity, unix)
+                    .unwrap();
+            let mut sessions = CodePairingSessions::new();
+            let operation = crate::runtime::pairing_sessions::fresh_pairing_operation_id();
+            sessions
+                .open_with_id(operation.clone(), "lab", 600, unix, Instant::now())
+                .unwrap();
+            let approval = PendingApproval::new(
+                operation.clone(),
+                remote.peer_id.parse().unwrap(),
+                unix + 600,
+                request,
+            )
+            .unwrap();
+            sessions.set_pending_approval(approval.clone()).unwrap();
+            sessions
+                .prepare_enrollment(
+                    "lab",
+                    PairingEnrollmentPreparation {
+                        operation_id: operation.clone(),
+                        role: PairingEnrollmentRole::Inviter,
+                        approval_id: Some(approval.approval_id.clone()),
+                        offer: Some(offer),
+                        response,
+                        transcript_sha256: approval.transcript_sha256,
+                        membership_key_preconfigured: Some(false),
+                    },
+                )
+                .unwrap();
+            sessions
+                .record_tun_cleanup(
+                    &operation,
+                    super::super::tun::PairingTunCleanup::capture(&tun, &prepared.tun_runtime)
+                        .unwrap(),
+                )
+                .unwrap();
+            let path = test_pairing_state_path(&format!("abort-rpc-{reject}"));
+            let store = PairingStateStore::new(&path);
+            persist_code_pairing_sessions(Some(&store), &sessions, "lab").unwrap();
+            let mut capabilities = ControlCapabilities::local("lab", None, 1280);
+            for fail in [true, false] {
+                let request = if reject {
+                    PairRpcRequest::PairReject {
+                        operation_id: operation.clone(),
+                        approval_id: approval.approval_id.clone(),
+                        reason: PairRpcRejectionReason::Declined,
+                    }
+                } else {
+                    PairRpcRequest::PairCancel {
+                        operation_id: operation.clone(),
+                    }
+                };
+                let result = handle_pair_rpc_request(
+                    &mut node.swarm,
+                    request,
+                    &mut sessions,
+                    Some(&store),
+                    &mut forwarder,
+                    &mut membership,
+                    &mut tun,
+                    &mut Routes(fail),
+                    &mut capabilities,
+                    &identity,
+                    &mut HashSet::new(),
+                    &mut None,
+                    &RuntimeMetrics::default(),
+                );
+                assert_eq!(
+                    matches!(result.outcome, PairRpcOutcome::Ok { .. }),
+                    !fail,
+                    "{result:?}"
+                );
+                let saved = CodePairingSessions::restore_persisted(
+                    &store.load().unwrap().unwrap(),
+                    "lab",
+                    unix,
+                    Instant::now(),
+                )
+                .unwrap();
+                if fail {
+                    assert_eq!(
+                        saved.enrollment(&operation).unwrap().state,
+                        PairingEnrollmentState::Aborting
+                    );
+                } else {
+                    assert!(saved.enrollment(&operation).is_none());
+                }
+                assert!(forwarder.config().peers.is_empty());
+                assert!(!membership.allows(remote.peer_id.parse().unwrap()));
+            }
+            fs::remove_dir_all(path.parent().unwrap()).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn cancelled_pairing_restart_retries_cleanup_without_authorizing_peer() {
+        for role in [
+            PairingEnrollmentRole::Inviter,
+            PairingEnrollmentRole::Joiner,
+        ] {
+            let unix = current_unix_seconds_lossy();
+            let (inviter_config, inviter, joiner, offer, request, response) =
+                code_pairing_runtime_fixture_at(None, unix - 10);
+            let (identity, remote, config) = match role {
+                PairingEnrollmentRole::Inviter => (
+                    inviter.clone(),
+                    joiner.peer_id.parse().unwrap(),
+                    inviter_config,
+                ),
+                PairingEnrollmentRole::Joiner => {
+                    let remote = inviter.peer_id.parse().unwrap();
+                    let mut config = config_with_peer(&joiner, remote);
+                    config.peers.clear();
+                    (joiner.clone(), remote, config)
+                }
+            };
+            let mut forwarder = Forwarder::from_config(&config).unwrap();
+            let mut membership = OverlayMembership::from_config(&config).unwrap();
+            let mut tun = TunRuntimeConfig::from_config(&config).unwrap();
+            let baseline = tun.clone();
+            let prepared =
+                prepare_pairing_runtime_enrollment(&forwarder, &offer, &response, &identity, unix)
+                    .unwrap();
+            let operation = crate::runtime::pairing_sessions::fresh_pairing_operation_id();
+            let mut sessions = CodePairingSessions::new();
+            let approval = PendingApproval::new(
+                operation.clone(),
+                joiner.peer_id.parse().unwrap(),
+                unix + 600,
+                request,
+            )
+            .unwrap();
+            sessions
+                .prepare_enrollment(
+                    "lab",
+                    PairingEnrollmentPreparation {
+                        operation_id: operation.clone(),
+                        role,
+                        approval_id: (role == PairingEnrollmentRole::Inviter)
+                            .then_some(approval.approval_id),
+                        offer: Some(offer),
+                        response,
+                        transcript_sha256: approval.transcript_sha256,
+                        membership_key_preconfigured: Some(false),
+                    },
+                )
+                .unwrap();
+            sessions
+                .record_tun_cleanup(
+                    &operation,
+                    super::super::tun::PairingTunCleanup::capture(&tun, &prepared.tun_runtime)
+                        .unwrap(),
+                )
+                .unwrap();
+            sessions.begin_enrollment_abort(&operation).unwrap();
+            let path = test_pairing_state_path(&format!("abort-restart-{role:?}"));
+            let store = PairingStateStore::new(&path);
+            persist_code_pairing_sessions(Some(&store), &sessions, "lab").unwrap();
+            let abort_bytes = store.load().unwrap().unwrap();
+            let mut node = pairing_test_node(&identity);
+            sessions =
+                CodePairingSessions::restore_persisted(&abort_bytes, "lab", unix, Instant::now())
+                    .unwrap();
+            reconcile_persisted_pairing_enrollments_with(
+                &mut node.swarm,
+                &mut sessions,
+                Some(&store),
+                &mut forwarder,
+                &mut membership,
+                &mut tun,
+                &identity,
+                |_| Ok(()),
+            )
+            .unwrap();
+            assert!(!forwarder.is_configured_transport_peer(remote));
+            assert!(!membership.allows(remote));
+            assert_eq!(tun, baseline);
+
+            let blocked_path = path.with_extension("blocked");
+            fs::create_dir(&blocked_path).unwrap();
+            let blocked_store = PairingStateStore::new(&blocked_path);
+            assert!(
+                cleanup_pending_pairing_aborts_with(
+                    &mut sessions,
+                    Some(&blocked_store),
+                    "lab",
+                    &identity.peer_id,
+                    &tun,
+                    |_, _, _| panic!("cleanup must not precede durable abort")
+                )
+                .is_err()
+            );
+            fs::remove_dir(&blocked_path).unwrap();
+            let mut attempted = Vec::new();
+            assert!(
+                cleanup_pending_pairing_aborts_with(
+                    &mut sessions,
+                    Some(&store),
+                    "lab",
+                    &identity.peer_id,
+                    &tun,
+                    |_, _, update| {
+                        assert!(update.is_abort_cleanup());
+                        attempted = update.apply_commands().to_vec();
+                        Err(io::Error::other("injected cleanup failure").into())
+                    }
+                )
+                .is_err()
+            );
+            assert!(!attempted.is_empty());
+            assert_eq!(store.load().unwrap().unwrap(), abort_bytes);
+            sessions =
+                CodePairingSessions::restore_persisted(&abort_bytes, "lab", unix, Instant::now())
+                    .unwrap();
+            cleanup_pending_pairing_aborts_with(
+                &mut sessions,
+                Some(&store),
+                "lab",
+                &identity.peer_id,
+                &tun,
+                |_, _, update| {
+                    assert_eq!(update.apply_commands(), attempted);
+                    Ok(())
+                },
+            )
+            .unwrap();
+            let restored = CodePairingSessions::restore_persisted(
+                &store.load().unwrap().unwrap(),
+                "lab",
+                unix,
+                Instant::now(),
+            )
+            .unwrap();
+            assert!(restored.enrollment(&operation).is_none());
+            assert!(restored.receipt(&operation).is_none());
+            assert!(!forwarder.is_configured_transport_peer(remote));
+            assert!(!membership.allows(remote));
+            assert_eq!(tun, baseline);
+            assert_eq!(forwarder.config(), &config);
+            fs::remove_dir_all(path.parent().unwrap()).unwrap();
+        }
+    }
+
+    #[test]
+    fn pairing_abort_cleanup_retries_forward_without_restoring_cancelled_state() {
+        let current = TunRuntimeConfig {
+            name: "pv0".to_owned(),
+            mtu: 1280,
+            addresses: crate::runtime::tun::TunAddresses::for_peer(PeerId::from_bytes([1; 32])),
+            additional_addresses: Vec::new(),
+            routes: Vec::new(),
+        };
+        let attempted = TunRuntimeConfig {
+            additional_addresses: vec![IpCidr::new("10.42.0.1".parse().unwrap(), 32).unwrap()],
+            routes: vec![crate::route::Route {
+                owner: PeerId::from_bytes([2; 32]),
+                prefix: IpCidr::new("10.42.0.2".parse().unwrap(), 32).unwrap(),
+                metric: 0,
+            }],
+            ..current.clone()
+        };
+        let update =
+            TunRouteUpdate::abort_cleanup(current.pairing_abort_commands_from(&attempted).unwrap());
+        assert!(update.rollback_commands().is_empty());
+        let expected = vec![
+            "ip route del 10.42.0.2/32 dev pv0 metric 3000",
+            "ip addr del 10.42.0.1/32 dev pv0",
+        ];
+        for failed_step in 0..expected.len() {
+            let mut commands = Vec::new();
+            let result = execute_tun_route_update(&update, |command| {
+                commands.push(command.to_string());
+                if commands.len() == failed_step + 1 {
+                    Err(RunnerError::ControlSocket(io::Error::other(
+                        "cleanup failed",
+                    )))
+                } else {
+                    Ok(())
+                }
+            });
+            assert!(result.is_err());
+            assert_eq!(commands, expected[..=failed_step]);
+
+            commands.clear();
+            execute_tun_route_update(&update, |command| {
+                commands.push(command.to_string());
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(commands, expected);
+        }
     }
 
     #[test]
@@ -22865,7 +23383,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn inconsistent_prepared_enrollment_fails_before_runtime_changes() {
+    async fn legacy_inconsistent_prepared_enrollment_fails_before_runtime_changes() {
         let (config, inviter, joiner, offer, request, response) = code_pairing_runtime_fixture();
         let operation_id = crate::runtime::pairing_sessions::fresh_pairing_operation_id();
         let joiner_peer = joiner.peer_id.parse().expect("joiner peer");
@@ -22897,6 +23415,17 @@ mod tests {
         sessions
             .cancel(&operation_id)
             .expect("invalidate operation relationship");
+        // Older binaries cleared the operation but left its ledger Prepared.
+        let mut legacy: serde_json::Value =
+            serde_json::from_slice(&sessions.encode_persisted("lab").unwrap()).unwrap();
+        legacy["enrollments"][0]["state"] = serde_json::json!("prepared");
+        let mut sessions = CodePairingSessions::restore_persisted(
+            &serde_json::to_vec(&legacy).unwrap(),
+            "lab",
+            1_001,
+            Instant::now(),
+        )
+        .unwrap();
 
         let mut node = pairing_test_node(&inviter);
         let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
@@ -23404,7 +23933,6 @@ mod tests {
         membership: &mut OverlayMembership,
         tun_runtime: &mut TunRuntimeConfig,
     ) -> Vec<u8> {
-        let persisted_before = store.load().unwrap().unwrap();
         let sessions_before = sessions.encode_persisted("lab").unwrap();
         let config_before = forwarder.config().clone();
         let membership_before = membership.clone();
@@ -23419,6 +23947,12 @@ mod tests {
             tun_runtime,
             &node.identity,
             |command| {
+                let checkpoint: serde_json::Value =
+                    serde_json::from_slice(&store.load().unwrap().unwrap()).unwrap();
+                assert!(
+                    checkpoint["enrollments"][0]["tun_cleanup"].is_object(),
+                    "restart cleanup ownership must precede route application"
+                );
                 commands.push(command.clone());
                 match commands.len() {
                     1 => Ok(()),
@@ -23444,11 +23978,27 @@ mod tests {
         assert_eq!(forwarder.config(), &config_before);
         assert_eq!(membership, &membership_before);
         assert_eq!(tun_runtime, &tun_before);
-        assert_eq!(sessions.encode_persisted("lab").unwrap(), sessions_before);
+        let sessions_after = sessions.encode_persisted("lab").unwrap();
+        let mut after: serde_json::Value = serde_json::from_slice(&sessions_after).unwrap();
+        for enrollment in after["enrollments"].as_array_mut().unwrap() {
+            assert_eq!(enrollment["state"], "prepared");
+            assert!(
+                enrollment
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("tun_cleanup")
+                    .is_some()
+            );
+        }
+        assert_eq!(
+            after,
+            serde_json::from_slice::<serde_json::Value>(&sessions_before).unwrap(),
+            "failed restart may only add cleanup ownership"
+        );
         let retained = store.load().unwrap().unwrap();
         assert_eq!(
-            retained, persisted_before,
-            "failed restart changed the durable ledger"
+            retained, sessions_after,
+            "failed restart must retain its cleanup ownership durably"
         );
         retained
     }
