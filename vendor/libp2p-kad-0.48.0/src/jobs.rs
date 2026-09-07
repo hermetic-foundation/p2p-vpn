@@ -53,14 +53,20 @@
 //! from the `RecordStore` on every run. Expired records are never emitted
 //! by the jobs.
 //!
-//! > **Note**: The current implementation takes a snapshot of the records
+//! > **Note**: Without background-job limits, the implementation takes a snapshot of the records
 //! > to replicate from the `RecordStore` when it starts and thus, to account
 //! > for the worst case, it temporarily requires additional memory proportional
 //! > to the size of all stored records. As a job runs, the records are moved
 //! > out of the job to the consumer, where they can be dropped after being sent.
+//! > With limits enabled, jobs retain bounded key batches and read fresh values
+//! > only when polled for an admitted query. Cursors prevent batch starvation.
+
+mod bounded;
+use bounded::KeyBatch;
+pub use bounded::{BackgroundJobLimits, BackgroundJobUsage};
 
 use std::{
-    collections::HashSet,
+    collections::HashMap,
     pin::Pin,
     task::{Context, Poll},
     time::Duration,
@@ -81,6 +87,8 @@ pub(crate) const JOBS_MAX_QUERIES: usize = 100;
 /// The default shared maximum number of new queries started by background jobs
 /// per invocation of `Behaviour::poll`.
 pub(crate) const JOBS_MAX_NEW_QUERIES: usize = 10;
+const SKIP_CURRENT: u8 = 1;
+const SKIP_NEXT: u8 = 2;
 /// A background job run periodically.
 #[derive(Debug)]
 struct PeriodicJob<T> {
@@ -136,7 +144,13 @@ pub(crate) struct PutRecordJob {
     next_publish: Option<Instant>,
     publish_interval: Option<Duration>,
     record_ttl: Option<Duration>,
-    skipped: HashSet<record::Key>,
+    // Current and next-pass intentions share one bounded key owner.
+    skipped: HashMap<record::Key, u8>,
+    limits: Option<BackgroundJobLimits>,
+    keys: Option<KeyBatch>,
+    skipped_bytes: usize,
+    rejected_inputs: u64,
+    rejected_skips: u64,
     inner: PeriodicJob<vec::IntoIter<Record>>,
 }
 
@@ -158,7 +172,12 @@ impl PutRecordJob {
             next_publish,
             publish_interval,
             record_ttl,
-            skipped: HashSet::new(),
+            skipped: HashMap::new(),
+            limits: None,
+            keys: None,
+            skipped_bytes: 0,
+            rejected_inputs: 0,
+            rejected_skips: 0,
             inner: PeriodicJob {
                 interval: replicate_interval,
                 state: PeriodicJobState::Waiting(delay, deadline),
@@ -166,10 +185,63 @@ impl PutRecordJob {
         }
     }
 
+    pub(crate) fn set_limits(&mut self, limits: Option<BackgroundJobLimits>) {
+        self.limits = limits;
+    }
+
+    pub(crate) fn remove(&mut self, key: &record::Key) {
+        if let Some(keys) = &mut self.keys {
+            keys.remove(key);
+        }
+        if self.skipped.remove(key).is_some() {
+            self.skipped_bytes = self.skipped_bytes.saturating_sub(key.as_ref().len());
+        }
+        if let PeriodicJobState::Running(records) = &mut self.inner.state {
+            *records = std::mem::take(records)
+                .filter(|record| &record.key != key)
+                .collect::<Vec<_>>()
+                .into_iter();
+        }
+    }
+
+    pub(crate) fn add_usage(&self, usage: &mut BackgroundJobUsage) {
+        if self.limits.is_some() {
+            usage.bounded_jobs += 1;
+            usage.skipped_keys += self.skipped.len();
+            usage.skipped_key_bytes += self.skipped_bytes;
+            usage.rejected_inputs = usage.rejected_inputs.saturating_add(self.rejected_inputs);
+            usage.rejected_skips = usage.rejected_skips.saturating_add(self.rejected_skips);
+            if let Some(keys) = &self.keys {
+                keys.add_usage(usage);
+            }
+        }
+    }
+
     /// Adds the key of a record that is ignored on the current or
     /// next run of the job.
     pub(crate) fn skip(&mut self, key: record::Key) {
-        self.skipped.insert(key);
+        let intention = if self.keys.is_some() {
+            SKIP_NEXT
+        } else {
+            SKIP_CURRENT
+        };
+        if let Some(skipped) = self.skipped.get_mut(&key) {
+            *skipped |= intention;
+            return;
+        }
+        if let Some(limits) = self.limits {
+            if !limits.accepts_key(&key)
+                || self.skipped.len() >= limits.keys
+                || key.as_ref().len() > limits.bytes.saturating_sub(self.skipped_bytes)
+            {
+                self.rejected_skips = self.rejected_skips.saturating_add(1);
+                return;
+            }
+            self.skipped_bytes += key.as_ref().len();
+            self.skipped.insert(record::Key::new(&key), intention);
+        } else {
+            self.skipped.insert(key, intention);
+        }
     }
 
     /// Checks whether the job is currently running.
@@ -206,33 +278,114 @@ impl PutRecordJob {
     {
         if self.inner.check_ready(cx, now) {
             let publish = self.next_publish.is_some_and(|t_pub| now >= t_pub);
-            let records = store
-                .records()
-                .filter_map(|r| {
-                    let is_publisher = r.publisher.as_ref() == Some(&self.local_id);
-                    if self.skipped.contains(&r.key) || (!publish && is_publisher) {
-                        None
-                    } else {
-                        let mut record = r.into_owned();
-                        if publish && is_publisher {
-                            record.expires = record
-                                .expires
-                                .or_else(|| self.record_ttl.map(|ttl| now + ttl));
+            let records = if let Some(limits) = self.limits {
+                self.keys = Some(KeyBatch::new(limits, publish));
+                Vec::new().into_iter()
+            } else {
+                store
+                    .records()
+                    .filter_map(|r| {
+                        let is_publisher = r.publisher.as_ref() == Some(&self.local_id);
+                        if self.skipped.contains_key(&r.key) || (!publish && is_publisher) {
+                            None
+                        } else {
+                            let mut record = r.into_owned();
+                            if publish && is_publisher {
+                                record.expires = record
+                                    .expires
+                                    .or_else(|| self.record_ttl.map(|ttl| now + ttl));
+                            }
+                            Some(record)
                         }
-                        Some(record)
-                    }
-                })
-                .collect::<Vec<_>>()
-                .into_iter();
+                    })
+                    .collect::<Vec<_>>()
+                    .into_iter()
+            };
 
             // Schedule the next publishing run.
             if publish {
                 self.next_publish = self.publish_interval.map(|i| now + i);
             }
 
-            self.skipped.clear();
+            if self.limits.is_none() {
+                self.skipped.clear();
+            }
 
             self.inner.state = PeriodicJobState::Running(records);
+        }
+
+        if let (Some(limits), Some(keys)) = (self.limits, &mut self.keys) {
+            // Bound discarded/deleted work per poll. Store scans borrow records;
+            // only the next bounded key prefix is copied.
+            for _ in 0..limits.keys {
+                if keys.is_empty() {
+                    keys.start_page();
+                    for record in store.records() {
+                        if !limits.accepts_key(&record.key) {
+                            self.rejected_inputs = self.rejected_inputs.saturating_add(1);
+                            continue;
+                        }
+                        keys.consider(&record.key);
+                    }
+                }
+                let Some(key) = keys.pop() else { break };
+                let Some(record) = store.get(&key) else {
+                    continue;
+                };
+                if record.is_expired(now) {
+                    store.remove(&key);
+                    continue;
+                }
+                let is_publisher = record.publisher.as_ref() == Some(&self.local_id);
+                if self
+                    .skipped
+                    .get(&key)
+                    .is_some_and(|flags| flags & SKIP_CURRENT != 0)
+                    || (!keys.publish && is_publisher)
+                {
+                    continue;
+                }
+                if record.key.as_ref().len().saturating_add(record.value.len()) > limits.input_bytes
+                {
+                    self.rejected_inputs = self.rejected_inputs.saturating_add(1);
+                    continue;
+                }
+                let mut record = record.into_owned();
+                record.key = record::Key::new(&record.key);
+                record.value = record.value.into_boxed_slice().into_vec();
+                if keys.publish && is_publisher {
+                    record.expires = record
+                        .expires
+                        .or_else(|| self.record_ttl.map(|ttl| now + ttl));
+                }
+                return Poll::Ready(record);
+            }
+            if !keys.is_empty() {
+                cx.waker().wake_by_ref();
+                return Poll::Pending;
+            }
+            // An empty page can also mean this poll exhausted its work allowance.
+            // Probe for another page before retiring the run.
+            keys.start_page();
+            for record in store.records() {
+                if limits.accepts_key(&record.key) {
+                    keys.consider(&record.key);
+                }
+            }
+            if !keys.is_empty() {
+                cx.waker().wake_by_ref();
+                return Poll::Pending;
+            }
+            self.keys = None;
+            self.skipped.retain(|key, flags| {
+                if *flags & SKIP_NEXT != 0 {
+                    *flags = SKIP_CURRENT;
+                    true
+                } else {
+                    self.skipped_bytes -= key.as_ref().len();
+                    false
+                }
+            });
         }
 
         if let PeriodicJobState::Running(records) = &mut self.inner.state {
@@ -261,11 +414,17 @@ impl PutRecordJob {
 /// Periodic job for replicating provider records.
 pub(crate) struct AddProviderJob {
     inner: PeriodicJob<vec::IntoIter<ProviderRecord>>,
+    limits: Option<BackgroundJobLimits>,
+    keys: Option<KeyBatch>,
+    rejected_inputs: u64,
 }
 
 impl AddProviderJob {
     /// Remove a stopped provider from an already captured publication batch.
     pub(crate) fn remove(&mut self, key: &record::Key) {
+        if let Some(keys) = &mut self.keys {
+            keys.remove(key);
+        }
         if let PeriodicJobState::Running(records) = &mut self.inner.state {
             *records = std::mem::take(records)
                 .filter(|record| &record.key != key)
@@ -274,10 +433,27 @@ impl AddProviderJob {
         }
     }
 
+    pub(crate) fn set_limits(&mut self, limits: Option<BackgroundJobLimits>) {
+        self.limits = limits;
+    }
+
+    pub(crate) fn add_usage(&self, usage: &mut BackgroundJobUsage) {
+        if self.limits.is_some() {
+            usage.bounded_jobs += 1;
+            usage.rejected_inputs = usage.rejected_inputs.saturating_add(self.rejected_inputs);
+            if let Some(keys) = &self.keys {
+                keys.add_usage(usage);
+            }
+        }
+    }
+
     /// Creates a new periodic job for provider announcements.
     pub(crate) fn new(interval: Duration) -> Self {
         let now = Instant::now();
         Self {
+            limits: None,
+            keys: None,
+            rejected_inputs: 0,
             inner: PeriodicJob {
                 interval,
                 state: {
@@ -318,12 +494,66 @@ impl AddProviderJob {
         T: RecordStore,
     {
         if self.inner.check_ready(cx, now) {
-            let records = store
-                .provided()
-                .map(|r| r.into_owned())
-                .collect::<Vec<_>>()
-                .into_iter();
+            let records = if let Some(limits) = self.limits {
+                self.keys = Some(KeyBatch::new(limits, false));
+                Vec::new().into_iter()
+            } else {
+                store
+                    .provided()
+                    .map(|r| r.into_owned())
+                    .collect::<Vec<_>>()
+                    .into_iter()
+            };
             self.inner.state = PeriodicJobState::Running(records);
+        }
+
+        if let (Some(limits), Some(keys)) = (self.limits, &mut self.keys) {
+            for _ in 0..limits.keys {
+                if keys.is_empty() {
+                    keys.start_page();
+                    for record in store.provided() {
+                        if !limits.accepts_key(&record.key) {
+                            self.rejected_inputs = self.rejected_inputs.saturating_add(1);
+                            continue;
+                        }
+                        keys.consider(&record.key);
+                    }
+                }
+                let Some(key) = keys.pop() else { break };
+                let record = store
+                    .provided()
+                    .find(|record| record.key == key)
+                    .map(|record| {
+                        ProviderRecord {
+                            key: record::Key::new(&key),
+                            provider: record.provider,
+                            expires: record.expires,
+                            // Publication acquires current external addresses in its query phase.
+                            addresses: Vec::new(),
+                        }
+                    });
+                let Some(record) = record else { continue };
+                if record.is_expired(now) {
+                    store.remove_provider(&record.key, &record.provider);
+                    continue;
+                }
+                return Poll::Ready(record);
+            }
+            if !keys.is_empty() {
+                cx.waker().wake_by_ref();
+                return Poll::Pending;
+            }
+            keys.start_page();
+            for record in store.provided() {
+                if limits.accepts_key(&record.key) {
+                    keys.consider(&record.key);
+                }
+            }
+            if !keys.is_empty() {
+                cx.waker().wake_by_ref();
+                return Poll::Pending;
+            }
+            self.keys = None;
         }
 
         if let PeriodicJobState::Running(keys) = &mut self.inner.state {

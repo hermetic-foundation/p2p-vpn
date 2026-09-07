@@ -25,7 +25,7 @@ changelog, generated protocol source, and tests.
 | `src/query.rs` | Enforce deadlines and initial candidate admission; share retention accounting with iterative discovery; remove canceled queries. |
 | `src/query/retained.rs` | Bound candidate identities and address bytes across learning, migration, failure, and result extraction. |
 | `src/query/metadata.rs` | Bound query input and result metadata; normalize retained buffers; expose aggregate usage and typed admission errors. |
-| `src/jobs.rs` | Document the shared background batch default; remove stopped providers from pending snapshots. |
+| `src/jobs.rs`, `src/jobs/bounded.rs` | Shared background admission, bounded key batches and skip bookkeeping, fresh record selection, and explicit removal from pending jobs. |
 | `src/handler.rs`, `src/handler/pending.rs` | Opt-in request admission/expiry, bounded rejection reporting, and negotiation queue accounting. |
 | `src/kbucket.rs`, `src/kbucket/bucket.rs` | Preserve protected seed peers during pending replacement; retain and recheck the probed victim identity. |
 | `src/addresses/budget.rs` | Shared aggregate entry-generation and encoded-buffer reservations, including retained snapshots and deferred eviction storage. |
@@ -73,7 +73,7 @@ Legacy starts rejected by this opt-in cap return an unretained ID without a
 completion event; local result events and bootstrap suppression are not retained
 for that ID. No rejection queue is created. The application constructor enables
 32 retained queries per DHT and application starts use checked admission.
-Queued result/action and background-snapshot bounds remain unfinished.
+Queued result/action bounds remain unfinished; background storage is bounded below.
 
 `set_query_metadata_limits()` bounds input key/value bytes, stored result peers,
 and provider addresses. Production selects 256 KiB input, 256 result peers,
@@ -103,12 +103,32 @@ reservations. `pending_rpc_usage()` exposes aggregate usage and rejections.
 Provider requests awaiting connection no longer complete before handoff.
 `AddProviderError::NoPeersReached` reports an all-failed publication phase;
 it is a local API addition, not a wire change. Handler dispatch still does not
-prove remote receipt. Queued result/action and job-snapshot bounds remain unfinished.
+prove remote receipt. Queued result/action bounds remain unfinished.
 
 Provider and record jobs share background admission capacity and alternate first
 access. Defaults remain a 100-query ceiling and batch size ten, but the batch is
 now shared across both jobs. p2p-vpn selects a ceiling of two and batch size one.
 Foreground API calls count against admission but are not capped by this setting.
+
+`set_background_job_limits()` replaces full snapshots with ordered key batches.
+Production selects 64 keys / 1 MiB per job and a 256 KiB input ceiling. Each
+job also retains at most two bounded cursor/boundary keys. The record job's
+current/next-pass skip map shares a 64-key / 1 MiB budget.
+
+Together these owners retain at most 4 MiB of key payload per DHT, excluding
+containers, transient copies, record-store data, and separately admitted queries.
+`background_job_usage()` reports aggregate keys, bytes, and rejection attempts;
+unconfigured legacy snapshots are explicitly outside that report.
+
+Byte-limited pages preserve the first excluded key so later short keys cannot
+starve earlier large keys. Values and expiry are read at selection time; no
+record-value or provider-address snapshots are retained. Oversized inputs remain
+in the store but are not cloned into jobs or submitted as queries.
+
+Full skip maps discard advisory hints, not records. Explicit local record
+removal clears pending keys, skip bookkeeping, and legacy record snapshots.
+Provider removal clears its pending batch too. Store scans borrow entries;
+bounded batches do not imply constant-time scans or an RSS bound.
 
 Expired queries stop issuing new requests, even if uncontacted candidates remain.
 One timer per query pool wakes it for the earliest started query deadline;

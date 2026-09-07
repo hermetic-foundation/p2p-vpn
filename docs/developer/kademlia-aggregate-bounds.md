@@ -575,12 +575,95 @@ formal model, physical deployment, or public-network measurement is claimed.
 | Owner | Remaining Work |
 | --- | --- |
 | Behaviour event/action queue | Bound query results and unsent actions without stranding terminal query ownership |
-| Background record/provider jobs | Bound retained snapshots, payload copies, and skipped-key bookkeeping, including work waiting for admission |
+| Background record/provider jobs | Bounded key batches and skipped-key bookkeeping verified below |
 | Final aggregate audit | Account for container high-water storage, cancellation, phase changes, and every producer |
 
 Metadata enforcement does not close these owners. Phase 1 remains active.
 Wire formats, authorization, minimal JSON/Nix configuration, and packet transport
 are unchanged. Public-WAN settling and process measurements remain later phases.
+
+## Background Job Storage
+
+The original jobs cloned every stored record or provider into an owned snapshot.
+The record job also accumulated skipped keys independently of query admission.
+Production now enables `set_background_job_limits()` for both job owners.
+
+| Owner | Production Ceiling | Aggregate Per DHT |
+| --- | ---: | ---: |
+| Pending key batch | 64 keys / 1 MiB per job | 128 keys / 2 MiB |
+| Resume and page-boundary keys | Two keys per job, each at most 256 KiB | Four keys / 1 MiB |
+| Replication skip map | 64 keys / 1 MiB | One map / 1 MiB |
+| Record input selected for admission | Key plus value at most 256 KiB | Moves immediately into the separately bounded query pool |
+| Snapshotted record values / provider addresses | None | None |
+
+The retained key-payload ceiling is 4 MiB per DHT. This excludes container
+overhead, transient selection copies, the record store itself, admitted queries,
+and allocator RSS. Key buffers are normalized instead of retaining caller spare
+capacity. Metadata slots are bounded independently by the counts above.
+
+### Progress And Retirement
+
+1. Check shared query admission before polling either job.
+2. Scan borrowed store entries for the next bounded, ordered key prefix.
+3. Fetch the current record only when its key reaches the front of the batch.
+4. Reject oversized input before cloning its value; discard deleted or expired work.
+5. Keep the cursor across batches; release batch/cursor storage when the pass ends.
+
+The first excluded key bounds each page. A smaller later key cannot advance
+the cursor past an earlier key that failed byte admission. New keys behind the
+cursor remain eligible on the next periodic pass; stored values are read fresh.
+
+Each poll discards at most 64 selected keys before yielding and waking itself.
+Refilling a page scans the store, and provider selection scans local providers.
+Production uses the existing bounded `MemoryStore`; scan cost still depends on
+store size, so this is not an O(1) work or sustained-performance claim.
+
+Current-pass and next-pass skip intentions share the same bounded map. A full
+map drops new skip hints, not records; excess records may be replicated normally.
+Local record removal and `stop_providing` remove matching pending job keys.
+Already admitted query work is not recalled by local record removal.
+
+`background_job_usage()` aggregates both jobs' keys, bytes, cursors, and skip
+state, plus saturating rejection counters. `bounded_jobs` identifies activation;
+the usage report does not cover unconfigured legacy snapshots.
+
+### Compatibility And Coverage
+
+- Generic library jobs retain snapshot behavior unless the new limits are enabled.
+- Production constructors enable limits for shared, separate-pairing, and standalone DHTs.
+- Minimal JSON/Nix, DHT wire messages, authorization, and packet transport are unchanged.
+- Explicit local record removal also removes legacy pending snapshots, preventing stale republication.
+
+| Regression | Evidence |
+| --- | --- |
+| Ordered variable-size keys | Both jobs cross count/byte boundaries without starving the large earlier key |
+| Foreground saturation | No batch consumed until capacity is released; unrelated query stays retained |
+| Fresh value / deletion / expiry | Bounded jobs read updates and discard obsolete work; legacy snapshot is a comparison control |
+| Oversized key and combined key/value input | No query admitted; corrected store entries become eligible on the next pass |
+| Inbound loopback churn | Skip count and byte ceilings hold; explicit removal releases capacity for a new hint |
+| Constructor activation | Both background owners are bounded in each production DHT constructor |
+
+### Background Job Checkpoint Evidence
+
+| Check | Result |
+| --- | --- |
+| Focused background and constructor regressions | Ten passed |
+| Offline workspace tests | 1,308 passed; 22 opt-in tests ignored |
+| Namespace DHT, peerless pairing, forced-relay pairing, owned QUIC | All four passed |
+| Namespace relay/direct network move | Passed |
+| Android x86_64 native library | Compiled offline; four existing warnings |
+| Nix desktop/Android source parity | Passed with cached tool overrides, including the new job module |
+| Root and changed vendored Rust formatting / whitespace | Passed |
+| Workspace Clippy correctness, suspicious, and perf groups | Passed; nonfatal style warnings remain |
+
+Logs use `/tmp/p2p-vpn-kad-jobs-` with suffixes `focused.log`, `workspace.log`,
+`namespace.log`, `move.log`, `android.log`, `nix.log`, and `clippy.log`.
+The workspace run includes current/next-pass skip bookkeeping. Readable project
+temporary paths total approximately 4.74 GiB; no downloads occurred.
+
+The source-parity check is not a full Nix package build. No ARM64 native build,
+APK, formal model, physical deployment, or public-network measurement is claimed.
+Query-result and action queues still require bounds; phase 1 is not complete.
 
 ## Implementation Order
 

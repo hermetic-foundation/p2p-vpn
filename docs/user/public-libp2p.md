@@ -57,6 +57,7 @@ server duties or advertise itself as a Kademlia server.
 | Provider publication addresses | At most 64 per query, each at most 2,048 encoded bytes. |
 | RPCs awaiting a connection | Per DHT: at most 256 requests and 1 MiB of retained payload; retired with their queries. |
 | Library background jobs | One new query per poll, only below two existing queries; provider and record jobs share the allowance. |
+| Background job storage | Bounded key batches, not full-record snapshots; at most 4 MiB of retained key payload per DHT. |
 | Waiting DHT requests | Per connection: at most 64 requests and 256 KiB of retained payload data; queued requests expire after ten seconds. |
 | Aggregate routing storage | Per DHT: 512 retained entry versions and 2 MiB of encoded address buffers, including pending entries and routing snapshots. |
 
@@ -78,6 +79,10 @@ Oversized input reports `query_input_too_large`, separately from temporary
 address update instead of repeatedly retrying the same invalid publication.
 These limits require no additional JSON or Nix settings.
 The input ceiling does not increase existing wire-message or local-store limits.
+
+Background publication reads current stored values as capacity becomes available.
+Deleted or expired pending work is discarded. A full replication skip-hint map
+may cause an extra normal replication; it does not drop stored records.
 
 A full DHT request queue rejects new work without closing the connection used
 by VPN traffic. Rejection reporting is bounded too; extreme overload may wait

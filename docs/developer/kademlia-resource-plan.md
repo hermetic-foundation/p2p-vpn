@@ -25,7 +25,7 @@ See [Aggregate Bounds](kademlia-aggregate-bounds.md) for phase 1 ownership and t
 | Area | Required Evidence | Status |
 | --- | --- | --- |
 | Internal addresses | Count/byte bounds for present and pending buckets, address changes, and query caches | Aggregate routing and per-query retention verified; total query retention open |
-| Query state | Bounded candidate identities, active queries, and retained results | Aggregate admission, pending RPCs, and metadata verified; result/action queues and job snapshots open |
+| Query state | Bounded candidate identities, active queries, and retained results | Aggregate admission, pending RPCs, metadata, and background storage verified; result/action queues open |
 | Scheduling | Bounded bootstrap, discovery, and dial activity under failure and churn | Cooldown and automatic bootstrap fixed; aggregate audit open |
 | Recovery | LAN-first lookup, relay fallback, network-change recovery, and healthy-path settling | Open |
 | Measurements | Comparable before/after CPU, RSS, sockets, dial rates, and query rates | Open |

@@ -892,6 +892,7 @@ mod tests {
             .unwrap();
         let kad = &mut swarm.behaviour_mut().kad;
         assert_eq!(kad.query_pool_usage().capacity, Some(32));
+        assert_eq!(kad.background_job_usage().bounded_jobs, 2);
         assert!(matches!(
             kad.try_get_closest_peers(vec![0; 256 * 1024 + 1]),
             Err(kad::QueryStartError::InputTooLarge(_))

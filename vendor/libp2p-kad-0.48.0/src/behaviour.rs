@@ -192,6 +192,7 @@ pub struct Config {
     handler_queue_limits: Option<crate::HandlerQueueLimits>,
     background_query_limit: usize,
     background_query_batch: usize,
+    background_job_limits: Option<crate::BackgroundJobLimits>,
     kbucket_config: KBucketConfig,
     query_config: QueryConfig,
     protocol_config: ProtocolConfig,
@@ -243,6 +244,7 @@ impl Config {
             query_config: QueryConfig::default(),
             background_query_limit: JOBS_MAX_QUERIES,
             background_query_batch: JOBS_MAX_NEW_QUERIES,
+            background_job_limits: None,
             protocol_config: ProtocolConfig::new(protocol_name),
             record_ttl: Some(Duration::from_secs(48 * 60 * 60)),
             record_replication_interval: Some(Duration::from_secs(60 * 60)),
@@ -286,6 +288,13 @@ impl Config {
     /// Bounds pending connection requests across all queries in this DHT.
     pub fn set_pending_rpc_limits(&mut self, limits: crate::PendingRpcLimits) -> &mut Self {
         self.query_config.pending_rpc_limits = Some(limits);
+        self
+    }
+
+    /// Replace full background snapshots with bounded key batches and skip state.
+    /// Values are read from the store only when query admission permits progress.
+    pub fn set_background_job_limits(&mut self, limits: crate::BackgroundJobLimits) -> &mut Self {
+        self.background_job_limits = Some(limits);
         self
     }
 
@@ -567,17 +576,21 @@ where
             .record_replication_interval
             .or(config.record_publication_interval)
             .map(|interval| {
-                PutRecordJob::new(
+                let mut job = PutRecordJob::new(
                     id,
                     interval,
                     config.record_publication_interval,
                     config.record_ttl,
-                )
+                );
+                job.set_limits(config.background_job_limits);
+                job
             });
 
-        let add_provider_job = config
-            .provider_publication_interval
-            .map(AddProviderJob::new);
+        let add_provider_job = config.provider_publication_interval.map(|interval| {
+            let mut job = AddProviderJob::new(interval);
+            job.set_limits(config.background_job_limits);
+            job
+        });
 
         Behaviour {
             routing_budget: routing_budget.clone(),
@@ -813,6 +826,18 @@ where
 
     pub fn query_metadata_usage(&self) -> crate::QueryMetadataUsage {
         self.queries.metadata_usage()
+    }
+
+    /// Bounded key/cursor/skip storage across both background jobs in this DHT.
+    pub fn background_job_usage(&self) -> crate::BackgroundJobUsage {
+        let mut usage = crate::BackgroundJobUsage::default();
+        if let Some(job) = &self.put_record_job {
+            job.add_usage(&mut usage);
+        }
+        if let Some(job) = &self.add_provider_job {
+            job.add_usage(&mut usage);
+        }
+        usage
     }
 
     fn check_query_input(&mut self, bytes: usize) -> Result<(), crate::QueryStartError> {
@@ -1202,7 +1227,10 @@ where
     pub fn remove_record(&mut self, key: &record::Key) {
         if let Some(r) = self.store.get(key) {
             if r.publisher.as_ref() == Some(self.kbuckets.local_key().preimage()) {
-                self.store.remove(key)
+                self.store.remove(key);
+                if let Some(job) = &mut self.put_record_job {
+                    job.remove(key);
+                }
             }
         }
     }

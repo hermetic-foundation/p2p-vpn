@@ -461,6 +461,11 @@ pub(super) fn controlled_kademlia_config(protocol: StreamProtocol) -> kad::Confi
             NonZeroUsize::new(2 * 1024 * 1024).unwrap(),
         ))
         .set_background_query_limits(NonZeroUsize::new(2).unwrap(), NonZeroUsize::MIN)
+        .set_background_job_limits(kad::BackgroundJobLimits::new(
+            NonZeroUsize::new(64).unwrap(),
+            NonZeroUsize::new(1024 * 1024).unwrap(),
+            NonZeroUsize::new(256 * 1024).unwrap(),
+        ))
         .set_address_limits(address_limits)
         .set_query_limits(kad::QueryLimits::new(
             NonZeroUsize::new(KADEMLIA_QUERY_CANDIDATES).unwrap(),
@@ -661,6 +666,10 @@ impl From<crate::config::ConfigError> for P2pBuildError {
 mod metadata_tests;
 
 #[cfg(test)]
+#[path = "p2p/background_tests.rs"]
+mod background_tests;
+
+#[cfg(test)]
 mod tests {
     use std::time::Duration;
 
@@ -789,6 +798,14 @@ mod tests {
         assert!(!node.startup.kademlia.bootstrap_started);
         assert!(!node.startup.kademlia.rendezvous_advertise_started);
         assert!(!node.startup.kademlia.rendezvous_lookup_started);
+        assert_eq!(
+            node.swarm
+                .behaviour()
+                .kad
+                .background_job_usage()
+                .bounded_jobs,
+            2
+        );
         assert!(!node.swarm.behaviour().mdns.is_enabled());
         assert!(!node.swarm.behaviour().pairing_mdns.is_enabled());
         assert!(!node.swarm.behaviour().dcutr.is_enabled());
@@ -885,6 +902,7 @@ mod tests {
         );
         let behaviour = node.swarm.behaviour_mut();
         for kad in [&mut behaviour.kad, behaviour.pairing_kad.as_mut().unwrap()] {
+            assert_eq!(kad.background_job_usage().bounded_jobs, 2);
             assert!(matches!(
                 kad.try_get_closest_peers(vec![0; 256 * 1024 + 1]),
                 Err(kad::QueryStartError::InputTooLarge(_))
@@ -3331,7 +3349,7 @@ mod tests {
         }
     }
 
-    fn retention_diagnostic_config(separate: bool) -> HostConfig {
+    pub(super) fn retention_diagnostic_config(separate: bool) -> HostConfig {
         HostConfig {
             identity: NodeIdentity::generate_ed25519().expect("identity"),
             network_name: "retention-diagnostic".to_owned(),
@@ -4665,7 +4683,7 @@ mod tests {
         .expect("relayed packet exchange timed out");
     }
 
-    async fn next_listen_address(swarm: &mut Swarm<Behaviour>) -> Multiaddr {
+    pub(super) async fn next_listen_address(swarm: &mut Swarm<Behaviour>) -> Multiaddr {
         loop {
             if let SwarmEvent::NewListenAddr { address, .. } = swarm.select_next_some().await {
                 return address;
@@ -4673,7 +4691,7 @@ mod tests {
         }
     }
 
-    async fn next_connection_to_peer(
+    pub(super) async fn next_connection_to_peer(
         listener: &mut Swarm<Behaviour>,
         dialer: &mut Swarm<Behaviour>,
         peer: PeerId,

@@ -67,6 +67,7 @@ pub use behaviour::{
     QueryResult, QueryStats, Quorum, RoutingUpdate, StoreInserts,
 };
 pub use handler::{HandlerQueueLimits, HandlerQueueUsage};
+pub use jobs::{BackgroundJobLimits, BackgroundJobUsage};
 pub use kbucket::{
     Distance as KBucketDistance, EntryView, KBucketRef, Key as KBucketKey, NodeStatus, U256,
 };
