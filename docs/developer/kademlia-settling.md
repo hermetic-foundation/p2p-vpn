@@ -3,8 +3,9 @@
 ## Status
 
 Phase 2 is active. Starting revision: `63a380cbcd1a`.
-This initial source audit is not a passing test report. No acceptance soak has
-run, and no production behavior has changed in this checkpoint.
+Signed address renewal is implemented and its checkpoint checks pass.
+No acceptance soak has run. The remaining findings and phase-wide acceptance
+cases below are still open.
 
 See the [workstream plan](kademlia-resource-plan.md) and the completed
 [aggregate ownership audit](kademlia-final-ownership-audit.md).
@@ -64,11 +65,23 @@ Before acceptance runs, complete the fixture-specific numeric recovery and
 settling budgets from these timers and the actual topology. Record them here
 and in test assertions; do not widen them after a failure merely to pass.
 
+### Signed Freshness Gate
+
+Freeze the unchanged-address refresh target at 900 seconds, half the existing
+1,800-second signed lifetime. In a serviced five-second timeline, refresh starts
+within five seconds of its due time; capacity rejection retains the pending work.
+
+- Run 24 simulated hours with both monotonic and signed wall time advanced.
+- With unchanged addresses and immediate completion, allow 96 starts in `[0, 86400)`.
+- Quiet-mode cancellation must not prevent refresh, and signatures must remain valid.
+- Address churn still shares the five-second start limit and one publication owner.
+- Empty or permanently rejected snapshots must not become recurring retry work.
+
 ## Findings To Reproduce
 
 | Source Finding | Risk | Required Regression |
 | --- | --- | --- |
-| Quiet mode suppresses periodic signed address publication; event publication requires a pending change | Unchanged healthy records can age past their signed validity | Advance wall time past the 1,800-second lifetime and 5,400-second grace boundary; verify fresh signatures |
+| Quiet mode previously suppressed signed address renewal | Unchanged healthy records aged past their signed validity | Reproduced and fixed; see the signed-freshness checkpoint below |
 | AutoNAT Private events test pending ownership but not maintenance `next_due` | Fast completions and repeated transitions can bypass the 120-second cadence | Repeated status transitions with immediate completion, full candidates, and disabled automatic relays |
 | Synchronous auto-relay listen failures schedule retries outside timeout failure accounting | Optional failed candidates may be retried indefinitely while overlay paths are healthy | Compare synchronous failure, timeout, candidate retirement, and admission of alternatives |
 | Configured relay reservations retry independently of healthy suppression | An explicitly requested standby is different from optional discovery | Test explicit reservations separately; do not silently disable configured intent |
@@ -76,6 +89,58 @@ and in test assertions; do not widen them after a failure merely to pass.
 Passing discovered addresses into `redial_known_addresses` is not itself an
 infrastructure redial bug. Its target selector filters discovered entries by
 overlay authorization. Preserve that filter in the regression matrix.
+
+## Signed Freshness Checkpoint
+
+The negative control failed at the first missing renewal, 900 simulated seconds.
+The publication owner now retains one refresh deadline in addition to its
+existing query ID, pending bit, and five-second start limiter.
+
+| Transition | Behavior |
+| --- | --- |
+| Startup with usable addresses | Publish without relying on a listener event that preceded runtime startup |
+| Unchanged healthy addresses | Re-sign every 900 seconds through the existing publication owner |
+| Address change | Coalesce as before; the latest admitted snapshot resets the refresh deadline |
+| Temporary capacity rejection | Keep pending work; retry no faster than every five seconds |
+| Publication owner times out | Retire the query; wait for the next refresh or address change |
+| Empty or permanently oversized snapshot | Stop scheduled refresh attempts until another address event |
+
+`kademlia_address_update_coalesced` retains its existing fields and adds
+`refresh_due`. Packet formats, signature verification, record lifetime, configuration,
+query limits, and the separate ordinary-maintenance owner are unchanged.
+
+### Regression Evidence
+
+- `address_publication_stays_fresh_for_twenty_four_quiet_hours`: 96 signed publications per protocol over 24 simulated hours; unrelated retained work survives.
+- `address_refresh_waits_for_capacity_and_retires_without_fast_retries`: startup, full pool, latest snapshot, rate limit, timeout, and next refresh.
+- Empty and oversized snapshot tests cover a full simulated day without repeated admission.
+- The churn test retains 32,000 updates and now checks the legitimate next freshness renewal.
+
+The timeline advances explicit monotonic and signing clocks. Query completion is
+delivered locally without transport dials; it is not a simulation of the entire
+swarm clock or proof of remote publication delivery.
+
+Negative-control log: `/tmp/p2p-vpn-settling-freshness-before.log`.
+The focused `address_` suite passed 57 tests with one opt-in test ignored.
+
+### Checkpoint Verification
+
+| Check | Result |
+| --- | --- |
+| Offline locked workspace suite | 1,331 passed; 22 opt-in tests ignored |
+| DHT, peerless pairing, forced-relay pairing, owned QUIC, network-move namespaces | Five passed; 115.04 seconds combined |
+| Clippy correctness, suspicious, and performance groups | Passed; nonfatal style warnings remain, including two new test warnings |
+| Android x86_64 native library | Compiled offline in 35.02 seconds; four existing warnings |
+| Nix desktop/Android source parity | Passed with cached tools and unchanged assertions |
+| Formatting / whitespace | Passed |
+
+Logs use `/tmp/p2p-vpn-settling-freshness-` with `before.log`, `focused.log`,
+`workspace.log`, `namespace.log`, `clippy.log`, `android.log`, and `nix.log`
+suffixes. Readable task temporary storage was approximately 5.05 GiB.
+
+All builds used cached dependencies and at most two Cargo jobs. These checks
+are not the phase-2 soak, remote publication acceptance, an APK/ARM64 build,
+a full Nix package build, a formal proof, or a physical-device/WAN deployment.
 
 ## Harness Gaps
 

@@ -44,8 +44,9 @@ server duties or advertise itself as a Kademlia server.
 | Maintenance cadence | At most once every two minutes. |
 | Query overlap | A second cycle cannot start while one is active. |
 | Query timeout | Stale cycle queries are canceled after 90 seconds. |
-| Healthy overlay | Active maintenance is canceled and public discovery rests. |
+| Healthy overlay | Ordinary lookup cycles stop; signed address refresh continues. |
 | Address changes | Coalesced into one pending update; at most one event-driven publication every five seconds. |
+| Signed address freshness | Re-signed every 15 minutes, including while peers are healthy; the 30-minute signed lifetime is unchanged. |
 | Offline peer recovery | Starts at 10 seconds, then backs off to five minutes. |
 | Routing addresses | At most 64 per peer, each at most 2,048 encoded bytes. |
 | Configured routing seeds | Protected from address churn; count toward the same limit. |
