@@ -52,6 +52,7 @@ server duties or advertise itself as a Kademlia server.
 | Query candidates | At most 256 identities per query phase, including failed candidates. |
 | Query address storage | At most 256 KiB of encoded addresses per phase, with the same per-peer limits. |
 | Retained queries | At most 32 per DHT, including finished queries awaiting retirement. |
+| RPCs awaiting a connection | Per DHT: at most 256 requests and 1 MiB of retained payload; retired with their queries. |
 | Library background jobs | One new query per poll, only below two existing queries; provider and record jobs share the allowance. |
 | Waiting DHT requests | Per connection: at most 64 requests and 256 KiB of retained payload data; queued requests expire after ten seconds. |
 | Aggregate routing storage | Per DHT: 512 retained entry versions and 2 MiB of encoded address buffers, including pending entries and routing snapshots. |

@@ -19,8 +19,11 @@
 // DEALINGS IN THE SOFTWARE.
 
 mod peers;
+mod pending;
 mod retained;
 
+use pending::{Budget as PendingRpcBudget, PendingRpcs};
+pub use pending::{PendingRpcLimits, PendingRpcUsage};
 use retained::RetainedPeers;
 pub use retained::{QueryLimits, QueryResourceUsage};
 
@@ -34,12 +37,10 @@ use peers::{
     fixed::FixedPeersIter,
     PeersIterState,
 };
-use smallvec::SmallVec;
 use web_time::Instant;
 
 use crate::{
     behaviour::PeerInfo,
-    handler::HandlerIn,
     kbucket::{Key, KeyBytes},
     QueryInfo, ALPHA_VALUE, K_VALUE,
 };
@@ -54,6 +55,7 @@ pub(crate) struct QueryPool {
     config: QueryConfig,
     queries: FnvHashMap<QueryId, Query>,
     rejected: u64,
+    pending_rpc_budget: Option<PendingRpcBudget>,
 }
 
 /// Synchronous rejection before starting a query in a capacity-limited pool.
@@ -86,6 +88,7 @@ impl QueryPool {
     /// Creates a new `QueryPool` with the given configuration.
     pub(crate) fn new(config: QueryConfig) -> Self {
         QueryPool {
+            pending_rpc_budget: config.pending_rpc_limits.map(PendingRpcBudget::new),
             next_id: 0,
             config,
             queries: Default::default(),
@@ -114,6 +117,12 @@ impl QueryPool {
             capacity: self.config.capacity.map(NonZeroUsize::get),
             rejected: self.rejected,
         }
+    }
+
+    pub(crate) fn pending_rpc_usage(&self) -> PendingRpcUsage {
+        self.pending_rpc_budget
+            .as_ref()
+            .map_or_else(PendingRpcUsage::default, PendingRpcBudget::usage)
     }
 
     pub(crate) fn check_capacity(&mut self) -> Result<(), QueryCapacityError> {
@@ -166,7 +175,13 @@ impl QueryPool {
             )
             .collect::<Vec<_>>();
         let peer_iter = QueryPeerIter::Fixed(FixedPeersIter::new(peers, parallelism));
-        let query = Query::new(id, peer_iter, info, retained);
+        let query = Query::new(
+            id,
+            peer_iter,
+            info,
+            retained,
+            self.pending_rpc_budget.clone(),
+        );
         self.queries.insert(id, query);
     }
 
@@ -225,7 +240,13 @@ impl QueryPool {
             QueryPeerIter::Closest(ClosestPeersIter::with_config(cfg, target, peers))
         };
 
-        let query = Query::new(id, peer_iter, info, retained);
+        let query = Query::new(
+            id,
+            peer_iter,
+            info,
+            retained,
+            self.pending_rpc_budget.clone(),
+        );
         self.queries.insert(id, query);
     }
 
@@ -316,6 +337,7 @@ impl std::fmt::Display for QueryId {
 /// The configuration for queries in a `QueryPool`.
 #[derive(Debug, Clone)]
 pub(crate) struct QueryConfig {
+    pub(crate) pending_rpc_limits: Option<PendingRpcLimits>,
     pub(crate) capacity: Option<NonZeroUsize>,
     pub(crate) limits: Option<QueryLimits>,
     /// Timeout of a single query.
@@ -339,6 +361,7 @@ pub(crate) struct QueryConfig {
 impl Default for QueryConfig {
     fn default() -> Self {
         QueryConfig {
+            pending_rpc_limits: None,
             capacity: None,
             limits: None,
             timeout: Duration::from_secs(60),
@@ -363,7 +386,7 @@ pub(crate) struct Query {
     ///
     /// A request is pending if the targeted peer is not currently connected
     /// and these requests are sent as soon as a connection to the peer is established.
-    pub(crate) pending_rpcs: SmallVec<[(PeerId, HandlerIn); K_VALUE.get()]>,
+    pub(crate) pending_rpcs: PendingRpcs,
 }
 
 /// The peer iterator that drives the query state,
@@ -413,6 +436,7 @@ impl Query {
         peer_iter: QueryPeerIter,
         info: QueryInfo,
         retained: RetainedPeers,
+        pending_rpc_budget: Option<PendingRpcBudget>,
     ) -> Self {
         Query {
             id,
@@ -421,7 +445,7 @@ impl Query {
                 addresses: retained,
                 peer_iter,
             },
-            pending_rpcs: SmallVec::default(),
+            pending_rpcs: PendingRpcs::new(pending_rpc_budget),
             stats: QueryStats::empty(),
         }
     }
@@ -436,8 +460,15 @@ impl Query {
         &self.stats
     }
 
+    pub(crate) fn has_expired(&self, timeout: Duration) -> bool {
+        self.stats
+            .start
+            .is_some_and(|start| start.elapsed() >= timeout)
+    }
+
     /// Informs the query that the attempt to contact `peer` failed.
     pub(crate) fn on_failure(&mut self, peer: &PeerId) {
+        self.pending_rpcs.remove_peer(peer);
         let updated = match &mut self.peers.peer_iter {
             QueryPeerIter::Closest(iter) => iter.on_failure(peer),
             QueryPeerIter::ClosestDisjoint(iter) => iter.on_failure(peer),
@@ -455,6 +486,7 @@ impl Query {
     where
         I: IntoIterator<Item = PeerId>,
     {
+        self.pending_rpcs.remove_peer(peer);
         let updated = match &mut self.peers.peer_iter {
             QueryPeerIter::Closest(iter) => iter.on_success(peer, new_peers),
             QueryPeerIter::ClosestDisjoint(iter) => iter.on_success(peer, new_peers),

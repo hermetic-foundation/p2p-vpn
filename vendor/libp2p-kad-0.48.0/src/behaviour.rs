@@ -283,6 +283,12 @@ impl Config {
         self
     }
 
+    /// Bounds pending connection requests across all queries in this DHT.
+    pub fn set_pending_rpc_limits(&mut self, limits: crate::PendingRpcLimits) -> &mut Self {
+        self.query_config.pending_rpc_limits = Some(limits);
+        self
+    }
+
     /// Sets the timeout for a single query.
     ///
     /// > **Note**: A single query usually comprises at least as many requests
@@ -787,6 +793,10 @@ where
 
     pub fn query_pool_usage(&self) -> crate::QueryPoolUsage {
         self.queries.usage()
+    }
+
+    pub fn pending_rpc_usage(&self) -> crate::PendingRpcUsage {
+        self.queries.pending_rpc_usage()
     }
 
     /// Unlike `query`, this includes finished entries which still occupy capacity.
@@ -1893,20 +1903,22 @@ where
                         get_closest_peers_stats,
                         ..
                     },
-            } => match context {
-                AddProviderContext::Publish => Some(Event::OutboundQueryProgressed {
+            } => {
+                let result = if q.stats.num_successes() == 0 && q.stats.num_failures() > 0 {
+                    Err(AddProviderError::NoPeersReached { key })
+                } else {
+                    Ok(AddProviderOk { key })
+                };
+                Some(Event::OutboundQueryProgressed {
                     id: query_id,
                     stats: get_closest_peers_stats.merge(q.stats),
-                    result: QueryResult::StartProviding(Ok(AddProviderOk { key })),
+                    result: match context {
+                        AddProviderContext::Publish => QueryResult::StartProviding(result),
+                        AddProviderContext::Republish => QueryResult::RepublishProvider(result),
+                    },
                     step: ProgressStep::first_and_last(),
-                }),
-                AddProviderContext::Republish => Some(Event::OutboundQueryProgressed {
-                    id: query_id,
-                    stats: get_closest_peers_stats.merge(q.stats),
-                    result: QueryResult::RepublishProvider(Ok(AddProviderOk { key })),
-                    step: ProgressStep::first_and_last(),
-                }),
-            },
+                })
+            }
 
             QueryInfo::GetRecord {
                 key,
@@ -2477,13 +2489,19 @@ where
         self.connections.insert(connection_id, peer);
         // Queue events for sending pending RPCs to the connected peer.
         // There can be only one pending RPC for a particular peer and query per definition.
-        for (_peer_id, event) in self.queries.iter_mut().filter_map(|q| {
-            q.pending_rpcs
-                .iter()
-                .position(|(p, _)| p == &peer)
-                .map(|p| q.pending_rpcs.remove(p))
-        }) {
-            handler.on_behaviour_event(event)
+        let timeout = self.queries.config().timeout;
+        for query in self.queries.iter_mut() {
+            if query.is_finished() || query.has_expired(timeout) {
+                query.pending_rpcs.clear();
+                continue;
+            }
+            if let Some(event) = query.pending_rpcs.remove_peer(&peer) {
+                let provider = matches!(event, HandlerIn::AddProvider { .. });
+                handler.on_behaviour_event(event);
+                if provider {
+                    query.on_success(&peer, vec![]);
+                }
+            }
         }
     }
 }
@@ -2914,13 +2932,13 @@ where
                         // better emit an event when the request has been sent (and report
                         // an error if sending fails), instead of immediately reporting
                         // "success" somewhat prematurely here.
-                        if let QueryInfo::AddProvider {
-                            phase: AddProviderPhase::AddProvider { .. },
-                            ..
-                        } = &query.info
-                        {
-                            query.on_success(&peer_id, vec![])
-                        }
+                        let provider = matches!(
+                            &query.info,
+                            QueryInfo::AddProvider {
+                                phase: AddProviderPhase::AddProvider { .. },
+                                ..
+                            }
+                        );
 
                         if self.connected_peers.contains(&peer_id) {
                             self.queued_events.push_back(ToSwarm::NotifyHandler {
@@ -2928,11 +2946,17 @@ where
                                 event,
                                 handler: NotifyHandler::Any,
                             });
+                            if provider {
+                                query.on_success(&peer_id, vec![]);
+                            }
                         } else if &peer_id != self.kbuckets.local_key().preimage() {
-                            query.pending_rpcs.push((peer_id, event));
-                            self.queued_events.push_back(ToSwarm::Dial {
-                                opts: DialOpts::peer_id(peer_id).build(),
-                            });
+                            if query.pending_rpcs.push(peer_id, event) {
+                                self.queued_events.push_back(ToSwarm::Dial {
+                                    opts: DialOpts::peer_id(peer_id).build(),
+                                });
+                            } else {
+                                query.on_failure(&peer_id);
+                            }
                         }
                     }
                     QueryPoolState::Waiting(None) | QueryPoolState::Idle => break,
@@ -3413,20 +3437,22 @@ pub struct AddProviderOk {
 pub enum AddProviderError {
     #[error("the request timed out")]
     Timeout { key: record::Key },
+    #[error("no attempted peer accepted the provider request for dispatch")]
+    NoPeersReached { key: record::Key },
 }
 
 impl AddProviderError {
     /// Gets the key for which the operation failed.
     pub fn key(&self) -> &record::Key {
         match self {
-            AddProviderError::Timeout { key, .. } => key,
+            AddProviderError::Timeout { key, .. } | AddProviderError::NoPeersReached { key } => key,
         }
     }
 
     /// Extracts the key for which the operation failed,
     pub fn into_key(self) -> record::Key {
         match self {
-            AddProviderError::Timeout { key, .. } => key,
+            AddProviderError::Timeout { key, .. } | AddProviderError::NoPeersReached { key } => key,
         }
     }
 }

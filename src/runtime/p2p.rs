@@ -443,6 +443,10 @@ pub(super) fn controlled_kademlia_config(protocol: StreamProtocol) -> kad::Confi
     config
         .set_parallelism(KADEMLIA_QUERY_PARALLELISM)
         .set_query_pool_capacity(KADEMLIA_QUERY_POOL_CAPACITY)
+        .set_pending_rpc_limits(kad::PendingRpcLimits::new(
+            NonZeroUsize::new(256).unwrap(),
+            NonZeroUsize::new(1024 * 1024).unwrap(),
+        ))
         .set_handler_queue_limits(kad::HandlerQueueLimits::new(
             NonZeroUsize::new(64).unwrap(),
             NonZeroUsize::new(256 * 1024).unwrap(),
@@ -2058,6 +2062,267 @@ mod tests {
             0,
             "background jobs were consumed before capacity was available"
         );
+    }
+
+    #[test]
+    fn pending_rpc_budget_is_aggregate_and_reusable_after_cancellation_and_handoff() {
+        use libp2p::{
+            core::{Endpoint, transport::PortUse},
+            swarm::{ConnectionHandler, ConnectionId, NetworkBehaviour, ToSwarm},
+        };
+        fn drain(kad: &mut kad::Behaviour<kad::store::MemoryStore>) -> usize {
+            let waker = futures::task::noop_waker();
+            let mut cx = std::task::Context::from_waker(&waker);
+            let mut failures = 0;
+            for _ in 0..128 {
+                match kad.poll(&mut cx) {
+                    std::task::Poll::Pending => return failures,
+                    std::task::Poll::Ready(ToSwarm::GenerateEvent(
+                        kad::Event::OutboundQueryProgressed {
+                            result: kad::QueryResult::PutRecord(Err(_)),
+                            ..
+                        },
+                    )) => failures += 1,
+                    _ => {}
+                }
+            }
+            panic!("pending RPC test did not settle");
+        }
+        for (count, bytes, admitted) in [(1, 4096, 1), (8, 40, 1), (8, 16, 0)] {
+            let local = PeerId::random();
+            let mut config = controlled_kademlia_config(StreamProtocol::new(
+                crate::config::PUBLIC_IPFS_KADEMLIA_PROTOCOL,
+            ));
+            config.set_pending_rpc_limits(kad::PendingRpcLimits::new(
+                NonZeroUsize::new(count).unwrap(),
+                NonZeroUsize::new(bytes).unwrap(),
+            ));
+            let mut kad =
+                kad::Behaviour::with_config(local, kad::store::MemoryStore::new(local), config);
+            let queries = (0_u8..2)
+                .map(|index| {
+                    kad.put_record_to(
+                        kad::Record::new(kad::RecordKey::new(&[index]), vec![42; 32]),
+                        [PeerId::random()].into_iter(),
+                        kad::Quorum::One,
+                    )
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(drain(&mut kad), 2 - admitted);
+            let usage = kad.pending_rpc_usage();
+            assert_eq!(usage.requests, admitted);
+            assert_eq!(usage.bytes, admitted * 33);
+            if count == 1 {
+                assert_eq!(usage.count_rejections, 1);
+            } else {
+                assert_eq!(usage.byte_rejections, (2 - admitted) as u64);
+            }
+            assert_eq!(
+                queries
+                    .iter()
+                    .filter(|id| kad.query_is_retained(id))
+                    .count(),
+                admitted
+            );
+            for query in queries {
+                kad.cancel_query(&query);
+            }
+            assert_eq!(kad.pending_rpc_usage().requests, 0);
+            assert_eq!(kad.pending_rpc_usage().bytes, 0);
+            let remote = PeerId::random();
+            let query = kad.put_record_to(
+                kad::Record::new(kad::RecordKey::new(&b"r"), vec![1]),
+                [remote].into_iter(),
+                kad::Quorum::One,
+            );
+            assert_eq!(drain(&mut kad), 0);
+            assert_eq!(kad.pending_rpc_usage().requests, 1);
+            assert_eq!(kad.pending_rpc_usage().bytes, 2);
+            let mut handler = kad
+                .handle_established_outbound_connection(
+                    ConnectionId::new_unchecked(1),
+                    remote,
+                    &"/memory/1".parse().unwrap(),
+                    Endpoint::Dialer,
+                    PortUse::Reuse,
+                )
+                .unwrap();
+            assert_eq!(kad.pending_rpc_usage().requests, 0);
+            assert_eq!(kad.pending_rpc_usage().bytes, 0);
+            assert_eq!(handler.pending_request_usage().requests, 1);
+            assert!(kad.query_is_retained(&query));
+            let waker = futures::task::noop_waker();
+            assert!(
+                handler
+                    .poll(&mut std::task::Context::from_waker(&waker))
+                    .is_ready()
+            );
+        }
+    }
+
+    #[test]
+    fn pending_provider_rpc_waits_for_handoff_and_reports_capacity_failure() {
+        use libp2p::{
+            core::{Endpoint, transport::PortUse},
+            swarm::{ConnectionHandler, ConnectionId, FromSwarm, NetworkBehaviour, ToSwarm},
+        };
+        type HandlerEvent = <<kad::Behaviour<kad::store::MemoryStore> as NetworkBehaviour>::ConnectionHandler as ConnectionHandler>::ToBehaviour;
+        for reject in [false, true] {
+            let local = PeerId::random();
+            let remote = PeerId::random();
+            let address: Multiaddr = "/memory/1".parse().unwrap();
+            let mut config = controlled_kademlia_config(StreamProtocol::new(
+                crate::config::PUBLIC_IPFS_KADEMLIA_PROTOCOL,
+            ));
+            config.set_pending_rpc_limits(kad::PendingRpcLimits::new(
+                NonZeroUsize::MIN,
+                NonZeroUsize::new(if reject { 2 } else { 4096 }).unwrap(),
+            ));
+            let mut kad =
+                kad::Behaviour::with_config(local, kad::store::MemoryStore::new(local), config);
+            kad.add_address(&remote, address.clone());
+            kad.on_swarm_event(FromSwarm::ExternalAddrConfirmed(
+                libp2p::swarm::behaviour::ExternalAddrConfirmed { addr: &address },
+            ));
+            let query = kad.start_providing(kad::RecordKey::new(&b"p")).unwrap();
+            let waker = futures::task::noop_waker();
+            let mut cx = std::task::Context::from_waker(&waker);
+            for _ in 0..32 {
+                let _ = kad.poll(&mut cx);
+                if kad.pending_rpc_usage().requests == 1 {
+                    break;
+                }
+            }
+            assert_eq!(kad.pending_rpc_usage().requests, 1);
+            // The lookup response arrives before the publication connection exists.
+            kad.on_connection_handler_event(
+                remote,
+                ConnectionId::new_unchecked(1),
+                HandlerEvent::FindNodeRes {
+                    closer_peers: vec![],
+                    query_id: query,
+                },
+            );
+            assert_eq!(kad.pending_rpc_usage().requests, 0);
+            let mut result = None;
+            for _ in 0..64 {
+                if let std::task::Poll::Ready(ToSwarm::GenerateEvent(
+                    kad::Event::OutboundQueryProgressed {
+                        id,
+                        result: kad::QueryResult::StartProviding(event),
+                        ..
+                    },
+                )) = kad.poll(&mut cx)
+                {
+                    assert_eq!(id, query);
+                    result = Some(event);
+                }
+            }
+            if reject {
+                assert!(matches!(
+                    result,
+                    Some(Err(kad::AddProviderError::NoPeersReached { .. }))
+                ));
+                assert_eq!(kad.pending_rpc_usage().requests, 0);
+                assert_eq!(kad.pending_rpc_usage().byte_rejections, 1);
+                assert!(!kad.query_is_retained(&query));
+                continue;
+            }
+            assert!(
+                result.is_none(),
+                "unhanded provider request reported completion"
+            );
+            assert!(kad.query_is_retained(&query));
+            assert_eq!(kad.pending_rpc_usage().requests, 1);
+            let handler = kad
+                .handle_established_outbound_connection(
+                    ConnectionId::new_unchecked(2),
+                    remote,
+                    &address,
+                    Endpoint::Dialer,
+                    PortUse::Reuse,
+                )
+                .unwrap();
+            assert_eq!(handler.pending_request_usage().requests, 1);
+            assert_eq!(kad.pending_rpc_usage().requests, 0);
+            for _ in 0..64 {
+                if let std::task::Poll::Ready(ToSwarm::GenerateEvent(
+                    kad::Event::OutboundQueryProgressed {
+                        id,
+                        result: kad::QueryResult::StartProviding(event),
+                        ..
+                    },
+                )) = kad.poll(&mut cx)
+                {
+                    assert_eq!(id, query);
+                    result = Some(event);
+                }
+            }
+            assert!(matches!(result, Some(Ok(_))));
+        }
+    }
+
+    #[test]
+    fn pending_rpc_budget_retires_failed_finished_and_expired_work() {
+        use libp2p::{
+            core::{Endpoint, transport::PortUse},
+            swarm::{ConnectionId, DialError, FromSwarm, NetworkBehaviour},
+        };
+        for retirement in ["dial_failure", "finished", "expired"] {
+            let local = PeerId::random();
+            let remote = PeerId::random();
+            let mut config = controlled_kademlia_config(StreamProtocol::new(
+                crate::config::PUBLIC_IPFS_KADEMLIA_PROTOCOL,
+            ));
+            config.set_query_timeout(Duration::from_millis(50));
+            let mut kad =
+                kad::Behaviour::with_config(local, kad::store::MemoryStore::new(local), config);
+            let query = kad.put_record_to(
+                kad::Record::new(kad::RecordKey::new(&b"r"), vec![1]),
+                [remote].into_iter(),
+                kad::Quorum::One,
+            );
+            let waker = futures::task::noop_waker();
+            let mut cx = std::task::Context::from_waker(&waker);
+            let _ = kad.poll(&mut cx);
+            assert_eq!(kad.pending_rpc_usage().requests, 1);
+            if retirement == "dial_failure" {
+                kad.on_swarm_event(FromSwarm::DialFailure(libp2p::swarm::DialFailure {
+                    peer_id: Some(remote),
+                    connection_id: ConnectionId::new_unchecked(1),
+                    error: &DialError::NoAddresses,
+                }));
+            } else {
+                if retirement == "finished" {
+                    kad.query_mut(&query).unwrap().finish();
+                } else {
+                    std::thread::sleep(Duration::from_millis(75));
+                }
+                assert_eq!(kad.pending_rpc_usage().requests, 1);
+                let handler = kad
+                    .handle_established_outbound_connection(
+                        ConnectionId::new_unchecked(1),
+                        remote,
+                        &"/memory/1".parse().unwrap(),
+                        Endpoint::Dialer,
+                        PortUse::Reuse,
+                    )
+                    .unwrap();
+                assert_eq!(
+                    handler.pending_request_usage().requests,
+                    0,
+                    "stale RPC handed off"
+                );
+            }
+            assert_eq!(kad.pending_rpc_usage().requests, 0);
+            assert_eq!(kad.pending_rpc_usage().bytes, 0);
+            for _ in 0..32 {
+                if kad.poll(&mut cx).is_pending() {
+                    break;
+                }
+            }
+            assert!(!kad.query_is_retained(&query));
+        }
     }
 
     #[test]

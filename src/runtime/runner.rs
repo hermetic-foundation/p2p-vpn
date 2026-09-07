@@ -20396,6 +20396,7 @@ const fn kademlia_query_result_name(result: &kad::QueryResult) -> &'static str {
 const fn kademlia_add_provider_error_name(error: &kad::AddProviderError) -> &'static str {
     match error {
         kad::AddProviderError::Timeout { .. } => "timeout",
+        kad::AddProviderError::NoPeersReached { .. } => "no_peers_reached",
     }
 }
 

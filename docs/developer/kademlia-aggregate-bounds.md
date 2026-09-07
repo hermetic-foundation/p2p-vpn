@@ -373,6 +373,57 @@ of 32 for primary, separate public-pairing, and standalone pairing DHTs.
 No full Nix package, APK, ARM64 build, or physical deployment was performed.
 Normal namespace tests do not prove VPN continuity during aggregate overload.
 
+## Pending Query RPC Bounds
+
+Requests awaiting a peer connection share one budget across all queries in a
+DHT. Reservations follow retained requests until cancellation, failure,
+retirement, or handoff to a separately bounded connection handler.
+
+| Limit | Default | Scope |
+| --- | ---: | --- |
+| Waiting RPCs | 256 | Aggregate per DHT, not per query |
+| Waiting payload | 1 MiB | Keys, record-value capacities, provider addresses and vector slots |
+| Lifetime | Parent query deadline | Failed, finished, and expired work cannot be handed off late |
+| Rejection bookkeeping | Saturating counters | No rejected-payload or rejected-ID queue |
+
+The request count allows eight waiting requests per retained query on average,
+with headroom for fixed publication batches. The byte cap permits ordinary
+record publication while preventing those batches from retaining unlimited copies.
+
+`pending_rpc_usage()` reports retained requests, bytes, and count/byte rejection
+totals. This is payload accounting, not allocator RSS. Container high-water
+capacity and query metadata require separate accounting in the final audit.
+
+Admission preserves existing requests and fails the rejected peer attempt.
+Dial failure and query cancellation release reservations. Handler preload skips
+finished/expired queries and transfers admitted live work out of this budget.
+
+Disconnected provider requests remain pending until handoff. If all attempted
+publication peers fail, `NoPeersReached` reports failure instead of success;
+the runtime exposes `no_peers_reached`. This changes a local result enum, not
+the wire protocol. Handoff is not remote acknowledgement or confirmed delivery.
+
+Focused count/byte, cancellation, handoff, dial-failure, and late-handoff tests
+passed in `/tmp/p2p-vpn-kad-pending-rpc-tests.log`. Provider handoff and capacity
+failure passed in `/tmp/p2p-vpn-kad-pending-provider-test.log`.
+
+### Pending RPC Checkpoint Evidence
+
+| Check | Result |
+| --- | --- |
+| Offline workspace tests | 1,296 passed; 22 opt-in tests ignored |
+| Namespace DHT, peerless pairing, forced-relay pairing, owned QUIC | All four passed |
+| Namespace relay/direct network move | Passed |
+| Android x86_64 native library | Compiled offline; four existing warnings |
+| Nix desktop/Android source parity | Passed with cached tool overrides |
+| Root and changed vendored Rust formatting | Passed |
+| Workspace Clippy correctness, suspicious, and perf groups | Passed; style warnings remain |
+
+Logs use `/tmp/p2p-vpn-kad-pending-` with suffixes `workspace.log`,
+`namespace.log`, `move.log`, `android.log`, `nix.log`, and `clippy.log`.
+No full Nix package, APK, ARM64 build, formal model, or physical deployment
+is claimed. Query metadata, queued results, and combined overload remain open.
+
 ## Implementation Order
 
 1. Handler admission, expiry, and bounded rejection reporting.

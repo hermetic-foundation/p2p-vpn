@@ -74,6 +74,16 @@ for that ID. No rejection queue is created. The application constructor enables
 32 retained queries per DHT and application starts use checked admission.
 Additional query-payload/result bounds remain unfinished.
 
+Pending connection RPCs now use shared reservations across the query pool.
+`set_pending_rpc_limits()` is opt-in upstream; p2p-vpn sets 256 requests and
+1 MiB per DHT. Failure, cancellation, retirement, and handler handoff release
+reservations. `pending_rpc_usage()` exposes aggregate usage and rejections.
+
+Provider requests awaiting connection no longer complete before handoff.
+`AddProviderError::NoPeersReached` reports an all-failed publication phase;
+it is a local API addition, not a wire change. Handler dispatch still does not
+prove remote receipt. Metadata and queued result bounds remain unfinished.
+
 Provider and record jobs share background admission capacity and alternate first
 access. Defaults remain a 100-query ceiling and batch size ten, but the batch is
 now shared across both jobs. p2p-vpn selects a ceiling of two and batch size one.
