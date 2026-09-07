@@ -1338,8 +1338,8 @@ mod tests {
         }
     }
 
-    async fn exercise_internal_kademlia_connection_address_retention(separate: bool) {
-        let config = || HostConfig {
+    fn retention_diagnostic_config(separate: bool) -> HostConfig {
+        HostConfig {
             identity: NodeIdentity::generate_ed25519().expect("identity"),
             network_name: "retention-diagnostic".to_owned(),
             membership_tag: None,
@@ -1366,9 +1366,12 @@ mod tests {
                 },
                 ..DiscoveryConfig::default()
             },
-        };
-        let mut listener = build_node(&config()).expect("listener");
-        let mut dialer = build_node(&config()).expect("dialer");
+        }
+    }
+
+    async fn exercise_internal_kademlia_connection_address_retention(separate: bool) {
+        let mut listener = build_node(&retention_diagnostic_config(separate)).expect("listener");
+        let mut dialer = build_node(&retention_diagnostic_config(separate)).expect("dialer");
         for node in [&mut listener, &mut dialer] {
             assert_eq!(node.swarm.behaviour().pairing_kad.is_enabled(), separate);
             for seed in public_ipfs_bootstrap_peer_configs() {
@@ -1436,6 +1439,99 @@ mod tests {
             "internal_kademlia_retention separate={separate} connections={samples} addresses={retained}"
         );
         assert_eq!(retained, samples);
+    }
+
+    #[tokio::test]
+    #[ignore = "opt-in loopback diagnostic for query-local Kademlia address retention"]
+    async fn measure_internal_kademlia_query_address_retention() {
+        for separate in [false, true] {
+            let mut source = build_node(&retention_diagnostic_config(separate)).unwrap();
+            let mut client = build_node(&retention_diagnostic_config(separate)).unwrap();
+            for node in [&mut source, &mut client] {
+                for seed in public_ipfs_bootstrap_peer_configs() {
+                    let (peer, _) = seed.peer_address().unwrap();
+                    public_pairing_kad_mut(node.swarm.behaviour_mut()).remove_peer(&peer);
+                }
+                public_pairing_kad_mut(node.swarm.behaviour_mut())
+                    .set_mode(Some(kad::Mode::Server));
+            }
+            source
+                .swarm
+                .listen_on("/ip4/127.0.0.1/tcp/0".parse().unwrap())
+                .unwrap();
+            let address = next_listen_address(&mut source.swarm).await;
+            let reported = PeerId::random();
+            let count = super::super::address_retention::MAX_DISCOVERED_ADDRESSES_PER_PEER + 1;
+            for index in 1..=count {
+                // Unsupported memory addresses cannot dial unrelated local or public services.
+                public_pairing_kad_mut(source.swarm.behaviour_mut())
+                    .add_address(&reported, format!("/memory/{index}").parse().unwrap());
+            }
+            let kad = public_pairing_kad_mut(client.swarm.behaviour_mut());
+            kad.add_address(&source.local_peer_id, address);
+            let query = kad.get_closest_peers(reported);
+            let retained = tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    tokio::select! {
+                        _ = source.swarm.select_next_some() => {}
+                        _ = client.swarm.select_next_some() => {}
+                    }
+                    let addresses = public_pairing_kad_mut(client.swarm.behaviour_mut())
+                        .handle_pending_outbound_connection(
+                            libp2p::swarm::ConnectionId::new_unchecked(99_999),
+                            Some(reported),
+                            &[],
+                            libp2p::core::Endpoint::Dialer,
+                        )
+                        .unwrap();
+                    if !addresses.is_empty() {
+                        break addresses;
+                    }
+                }
+            })
+            .await
+            .expect("query retention diagnostic deadline");
+            let kad = public_pairing_kad_mut(client.swarm.behaviour_mut());
+            assert!(kad.kbuckets().all(|bucket| {
+                bucket
+                    .iter()
+                    .all(|entry| entry.node.key.preimage() != &reported)
+            }));
+            assert_eq!(retained.len(), count);
+            let encoded_bytes: usize = retained.iter().map(Multiaddr::len).sum();
+            eprintln!(
+                "internal_kademlia_query_retention separate={separate} addresses={} encoded_bytes={encoded_bytes}",
+                retained.len()
+            );
+            kad.query_mut(&query)
+                .expect("query remains active")
+                .finish();
+            // Polling retires a finished query; no application routing-table admission occurs.
+            tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    tokio::select! {
+                        _ = source.swarm.select_next_some() => {}
+                        _ = client.swarm.select_next_some() => {}
+                    }
+                    let kad = public_pairing_kad_mut(client.swarm.behaviour_mut());
+                    if kad.query(&query).is_none() {
+                        assert!(
+                            kad.handle_pending_outbound_connection(
+                                libp2p::swarm::ConnectionId::new_unchecked(99_999),
+                                Some(reported),
+                                &[],
+                                libp2p::core::Endpoint::Dialer,
+                            )
+                            .unwrap()
+                            .is_empty()
+                        );
+                        break;
+                    }
+                }
+            })
+            .await
+            .expect("finished query cleanup deadline");
+        }
     }
 
     #[tokio::test]

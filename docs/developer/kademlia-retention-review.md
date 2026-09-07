@@ -47,7 +47,7 @@ stores reported addresses before passing candidate identities to the query strat
 
 1. Add enforcement for internally learned bucket addresses and turn the diagnostic
    below into a regression that requires the bound to hold.
-2. Exercise query-local retention with bounded synthetic peer responses.
+2. Extend the query-local address diagnostic below to cumulative peer growth and heap measurements.
 3. Verify pending entries and address changes, not only `RoutingUpdated` events.
 
 Any reconciliation must preserve configured seeds, active connections, and fresh
@@ -84,6 +84,52 @@ a public-network attack. The enforcement gap remains open.
 cargo test --offline --locked --lib \
   measure_internal_kademlia_connection_address_retention -- --ignored --nocapture
 ```
+
+## Query-Local Reproduction
+
+`runtime::p2p::tests::measure_internal_kademlia_query_address_retention` runs
+two real loopback swarms. The responder reports 65 addresses for one synthetic
+peer in a closest-peers response; the client never admits it to a routing bucket.
+
+| DHT Mode | Query Addresses | Encoded Address Bytes | Candidates After Query Retirement |
+| --- | ---: | ---: | ---: |
+| Shared public DHT | 65 | 3,055 | 0 |
+| Private primary plus public-pairing DHT | 65 | 3,055 | 0 |
+
+The two-mode diagnostic passed in 0.07 seconds. It reads the addresses through
+`NetworkBehaviour::handle_pending_outbound_connection`, verifies bucket absence,
+then explicitly finishes and polls the query before checking candidate cleanup.
+
+```bash
+cargo test --offline --lib measure_internal_kademlia_query_address_retention \
+  -- --ignored --nocapture
+```
+
+### Interpretation
+
+- Query caching bypasses the application's 64-address admission limit, independently of bucket insertion.
+- Encoded bytes sum retained multiaddress lengths, including normalized peer suffixes; this is not heap allocation or RSS.
+- Explicit completion releases query candidates; this does not establish timeout behavior under load or immediate allocator reclamation.
+- One response and one reported identity do not measure cumulative peer growth, concurrent-query memory, or a public-network attack.
+- The diagnostic expects current retention behavior. A future bound-enforcing patch must replace that expectation, not keep it as a required contract.
+
+### Isolation and Verification
+
+- Public bootstrap entries are removed before polling; mDNS, AutoNAT, DCUtR, and provider advertisements are disabled.
+- The source connection uses loopback TCP; reported `/memory` addresses have no supported transport and cannot contact unrelated services.
+- Each retention/cleanup phase has a ten-second deadline; dropping both swarms closes their listeners.
+- The existing bucket diagnostic and new query diagnostic share only their test configuration helper.
+- No dependency, production runtime, wire protocol, or configuration change is included.
+- Logs: `/tmp/p2p-vpn-review-query-retention.log` and `/tmp/p2p-vpn-review-query-retention-p2p.log`.
+
+The combined module run passed all 34 tests, including both opt-in diagnostics,
+in 17.05 seconds. After a redundant-closure cleanup, all 34 passed again in
+17.11 seconds (`/tmp/p2p-vpn-review-query-retention-p2p-final.log`). Required Clippy
+groups, changed-file formatting, whitespace, and Nix test-source inclusion passed.
+
+The full workspace was not repeated for this diagnostic-only change; its prior
+1,232-test pass is recorded separately. No VM, emulator, or physical device was
+started. Existing build directories were reused, remaining about 3.6 GiB combined.
 
 ## Reproduce the Audit
 
