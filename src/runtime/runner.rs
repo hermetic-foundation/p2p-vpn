@@ -1977,6 +1977,14 @@ where
                     packet_plane_quic.as_ref(),
                 );
                 let now = Instant::now();
+                drive_kademlia_address_publication(
+                    &mut node.swarm,
+                    &mut kademlia_maintenance,
+                    &node.network_name,
+                    node.membership_tag.as_deref(),
+                    &node.identity,
+                    now,
+                );
                 let recovery_active = queue_runtime
                     .discovered_peer_addresses
                     .has_pending_recovery_discovery_query();
@@ -2574,6 +2582,9 @@ struct KademliaMaintenance {
     started_at: Option<Instant>,
     queries: HashSet<kad::QueryId>,
     task_cursor: usize,
+    address_publication_pending: bool,
+    address_publication: Option<(kad::QueryId, Instant)>,
+    address_publication_next: Instant,
 }
 
 impl KademliaMaintenance {
@@ -2583,6 +2594,9 @@ impl KademliaMaintenance {
             started_at: None,
             queries: HashSet::new(),
             task_cursor: 0,
+            address_publication_pending: false,
+            address_publication: None,
+            address_publication_next: now,
         }
     }
 
@@ -2610,6 +2624,10 @@ impl KademliaMaintenance {
     }
 
     fn finish_query(&mut self, query: kad::QueryId) -> bool {
+        if self.address_publication.is_some_and(|(id, _)| id == query) {
+            self.address_publication = None;
+            return true;
+        }
         let removed = self.queries.remove(&query);
         if self.queries.is_empty() {
             self.started_at = None;
@@ -4903,12 +4921,7 @@ fn handle_runtime_network_change(
         }
     }
 
-    publish_kademlia_peer_address_record_for_capabilities(
-        &mut context.node.swarm,
-        &context.node.discovery,
-        context.local_capabilities,
-        &context.node.identity,
-    );
+    request_kademlia_address_publication(context.kademlia_maintenance, &context.node.discovery);
     handle_redial_tick(
         context.node,
         context.forwarder,
@@ -6939,17 +6952,44 @@ impl std::fmt::Display for KademliaPeerAddressRecordError {
     }
 }
 
-fn publish_kademlia_peer_address_record(
+fn drive_kademlia_address_publication(
     swarm: &mut Swarm<Behaviour>,
+    maintenance: &mut KademliaMaintenance,
     network_name: &str,
     membership_tag: Option<&str>,
     identity: &NodeIdentity,
+    now: Instant,
 ) {
-    let _ = start_kademlia_peer_address_record_publication(
+    if now < maintenance.address_publication_next {
+        return;
+    }
+    let expired = maintenance.address_publication.is_some_and(|(_, started)| {
+        now.saturating_duration_since(started) >= KADEMLIA_MAINTENANCE_QUERY_TIMEOUT
+    });
+    if !maintenance.address_publication_pending && !expired {
+        return;
+    }
+    if let Some((query, _)) = maintenance.address_publication.take() {
+        swarm.behaviour_mut().kad.cancel_query(&query);
+    }
+    if !std::mem::take(&mut maintenance.address_publication_pending) {
+        return;
+    }
+    maintenance.address_publication_next = now + KADEMLIA_MAINTENANCE_POLL_INTERVAL;
+    maintenance.address_publication = start_kademlia_peer_address_record_publication(
         swarm,
         network_name,
         membership_tag,
         identity,
+    )
+    .map(|query| (query, now));
+    log_runtime_event(
+        LogLevel::Info,
+        "kademlia_address_update_coalesced",
+        &[(
+            "started",
+            &maintenance.address_publication.is_some().to_string(),
+        )],
     );
 }
 
@@ -7008,22 +7048,15 @@ fn start_kademlia_peer_address_record_publication(
     }
 }
 
-fn publish_kademlia_peer_address_record_for_capabilities(
-    swarm: &mut Swarm<Behaviour>,
+fn request_kademlia_address_publication(
+    maintenance: &mut KademliaMaintenance,
     discovery: &DiscoveryConfig,
-    local_capabilities: &ControlCapabilities,
-    identity: &NodeIdentity,
 ) {
     if !discovery.kademlia {
         return;
     }
 
-    publish_kademlia_peer_address_record(
-        swarm,
-        &local_capabilities.network_name,
-        local_capabilities.membership_tag.as_deref(),
-        identity,
-    );
+    maintenance.address_publication_pending = true;
 }
 
 fn local_advertisable_addresses(swarm: &Swarm<Behaviour>) -> Vec<Multiaddr> {
@@ -11934,11 +11967,9 @@ async fn handle_swarm_event(
                     context.local_capabilities,
                     context.metrics,
                 );
-                publish_kademlia_peer_address_record_for_capabilities(
-                    swarm,
+                request_kademlia_address_publication(
+                    context.kademlia_maintenance,
                     context.discovery,
-                    context.local_capabilities,
-                    context.identity,
                 );
             }
             log_runtime_event(
@@ -11975,11 +12006,9 @@ async fn handle_swarm_event(
                     context.local_capabilities,
                     context.metrics,
                 );
-                publish_kademlia_peer_address_record_for_capabilities(
-                    swarm,
+                request_kademlia_address_publication(
+                    context.kademlia_maintenance,
                     context.discovery,
-                    context.local_capabilities,
-                    context.identity,
                 );
             }
             log_runtime_event(
@@ -12044,11 +12073,9 @@ async fn handle_swarm_event(
                 publish_peer_address_record = true;
             }
             if publish_peer_address_record {
-                publish_kademlia_peer_address_record_for_capabilities(
-                    swarm,
+                request_kademlia_address_publication(
+                    context.kademlia_maintenance,
                     context.discovery,
-                    context.local_capabilities,
-                    context.identity,
                 );
             }
         }
@@ -12081,11 +12108,9 @@ async fn handle_swarm_event(
                         ("address", &address.to_string()),
                     ],
                 );
-                publish_kademlia_peer_address_record_for_capabilities(
-                    swarm,
+                request_kademlia_address_publication(
+                    context.kademlia_maintenance,
                     context.discovery,
-                    context.local_capabilities,
-                    context.identity,
                 );
             }
         }
@@ -12127,11 +12152,9 @@ async fn handle_swarm_event(
                                 ("address", &address.to_string()),
                             ],
                         );
-                        publish_kademlia_peer_address_record_for_capabilities(
-                            swarm,
+                        request_kademlia_address_publication(
+                            context.kademlia_maintenance,
                             context.discovery,
-                            context.local_capabilities,
-                            context.identity,
                         );
                     }
                 }
@@ -12145,11 +12168,9 @@ async fn handle_swarm_event(
                 )
                 .is_some_and(|released| released.was_accepted)
                 {
-                    publish_kademlia_peer_address_record_for_capabilities(
-                        swarm,
+                    request_kademlia_address_publication(
+                        context.kademlia_maintenance,
                         context.discovery,
-                        context.local_capabilities,
-                        context.identity,
                     );
                 }
             }
@@ -12172,11 +12193,9 @@ async fn handle_swarm_event(
                 )
                 .is_some_and(|released| released.was_accepted)
             {
-                publish_kademlia_peer_address_record_for_capabilities(
-                    swarm,
+                request_kademlia_address_publication(
+                    context.kademlia_maintenance,
                     context.discovery,
-                    context.local_capabilities,
-                    context.identity,
                 );
             }
             swarm.remove_listener(listener_id);
@@ -19742,8 +19761,7 @@ fn handle_behaviour_event(
             context.discovered_peer_addresses,
             context.metrics,
             context.discovery,
-            context.local_capabilities,
-            context.identity,
+            context.kademlia_maintenance,
             &event,
         ),
         BehaviourEvent::RelayServer(event) => handle_relay_server_event(context.metrics, &event),
@@ -20658,8 +20676,7 @@ fn handle_relay_event(
     discovered_peer_addresses: &mut DiscoveredPeerAddresses,
     metrics: &RuntimeMetrics,
     discovery: &DiscoveryConfig,
-    local_capabilities: &ControlCapabilities,
-    identity: &NodeIdentity,
+    kademlia_maintenance: &mut KademliaMaintenance,
     event: &relay::client::Event,
 ) {
     let accepted_relay = record_relay_client_event(metrics, event);
@@ -20677,14 +20694,7 @@ fn handle_relay_event(
             metrics,
             relay_peer_id,
         );
-        if discovery.kademlia {
-            publish_kademlia_peer_address_record(
-                swarm,
-                &local_capabilities.network_name,
-                local_capabilities.membership_tag.as_deref(),
-                identity,
-            );
-        }
+        request_kademlia_address_publication(kademlia_maintenance, discovery);
     }
 }
 
@@ -27205,6 +27215,181 @@ mod tests {
         assert_eq!(snapshot.outbound_drop_queue_expired_packets, 1);
         assert_eq!(snapshot.queue.queued_packets, 1);
         assert_eq!(snapshot.queue.expired_packets, 1);
+    }
+
+    #[tokio::test]
+    async fn address_publication_completion_preserves_pending_update() {
+        let identity = NodeIdentity::generate_ed25519().unwrap();
+        let mut node = pairing_test_node(&identity);
+        let now = Instant::now();
+        let mut maintenance = KademliaMaintenance::new(now);
+        let mut discovery = DiscoveryConfig {
+            kademlia: false,
+            ..DiscoveryConfig::default()
+        };
+        request_kademlia_address_publication(&mut maintenance, &discovery);
+        assert!(!maintenance.address_publication_pending);
+        discovery.kademlia = true;
+        request_kademlia_address_publication(&mut maintenance, &discovery);
+        drive_kademlia_address_publication(
+            &mut node.swarm,
+            &mut maintenance,
+            "lab",
+            None,
+            &identity,
+            now,
+        );
+        assert!(maintenance.address_publication.is_none());
+        assert!(
+            !maintenance.address_publication_pending,
+            "no-address state must settle"
+        );
+        node.swarm
+            .add_external_address("/ip4/192.168.1.2/tcp/4001".parse().unwrap());
+        let tick = now + KADEMLIA_MAINTENANCE_POLL_INTERVAL;
+        request_kademlia_address_publication(&mut maintenance, &discovery);
+        drive_kademlia_address_publication(
+            &mut node.swarm,
+            &mut maintenance,
+            "lab",
+            None,
+            &identity,
+            tick,
+        );
+        let query = maintenance.address_publication.unwrap().0;
+        assert_eq!(
+            maintenance.cancel_queries(&mut node.swarm.behaviour_mut().kad),
+            0
+        );
+        assert!(
+            maintenance.address_publication.is_some(),
+            "healthy-path suppression must preserve updates"
+        );
+        request_kademlia_address_publication(&mut maintenance, &discovery);
+        assert!(node.swarm.behaviour_mut().kad.cancel_query(&query));
+        assert!(maintenance.finish_query(query));
+        assert!(!maintenance.finish_query(query));
+        assert!(maintenance.address_publication_pending);
+        drive_kademlia_address_publication(
+            &mut node.swarm,
+            &mut maintenance,
+            "lab",
+            None,
+            &identity,
+            tick,
+        );
+        assert!(
+            maintenance.address_publication.is_none(),
+            "completion must not bypass rate limit"
+        );
+        drive_kademlia_address_publication(
+            &mut node.swarm,
+            &mut maintenance,
+            "lab",
+            None,
+            &identity,
+            tick + KADEMLIA_MAINTENANCE_POLL_INTERVAL,
+        );
+        assert!(maintenance.address_publication.is_some());
+        assert!(!maintenance.address_publication_pending);
+    }
+
+    #[tokio::test]
+    async fn address_publication_coalesces_churn_and_publishes_latest_snapshot() {
+        use libp2p::kad::store::RecordStore;
+        let identity = NodeIdentity::generate_ed25519().unwrap();
+        let mut node = pairing_test_node(&identity);
+        let now = Instant::now();
+        let mut maintenance = KademliaMaintenance::new(now);
+        let discovery = DiscoveryConfig::default();
+        node.swarm
+            .behaviour_mut()
+            .kad
+            .add_address(&peer_id(), "/memory/1".parse().unwrap());
+        let unrelated = node.swarm.behaviour_mut().kad.get_closest_peers(peer_id());
+        let key = crate::runtime::p2p::kademlia_peer_addresses_key(
+            "lab",
+            None,
+            *node.swarm.local_peer_id(),
+        );
+        let mut previous_address = None;
+        let mut previous_query = None;
+        for cycle in 0..64 {
+            if let Some(address) = previous_address.take() {
+                node.swarm.remove_external_address(&address);
+            }
+            let address: Multiaddr = format!("/ip4/192.168.1.2/tcp/{}", 4000 + cycle)
+                .parse()
+                .unwrap();
+            node.swarm.add_external_address(address.clone());
+            for _ in 0..500 {
+                request_kademlia_address_publication(&mut maintenance, &discovery);
+            }
+            let tick = now + KADEMLIA_MAINTENANCE_POLL_INTERVAL * cycle;
+            if cycle > 0 {
+                drive_kademlia_address_publication(
+                    &mut node.swarm,
+                    &mut maintenance,
+                    "lab",
+                    None,
+                    &identity,
+                    tick - Duration::from_millis(1),
+                );
+                assert_eq!(
+                    maintenance.address_publication.map(|(query, _)| query),
+                    previous_query
+                );
+            }
+            drive_kademlia_address_publication(
+                &mut node.swarm,
+                &mut maintenance,
+                "lab",
+                None,
+                &identity,
+                tick,
+            );
+            let query = maintenance.address_publication.unwrap().0;
+            if let Some(previous) = previous_query {
+                assert!(!node.swarm.behaviour_mut().kad.cancel_query(&previous));
+            }
+            assert_eq!(node.swarm.behaviour().kad.iter_queries().count(), 2);
+            assert!(node.swarm.behaviour().kad.query(&unrelated).is_some());
+            let stored = node
+                .swarm
+                .behaviour_mut()
+                .kad
+                .store_mut()
+                .get(&key)
+                .unwrap()
+                .into_owned();
+            let record: KademliaPeerAddressRecord = serde_json::from_slice(&stored.value).unwrap();
+            assert_eq!(record.payload.addresses, vec![address.to_string()]);
+            assert!(!maintenance.address_publication_pending);
+            previous_query = Some(query);
+            previous_address = Some(address);
+        }
+        let query = previous_query.unwrap();
+        let last_started = maintenance.address_publication.unwrap().1;
+        drive_kademlia_address_publication(
+            &mut node.swarm,
+            &mut maintenance,
+            "lab",
+            None,
+            &identity,
+            last_started + KADEMLIA_MAINTENANCE_QUERY_TIMEOUT,
+        );
+        assert!(maintenance.address_publication.is_none());
+        assert!(!node.swarm.behaviour_mut().kad.cancel_query(&query));
+        assert_eq!(node.swarm.behaviour().kad.iter_queries().count(), 1);
+        drive_kademlia_address_publication(
+            &mut node.swarm,
+            &mut maintenance,
+            "lab",
+            None,
+            &identity,
+            last_started + Duration::from_secs(3600),
+        );
+        assert_eq!(node.swarm.behaviour().kad.iter_queries().count(), 1);
     }
 
     #[tokio::test]

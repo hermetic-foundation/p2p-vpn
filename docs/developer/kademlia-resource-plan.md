@@ -253,16 +253,53 @@ Nix source output:
 These are controlled regression checks, not sustained resource measurements or
 physical-network validation. No full Nix package or ARM64 build was performed.
 
-#### Address Publication Admission Gap
+#### Address Publication Admission
 
-`publish_kademlia_peer_address_record` discards the query ID returned by its
-publication helper. Listener/external-address changes and relay acceptance call
-this path independently of the one-query maintenance owner. Query lifetime alone
-does not prove bounded admission under event churn.
+The old event helper discarded publication query IDs. Listener/external-address
+changes and relay acceptance could therefore start overlapping queries outside
+the one-query maintenance owner.
 
-Next: coalesce and bound event-triggered publication while retaining the newest
-reachable addresses. Do not suppress required post-migration publication merely
-because maintenance or an older publication is still running.
+| Owner / Transition | Bound / Behavior |
+| --- | --- |
+| Event notifications | One pending bit; no address snapshots or event queue retained by this owner |
+| Event publication | One query ID and start time |
+| Start rate | At most one every five seconds, including timer catch-up and early completion |
+| New addresses | Cancel older event query and encode current addresses at the next eligible tick |
+| Completion | Release query ownership without clearing a newer pending update |
+| Timeout | Retire after 90 seconds; do not continually recreate an unchanged event update |
+| Healthy paths / recovery | Ordinary maintenance suppression does not cancel an address update |
+| Discovery disabled | Notifications do not schedule publication |
+
+Periodic address refresh remains part of the existing single-query maintenance
+cycle. Its query can coexist with the one event-publication query; this is not
+an aggregate query limit. Background jobs also retain their existing admission.
+
+The churn regression exercises 32,000 notifications across 64 address changes.
+It inspects the signed local-store record for the newest address and checks
+retirement, interval enforcement, and idle settling. A second test covers
+completion, pending updates, disabled discovery, and no-address state.
+
+`kademlia_address_update_coalesced` reports whether a scheduled update started.
+Already dispatched handler requests and remote records are not recalled. These
+synthetic tests do not measure sockets, successful remote delivery, CPU, or RSS.
+
+#### Verified Publication Checks
+
+| Check | Result |
+| --- | --- |
+| Workspace | 1,272 passed; 22 opt-in tests ignored |
+| Clippy correctness, suspicious, performance groups | Passed; style warnings remain |
+| Peerless code pairing / forced-relay pairing | Passed: 13.38 / 17.64 seconds |
+| DHT / owned QUIC / relay-direct network move | Passed: 16.73 / 15.99 / 52.36 seconds |
+| Native x86_64 Android | Built offline in 37.53 seconds; existing native-target warnings remain |
+| Nix source parity / formatting / whitespace | Passed |
+
+Logs use `/tmp/p2p-vpn-kad-publish-` with `workspace`, `clippy`, `code`, `relay`,
+`dht`, `quic`, `move`, `android`, and `nix` `.log` suffixes. Nix source output:
+`/nix/store/rmzpxqbrciglwqg6q1w888qnfiscb61n-p2p-vpn-rust-test-sources`.
+
+Namespace timings are smoke-test observations, not performance comparisons.
+No full Nix package, ARM64 build, or physical-device deployment was performed.
 
 ### Background Job Admission
 

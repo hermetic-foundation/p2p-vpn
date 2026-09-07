@@ -45,6 +45,7 @@ server duties or advertise itself as a Kademlia server.
 | Query overlap | A second cycle cannot start while one is active. |
 | Query timeout | Stale cycle queries are canceled after 90 seconds. |
 | Healthy overlay | Active maintenance is canceled and public discovery rests. |
+| Address changes | Coalesced into one pending update; at most one event-driven publication every five seconds. |
 | Offline peer recovery | Starts at 10 seconds, then backs off to five minutes. |
 | Routing addresses | At most 64 per peer, each at most 2,048 encoded bytes. |
 | Configured routing seeds | Protected from address churn; count toward the same limit. |
@@ -60,9 +61,10 @@ Query limits also apply to standalone code pairing. Excess candidates and
 addresses are ignored; unusually large searches can return fewer results.
 These are per-query limits, not a total process-memory or connection limit.
 
-The five-second scheduler only evaluates state.
-
-It does not launch a DHT batch on every tick.
+The five-second scheduler does not launch a DHT batch on every tick.
+Changed local addresses still receive a bounded publication while ordinary
+maintenance rests. New changes replace stale publication work with the latest
+address snapshot; network delivery is not guaranteed within five seconds.
 
 ## Code Pairing Over Public Paths
 
