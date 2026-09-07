@@ -40,6 +40,8 @@ const CONNECTION_PING_TIMEOUT: Duration = Duration::from_secs(20);
 const SWARM_IDLE_CONNECTION_TIMEOUT: Duration = Duration::from_secs(60);
 const DIAL_CONCURRENCY_FACTOR: NonZeroU8 = NonZeroU8::MIN;
 const KADEMLIA_QUERY_PARALLELISM: NonZeroUsize = NonZeroUsize::MIN;
+const KADEMLIA_QUERY_CANDIDATES: usize = 256;
+const KADEMLIA_QUERY_ADDRESS_BYTES: usize = 256 * 1024;
 
 #[derive(NetworkBehaviour)]
 pub struct Behaviour {
@@ -433,11 +435,17 @@ fn relay_peer_address_from_reservation(reservation: &Multiaddr) -> Option<(PeerI
 
 pub(super) fn controlled_kademlia_config(protocol: StreamProtocol) -> kad::Config {
     let mut config = kad::Config::new(protocol);
+    let address_limits = kad::AddressLimits::new(
+        NonZeroUsize::new(super::address_retention::MAX_DISCOVERED_ADDRESSES_PER_PEER).unwrap(),
+        NonZeroUsize::new(super::address_retention::MAX_DISCOVERED_ADDRESS_BYTES).unwrap(),
+    );
     config
         .set_parallelism(KADEMLIA_QUERY_PARALLELISM)
-        .set_address_limits(kad::AddressLimits::new(
-            NonZeroUsize::new(super::address_retention::MAX_DISCOVERED_ADDRESSES_PER_PEER).unwrap(),
-            NonZeroUsize::new(super::address_retention::MAX_DISCOVERED_ADDRESS_BYTES).unwrap(),
+        .set_address_limits(address_limits)
+        .set_query_limits(kad::QueryLimits::new(
+            NonZeroUsize::new(KADEMLIA_QUERY_CANDIDATES).unwrap(),
+            address_limits,
+            NonZeroUsize::new(KADEMLIA_QUERY_ADDRESS_BYTES).unwrap(),
         ))
         .set_periodic_bootstrap_interval(None)
         .set_automatic_bootstrap_throttle(None);
@@ -1474,6 +1482,72 @@ mod tests {
     }
 
     #[test]
+    fn kademlia_fixed_query_initial_candidates_obey_budget() {
+        use libp2p::swarm::{DialError, FromSwarm, NetworkBehaviour, ToSwarm};
+        use std::task::{Context, Poll};
+
+        for bounded in [false, true] {
+            let mut kad = if bounded {
+                bounded_routing_test_dht()
+            } else {
+                let local = PeerId::random();
+                kad::Behaviour::new(local, kad::store::MemoryStore::new(local))
+            };
+            let peers = (0..512).map(|_| PeerId::random()).collect::<Vec<_>>();
+            let query = kad.put_record_to(
+                kad::Record::new(b"bounded".to_vec(), b"value".to_vec()),
+                peers.into_iter(),
+                kad::Quorum::All,
+            );
+            let expected = if bounded {
+                KADEMLIA_QUERY_CANDIDATES
+            } else {
+                512
+            };
+            let usage = kad.query(&query).unwrap().resource_usage();
+            assert_eq!(
+                usage.map(|usage| usage.candidates),
+                bounded.then_some(expected)
+            );
+            let waker = futures::task::noop_waker();
+            let mut cx = Context::from_waker(&waker);
+            let mut dials = 0;
+            let mut finished = false;
+            for _ in 0..1024 {
+                match kad.poll(&mut cx) {
+                    Poll::Ready(ToSwarm::Dial { opts }) => {
+                        dials += 1;
+                        assert!(dials <= expected);
+                        kad.on_swarm_event(FromSwarm::DialFailure(
+                            libp2p::swarm::behaviour::DialFailure {
+                                peer_id: opts.get_peer_id(),
+                                connection_id: opts.connection_id(),
+                                error: &DialError::NoAddresses,
+                            },
+                        ));
+                    }
+                    Poll::Ready(ToSwarm::GenerateEvent(kad::Event::OutboundQueryProgressed {
+                        id,
+                        result: kad::QueryResult::PutRecord(result),
+                        stats,
+                        ..
+                    })) => {
+                        assert_eq!(id, query);
+                        assert!(result.is_err(), "a capped query must not lower its quorum");
+                        assert_eq!(stats.num_requests() as usize, expected);
+                        finished = true;
+                        break;
+                    }
+                    other => panic!("unexpected fixed-query event: {other:?}"),
+                }
+            }
+            assert!(finished);
+            assert_eq!(dials, expected);
+            assert!(kad.query(&query).is_none());
+        }
+    }
+
+    #[test]
     fn routing_address_limits_preserve_seeds_lan_and_relay_under_churn() {
         let mut kad = bounded_routing_test_dht();
         let peer = PeerId::random();
@@ -1811,9 +1885,9 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "opt-in loopback diagnostic for query-local Kademlia address retention"]
-    async fn measure_internal_kademlia_query_address_retention() {
-        for separate in [false, true] {
+    async fn internal_kademlia_query_addresses_remain_bounded() {
+        for (separate, small_budget) in [(false, false), (true, false), (false, true), (true, true)]
+        {
             let mut source = build_node(&retention_diagnostic_config(separate)).unwrap();
             let mut client = build_node(&retention_diagnostic_config(separate)).unwrap();
             // Keep the responder deliberately unbounded so this diagnostic
@@ -1827,6 +1901,24 @@ mod tests {
                 kad::store::MemoryStore::new(source.local_peer_id),
                 source_config,
             );
+            if small_budget {
+                let mut config = controlled_kademlia_config(StreamProtocol::new(
+                    crate::config::PUBLIC_IPFS_KADEMLIA_PROTOCOL,
+                ));
+                config.set_query_limits(kad::QueryLimits::new(
+                    NonZeroUsize::new(2).unwrap(),
+                    kad::AddressLimits::new(
+                        NonZeroUsize::new(64).unwrap(),
+                        NonZeroUsize::new(2048).unwrap(),
+                    ),
+                    NonZeroUsize::new(1024).unwrap(),
+                ));
+                *public_pairing_kad_mut(client.swarm.behaviour_mut()) = kad::Behaviour::with_config(
+                    client.local_peer_id,
+                    kad::store::MemoryStore::new(client.local_peer_id),
+                    config,
+                );
+            }
             for node in [&mut source, &mut client] {
                 for seed in public_ipfs_bootstrap_peer_configs() {
                     let (peer, _) = seed.peer_address().unwrap();
@@ -1846,6 +1938,14 @@ mod tests {
                 // Unsupported memory addresses cannot dial unrelated local or public services.
                 public_pairing_kad_mut(source.swarm.behaviour_mut())
                     .add_address(&reported, format!("/memory/{index}").parse().unwrap());
+            }
+            if small_budget {
+                for index in 100..104 {
+                    public_pairing_kad_mut(source.swarm.behaviour_mut()).add_address(
+                        &PeerId::random(),
+                        format!("/memory/{index}").parse().unwrap(),
+                    );
+                }
             }
             let kad = public_pairing_kad_mut(client.swarm.behaviour_mut());
             kad.add_address(&source.local_peer_id, address);
@@ -1877,11 +1977,131 @@ mod tests {
                     .iter()
                     .all(|entry| entry.node.key.preimage() != &reported)
             }));
-            assert_eq!(retained.len(), count);
+            let expected = if small_budget {
+                1024 / retained[0].len()
+            } else {
+                count - 1
+            };
+            assert_eq!(retained.len(), expected);
             let encoded_bytes: usize = retained.iter().map(Multiaddr::len).sum();
+            let usage = kad.query(&query).unwrap().resource_usage().unwrap();
+            assert_eq!(usage.candidates, 2);
+            assert_eq!(usage.address_bytes, encoded_bytes);
+            assert!(usage.rejected >= count - expected);
             eprintln!(
-                "internal_kademlia_query_retention separate={separate} addresses={} encoded_bytes={encoded_bytes}",
-                retained.len()
+                "internal_kademlia_query_retention separate={separate} small_budget={small_budget} addresses={} encoded_bytes={encoded_bytes} rejected={}",
+                retained.len(),
+                usage.rejected
+            );
+            let endpoint = |address| libp2p::core::ConnectedPoint::Dialer {
+                address,
+                role_override: libp2p::core::Endpoint::Dialer,
+                port_use: libp2p::core::transport::PortUse::Reuse,
+            };
+            let mut old = retained[0].clone();
+            for index in 200..300 {
+                let new = format!("/memory/{index}/p2p/{reported}")
+                    .parse::<Multiaddr>()
+                    .unwrap();
+                kad.on_swarm_event(libp2p::swarm::FromSwarm::AddressChange(
+                    libp2p::swarm::behaviour::AddressChange {
+                        peer_id: reported,
+                        connection_id: libp2p::swarm::ConnectionId::new_unchecked(99_999),
+                        old: &endpoint(old),
+                        new: &endpoint(new.clone()),
+                    },
+                ));
+                assert_eq!(
+                    kad.query(&query)
+                        .unwrap()
+                        .resource_usage()
+                        .unwrap()
+                        .address_bytes,
+                    encoded_bytes
+                );
+                old = new;
+            }
+            let oversized = Multiaddr::empty().with(Protocol::Dns("a".repeat(2048).into()));
+            kad.on_swarm_event(libp2p::swarm::FromSwarm::AddressChange(
+                libp2p::swarm::behaviour::AddressChange {
+                    peer_id: reported,
+                    connection_id: libp2p::swarm::ConnectionId::new_unchecked(99_999),
+                    old: &endpoint(old.clone()),
+                    new: &endpoint(oversized),
+                },
+            ));
+            let current = kad
+                .handle_pending_outbound_connection(
+                    libp2p::swarm::ConnectionId::new_unchecked(99_999),
+                    Some(reported),
+                    &[],
+                    libp2p::core::Endpoint::Dialer,
+                )
+                .unwrap();
+            assert!(current.contains(&old));
+            assert_eq!(current.len(), expected);
+            if small_budget {
+                let over_budget = Multiaddr::empty().with(Protocol::Dns("a".repeat(100).into()));
+                kad.on_swarm_event(libp2p::swarm::FromSwarm::AddressChange(
+                    libp2p::swarm::behaviour::AddressChange {
+                        peer_id: reported,
+                        connection_id: libp2p::swarm::ConnectionId::new_unchecked(99_999),
+                        old: &endpoint(old.clone()),
+                        new: &endpoint(over_budget),
+                    },
+                ));
+                assert_eq!(
+                    kad.query(&query)
+                        .unwrap()
+                        .resource_usage()
+                        .unwrap()
+                        .address_bytes,
+                    encoded_bytes
+                );
+            }
+            kad.on_swarm_event(libp2p::swarm::FromSwarm::DialFailure(
+                libp2p::swarm::behaviour::DialFailure {
+                    peer_id: Some(reported),
+                    connection_id: libp2p::swarm::ConnectionId::new_unchecked(99_999),
+                    error: &libp2p::swarm::DialError::Transport(vec![(
+                        old.clone(),
+                        libp2p::core::transport::TransportError::Other(std::io::Error::other(
+                            "injected failure",
+                        )),
+                    )]),
+                },
+            ));
+            assert_eq!(
+                kad.query(&query)
+                    .unwrap()
+                    .resource_usage()
+                    .unwrap()
+                    .address_bytes,
+                encoded_bytes - old.len()
+            );
+            assert_eq!(
+                kad.query(&query)
+                    .unwrap()
+                    .resource_usage()
+                    .unwrap()
+                    .candidates,
+                2,
+            );
+            kad.on_swarm_event(libp2p::swarm::FromSwarm::AddressChange(
+                libp2p::swarm::behaviour::AddressChange {
+                    peer_id: reported,
+                    connection_id: libp2p::swarm::ConnectionId::new_unchecked(99_999),
+                    old: &endpoint(retained[1].clone()),
+                    new: &endpoint(retained[2].clone()),
+                },
+            ));
+            assert_eq!(
+                kad.query(&query)
+                    .unwrap()
+                    .resource_usage()
+                    .unwrap()
+                    .address_bytes,
+                encoded_bytes - old.len() - retained[1].len()
             );
             kad.query_mut(&query)
                 .expect("query remains active")

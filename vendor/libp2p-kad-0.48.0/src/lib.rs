@@ -71,7 +71,7 @@ pub use kbucket::{
 };
 use libp2p_swarm::StreamProtocol;
 pub use protocol::{ConnectionType, KadPeer};
-pub use query::QueryId;
+pub use query::{QueryId, QueryLimits, QueryResourceUsage};
 pub use record::{store, Key as RecordKey, ProviderRecord, Record};
 
 /// The `k` parameter of the Kademlia specification.

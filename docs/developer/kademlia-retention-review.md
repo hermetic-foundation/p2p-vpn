@@ -4,9 +4,9 @@ Current follow-up: [resource-limits workstream](kademlia-resource-plan.md).
 The audit below records the original diagnostics and patch proposal. The current
 workstream distinguishes closed per-peer gaps from remaining aggregate/query limits.
 
-The follow-up now enforces per-peer routing-address count/size limits and protects
-configured seeds. The original measurements below are historical; query-local and
-aggregate resource limits remain separate work in the active plan.
+The follow-up enforces per-peer routing-address limits, protects configured seeds,
+and adds per-query candidate/address budgets. The original measurements below
+are historical; current validation and remaining aggregate limits are in the plan.
 
 ## Scope
 
@@ -95,6 +95,10 @@ cargo test --offline --locked --lib \
 
 ## Query-Local Reproduction
 
+Historical baseline below. The replacement regression is
+`internal_kademlia_query_addresses_remain_bounded`; see
+[current limits and evidence](kademlia-resource-plan.md#per-query-retention).
+
 `runtime::p2p::tests::measure_internal_kademlia_query_address_retention` runs
 two real loopback swarms. The responder reports 65 addresses for one synthetic
 peer in a closest-peers response; the client never admits it to a routing bucket.
@@ -109,8 +113,8 @@ The two-mode diagnostic passed in 0.07 seconds. It reads the addresses through
 then explicitly finishes and polls the query before checking candidate cleanup.
 
 ```bash
-cargo test --offline --lib measure_internal_kademlia_query_address_retention \
-  -- --ignored --nocapture
+cargo test --offline --locked --lib internal_kademlia_query_addresses_remain_bounded \
+  -- --nocapture
 ```
 
 ### Interpretation

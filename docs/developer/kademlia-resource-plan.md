@@ -9,8 +9,8 @@ Starting revision: `5ecb01ea`. No deployed service or physical device has change
 
 | Area | Required Evidence | Status |
 | --- | --- | --- |
-| Internal addresses | Count/byte bounds for present and pending buckets, address changes, and query caches | Per-peer routing verified; aggregate/query limits open |
-| Query state | Bounded candidate identities, active queries, and retained results | Open |
+| Internal addresses | Count/byte bounds for present and pending buckets, address changes, and query caches | Per-peer routing and per-query retention verified; aggregate routing open |
+| Query state | Bounded candidate identities, active queries, and retained results | Candidates/addresses verified; aggregate admission and result audit open |
 | Scheduling | Bounded bootstrap, discovery, and dial activity under failure and churn | Cooldown and automatic bootstrap fixed; aggregate audit open |
 | Recovery | LAN-first lookup, relay fallback, network-change recovery, and healthy-path settling | Open |
 | Measurements | Comparable before/after CPU, RSS, sockets, dial rates, and query rates | Open |
@@ -146,9 +146,9 @@ is claimed for this patch.
 
 ### Candidate Identities
 
-The query-local address map is not the only owner. `ClosestPeersIter::on_success`
-also inserts reported identities into its distance-ordered map. Limiting address
-vectors alone would leave cumulative candidate identity retention unbounded.
+The query-local address map was not the only unbounded owner.
+`ClosestPeersIter::on_success` also inserted reported identities into its
+distance-ordered map. Address-vector limits alone could not close that gap.
 
 ### Query Deadline Enforcement
 
@@ -205,9 +205,70 @@ fixed-peer queries use the replication factor. Both default counts are 20.
 
 - Overlay recovery has its own one-query admission limit in `recovery_queries.rs`.
 - Other producers include maintenance, pairing publication/lookup, standalone pairing, and library background work.
-- Pool admission, candidate identities, query addresses, pending RPCs, and outbound address unions need coordinated bounds.
+- Pool admission, pending RPC concurrency, and outbound address unions still need aggregate bounds.
 
 Aggregate limits and comparable resource measurements remain open.
+
+### Per-Query Retention
+
+All three production DHT constructors enable shared candidate/address accounting.
+The library default remains unbounded for callers that do not configure limits.
+
+| Limit | Value | Rationale |
+| --- | ---: | --- |
+| Candidate identities per phase | 256 | More than twelve standard 20-peer response sets, while bounding cumulative iterator state |
+| Addresses per query peer | 64 | Matches routing-address admission |
+| Encoded bytes per address | 2,048 | Matches routing-address admission |
+| Encoded query address bytes | 256 KiB | Allows roughly 5,500 typical 47-byte addresses without permitting every candidate to fill its worst-case allowance |
+
+Initial candidates and response candidates share one lifetime identity budget.
+Rejected identities enter neither the address map nor the closest/disjoint iterator.
+Fixed queries also cap initial candidates; their original quorum is not reduced.
+Heavy branching can produce fewer results, just as finite search time can.
+
+Failed addresses release byte capacity, but their identities remain counted.
+Migration checks individual and aggregate byte budgets, collapses duplicates,
+and preserves the old address on rejection. Query retirement drops the owner.
+`QueryRef::resource_usage()` exposes current candidates, encoded bytes, and rejects.
+
+The loopback regression now uses
+`internal_kademlia_query_addresses_remain_bounded`. A deliberately unbounded
+responder advertises 65 addresses. Production limits retain 64 (3,008 bytes);
+a 1,024-byte test budget retains 21 (987 bytes) and rejects excess candidates.
+
+The four combinations cover both DHT layouts and both byte budgets, 100 address
+migrations each, individual/aggregate size rejection, duplicate collapse, and
+failed-address cleanup. This regression now runs in the normal workspace suite.
+
+#### Verified Query Checks
+
+| Check | Result |
+| --- | --- |
+| Workspace | 1,259 passed; 22 opt-in tests ignored |
+| Fixed-query comparison | 512 dial actions without limits; 256 with limits; original quorum preserved |
+| Loopback query retention | Four budget/layout combinations passed, including retirement cleanup |
+| DHT-discovered overlay | Passed |
+| Forced-relay live pairing | Passed |
+| Peerless code pairing | Passed |
+| Owned QUIC packet plane | Passed |
+| Relay/direct network-move recovery | Passed |
+| Workspace Clippy correctness, suspicious, performance groups | Passed; nonfatal style warnings remain |
+| Nix source parity | Passed with cached tools and unchanged sandbox assertions |
+| Android native x86_64 | Built offline with the patched library |
+| Root/changed-vendor formatting and whitespace | Passed |
+
+Logs use `/tmp/p2p-vpn-kad-query-`: `workspace-verified.log`,
+`churn-final.log`, `dht.log`, `relay.log`, `code-pairing.log`, `quic.log`,
+`move.log`, `clippy.log`, `nix-verified.log`, and `android.log`.
+
+The separate dependency-package Clippy command returned a cached success without
+a compiler invocation; it is not counted as independent vendor lint evidence.
+Vendor behavior is exercised through the workspace tests and native compilation.
+
+The fixed-query comparison injects dial failures without opening sockets. It is
+not a network dial-rate, CPU, or RSS benchmark. No physical-device, public-WAN,
+ARM64-native, or full Nix-package validation is claimed for this patch.
+Active-query admission and aggregate routing/measurement gates remain open.
 
 ### Routing-Address Owner
 
@@ -233,9 +294,9 @@ The loopback regression is now named
 addresses after 65 connections in both DHT layouts, replacing the old diagnostic's
 65-address expectation.
 
-The query-cache diagnostic uses a deliberately unbounded responder. Otherwise
-limiting the responder could hide the client's independent query-cache gap.
-Its 65-address client expectation remains diagnostic evidence, not desired behavior.
+The original query-cache diagnostic used a deliberately unbounded responder.
+Its historical 65-address observation is now replaced by the enforcement
+regression described under Per-Query Retention.
 
 #### Fixture Corrections
 

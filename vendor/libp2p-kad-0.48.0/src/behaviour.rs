@@ -463,6 +463,13 @@ impl Config {
         self.address_limits = limits;
         self
     }
+
+    /// Bound candidate identities and address retention within each query phase.
+    /// Excess candidates are ignored. Unconfigured callers retain upstream behavior.
+    pub fn set_query_limits(&mut self, limits: crate::QueryLimits) -> &mut Self {
+        self.query_config.limits = Some(limits);
+        self
+    }
 }
 
 impl<TStore> Behaviour<TStore>
@@ -1259,17 +1266,19 @@ where
         let others_iter = peers.filter(|p| &p.node_id != local_id);
         if let Some(query) = self.queries.get_mut(query_id) {
             tracing::trace!(peer=%source, query=?query_id, "Request to peer in query succeeded");
-            for peer in others_iter.clone() {
+            let mut admitted = Vec::new();
+            for peer in others_iter {
                 tracing::trace!(
                     ?peer,
                     %source,
                     query=?query_id,
                     "Peer reported by source in query"
                 );
-                let addrs = peer.multiaddrs.iter().cloned().collect();
-                query.peers.addresses.insert(peer.node_id, addrs);
+                if query.peers.addresses.learn(peer.node_id, &peer.multiaddrs) {
+                    admitted.push(peer.node_id);
+                }
             }
-            query.on_success(source, others_iter.cloned().map(|kp| kp.node_id))
+            query.on_success(source, admitted)
         }
     }
 
@@ -2055,9 +2064,7 @@ where
         }
 
         for query in self.queries.iter_mut() {
-            if let Some(addrs) = query.peers.addresses.get_mut(&peer_id) {
-                addrs.retain(|a| a != address);
-            }
+            query.peers.addresses.address_failed(&peer_id, address);
         }
     }
 
@@ -2138,13 +2145,7 @@ where
         // large performance impact. If so, the code below might be worth
         // revisiting.
         for query in self.queries.iter_mut() {
-            if let Some(addrs) = query.peers.addresses.get_mut(&peer) {
-                for addr in addrs.iter_mut() {
-                    if addr == old {
-                        *addr = new.clone();
-                    }
-                }
-            }
+            query.peers.addresses.replace(&peer, old, new);
         }
     }
 
@@ -3433,6 +3434,10 @@ pub struct QueryRef<'a> {
 }
 
 impl QueryRef<'_> {
+    /// Retained resources when this query opted into finite budgets.
+    pub fn resource_usage(&self) -> Option<crate::QueryResourceUsage> {
+        self.query.peers.addresses.usage()
+    }
     pub fn id(&self) -> QueryId {
         self.query.id()
     }

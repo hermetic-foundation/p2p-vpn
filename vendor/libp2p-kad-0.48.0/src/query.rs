@@ -19,12 +19,15 @@
 // DEALINGS IN THE SOFTWARE.
 
 mod peers;
+mod retained;
+
+use retained::RetainedPeers;
+pub use retained::{QueryLimits, QueryResourceUsage};
 
 use std::{num::NonZeroUsize, time::Duration};
 
 use either::Either;
 use fnv::FnvHashMap;
-use libp2p_core::Multiaddr;
 use libp2p_identity::PeerId;
 use peers::{
     closest::{disjoint::ClosestDisjointPeersIter, ClosestPeersIter, ClosestPeersIterConfig},
@@ -114,8 +117,18 @@ impl QueryPool {
     {
         assert!(!self.queries.contains_key(&id));
         let parallelism = self.config.replication_factor;
+        let mut retained = RetainedPeers::new(self.config.limits);
+        let peers = peers
+            .into_iter()
+            .filter(|peer| retained.admit(*peer))
+            .take(
+                self.config
+                    .limits
+                    .map_or(usize::MAX, |limits| limits.candidates),
+            )
+            .collect::<Vec<_>>();
         let peer_iter = QueryPeerIter::Fixed(FixedPeersIter::new(peers, parallelism));
-        let query = Query::new(id, peer_iter, info);
+        let query = Query::new(id, peer_iter, info, retained);
         self.queries.insert(id, query);
     }
 
@@ -155,6 +168,13 @@ impl QueryPool {
             ..ClosestPeersIterConfig::default()
         };
 
+        let mut retained = RetainedPeers::new(self.config.limits);
+        let peers = peers
+            .into_iter()
+            .take(K_VALUE.get())
+            .filter(|peer| retained.admit(*peer.preimage()))
+            .collect::<Vec<_>>();
+
         let peer_iter = if self.config.disjoint_query_paths {
             QueryPeerIter::ClosestDisjoint(ClosestDisjointPeersIter::with_config(
                 cfg, target, peers,
@@ -163,7 +183,7 @@ impl QueryPool {
             QueryPeerIter::Closest(ClosestPeersIter::with_config(cfg, target, peers))
         };
 
-        let query = Query::new(id, peer_iter, info);
+        let query = Query::new(id, peer_iter, info, retained);
         self.queries.insert(id, query);
     }
 
@@ -250,6 +270,7 @@ impl std::fmt::Display for QueryId {
 /// The configuration for queries in a `QueryPool`.
 #[derive(Debug, Clone)]
 pub(crate) struct QueryConfig {
+    pub(crate) limits: Option<QueryLimits>,
     /// Timeout of a single query.
     ///
     /// See [`crate::behaviour::Config::set_query_timeout`] for details.
@@ -271,6 +292,7 @@ pub(crate) struct QueryConfig {
 impl Default for QueryConfig {
     fn default() -> Self {
         QueryConfig {
+            limits: None,
             timeout: Duration::from_secs(60),
             replication_factor: NonZeroUsize::new(K_VALUE.get()).expect("K_VALUE > 0"),
             parallelism: ALPHA_VALUE,
@@ -299,7 +321,7 @@ pub(crate) struct Query {
 /// The peer iterator that drives the query state,
 pub(crate) struct QueryPeers {
     /// Addresses of peers discovered during a query.
-    pub(crate) addresses: FnvHashMap<PeerId, SmallVec<[Multiaddr; 8]>>,
+    pub(crate) addresses: RetainedPeers,
     /// The peer iterator that drives the query state.
     peer_iter: QueryPeerIter,
 }
@@ -338,12 +360,17 @@ enum QueryPeerIter {
 
 impl Query {
     /// Creates a new query without starting it.
-    fn new(id: QueryId, peer_iter: QueryPeerIter, info: QueryInfo) -> Self {
+    fn new(
+        id: QueryId,
+        peer_iter: QueryPeerIter,
+        info: QueryInfo,
+        retained: RetainedPeers,
+    ) -> Self {
         Query {
             id,
             info,
             peers: QueryPeers {
-                addresses: Default::default(),
+                addresses: retained,
                 peer_iter,
             },
             pending_rpcs: SmallVec::default(),

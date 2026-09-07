@@ -48,10 +48,16 @@ server duties or advertise itself as a Kademlia server.
 | Offline peer recovery | Starts at 10 seconds, then backs off to five minutes. |
 | Routing addresses | At most 64 per peer, each at most 2,048 encoded bytes. |
 | Configured routing seeds | Protected from address churn; count toward the same limit. |
+| Query candidates | At most 256 identities per query phase, including failed candidates. |
+| Query address storage | At most 256 KiB of encoded addresses per phase, with the same per-peer limits. |
 
 Routing-address limits apply to both DHTs and standalone code pairing, including internally learned addresses.
 At capacity, unprotected addresses rotate while preserving LAN and relay alternatives
 where possible. These limits do not authorize peers or change minimal configuration.
+
+Query limits also apply to standalone code pairing. Excess candidates and
+addresses are ignored; unusually large searches can return fewer results.
+These are per-query limits, not a total process-memory or connection limit.
 
 The five-second scheduler only evaluates state.
 

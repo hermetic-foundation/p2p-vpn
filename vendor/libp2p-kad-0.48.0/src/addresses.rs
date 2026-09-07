@@ -36,7 +36,7 @@ pub struct Addresses {
 /// upstream behavior; applications can enable finite per-peer storage.
 #[derive(Clone, Copy, Debug)]
 pub struct AddressLimits {
-    count: usize,
+    pub(crate) count: usize,
     bytes: usize,
 }
 
