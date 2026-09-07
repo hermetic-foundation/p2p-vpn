@@ -259,7 +259,11 @@
               exit 2
             fi
 
-            unshare --user --map-root-user --mount --net -- bash -euo pipefail -c '
+            # Expand these checks inside the child PID namespace, not this shell.
+            # shellcheck disable=SC2016
+            unshare --user --map-root-user --mount --net --pid --fork --kill-child=SIGKILL --mount-proc -- bash -euo pipefail -c '
+              read -r proc_pid _ < /proc/self/stat
+              [[ "$$" == 1 && "$proc_pid" == "$$" ]]
               ip link add p2p-vpn-pre0 type veth peer name p2p-vpn-pre1
               ip link set p2p-vpn-pre0 up
               ip tuntap add dev p2p-vpn-pre-tun mode tun
@@ -268,7 +272,7 @@
               ip link delete p2p-vpn-pre-tun
             ' >/dev/null
 
-            echo "namespace preflight ok: user namespace, network namespace, veth, and TUN creation work"
+            echo "namespace preflight ok: user, mount, PID and network namespaces, private procfs, veth, and TUN creation work"
           '';
         };
         tunE2e = pkgs.writeShellApplication {

@@ -258,8 +258,8 @@ fn namespace_repro_artifacts_include_replay_commands_and_metadata() {
         .find("nix run .#tun-e2e")
         .expect("nix replay command");
     let direct_replay_index = replay_commands
-        .find(&format!("{CHILD_ENV}=orchestrator unshare"))
-        .expect("direct unshare replay command");
+        .find(&format!("env -u {CHILD_ENV}"))
+        .expect("watchdog-protected binary replay command");
     assert!(exports_index < nix_replay_index);
     assert!(exports_index < direct_replay_index);
     assert_eq!(
@@ -368,13 +368,8 @@ fn reexec_orchestrator(test_name: &str) {
     };
     let timeout =
         env_duration_override(ORCHESTRATOR_TIMEOUT_ENV).unwrap_or(default_timeout + idle_extra);
-    let output = command_output(
-        "unshare",
+    let output = namespace_orchestrator_output(
         &[
-            "--user",
-            "--map-root-user",
-            "--mount",
-            "--net",
             current_exe.to_str().expect("test binary path is utf-8"),
             "--ignored",
             test_name,
@@ -396,7 +391,7 @@ fn run_direct_orchestrator(test_name: &str) {
     let identity_a = NodeIdentity::generate_ed25519().expect("node A identity");
     let identity_b = NodeIdentity::generate_ed25519().expect("node B identity");
     let temp_dir = env::temp_dir().join(format!("p2p-vpn-{test_name}-{}", std::process::id()));
-    init_namespace_temp_dir(&temp_dir, test_name);
+    let temp_dir = init_namespace_temp_dir(&temp_dir, test_name);
     let start_a = temp_dir.join("start-a");
     let start_b = temp_dir.join("start-b");
 
@@ -506,7 +501,7 @@ fn run_mdns_orchestrator() {
     let identity_a = NodeIdentity::generate_ed25519().expect("node A identity");
     let identity_b = NodeIdentity::generate_ed25519().expect("node B identity");
     let temp_dir = env::temp_dir().join(format!("p2p-vpn-mdns-tun-e2e-{}", std::process::id()));
-    init_namespace_temp_dir(&temp_dir, MDNS_TEST_NAME);
+    let temp_dir = init_namespace_temp_dir(&temp_dir, MDNS_TEST_NAME);
     let start_a = temp_dir.join("start-a");
     let start_b = temp_dir.join("start-b");
 
@@ -582,7 +577,7 @@ fn run_relay_orchestrator() {
     let identity_a = NodeIdentity::generate_ed25519().expect("node A identity");
     let identity_b = NodeIdentity::generate_ed25519().expect("node B identity");
     let temp_dir = env::temp_dir().join(format!("p2p-vpn-relay-tun-e2e-{}", std::process::id()));
-    init_namespace_temp_dir(&temp_dir, RELAY_TEST_NAME);
+    let temp_dir = init_namespace_temp_dir(&temp_dir, RELAY_TEST_NAME);
     let start_relay = temp_dir.join("start-relay");
     let start_a = temp_dir.join("start-a");
     let start_b = temp_dir.join("start-b");
@@ -673,7 +668,7 @@ fn run_invite_relay_orchestrator() {
         "p2p-vpn-invite-relay-tun-e2e-{}",
         std::process::id()
     ));
-    init_namespace_temp_dir(&temp_dir, INVITE_RELAY_TEST_NAME);
+    let temp_dir = init_namespace_temp_dir(&temp_dir, INVITE_RELAY_TEST_NAME);
     let start_relay = temp_dir.join("start-relay");
     let start_a = temp_dir.join("start-a");
     let start_b = temp_dir.join("start-b");
@@ -771,7 +766,7 @@ fn run_relay_promotion_orchestrator() {
         "p2p-vpn-relay-promotion-tun-e2e-{}",
         std::process::id()
     ));
-    init_namespace_temp_dir(&temp_dir, RELAY_PROMOTION_TEST_NAME);
+    let temp_dir = init_namespace_temp_dir(&temp_dir, RELAY_PROMOTION_TEST_NAME);
     let start_relay = temp_dir.join("start-relay");
     let start_a = temp_dir.join("start-a");
     let start_b = temp_dir.join("start-b");
@@ -876,7 +871,7 @@ fn run_network_move_orchestrator() {
         "p2p-vpn-network-move-tun-e2e-{}",
         std::process::id()
     ));
-    init_namespace_temp_dir(&temp_dir, NETWORK_MOVE_TEST_NAME);
+    let temp_dir = init_namespace_temp_dir(&temp_dir, NETWORK_MOVE_TEST_NAME);
     let start_relay = temp_dir.join("start-relay");
     let start_a = temp_dir.join("start-a");
     let start_b = temp_dir.join("start-b");
@@ -1030,7 +1025,7 @@ fn run_dht_orchestrator() {
     let identity_a = NodeIdentity::generate_ed25519().expect("node A identity");
     let identity_b = NodeIdentity::generate_ed25519().expect("node B identity");
     let temp_dir = env::temp_dir().join(format!("p2p-vpn-dht-tun-e2e-{}", std::process::id()));
-    init_namespace_temp_dir(&temp_dir, DHT_TEST_NAME);
+    let temp_dir = init_namespace_temp_dir(&temp_dir, DHT_TEST_NAME);
     let start_bootstrap = temp_dir.join("start-bootstrap");
     let start_a = temp_dir.join("start-a");
     let start_b = temp_dir.join("start-b");
@@ -1140,7 +1135,7 @@ fn run_pairing_orchestrator() {
     let identity_a = NodeIdentity::generate_ed25519().expect("node A identity");
     let identity_b = NodeIdentity::generate_ed25519().expect("node B identity");
     let temp_dir = env::temp_dir().join(format!("p2p-vpn-pairing-tun-e2e-{}", std::process::id()));
-    init_namespace_temp_dir(&temp_dir, PAIRING_TEST_NAME);
+    let temp_dir = init_namespace_temp_dir(&temp_dir, PAIRING_TEST_NAME);
     let start_a = temp_dir.join("start-a");
     let start_b = temp_dir.join("start-b");
     let offer_path = temp_dir.join("pairing-offer.txt");
@@ -1310,7 +1305,7 @@ fn run_pairing_relay_orchestrator() {
         "p2p-vpn-pairing-relay-tun-e2e-{}",
         std::process::id()
     ));
-    init_namespace_temp_dir(&temp_dir, PAIRING_RELAY_TEST_NAME);
+    let temp_dir = init_namespace_temp_dir(&temp_dir, PAIRING_RELAY_TEST_NAME);
     let start_relay = temp_dir.join("start-relay");
     let start_a = temp_dir.join("start-a");
     let start_b = temp_dir.join("start-b");
@@ -1463,7 +1458,7 @@ fn run_code_pairing_orchestrator() {
         "p2p-vpn-code-pairing-tun-e2e-{}",
         std::process::id()
     ));
-    init_namespace_temp_dir(&temp_dir, CODE_PAIRING_TEST_NAME);
+    let temp_dir = init_namespace_temp_dir(&temp_dir, CODE_PAIRING_TEST_NAME);
     let start_a = temp_dir.join("start-a");
     let start_b = temp_dir.join("start-b");
 
@@ -1719,9 +1714,47 @@ fn cleanup_temp_dir(temp_dir: PathBuf) {
     }
 }
 
-fn init_namespace_temp_dir(temp_dir: &Path, test_name: &str) {
-    fs::create_dir_all(temp_dir).expect("create temp dir");
-    write_namespace_repro_artifacts(temp_dir, test_name).expect("write namespace repro artifacts");
+fn init_namespace_temp_dir(base: &Path, test_name: &str) -> PathBuf {
+    let temp_dir = create_private_namespace_dir(base).expect("create private temp dir");
+    write_namespace_repro_artifacts(&temp_dir, test_name).expect("write namespace repro artifacts");
+    temp_dir
+}
+
+fn create_private_namespace_dir(base: &Path) -> io::Result<PathBuf> {
+    use rand_core::RngCore as _;
+    use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
+
+    // PID-namespace orchestrators are PID 1; mkdir rejects existing paths, including symlinks.
+    let path = base.with_extension(format!("{:016x}", rand_core::OsRng.next_u64()));
+    fs::DirBuilder::new().mode(0o700).create(&path)?;
+    // mkdir starts private; establish exact permissions even under a restrictive umask.
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o700))?;
+    Ok(path)
+}
+
+#[test]
+fn namespace_artifact_directories_are_fresh_and_private() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    for test_name in [DIRECT_TEST_NAME, QUEUE_PRESSURE_TEST_NAME] {
+        let prefix = format!("p2p-vpn-{test_name}-1");
+        let base = env::temp_dir().join(&prefix);
+        let first = create_private_namespace_dir(&base).expect("first private directory");
+        let second = create_private_namespace_dir(&base).expect("second private directory");
+        assert_ne!(first, second);
+        for path in [first, second] {
+            let name = path
+                .file_name()
+                .expect("artifact directory name")
+                .to_string_lossy();
+            assert!(name.starts_with(&format!("{prefix}.")));
+            let metadata = fs::symlink_metadata(&path).expect("directory metadata");
+            assert!(metadata.is_dir());
+            assert_eq!(metadata.permissions().mode() & 0o7777, 0o700);
+            assert_eq!(fs::read_dir(&path).expect("empty directory").count(), 0);
+            fs::remove_dir(path).expect("remove empty private directory");
+        }
+    }
 }
 
 fn write_namespace_repro_artifacts(temp_dir: &Path, test_name: &str) -> io::Result<()> {
@@ -1794,8 +1827,8 @@ fn namespace_repro_commands(
          {replay_env_exports}\
          nix run .#tun-e2e -- {test_name_quoted} -- --ignored --exact --nocapture\n\
          \n\
-         # Re-run the same already-built test binary inside unshare.\n\
-         {CHILD_ENV}=orchestrator unshare --user --map-root-user --mount --net {current_exe_quoted} --ignored {test_name_quoted} --exact --nocapture\n\
+         # Re-run the same already-built test binary through its namespace watchdog.\n\
+         env -u {CHILD_ENV} {current_exe_quoted} --ignored {test_name_quoted} --exact --nocapture\n\
          \n\
          # Inspect this artifact directory.\n\
          ls -la {temp_dir_quoted}\n",
@@ -2491,15 +2524,41 @@ fn spawn_node(
 }
 
 fn wait_for_child_namespace(pid: u32) {
+    wait_for_child_namespace_timeout(pid, scaled_wait_timeout(Duration::from_secs(5)))
+        .unwrap_or_else(|error| panic!("child namespace for pid {pid}: {error}"));
+}
+
+fn wait_for_child_namespace_timeout(pid: u32, timeout: Duration) -> io::Result<()> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let current = fs::metadata("/proc/self/ns/net")?;
     let namespace = PathBuf::from(format!("/proc/{pid}/ns/net"));
-    let deadline = Instant::now() + scaled_wait_timeout(Duration::from_secs(5));
-    while Instant::now() < deadline {
-        if namespace.exists() {
-            return;
+    let deadline = Instant::now() + timeout;
+    loop {
+        match fs::metadata(&namespace) {
+            Ok(child) if (child.dev(), child.ino()) != (current.dev(), current.ino()) => {
+                return Ok(());
+            }
+            Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
+            _ => {}
         }
-        thread::sleep(Duration::from_millis(50));
+        if Instant::now() >= deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!("pid {pid} did not enter a distinct network namespace"),
+            ));
+        }
+        thread::sleep(
+            Duration::from_millis(50).min(deadline.saturating_duration_since(Instant::now())),
+        );
     }
-    panic!("child namespace for pid {pid} did not appear");
+}
+
+#[test]
+fn namespace_readiness_rejects_the_current_network_namespace() {
+    let error = wait_for_child_namespace_timeout(std::process::id(), Duration::ZERO)
+        .expect_err("an existing /proc entry is not namespace readiness");
+    assert_eq!(error.kind(), io::ErrorKind::TimedOut);
 }
 
 fn configure_underlay(pid_a: u32, pid_b: u32) {
@@ -3665,6 +3724,103 @@ where
             );
         }
         thread::sleep(Duration::from_millis(250));
+    }
+}
+
+fn namespace_orchestrator_output(
+    args: &[&str],
+    envs: &[(&str, &str)],
+    timeout: Duration,
+) -> io::Result<Output> {
+    // Killing unshare kills namespace PID 1, so the kernel kills every descendant,
+    // including separate process groups holding captured pipes. Remount /proc so
+    // Child::id(), ip netns and nsenter all use this PID namespace's numbering.
+    // Do not add --fork/--pid to spawn_node: its Child::id() must remain the node.
+    let mut unshare_args = vec![
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "--net",
+        "--pid",
+        "--fork",
+        "--kill-child=SIGKILL",
+        "--mount-proc",
+        "--",
+    ];
+    unshare_args.extend_from_slice(args);
+    command_output("unshare", &unshare_args, envs, timeout)
+}
+
+#[test]
+#[ignore = "requires Linux user, mount, PID and network namespaces; no TUN or network traffic"]
+fn namespace_orchestrator_timeout_reaps_pipe_inheritors() {
+    use std::os::unix::process::{CommandExt as _, ExitStatusExt as _};
+
+    const CHILD: &str = "P2P_VPN_NAMESPACE_TIMEOUT_CHILD";
+    const TEST: &str = "namespace_orchestrator_timeout_reaps_pipe_inheritors";
+    let binary = env::current_exe().expect("test binary");
+    match env::var(CHILD).as_deref() {
+        Ok("leaf") => {
+            io::stdout()
+                .write_all(b"pipe-holder-ready\n")
+                .expect("stdout marker");
+            io::stderr()
+                .write_all(b"pipe-holder-ready\n")
+                .expect("stderr marker");
+            // Finite fallback: a broken watchdog must fail, not hang the regression forever.
+            thread::sleep(Duration::from_secs(15));
+            return;
+        }
+        Ok("init") => {
+            assert_eq!(std::process::id(), 1);
+            assert_eq!(
+                fs::read_link("/proc/self").expect("PID-local procfs"),
+                Path::new("1")
+            );
+            let mut leaf = NamespaceChild {
+                child: Command::new("unshare")
+                    .arg("--net")
+                    .arg(&binary)
+                    .args(["--ignored", "--exact", TEST, "--nocapture"])
+                    .env(CHILD, "leaf")
+                    .process_group(0)
+                    .spawn()
+                    .expect("spawn pipe-inheriting descendant in a separate group"),
+            };
+            wait_for_child_namespace(leaf.id());
+            eprintln!("distinct-namespace-ready");
+            assert!(leaf.child.wait().expect("reap descendant").success());
+            return;
+        }
+        _ => {}
+    }
+    let started = Instant::now();
+    let output = namespace_orchestrator_output(
+        &[
+            binary.to_str().expect("binary path"),
+            "--ignored",
+            "--exact",
+            TEST,
+            "--nocapture",
+        ],
+        &[(CHILD, "init")],
+        Duration::from_secs(2),
+    )
+    .expect("namespace watchdog output");
+    assert!(
+        started.elapsed() < Duration::from_secs(6),
+        "pipe readers outlived watchdog"
+    );
+    assert_eq!(output.status.signal(), Some(9), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("distinct-namespace-ready"),
+        "{output:?}"
+    );
+    for stream in [&output.stdout, &output.stderr] {
+        assert!(
+            String::from_utf8_lossy(stream).contains("pipe-holder-ready"),
+            "{output:?}"
+        );
     }
 }
 

@@ -27,8 +27,10 @@ nix develop -c cargo test overlay
 
 ## Controlled Idle Sampling
 
-Run as the workspace user, not through `sudo`. Requires Linux user/network
-namespaces, `/dev/net/tun`, `ip`, `ping`, `getconf`, and readable `/proc` data.
+Run as the workspace user, not through `sudo`. Requires Linux user, mount, PID,
+and network namespaces, `/dev/net/tun`, `ip`, `ping`, `getconf`, and readable
+`/proc` data. The orchestrator mounts a private procfs for its PID namespace.
+Process IDs in new samples are namespace-local, not host process IDs.
 
 ```sh
 P2P_VPN_TUN_E2E_KEEP_TEMP=1 P2P_VPN_TUN_E2E_IDLE_SECONDS=60 \

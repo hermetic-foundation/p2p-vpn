@@ -282,11 +282,11 @@ physical-device/WAN behavior, formal proof, or the sustained acceptance soak.
 - Runtime counters do not yet expose the complete retained-owner inventory from phase 1.
 - Tokio time advancement alone does not advance `std::time::Instant`, signed wall time, or vendored timers.
 - Normal packet-session renewal occurs every 600 seconds; do not misclassify it as failed recovery.
-- The current outer watchdog kills its immediate child, not a guaranteed contained process tree.
+- Process-tree timeout containment and private artifact directories are now verified; the full soak driver is still missing.
 
-The new fixture must verify namespace isolation before provisioning links and
-guarantee child cleanup on timeout. Keep artifacts private and capture bounded
-diagnostics before teardown, while control sockets are still available.
+The shared launcher now verifies distinct namespaces before provisioning links
+and guarantees descendant termination on timeout. The soak driver must still
+capture bounded diagnostics before teardown, while control sockets are available.
 
 A private-protocol local-seed profile cannot prove the public-default holdoff.
 Cover public-default scheduling separately. Adding a local seed to the public
@@ -296,8 +296,64 @@ Reuse namespace lifecycle, bounded command capture, control-socket observation,
 and packet assertions. Extend the fixture for real discovery and default timers;
 repeating the old smoke test is not sufficient acceptance evidence.
 
+Do not require optional relay acquisition while every overlay peer is already
+healthy: that conflicts with quiet-mode bootstrap suppression. After proving
+LAN-only discovery, the first direct-link fault must trigger fresh infrastructure
+discovery; budget that separately from later fallback to retained alternatives.
+
 Sources: [namespace harness](../../tests/tun_namespace.rs) and
 [idle sampler](../../tests/support/idle_sample.rs).
+
+## Namespace Lifecycle Checkpoint
+
+The shared launcher now places the orchestrator at PID 1 in a private PID
+namespace, with matching procfs. Its watchdog kills that namespace's init;
+the kernel then terminates descendants, including separate process groups.
+
+| Boundary | Verification |
+| --- | --- |
+| Timeout negative control | Omitting only `--kill-child` made the pipe readers outlive the two-second watchdog; regression failed after 15.01 seconds |
+| Timeout fixed path | SIGKILL, both inherited-pipe markers, and distinct-namespace readiness verified in 2.01 seconds, below the frozen six-second allowance |
+| Namespace readiness | Existing `/proc/PID/ns/net` alone is rejected; device and inode must differ from the orchestrator's namespace |
+| Artifact creation | Fresh random-suffixed directories are `0700` before writing files; fixture prefixes are preserved |
+| Replay | Already-built commands use the same outer watchdog; they no longer bypass containment |
+| Nix preflight | Evaluated script verifies PID-local procfs, veth and TUN creation; ShellCheck passes |
+
+Process IDs in new reports are namespace-local, not host PIDs. Existing reports
+remain historical. No packet runtime, protocol, identity, or user configuration
+changes are included in this harness checkpoint.
+
+```sh
+nix develop -c cargo test --test tun_namespace \
+  namespace_orchestrator_timeout_reaps_pipe_inheritors -- --ignored --exact
+```
+
+### Checkpoint Verification
+
+| Check | Result |
+| --- | --- |
+| Offline locked workspace suite | 1,338 passed; 23 opt-in tests ignored |
+| Complete opt-in namespace suite | All 13 passed, including the new watchdog, TCP pressure, network movement, and relay promotion; 238.80 seconds combined |
+| Clippy required groups / Rust formatting / whitespace | Passed; advisory style warnings remain |
+| Nix source parity / parsing | Passed with cached tools and unchanged source assertions |
+| Evaluated preflight / ShellCheck | Passed; no full preflight-package derivation build claimed |
+| Nix formatting | Existing drift reproduced on parent revision `1794bcab`; formatter differences are outside the edited preflight block |
+| Idle-sampler compatibility | Ten-second sample plus normal warmup/traffic gates passed in 56.31 seconds; 22 samples, stable process identity per role, readable CPU/RSS/socket data |
+
+Logs use `/tmp/p2p-vpn-settling-namespace-` with `before.log`, `watchdog.log`,
+`workspace.log`, `suite.log`, `clippy.log`, `nix-final.log`, `preflight.log`,
+`shellcheck.log`, `nixfmt-baseline.log`, `nixfmt.log`, and `idle.log` suffixes.
+
+The idle sample is
+`/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.ce04121036f17264/idle-sample.json`.
+No task builds ran during this compatibility sample.
+
+Task temporary storage remained about 5.06 GiB. No downloads occurred. Android
+native compilation was not repeated for test-launcher and preflight-only changes;
+the preceding runtime checkpoint covers unchanged native sources.
+
+This is harness validation, not the 30-minute acceptance soak, a resource
+comparison, or physical-device/WAN recovery evidence.
 
 ## Delivery Gates
 

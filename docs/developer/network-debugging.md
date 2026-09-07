@@ -178,7 +178,13 @@ nix run .#tun-e2e -- \
 
 Read the generated `repro-metadata.txt`.
 
-Run `repro-commands.sh` from the artifact directory to replay the case.
+Invoke the artifact's `repro-commands.sh` from the repository root; its first
+command uses `nix run .#tun-e2e`. The already-built-binary command also goes
+through the namespace watchdog, without rebuilding.
+
+Artifact directories are private (`0700`) and have a random suffix. Their
+numeric component is not a host PID. The watchdog kills the isolated process
+tree on timeout; readiness checks require a distinct network namespace.
 
 ## Public Relay Repro
 
