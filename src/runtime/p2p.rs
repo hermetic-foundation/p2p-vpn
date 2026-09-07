@@ -429,7 +429,8 @@ fn controlled_kademlia_config(protocol: StreamProtocol) -> kad::Config {
     let mut config = kad::Config::new(protocol);
     config
         .set_parallelism(KADEMLIA_QUERY_PARALLELISM)
-        .set_periodic_bootstrap_interval(None);
+        .set_periodic_bootstrap_interval(None)
+        .set_automatic_bootstrap_throttle(None);
     config
 }
 
@@ -1325,6 +1326,45 @@ mod tests {
         )
         .await
         .expect("packet exchange timed out");
+    }
+
+    #[tokio::test]
+    async fn routing_updates_do_not_start_unowned_bootstrap_queries() {
+        for separate in [false, true] {
+            let mut node = build_node(&retention_diagnostic_config(separate)).unwrap();
+            let kad = public_pairing_kad_mut(node.swarm.behaviour_mut());
+            for seed in public_ipfs_bootstrap_peer_configs() {
+                let (peer, _) = seed.peer_address().unwrap();
+                kad.remove_peer(&peer);
+            }
+            kad.add_address(&PeerId::random(), "/memory/1".parse().unwrap());
+            let deadline = tokio::time::sleep(Duration::from_secs(1));
+            tokio::pin!(deadline);
+            loop {
+                tokio::select! {
+                    () = &mut deadline => break,
+                    event = node.swarm.select_next_some() => {
+                        let event = match event {
+                            SwarmEvent::Behaviour(BehaviourEvent::Kad(event)) if !separate => Some(event),
+                            SwarmEvent::Behaviour(BehaviourEvent::PairingKad(event)) if separate => Some(event),
+                            _ => None,
+                        };
+                        assert!(
+                            !matches!(event, Some(kad::Event::OutboundQueryProgressed {
+                                result: kad::QueryResult::Bootstrap(_), ..
+                            })),
+                            "routing insertion started bootstrap outside the runtime scheduler"
+                        );
+                    }
+                }
+            }
+            let kad = public_pairing_kad_mut(node.swarm.behaviour_mut());
+            assert_eq!(kad.iter_queries().count(), 0);
+            let manual = kad
+                .bootstrap()
+                .expect("explicit bootstrap remains available");
+            assert!(kad.query(&manual).is_some());
+        }
     }
 
     #[tokio::test]

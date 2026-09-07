@@ -404,6 +404,11 @@ They are not VPN members and are not serialized into minimal configs.
 
 Application-scheduled public DHT work is serialized per network instance.
 
+Both DHTs disable library-triggered periodic and routing-insertion bootstrap.
+Explicit bootstrap remains available to the runtime scheduler. The pinned
+`libp2p-kad` patch exposes the library's existing automatic-bootstrap switch;
+it does not change the wire protocol or library defaults.
+
 `runtime/recovery_queries.rs` owns targeted overlay query IDs and peer cooldowns.
 It receives explicit timestamps and returns cancellation IDs; only the runner
 applies Kademlia effects. Address retention and infrastructure dial history remain

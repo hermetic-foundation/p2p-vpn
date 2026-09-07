@@ -83,8 +83,66 @@ The pinned `libp2p-kad 0.48.0` defaults to bootstrapping 500 ms after routing-ta
 insertion. `set_periodic_bootstrap_interval(None)` does not disable this separate
 trigger; its disabling setter is currently library-test-only.
 
-This source finding needs a runtime regression. Do not attribute observed socket
-activity to this trigger without measuring it.
+The runtime regression `routing_updates_do_not_start_unowned_bootstrap_queries`
+failed after 0.51 seconds with the original dependency. It passes after exposing
+the existing setter and disabling insertion-triggered bootstrap for both DHTs.
+The test also checks that explicit scheduler-owned bootstrap remains available.
+
+The pinned source is now shared through the root Cargo patch and the desktop and
+Android Nix filesets. Original MIT notices and archive provenance are retained in
+`vendor/libp2p-kad-0.48.0/P2P-VPN.md`. The source import is approximately 688 KiB.
+
+#### Bootstrap Validation
+
+| Check | Result |
+| --- | --- |
+| Native workspace | 1,249 passed; 23 opt-in tests ignored |
+| Clippy correctness, suspicious, performance groups | Passed; existing nonfatal style warnings remain |
+| Direct UDP namespace | Passed, 15.08 seconds |
+| Owned QUIC packet-plane namespace | Passed, 16.03 seconds |
+| Forced-relay live pairing namespace | Passed, 17.63 seconds |
+| Peerless code-pairing namespace | Passed, 13.23 seconds |
+| Nix source parity | Passed for desktop and both Android native source inputs |
+| Android native x86_64 library | Built with patched dependency, NDK 28, API 26, cached Nix Rust |
+| Workspace rustfmt / Nix parsing | Passed |
+| Upstream source comparison | Only the setter and patch record differ |
+
+Logs use `/tmp/p2p-vpn-kad-bootstrap-` with `before.log`, `after.log`,
+`workspace.log`, `clippy.log`, `udp.log`, `quic.log`, `relay.log`,
+`code-pairing.log`, and `nix-sources.log` suffixes.
+
+The source check ran in a Nix sandbox with cached tool inputs and unchanged
+assertions. The default tool closure planned 698 builds and was not built.
+Output: `/nix/store/qf5rlm0izinb3n3awg0k1igmfrc5bgc6-p2p-vpn-rust-test-sources`.
+
+An upstream generated file has a trailing blank line that triggers `git diff
+--check` on initial import. Its bytes were retained; all non-generated changed
+files pass whitespace checking. This is not a claim that upstream formatting passes.
+
+These tests do not measure public-network socket rates or close the internal
+address/candidate retention gates. No public-network improvement is claimed yet.
+
+#### Android Cache Repair
+
+The final offline native build passed in 1 minute 54 seconds with two build jobs.
+The log confirms compilation from the repo's vendored `libp2p-kad` path.
+Log: `/tmp/p2p-vpn-kad-bootstrap-android-native-verified.log`.
+
+| Artifact | Value |
+| --- | --- |
+| Library | `/tmp/p2p-vpn-android-target/x86_64-linux-android/debug/libp2p_vpn_android.so` |
+| SHA-256 | `71e31d77f222c2753772ad01fce4edc416dfc2df9f53d0858faeeacdefb0ad1a` |
+| Combined target/vendor footprint | Approximately 4.5 GiB |
+
+Earlier attempts failed on removed vendor-cache symlinks, missing host compiler
+and archiver settings, and an invalid cached `tracing` archive. Logs are retained.
+The cache was regenerated; replacement/downloaded archives were checked against
+Cargo.lock and fetched sequentially at no more than 1,000 KiB/s.
+
+The full workspace format check used the cached formatter executable directly;
+its old Nix wrapper referenced a removed store path. No source-format rules changed.
+No ARM64 native build, APK rebuild, physical-device test, or full Nix package build
+is claimed for this patch.
 
 ### Candidate Identities
 

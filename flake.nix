@@ -48,6 +48,7 @@
           fileset = lib.fileset.unions [
             ./Cargo.toml
             ./Cargo.lock
+            ./vendor/libp2p-kad-0.48.0
             ./crates/p2p-vpn-android
             ./crates/p2p-vpn-android-e2e-fixture
             ./src
@@ -5841,6 +5842,11 @@
                 test_targets ${self} > repository-tests.json
                 test_targets ${rustSource} > packaged-tests.json
                 diff -u repository-tests.json packaged-tests.json
+                diff -r ${self}/vendor/libp2p-kad-0.48.0 ${rustSource}/vendor/libp2p-kad-0.48.0
+                ${lib.optionalString androidSupported ''
+                  diff -r ${self}/vendor/libp2p-kad-0.48.0 ${android.androidNativeArm64.src}/vendor/libp2p-kad-0.48.0
+                  diff -r ${self}/vendor/libp2p-kad-0.48.0 ${android.androidNativeX86_64.src}/vendor/libp2p-kad-0.48.0
+                ''}
                 touch "$out"
               '';
           releaseArchive = self.packages.${system}.releaseArchive;

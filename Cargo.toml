@@ -13,6 +13,10 @@ members = [
 ]
 default-members = ["."]
 resolver = "3"
+exclude = ["vendor/libp2p-kad-0.48.0"]
+
+[patch.crates-io]
+libp2p-kad = { path = "vendor/libp2p-kad-0.48.0" }
 
 [lints.rust]
 unsafe_code = "forbid"
