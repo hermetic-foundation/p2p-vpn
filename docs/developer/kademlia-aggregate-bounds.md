@@ -107,6 +107,39 @@ APK, ARM64, and physical-device builds/deployments were not performed.
 | Query canceled while handler retains work | No permanent retained request or accounting leak |
 | Connection carries VPN streams | Kademlia overload does not reset unrelated application traffic |
 
+## Routing Owner Audit
+
+| Owner / Mutation | Implication For Aggregate Enforcement |
+| --- | --- |
+| `KBucketsTable::buckets` | Count all present entries, not only application-selected routing peers |
+| `KBucket::pending` | One additional retained candidate per bucket; include its addresses before promotion |
+| `KBucketsTable::applied_pending` | Retains inserted snapshots and evicted nodes until consumed; promotion alone does not retire all storage |
+| `entry`, `iter`, `bucket`, and closest iterators | Can apply pending replacements during otherwise read-like operations |
+| `Behaviour::add_address` | Updates present/pending entries or inserts a new entry |
+| `Behaviour::connection_updated` | Independently learns addresses and inserts connected peers |
+| `Behaviour::on_address_change` | Replaces an address, or adds the new endpoint while retaining a protected seed |
+| `remove_address`, `remove_peer`, and failed-address handling | Must release accounting without losing the last usable recovery address accidentally |
+
+### Protected Seed Gap
+
+`Addresses::protected` currently prevents address-rotation eviction. It does not
+protect the containing peer from `KBucket::apply_pending`, which evicts the first
+disconnected node. Aggregate admission must not assume whole-peer protection
+already exists.
+
+### Required Routing Regressions
+
+1. Fill present and pending entries together; assert entry and encoded-address budgets.
+2. Promote pending entries through lookup and iteration; account for deferred eviction notifications.
+3. Update a peer at the global byte ceiling; retain fresh LAN/public/relay alternatives within bounds.
+4. Attempt pending replacement of a disconnected protected seed; preserve it without bypassing the budget.
+5. Remove entries and drain deferred notifications; prove capacity becomes available again.
+6. Exercise explicit address addition, connection discovery, and address migration through the same admission policy.
+
+These are audit findings and outstanding tests, not an implemented routing cap.
+The routing solution must cover actual owners without treating cloned events or
+public bucket iterators as authoritative aggregate accounting.
+
 ## Implementation Order
 
 1. Handler admission, expiry, and bounded rejection reporting.
