@@ -10,7 +10,7 @@ within the [reliability review](refactor-review.md).
 | Priority | Case | Evidence and status |
 | --- | --- | --- |
 | P1 | Cancel after completion produces unrestorable state | Reproduced for inviter and joiner; cancellation now preserves completed state. |
-| P1 | Prepared enrollment loses recovery dependencies | Live join expiry reproduced and fixed; cancellation, rejection, and replacement remain open. |
+| P1 | Prepared enrollment loses recovery dependencies | Live join expiry and durable cancellation/rejection/replacement fixed; final scoped evidence is in the cancellation report. |
 | P2 | Accepted Submit failure leaves submission in flight | Reproduced at response dispatch; release the matching request before applying acceptance. |
 | P2 | New operation prevents acknowledgement of older enrollment | Replacement/restore regression reproduced; acknowledgement now uses Applied ledger state with matching-slot consistency checks. |
 
@@ -58,15 +58,15 @@ evidence and broader outstanding platform gates remain listed in
 This prevents new invalid snapshots. It does not automatically repair snapshots
 already corrupted by the old transition. Recovery compatibility remains an open review item.
 
-## Remaining Plan
+## Closeout Status
 
-1. Inject failure after Prepared persistence and before runtime commit; exercise
-   cancellation, rejection, expiry, and same-role replacement before recovery.
-2. Extend historical acknowledgement coverage beyond the inviter startup
-   compaction test to joiner recovery and multiple completed sequential pairings.
-3. Reconcile old invalid snapshots without silently dropping committed membership
-   or weakening restored-state authorization checks.
-4. Run affected native, namespace, and Android gates after transaction fixes.
+| Work | Status |
+| --- | --- |
+| Prepared mutations | Cancellation, rejection, expiry/replacement, persistence failure, and cleanup retry covered by Goal 1 |
+| Historical acknowledgement | Earlier ownership fixes and their regressions retained |
+| Invalid legacy snapshots | Explicit limitation; no destructive automatic repair or weakened authorization validation |
+| Scoped verification | Native workspace and affected namespace checks pass on the cancellation implementation |
+| Broader platform matrix | NixOS/Android final acceptance remains a separate workstream |
 
 Accepted-response continuation now has the [live retry coverage](#live-retry-through-completion)
 below. Lower-level partial rollback and persisted restart remain separate tests.
@@ -390,7 +390,8 @@ verified rollback, including crash recovery.
 
 Implementation and acceptance steps are recorded in the
 [cancellation plan](pairing-cancellation-plan.md). The decision is resolved;
-implementation is not yet complete.
+implementation and scoped verification are complete. Publication is recorded in
+that report; this does not close the broader reliability review.
 
 ### Mutation Diagnostic
 
@@ -416,7 +417,7 @@ cargo test --offline --lib diagnose_prepared_pairing_mutation_restore \
 ```
 
 - The diagnostic passed in 0.01 s, meaning it reproduced the defect in all five cases.
-- It is deliberately opt-in and expects today's broken behavior; replace it with prevention/recovery assertions when policy is implemented.
+- That historical diagnostic was opt-in and expected the broken behavior at the recorded revision.
 - All 53 normal session tests pass; the diagnostic is ignored by default and run separately.
 - Required Clippy groups, Rust formatting, whitespace checks, and Nix test-source inclusion pass.
 - Full workspace and platform tests were not rerun for this test-only diagnostic; their earlier results remain separately recorded.
@@ -425,6 +426,16 @@ cargo test --offline --lib diagnose_prepared_pairing_mutation_restore \
 
 Logs: `/tmp/p2p-vpn-review-prepared-mutation-recovery-final.log` and
 `/tmp/p2p-vpn-review-prepared-mutation-sessions.log`.
+
+### Current Mutation Regression
+
+The implementation replaces the diagnostic with
+`prepared_pairing_mutations_persist_abort_instead_of_replaying_enrollment`.
+It requires all five mutations to persist Aborting state, survive reload, reject
+enrollment replay, and compact without modifying a replacement operation.
+
+Runtime cleanup, failure injection, legacy limitations, and final scoped
+verification are tracked in the [durable cancellation report](pairing-cancellation-plan.md).
 
 ## Platform Follow-Up
 

@@ -14,15 +14,19 @@ This is the current acceptance map for
 the [reliability review](refactor-review.md), not a production certification.
 Earlier milestones remain historical evidence, not automatic proof for later changes.
 
+Closeout Goal 1 is complete: probe ownership at `8e5950fa` and durable pairing
+cancellation at `8ed95627`. The remaining bounded workstreams below are still
+required for the broader review.
+
 ## Current Evidence
 
 | Area | Evidence | Limitation |
 | --- | --- | --- |
-| Workspace | Last full run: 1,232 passed, 23 opt-in tests ignored, including historical startup compaction, task-scoped network logs, bounded fixture traces, live pairing retry, and persisted restart after partial route/rollback failure. Private-bootstrap restart, stream pressure, retention diagnostics, and all 12 namespace scenarios passed separately. | Native Linux toolchain; not an Android device run. |
-| Namespace integration | All 12 pass sequentially in 256.18 seconds, including the new [TCP queue-pressure test](queue-pressure-review.md). Log: `/tmp/p2p-vpn-review-queue-pressure-namespace-suite.log`. | Earlier 10/11 run exposed a direct hole-punch bypass in the fixture; see [isolation evidence](testing.md#namespace-e2e). Controlled topology; packet-limit pressure, not public NAT, independent byte-limit saturation, or a heap bound. |
+| Workspace | Latest Goal 1 run: 1,247 passed, 23 opt-in tests ignored. [Durable cancellation evidence](pairing-cancellation-plan.md#final-verification) includes cleanup/retry, five mutation cases, expired replacement, and built-in-address protection. | Native Linux toolchain; not an Android device run. |
+| Namespace integration | Goal 1 reruns pass peerless code pairing, direct/relay pairing acceptance, UDP, and QUIC datagrams. The historical all-12 pass remains in `/tmp/p2p-vpn-review-queue-pressure-namespace-suite.log`. | Controlled topology; not public NAT or final all-platform acceptance. Historical pressure/isolation limits remain in their linked reports. |
 | Static analysis | Required correctness, suspicious, and performance Clippy groups pass. | Existing non-fatal style warnings remain. |
 | Formatting | Changed Rust files pass rustfmt; whitespace checks pass. | Not proof of the complete flake `fmt` target. |
-| Nix source parity | `rust-test-sources` built successfully. | Verifies packaged test inclusion, not execution. |
+| Nix source parity | The unchanged `rust-test-sources` script passes in a sandbox with cached tool inputs; details in the [cancellation report](pairing-cancellation-plan.md#nix-check-tooling). | Default tool-closure build failed fetching a dependency. This verifies source inclusion, not a full package build. |
 | Nix consumer evaluation | `nixos-consumer-flake-eval` built; all 15 configuration contracts pass. | Does not build the consumer OS or execute the service. |
 | Membership VM | [Exported four-node check built at `4bb8ff1e`](nixos-membership-review.md): all 18 subtests pass in 349.04 seconds. Current packaged runtime and NixOS module; no runtime override. | Controlled VLAN/relay topology; IPv4/A-record assertions. Not public NAT, IPv6, sustained-load, or other VM-gate evidence. |
 | NixOS workflows | [Four exported VM checks pass at `cf18fb51`](nixos-workflow-review.md): lifecycle, smoke, minimal LAN, and URI pairing. | Pairing evaluates generated Nix but runs its resulting JSON, not a rebuild/switch. Controlled IPv4 LAN, not public WAN or sustained load. |
@@ -40,13 +44,13 @@ Earlier milestones remain historical evidence, not automatic proof for later cha
 | Membership sync retirement | Revoked first/final/restart replies stop; expiry and static-peer removal release pending owners; local recovery is preserved. | Application ownership, not transport-request cancellation. |
 | Stale sync responses | Two loopback TCP connections; real completed response followed by controlled retirement reproduces the owner leak and verifies cleanup/newer-ID isolation. | Controlled application ordering, not physical WAN race-frequency evidence. |
 | Sync history | Completion and retry maps each cap at 1,024 peers; overflow preserves backoff; authorization pruning and disconnect retention pass. | Entry-count/deadline evidence, not RSS or live overload measurements. |
-| Pairing cancellation | Both roles preserve completion and persisted state across late cancellation and restore; all 48 session tests pass. | Preventive fix, not repair of existing invalid snapshots; [transaction review](pairing-transaction-review.md) remains open. |
+| Pairing cancellation | Both roles preserve established completion; pending cancellation persists abort intent, cleans up, and compacts safely. RPC failure/retry and startup cleanup pass. | Local cancellation, not remote revocation; inconsistent legacy snapshots are not automatically repaired. |
 | Acceptance retry | Four live TCP loopback cases cover Submit/Poll persistence and route failures; the normal retry driver delivers acceptance through Applied persistence and reload. Removing the ownership release makes retry time out. | Signed fixture responder and injected route controller; not full inviter approval, kernel rollback, connection promotion, or physical WAN delivery. |
 | Completed pairing status | [Relay discovery loss reproduced and fixed](pairing-transaction-review.md#completed-discovery-status). Both role-specific regressions, full workspace, and rebuilt LAN/relay code-pairing VMs pass. | Status metadata only; historical records without operation history may lack discovery data. Not a change to routing or admission. |
 | Partial route retry | Successful and failed rollback after partial application preserve logical state; repaired runtime commit replays the full update and authorizes the peer. | Injected command results, not kernel state, durable finalization, or automatic retry delivery. |
-| Persisted restart repair | Both roles retain saved Prepared bytes after partial route/rollback failure, reload, complete reconciliation, and persist Applied state; repeated reconciliation emits no route commands. | Real state store and startup function with injected command results; not a restarted OS process, power loss, or live response retry. |
-| Live join expiry | Prepared remote approval survives expiry/checkpoint/restore; unprepared expiry still clears it. All 50 session tests pass. | Session-state evidence; cancellation and replacement can still invalidate recovery. |
-| Prepared mutations | [Five-case diagnostic](pairing-transaction-review.md#mutation-diagnostic): cancelled/rejected/replaced Prepared sessions decode but recovery returns `Conflict`. | Reproduction of an unresolved defect, not a passing recovery contract. Policy approval and implementation remain required. |
+| Persisted restart repair | Both roles checkpoint cleanup ownership before replay, preserve Prepared state after partial route/rollback failure, reload, and complete reconciliation. Aborting entries never replay as enrollment. | Real state store and startup function with injected route failures; isolated kernel deletion is tested separately. Not OS power-loss evidence. |
+| Live join expiry | Prepared remote approval survives expiry/checkpoint/restore; unprepared expiry still clears it. Expired Prepared entries require cancellation before replacement. | Completed-operation replacement remains supported; broader lifecycle review is separate. |
+| Prepared mutations | [Five original cases](pairing-transaction-review.md#current-mutation-regression) now require durable abort, reload, and safe compaction without replacing the newer operation. | Historical negative-control evidence retained; no repair claim for old inconsistent snapshots. |
 | Historical enrollments | Both roles retain acknowledgement and native artifacts after replacement/restore; RPC status shares session-owned readiness. [Inviter startup compaction](pairing-transaction-review.md#historical-startup-compaction) also preserves a replacement operation under incompatible declarative authority. | Real state store and startup function with injected routes; not joiner startup, multiple completed sequential enrollments, or physical deployment evidence. |
 | Startup ownership | Linux and Android pass installed snapshots; expiry deletion and metadata guards pass. Android reactivation asserts its reserved snapshot. | External library integrations must opt into the additive snapshot handoff to avoid config-derived compatibility behavior. |
 
@@ -169,7 +173,7 @@ Logs use `/tmp/p2p-vpn-review-startup-snapshot-*`.
 | Probe response ownership | [Wrong-peer probe consumption](path-probe-ownership-review.md) is corrected with a failing/passing regression, full native workspace checks, and UDP/QUIC namespace passes. Prepared pairing and the broader timer audit remain separate requirements. |
 | Session lifecycle | [Membership-sync review](membership-sync-review.md) cases are fixed. Reconcile broader session-lifecycle review and final platform evidence. |
 | Android lifecycle ownership | [Three event-ownership findings](android-event-ownership-review.md) have JVM/emulator coverage, including recurring JNI health polling and automatic native-failure recovery at `4b90f3bc`. Reconcile broader lifecycle evidence on final code. |
-| Pairing orchestration | Assess transaction ownership across preparation, persistence, and finalization. |
+| Pairing orchestration | Goal 1 closes the identified Prepared mutation defect; broader lifecycle/platform acceptance remains separate. |
 | Address resources | Identify admission is bounded. [Bucket and query retention are reproduced](kademlia-retention-review.md) in both DHT modes; the query diagnostic measures 65 addresses/3,055 encoded bytes and explicit-retirement cleanup. Enforcement, cumulative peer growth, and actual heap measurements remain. |
 | Resource comparison | Debug and release signed-ledger samples cover 256 records; timer refresh reuses valid evaluations. Isolate retained allocations and establish daemon/sustained-load impact. |
 | Platform validation | All exported VM scenarios have review results at the revisions listed above; Android passes all 68 multi-network checks at `deedd041`. Generated-Nix system activation now passes on both LAN guests. Consumer-flake, remote-deployment, and reboot coverage remain distinct; revalidate affected scenarios after further runtime changes. |
@@ -180,6 +184,15 @@ Logs use `/tmp/p2p-vpn-review-startup-snapshot-*`.
 | Packaging/tooling | Resolve or explicitly account for unverified exported checks without uncontrolled source builds. |
 | Documentation | Reconcile architecture and user workflows with final behavior and evidence. |
 
-No confirmed correctness or security issue is deferred by this table. Any proposed
-deferral still requires user agreement. A missing result is not a failure, but it
-cannot support a completion claim.
+The user split this review into bounded goals. Goal 1 covers probe ownership and
+Prepared pairing mutations only; it does not waive the remaining workstreams.
+A missing result cannot support a completion claim for the broader review.
+
+## Next Bounded Work
+
+| Workstream | Scope Retained |
+| --- | --- |
+| Kademlia resources | Enforce reproduced address/bucket/query retention limits |
+| Lifecycle review | Finish timer/event ownership and stale-completion auditing |
+| Resource measurement | Establish baseline and sustained CPU/memory evidence |
+| Final acceptance | Reconcile affected NixOS/Android scenarios and documentation on final code |

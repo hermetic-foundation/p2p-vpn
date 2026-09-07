@@ -37,6 +37,10 @@ after the first wrong-peer acknowledgement. Retained negative control:
 
 ## Verification
 
+Probe-only correction: `8e5950fa`. The table records its initial checks; the
+[Goal 1 closeout](pairing-cancellation-plan.md#final-verification) reruns the owner
+regression and datagram integration at `8ed95627`.
+
 | Check | Result |
 | --- | --- |
 | Full native workspace | 1,235 passed; 23 opt-in tests ignored |
@@ -53,5 +57,5 @@ after the first wrong-peer acknowledgement. Retained negative control:
 ## Review Boundary
 
 - This is the probe-ownership portion of closeout Goal 1, not completion of the broader review.
-- Prepared-pairing mutation policy and its implementation remain separate requirements of Goal 1.
+- Prepared-pairing mutations are closed by the [durable cancellation implementation](pairing-cancellation-plan.md).
 - The umbrella acceptance checklist remains [Review Verification Coverage](review-verification.md).
