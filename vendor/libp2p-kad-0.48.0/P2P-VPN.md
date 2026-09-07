@@ -27,6 +27,7 @@ changelog, generated protocol source, and tests.
 | `src/query/metadata.rs` | Bound query input and result metadata; normalize retained buffers; expose aggregate usage and typed admission errors. |
 | `src/jobs.rs`, `src/jobs/bounded.rs` | Shared background admission, bounded key batches and skip bookkeeping, fresh record selection, and explicit removal from pending jobs. |
 | `src/handler.rs`, `src/handler/pending.rs` | Opt-in request admission/expiry, bounded rejection reporting, and negotiation queue accounting. |
+| `src/handler/inbound.rs` | Strict inbound slot bound, wakeable in-place idle replacement, request/idle timeout, and saturation counters. |
 | `src/kbucket.rs`, `src/kbucket/bucket.rs` | Preserve protected seed peers during pending replacement; retain and recheck the probed victim identity. |
 | `src/addresses/budget.rs` | Shared aggregate entry-generation and encoded-buffer reservations, including retained snapshots and deferred eviction storage. |
 | `src/behaviour/queue.rs`, `src/behaviour/queue/payload.rs` | Bound unsent actions and intermediate results by count/bytes; charge routing notifications and release on dispatch/cancellation. |
@@ -34,6 +35,25 @@ changelog, generated protocol source, and tests.
 The library configuration defaults are unchanged. p2p-vpn disables automatic and periodic bootstrap
 explicitly so its scheduler owns bootstrap initiation. Explicit `bootstrap()` is
 unchanged; DHT wire messages and protocol names are unchanged.
+
+### Inbound Handler Retirement
+
+Inbound stream slots now stay within the existing 32-stream ceiling even across
+replacement bursts. A reusable idle stream is replaced in place and explicitly
+woken; canceled entries no longer accumulate in `SelectAll`.
+
+The configured substream timeout also retires idle or stalled inbound requests,
+including requests whose response was dropped during behaviour-queue overload.
+Each received request refreshes this deadline. Late responses are discarded;
+request reset wakes the waiting stream so closure can progress immediately.
+
+`pending_request_usage()` includes inbound count, rejections, replacements, and
+expiry counters. Outbound pending expiry runs before protocol/inbound events,
+so inbound activity cannot starve retirement of those payloads.
+
+`tests/kad_inbound_owner.rs` includes the production owner directly in workspace
+testing. Its two test-only dependencies were already present in the lockfile;
+no package versions or production dependencies changed.
 
 ### Behaviour Queue
 

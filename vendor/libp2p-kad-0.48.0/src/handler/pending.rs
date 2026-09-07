@@ -25,6 +25,10 @@ impl HandlerQueueLimits {
 /// Pending payload accounting excludes active streams and allocator overhead.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct HandlerQueueUsage {
+    pub active_inbound_streams: usize,
+    pub inbound_rejections: u64,
+    pub inbound_replacements: u64,
+    pub inbound_expired: u64,
     pub pending_negotiations: usize,
     pub active_outbound_streams: usize,
     pub requests: usize,

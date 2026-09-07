@@ -60,6 +60,7 @@ server duties or advertise itself as a Kademlia server.
 | Background job storage | Bounded key batches, not full-record snapshots; at most 4 MiB of retained key payload per DHT. |
 | Unsent DHT actions and intermediate results | Per DHT: 512 entries and 4 MiB of charged payload; terminal query results bypass this queue. |
 | Waiting DHT requests | Per connection: at most 64 requests and 256 KiB of retained payload data; queued requests expire after ten seconds. |
+| Inbound DHT streams | At most 32 per connection; idle or stalled requests expire after ten seconds by default. |
 | Aggregate routing storage | Per DHT: 512 retained entry versions and 2 MiB of encoded address buffers, including pending entries and routing snapshots. |
 
 Routing-address limits apply to both DHTs and standalone code pairing, including internally learned addresses.
@@ -94,6 +95,10 @@ event queue cannot indefinitely postpone query retirement.
 Queue overload can discard intermediate lookup results and inbound responses.
 Dropped progress does not count as a delivered record/provider result. Final query
 results remain deliverable, and handler-mode changes coalesce to the latest mode.
+
+Inbound saturation replaces reusable idle streams in place or rejects new streams.
+Stalled inbound requests expire even if no response was admitted to the DHT queue.
+These limits retire individual DHT streams, not the shared VPN connection.
 
 Configured bootstrap seeds are protected from routing-address rotation and
 whole-peer bucket replacement. Protection does not increase bucket capacity;

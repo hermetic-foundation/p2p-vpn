@@ -2361,6 +2361,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "futures",
+ "futures-timer",
  "hickory-proto",
  "hkdf",
  "hmac",
@@ -2378,6 +2379,7 @@ dependencies = [
  "spake2",
  "tokio",
  "tun",
+ "web-time",
  "x25519-dalek",
 ]
 

@@ -27,7 +27,7 @@ use std::{
 };
 
 use either::Either;
-use futures::{channel::oneshot, prelude::*, stream::SelectAll};
+use futures::{channel::oneshot, prelude::*};
 use libp2p_core::{upgrade, ConnectedPoint};
 use libp2p_identity::PeerId;
 use libp2p_swarm::{
@@ -47,7 +47,9 @@ use crate::{
 
 const MAX_NUM_STREAMS: usize = 32;
 
+mod inbound;
 mod pending;
+use inbound::InboundStreams;
 use pending::PendingRequests;
 pub use pending::{HandlerQueueLimits, HandlerQueueUsage};
 
@@ -81,7 +83,7 @@ pub struct Handler {
     pending_messages: PendingRequests,
 
     /// List of active inbound substreams with the state they are in.
-    inbound_substreams: SelectAll<InboundSubstreamState>,
+    inbound_substreams: InboundStreams<InboundSubstreamState>,
 
     /// The connected endpoint of the connection that the handler
     /// is associated with.
@@ -123,9 +125,6 @@ enum InboundSubstreamState {
     PendingFlush(UniqueConnecId, KadInStreamSink<Stream>),
     /// The substream is being closed.
     Closing(KadInStreamSink<Stream>),
-    /// The substream was cancelled in favor of a new one.
-    Cancelled,
-
     Poisoned {
         phantom: PhantomData<QueryId>,
     },
@@ -170,15 +169,17 @@ impl InboundSubstreamState {
                 phantom: PhantomData,
             },
         ) {
+            InboundSubstreamState::WaitingBehaviour(_, substream, waker) => {
+                *self = InboundSubstreamState::Closing(substream);
+                if let Some(waker) = waker {
+                    waker.wake();
+                }
+            }
             InboundSubstreamState::WaitingMessage { substream, .. }
-            | InboundSubstreamState::WaitingBehaviour(_, substream, _)
             | InboundSubstreamState::PendingSend(_, substream, _)
             | InboundSubstreamState::PendingFlush(_, substream)
             | InboundSubstreamState::Closing(substream) => {
                 *self = InboundSubstreamState::Closing(substream);
-            }
-            InboundSubstreamState::Cancelled => {
-                *self = InboundSubstreamState::Cancelled;
             }
             InboundSubstreamState::Poisoned { .. } => unreachable!(),
         }
@@ -466,7 +467,7 @@ impl Handler {
             endpoint,
             remote_peer_id,
             next_connec_unique_id: UniqueConnecId(0),
-            inbound_substreams: Default::default(),
+            inbound_substreams: InboundStreams::new(MAX_NUM_STREAMS, substreams_timeout),
             outbound_substreams: futures_bounded::FuturesTupleSet::new(
                 substreams_timeout,
                 MAX_NUM_STREAMS,
@@ -481,6 +482,10 @@ impl Handler {
     /// Inspect waiting requests, independently of the active stream limit.
     pub fn pending_request_usage(&self) -> HandlerQueueUsage {
         HandlerQueueUsage {
+            active_inbound_streams: self.inbound_substreams.len(),
+            inbound_rejections: self.inbound_substreams.rejected(),
+            inbound_replacements: self.inbound_substreams.replaced(),
+            inbound_expired: self.inbound_substreams.expired(),
             pending_negotiations: self.pending_streams.len(),
             active_outbound_streams: self.outbound_substreams.len(),
             ..self.pending_messages.usage()
@@ -532,38 +537,21 @@ impl Handler {
             });
         }
 
-        if self.inbound_substreams.len() == MAX_NUM_STREAMS {
-            if let Some(s) = self.inbound_substreams.iter_mut().find(|s| {
-                matches!(
-                    s,
-                    // An inbound substream waiting to be reused.
-                    InboundSubstreamState::WaitingMessage { first: false, .. }
-                )
-            }) {
-                *s = InboundSubstreamState::Cancelled;
-                tracing::debug!(
-                    peer=?self.remote_peer_id,
-                    "New inbound substream to peer exceeds inbound substream limit. \
-                    Removed older substream waiting to be reused."
-                )
-            } else {
-                tracing::warn!(
-                    peer=?self.remote_peer_id,
-                    "New inbound substream to peer exceeds inbound substream limit. \
-                     No older substream waiting to be reused. Dropping new substream."
-                );
-                return;
-            }
-        }
-
         let connec_unique_id = self.next_connec_unique_id;
         self.next_connec_unique_id.0 += 1;
-        self.inbound_substreams
-            .push(InboundSubstreamState::WaitingMessage {
+        self.inbound_substreams.push(
+            InboundSubstreamState::WaitingMessage {
                 first: true,
                 connection_id: connec_unique_id,
                 substream: protocol,
-            });
+            },
+            |state| {
+                matches!(
+                    state,
+                    InboundSubstreamState::WaitingMessage { first: false, .. }
+                )
+            },
+        );
     }
 
     /// Takes the given [`KadRequestMsg`] and composes it into an outbound request-response protocol
@@ -731,6 +719,14 @@ impl ConnectionHandler for Handler {
         cx: &mut Context<'_>,
     ) -> Poll<ConnectionHandlerEvent<Self::OutboundProtocol, (), Self::ToBehaviour>> {
         loop {
+            if let Some(query_id) = self.pending_messages.poll_expired(cx) {
+                return Poll::Ready(ConnectionHandlerEvent::NotifyBehaviour(
+                    HandlerEvent::QueryError {
+                        query_id,
+                        error: HandlerQueryErr::Io(io::ErrorKind::TimedOut.into()),
+                    },
+                ));
+            }
             match &mut self.protocol_status {
                 Some(status) if !status.reported => {
                     status.reported = true;
@@ -777,17 +773,8 @@ impl ConnectionHandler for Handler {
                 Poll::Pending => {}
             }
 
-            if let Poll::Ready(Some(event)) = self.inbound_substreams.poll_next_unpin(cx) {
+            if let Poll::Ready(Some(event)) = self.inbound_substreams.poll_next(cx) {
                 return Poll::Ready(event);
-            }
-
-            if let Some(query_id) = self.pending_messages.poll_expired(cx) {
-                return Poll::Ready(ConnectionHandlerEvent::NotifyBehaviour(
-                    HandlerEvent::QueryError {
-                        query_id,
-                        error: HandlerQueryErr::Io(io::ErrorKind::TimedOut.into()),
-                    },
-                ));
             }
             // Expired stream tasks can leave FIFO negotiation entries awaiting
             // their swarm callback; retain ordering without admitting more.
@@ -891,7 +878,10 @@ impl Handler {
             }
         }
 
-        debug_assert!(false, "Cannot find inbound substream for {request_id:?}")
+        tracing::trace!(
+            ?request_id,
+            "Discarding response for a retired inbound substream"
+        );
     }
 }
 
@@ -1040,7 +1030,6 @@ impl futures::Stream for InboundSubstreamState {
                     }
                 },
                 InboundSubstreamState::Poisoned { .. } => unreachable!(),
-                InboundSubstreamState::Cancelled => return Poll::Ready(None),
             }
         }
     }
