@@ -1109,13 +1109,31 @@ fn run_dht_orchestrator() {
     let responder_log = read_log(&temp_dir.join("node-b.log"));
     let bootstrap_log = read_log(&temp_dir.join("node-bootstrap.log"));
     assert!(
-        initiator_log.contains("event=kademlia_query_progressed")
-            && log_metric_positive(&initiator_log, "control_capability_accepts"),
-        "node A did not discover and validate node B through Kademlia\nnode-a log:\n{initiator_log}\nnode-b log:\n{responder_log}\nbootstrap log:\n{bootstrap_log}",
+        dht_discovery_validated(&initiator_log, &responder_log),
+        "nodes did not discover and mutually validate through Kademlia\nnode-a log:\n{initiator_log}\nnode-b log:\n{responder_log}\nbootstrap log:\n{bootstrap_log}",
     );
     assert_packet_plane_datagrams_used("node A", &initiator_log, &responder_log);
     assert_packet_plane_datagrams_used("node B", &responder_log, &initiator_log);
     cleanup_temp_dir(temp_dir);
+}
+
+fn dht_discovery_validated(node_a: &str, node_b: &str) -> bool {
+    // Either endpoint may finish discovery first and establish the shared connection.
+    (node_a.contains("event=kademlia_query_progressed")
+        || node_b.contains("event=kademlia_query_progressed"))
+        && log_metric_positive(node_a, "control_capability_accepts")
+        && log_metric_positive(node_b, "control_capability_accepts")
+}
+
+#[test]
+fn dht_discovery_requires_query_and_mutual_validation_in_either_direction() {
+    let accepted = "  control_capability_accepts 1\n";
+    let discovered = format!("event=kademlia_query_progressed\n{accepted}");
+    assert!(dht_discovery_validated(&discovered, accepted));
+    assert!(dht_discovery_validated(accepted, &discovered));
+    assert!(!dht_discovery_validated(accepted, accepted));
+    assert!(!dht_discovery_validated(&discovered, ""));
+    assert!(!dht_discovery_validated("", &discovered));
 }
 
 fn run_pairing_orchestrator() {
