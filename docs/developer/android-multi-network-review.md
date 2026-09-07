@@ -28,6 +28,26 @@ deltas; they cannot identify the missing packet or establish its cause.
 - No retry or relaxed assertion replaced the failed measurement.
 - Next: capture per-network packet progress and counter deltas around isolation.
 
+### Opt-In Packet Trace
+
+Set `P2P_VPN_ANDROID_E2E_TRACE_ECHO=1` when running `scripts/android-e2e.sh`.
+Each fixture records at most 4,096 echo events in its existing bounded log;
+tracing is disabled by default and does not change packet acceptance.
+
+| Stage | Meaning |
+| --- | --- |
+| `runtime_write` | VPN delivered an echo packet to the fixture |
+| `reply_generated` | Fixture generated a reply before enqueueing it |
+| `runtime_read` | VPN consumed a packet from the fixture's outbound queue |
+
+Events contain family, ICMP kind, identifier, sequence, and epoch milliseconds.
+They omit IP addresses and payloads. A read does not prove network delivery;
+compare separate fixture logs with Android ping intervals before attributing loss.
+
+Validation: all ten fixture tests, Rust formatting, and the repository's required
+Clippy categories passed. Strict `-D warnings` failed on 99 existing core-library
+warnings. An emulator run with this instrumentation remains pending.
+
 ### Latest Artifacts
 
 | Artifact | SHA-256 |

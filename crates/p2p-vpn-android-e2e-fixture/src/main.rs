@@ -8,7 +8,7 @@ use std::{
         atomic::{AtomicU16, Ordering},
         mpsc,
     },
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use base64::Engine as _;
@@ -190,10 +190,51 @@ struct PacketAgent {
     identifier: Arc<AtomicU16>,
     local_ipv4: Ipv4Addr,
     local_ipv6: Ipv6Addr,
+    echo_trace: Arc<EchoTrace>,
 }
 
 struct ChannelPacketReader {
     packets: mpsc::Receiver<Vec<u8>>,
+    echo_trace: Arc<EchoTrace>,
+}
+
+struct EchoTrace {
+    remaining: AtomicU16,
+}
+
+impl EchoTrace {
+    fn record(&self, stage: &str, packet: &[u8]) {
+        if let Some(line) = self.entry(stage, packet) {
+            eprintln!("{line}");
+        }
+    }
+
+    fn entry(&self, stage: &str, packet: &[u8]) -> Option<String> {
+        if self.remaining.load(Ordering::Relaxed) == 0 {
+            return None;
+        }
+        let echo = parse_echo(packet)?;
+        self.remaining
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |remaining| {
+                remaining.checked_sub(1)
+            })
+            .ok()?;
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .ok()?
+            .as_millis();
+        Some(format!(
+            "event=fixture_echo stage={stage} unix_millis={timestamp} family={} kind={:?} identifier={} sequence={}",
+            if echo.source.is_ipv4() {
+                "ipv4"
+            } else {
+                "ipv6"
+            },
+            echo.kind,
+            echo.identifier,
+            echo.sequence
+        ))
+    }
 }
 
 struct AgentPacketWriter {
@@ -297,15 +338,28 @@ async fn run_fixture(
 
     let (packet_tx, packet_rx) = mpsc::channel();
     let (inbound_tx, _) = broadcast::channel(256);
+    let echo_trace = Arc::new(EchoTrace {
+        remaining: AtomicU16::new(
+            if std::env::var("P2P_VPN_ANDROID_E2E_TRACE_ECHO").as_deref() == Ok("1") {
+                4096
+            } else {
+                0
+            },
+        ),
+    });
     let agent = PacketAgent {
         outbound: packet_tx,
         inbound: inbound_tx,
         identifier: Arc::new(AtomicU16::new(1)),
         local_ipv4: tun.addresses.ipv4,
         local_ipv6: tun.addresses.ipv6,
+        echo_trace: echo_trace.clone(),
     };
     let peer_packet_io = PacketIo::new(
-        ChannelPacketReader { packets: packet_rx },
+        ChannelPacketReader {
+            packets: packet_rx,
+            echo_trace,
+        },
         AgentPacketWriter {
             agent: agent.clone(),
         },
@@ -730,14 +784,17 @@ impl PacketRead for ChannelPacketReader {
             ));
         }
         buffer[..packet.len()].copy_from_slice(&packet);
+        self.echo_trace.record("runtime_read", &packet);
         Ok(packet.len())
     }
 }
 
 impl PacketWrite for AgentPacketWriter {
     fn write_packet(&mut self, packet: &[u8]) -> io::Result<usize> {
+        self.agent.echo_trace.record("runtime_write", packet);
         let _ = self.agent.inbound.send(packet.to_vec());
         if let Some(reply) = echo_reply(packet) {
+            self.agent.echo_trace.record("reply_generated", &reply);
             self.agent
                 .outbound
                 .send(reply)
@@ -1265,6 +1322,75 @@ const fn default_probe_timeout_millis() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn echo_trace_is_bounded_and_omits_addresses_and_payload() {
+        let trace = EchoTrace {
+            remaining: AtomicU16::new(2),
+        };
+        let packet = echo_request(
+            Ipv4Addr::new(100, 64, 1, 2).into(),
+            Ipv4Addr::new(100, 64, 3, 4).into(),
+            42,
+            7,
+        );
+        assert!(trace.entry("runtime_write", &[0]).is_none());
+        let entry = trace.entry("runtime_write", &packet).unwrap();
+        assert!(entry.contains("family=ipv4 kind=Request identifier=42 sequence=7"));
+        assert!(!entry.contains("100.64."));
+        assert_eq!(entry.split_whitespace().count(), 7);
+        assert!(
+            trace
+                .entry("reply_generated", &echo_reply(&packet).unwrap())
+                .is_some()
+        );
+        assert!(trace.entry("runtime_read", &packet).is_none());
+        assert_eq!(trace.remaining.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn disabled_echo_trace_emits_nothing() {
+        let trace = EchoTrace {
+            remaining: AtomicU16::new(0),
+        };
+        let packet = echo_request(Ipv6Addr::LOCALHOST.into(), Ipv6Addr::LOCALHOST.into(), 1, 1);
+        assert!(trace.entry("runtime_write", &packet).is_none());
+    }
+
+    #[test]
+    fn traced_fixture_round_trip_preserves_reply_and_records_all_stages() {
+        let (outbound, packets) = mpsc::channel();
+        let (inbound, _) = broadcast::channel(1);
+        let echo_trace = Arc::new(EchoTrace {
+            remaining: AtomicU16::new(3),
+        });
+        let mut writer = AgentPacketWriter {
+            agent: PacketAgent {
+                outbound,
+                inbound,
+                identifier: Arc::new(AtomicU16::new(1)),
+                local_ipv4: Ipv4Addr::LOCALHOST,
+                local_ipv6: Ipv6Addr::LOCALHOST,
+                echo_trace: echo_trace.clone(),
+            },
+        };
+        let mut reader = ChannelPacketReader {
+            packets,
+            echo_trace: echo_trace.clone(),
+        };
+        let packet = echo_request(
+            Ipv4Addr::LOCALHOST.into(),
+            Ipv4Addr::LOCALHOST.into(),
+            42,
+            5,
+        );
+        assert_eq!(writer.write_packet(&packet).unwrap(), packet.len());
+        assert_eq!(echo_trace.remaining.load(Ordering::Relaxed), 1);
+        let mut buffer = [0; 1500];
+        let count = reader.read_packet(&mut buffer).unwrap();
+        assert_eq!(&buffer[..count], echo_reply(&packet).unwrap());
+        assert_eq!(echo_trace.remaining.load(Ordering::Relaxed), 0);
+    }
 
     #[test]
     fn ipv4_echo_request_and_reply_are_valid() {
