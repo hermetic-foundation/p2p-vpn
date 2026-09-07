@@ -150,6 +150,65 @@ The query-local address map is not the only owner. `ClosestPeersIter::on_success
 also inserts reported identities into its distance-ordered map. Limiting address
 vectors alone would leave cumulative candidate identity retention unbounded.
 
+### Query Deadline Enforcement
+
+The query pool checked timeouts only when an iterator could not select another
+peer. After a failed request, an expired query could select another candidate
+and enqueue a dial before reporting timeout.
+
+- Negative control: `expired_kademlia_query_does_not_dial_remaining_candidates` reproduced the extra dial.
+- Log: `/tmp/p2p-vpn-kad-deadline-before.log`.
+- Fix: check expiry before advancing an unfinished query's iterator.
+- Preserve explicit completion and the existing typed timeout result.
+
+The check applies when the pool examines a query; it does not cancel requests
+already queued or sent. Multi-stage operations retain existing stage deadlines.
+It is not a bound on candidate storage, active-query count, or aggregate dial rate.
+
+#### Deadline Validation
+
+| Check | Result |
+| --- | --- |
+| Deadline regressions | Expired candidate rejected; explicit completion preserved |
+| Workspace | 1,257 passed; 23 opt-in tests ignored |
+| Clippy correctness, suspicious, performance groups | Passed; existing nonfatal style warnings remain |
+| DHT namespace | Passed after correcting a role-specific assertion |
+| Forced-relay live pairing namespace | Passed |
+| Peerless code pairing namespace | Passed |
+| Owned QUIC packet-plane namespace | Passed |
+| Relay/direct recovery after network move | Passed |
+| Nix source parity | Passed with cached tools and unchanged sandbox assertions |
+| Android native x86_64 | Built offline; no APK or device deployment |
+| Format and whitespace | Passed |
+
+Logs use `/tmp/p2p-vpn-kad-deadline-`. Final runs use `workspace-final.log`,
+`clippy-final.log`, `dht-final.log`, and `nix-final.log`. Other checks use
+`after.log`, `relay.log`, `code-pairing.log`, `quic.log`, `move.log`, and `android.log`.
+
+The first DHT test transferred packets successfully, but required node A to
+originate discovery. Node B had completed the query and both nodes authenticated.
+The corrected assertion accepts either initiator and requires both authentications;
+a unit test rejects missing discovery or one-sided authentication.
+
+The failed log remains `dht.log`. An older cached binary passed (`dht-control.log`);
+that is not evidence that the old binary reproduced the role-specific failure.
+No production behavior was changed to accommodate the assertion.
+
+Full Nix package builds, ARM64 native builds, physical devices, public WAN, and
+aggregate resource measurements are not validated by these checks.
+
+### Remaining Concurrency Audit
+
+`set_parallelism(1)` does not bound every query phase to one outstanding peer.
+The closest-peer iterator permits up to the result count while stalled, and
+fixed-peer queries use the replication factor. Both default counts are 20.
+
+- Overlay recovery has its own one-query admission limit in `recovery_queries.rs`.
+- Other producers include maintenance, pairing publication/lookup, standalone pairing, and library background work.
+- Pool admission, candidate identities, query addresses, pending RPCs, and outbound address unions need coordinated bounds.
+
+Aggregate limits and comparable resource measurements remain open.
+
 ### Routing-Address Owner
 
 Both runtime DHTs enable a 64-address limit per routing peer and a 2,048-byte

@@ -1377,6 +1377,87 @@ mod tests {
         }
     }
 
+    #[test]
+    fn expired_kademlia_query_does_not_dial_remaining_candidates() {
+        check_kademlia_query_deadline(false);
+    }
+
+    #[test]
+    fn explicitly_finished_kademlia_query_is_not_reclassified_as_timeout() {
+        check_kademlia_query_deadline(true);
+    }
+
+    fn check_kademlia_query_deadline(finish: bool) {
+        use std::task::{Context, Poll};
+
+        use libp2p::swarm::{DialError, FromSwarm, NetworkBehaviour, ToSwarm};
+
+        let local = PeerId::random();
+        let mut config = controlled_kademlia_config(StreamProtocol::new(
+            crate::config::PUBLIC_IPFS_KADEMLIA_PROTOCOL,
+        ));
+        config.set_query_timeout(Duration::from_millis(20));
+        let mut kad =
+            kad::Behaviour::with_config(local, kad::store::MemoryStore::new(local), config);
+        for index in 1..=3 {
+            kad.add_address(
+                &PeerId::random(),
+                format!("/memory/{index}").parse().unwrap(),
+            );
+        }
+        let query = kad.get_closest_peers(PeerId::random());
+        let waker = futures::task::noop_waker();
+        let mut cx = Context::from_waker(&waker);
+        let first = loop {
+            match kad.poll(&mut cx) {
+                Poll::Ready(ToSwarm::Dial { opts }) => break opts,
+                Poll::Ready(ToSwarm::GenerateEvent(kad::Event::RoutingUpdated { .. })) => {}
+                other => panic!("expected initial candidate dial, got {other:?}"),
+            }
+        };
+        std::thread::sleep(Duration::from_millis(30));
+        kad.on_swarm_event(FromSwarm::DialFailure(
+            libp2p::swarm::behaviour::DialFailure {
+                peer_id: first.get_peer_id(),
+                connection_id: first.connection_id(),
+                error: &DialError::NoAddresses,
+            },
+        ));
+        if finish {
+            kad.query_mut(&query).unwrap().finish();
+        }
+        let mut reported = false;
+        for _ in 0..10 {
+            match kad.poll(&mut cx) {
+                Poll::Ready(ToSwarm::Dial { .. }) => {
+                    panic!("expired query dialed another candidate")
+                }
+                Poll::Ready(ToSwarm::GenerateEvent(kad::Event::OutboundQueryProgressed {
+                    id,
+                    result: kad::QueryResult::GetClosestPeers(result),
+                    ..
+                })) => {
+                    assert_eq!(id, query);
+                    assert_eq!(result.is_ok(), finish);
+                    if !finish {
+                        assert!(matches!(
+                            result,
+                            Err(kad::GetClosestPeersError::Timeout { .. })
+                        ));
+                    }
+                    reported = true;
+                }
+                Poll::Pending => break,
+                other => panic!("unexpected event after expiry: {other:?}"),
+            }
+        }
+        assert!(
+            reported,
+            "query must report its result instead of silently disappearing"
+        );
+        assert!(kad.query(&query).is_none());
+    }
+
     fn bounded_routing_test_dht() -> kad::Behaviour<kad::store::MemoryStore> {
         let local = libp2p::identity::Keypair::ed25519_from_bytes([0; 32])
             .unwrap()

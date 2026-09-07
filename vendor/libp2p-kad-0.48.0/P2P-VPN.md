@@ -22,14 +22,20 @@ changelog, generated protocol source, and tests.
 | `src/behaviour.rs` | Expose automatic-bootstrap control; apply routing-address limits to explicit, confirmed, and pending entries; support protected seeds. |
 | `src/addresses.rs` | Bounded insertion/replacement, category-aware churn rotation, size rejection, and explicit seed protection. |
 | `src/lib.rs` | Export the optional `AddressLimits` configuration type. |
+| `src/query.rs` | Check query expiry before selecting another candidate; preserve explicit completion and normal timeout reporting. |
 
-The library default is unchanged. p2p-vpn disables automatic and periodic bootstrap
+The library configuration defaults are unchanged. p2p-vpn disables automatic and periodic bootstrap
 explicitly so its scheduler owns bootstrap initiation. Explicit `bootstrap()` is
 unchanged; DHT wire messages and protocol names are unchanged.
 
 p2p-vpn opts into 64 retained routing addresses per peer and 2,048 encoded bytes
 per address. Configured seeds count toward the same budget, survive churn, and
 remain explicitly removable. Query caches are separate and not bounded by this patch.
+
+Expired queries stop issuing new requests when the pool next examines them,
+even if uncontacted candidates remain. Already queued or dispatched requests are
+not canceled by this check. Multi-stage operations retain their existing timeout
+semantics; this does not establish an aggregate operation-lifetime bound.
 
 ## Build Integration
 

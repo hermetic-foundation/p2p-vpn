@@ -191,6 +191,13 @@ impl QueryPool {
 
         for (&query_id, query) in self.queries.iter_mut() {
             query.stats.start = query.stats.start.or(Some(now));
+            // A supply of new candidates must not let a query outlive its deadline.
+            // Explicit completion still takes precedence over timeout delivery.
+            if !query.is_finished() && now - query.stats.start.unwrap_or(now) >= self.config.timeout
+            {
+                timeout = Some(query_id);
+                break;
+            }
             match query.next(now) {
                 PeersIterState::Finished => {
                     finished = Some(query_id);
@@ -201,13 +208,7 @@ impl QueryPool {
                     waiting = Some((query_id, peer));
                     break;
                 }
-                PeersIterState::Waiting(None) | PeersIterState::WaitingAtCapacity => {
-                    let elapsed = now - query.stats.start.unwrap_or(now);
-                    if elapsed >= self.config.timeout {
-                        timeout = Some(query_id);
-                        break;
-                    }
-                }
+                PeersIterState::Waiting(None) | PeersIterState::WaitingAtCapacity => {}
             }
         }
 
