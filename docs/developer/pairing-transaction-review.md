@@ -261,6 +261,10 @@ gain invented discovery history; acknowledged receipt behavior is unchanged.
 
 ### VM Coverage and Limits
 
+These limits describe the status-fix run below. The later
+[activation check](nixos-pairing-activation-review.md) replaces the LAN JSON
+execution step with actual generated-Nix system builds and switches on both guests.
+
 - LAN verifies peerless startup, approval, live traffic, restart, native Nix artifacts, secret exclusion, and acknowledgement.
 - Its agenix-style secret paths are fixture files, not actual agenix decryption.
 - Generated Nix is evaluated with the upstream module; resulting JSON runs under `systemd-run`, not a rebuilt/switched OS.

@@ -117,18 +117,113 @@ let
     '';
   };
 
+  activatePairedNix = pkgs.writeShellApplication {
+    name = "activate-p2p-vpn-code-pairing";
+    runtimeInputs = [ pkgs.nix ];
+    text = ''
+      if [ "$#" -ne 3 ]; then
+        echo "usage: activate-p2p-vpn-code-pairing NODE MODULE VPN_IP" >&2
+        exit 2
+      fi
+      node_name="$1"
+      paired_module="$2"
+      vpn_ip="$3"
+      export NIX_PATH=
+      case "$node_name" in
+        node-a|node-b) ;;
+        *) echo "unknown fixture node" >&2; exit 2 ;;
+      esac
+
+      # Re-evaluate the same VM definition, importing the real pairing export.
+      # shellcheck disable=SC2016
+      eval_args=(\
+        --argstr nodeName "$node_name" \
+        --argstr pairedModule "$paired_module" \
+        --argstr vpnIp "$vpn_ip" \
+        --expr '
+          { nodeName, pairedModule, vpnIp }:
+          let
+            pkgs = import ${pkgs.path} { system = "${system}"; };
+            package = builtins.storePath "${package}";
+            fixtureSelf = {
+              outPath = "${self.outPath}";
+              nixosModules.default = import ${self.outPath}/nix/nixos-module.nix {
+                self.packages.${system}.default = package;
+              };
+            };
+            original = import ${self.outPath}/tests/nixos/code-pairing-lan.nix {
+              inherit pkgs package;
+              self = fixtureSelf;
+            };
+            paired = original.extend {
+              modules = [{
+                nodes.''${nodeName} = { lib, ... }: {
+                  imports = [ (builtins.toPath pairedModule) ];
+                  services.p2p-vpn.instances.${instance} = {
+                    vpnIp = lib.mkForce vpnIp;
+                    membershipKeyFile = lib.mkForce "/run/agenix/p2p-vpn-${instance}-membership";
+                    mtu = lib.mkForce 1360;
+                    listenAddresses = lib.mkForce [ "/ip4/0.0.0.0/tcp/4555" ];
+                  };
+                };
+              }];
+            };
+          in paired.nodes.''${nodeName}.system.build.toplevel
+        ')
+      plan=$(mktemp)
+      trap 'rm -f "$plan"' EXIT
+      system_drv=$(nix-instantiate "''${eval_args[@]}")
+      build_args=(--realise --option substitute false --max-jobs 1 --cores 2 "$system_drv")
+      nix-store --dry-run "''${build_args[@]}" > "$plan" 2>&1
+      cat "$plan" >&2
+      planned=$(grep -cE '^  /nix/store/[^ ]+\.drv$' "$plan" || true)
+      if [ "$planned" -gt 128 ]; then
+        echo "activation fixture needs $planned derivations; refusing a toolchain rebuild" >&2
+        exit 1
+      fi
+      system_path=$(nix-store "''${build_args[@]}")
+      nixos-rebuild switch --no-reexec --store-path "$system_path"
+      test "$(readlink -f /run/current-system)" = "$system_path"
+    '';
+  };
+
   common =
-    { ... }:
+    { lib, ... }:
     {
       imports = [ self.nixosModules.default ];
 
       system.stateVersion = "25.11";
+      system.switch.enable = true;
+      # The test driver boots the kernel directly; its disk has no GRUB embedding area.
+      boot.loader.grub.enable = lib.mkForce false;
+      system.extraDependencies = [
+        pkgs.stdenv
+        pkgs.stdenvNoCC
+        pkgs.coreutils-full.info
+        pkgs.desktop-file-utils
+        pkgs.getconf
+        pkgs.libxslt.bin
+        pkgs.shellcheck-minimal
+        pkgs.texinfo
+        pkgs.lndir
+        pkgs.makeWrapper
+        pkgs.libcap-text-verifier
+      ];
       virtualisation.vlans = [ 1 ];
+      virtualisation.writableStore = true;
+      virtualisation.memorySize = 3072;
+      virtualisation.cores = 2;
+      nix.settings = {
+        substituters = lib.mkForce [ ];
+        max-jobs = 1;
+        cores = 2;
+      };
       networking.useDHCP = false;
       networking.firewall.enable = false;
       environment.systemPackages = [
         package
         evaluatePairedNix
+        activatePairedNix
         pkgs.coreutils
         pkgs.iproute2
         pkgs.iputils
@@ -183,7 +278,6 @@ let
     controlSocket:
     "p2p-vpn daemon-health --socket ${controlSocket} --timeout-seconds 5 --wait-seconds 90 --require-validated-peers --require-supported-paths";
   state = controlSocket: "p2p-vpn daemon-state --socket ${controlSocket}";
-  runtimePath = pkgs.lib.makeBinPath [ pkgs.iproute2 ];
 in
 pkgs.testers.nixosTest {
   name = "p2p-vpn-nixos-vm-code-pairing-lan";
@@ -194,6 +288,8 @@ pkgs.testers.nixosTest {
   };
 
   testScript = ''
+    from datetime import timedelta
+
     start_all()
 
     node_a.wait_for_unit("p2p-vpn-${instance}.service")
@@ -323,39 +419,28 @@ pkgs.testers.nixosTest {
         node_a.fail("${pair "artifacts"} " + open_operation + " --output /tmp/replayed-a.nix")
         node_b.fail("${pair "artifacts"} " + join_operation + " --output /tmp/replayed-b.nix")
 
-    with subtest("evaluated native configurations boot and carry overlay traffic"):
-        node_a.succeed(
-            "jq --rawfile private_key /run/agenix/p2p-vpn-${instance}-identity "
-            "--rawfile membership_key /run/agenix/p2p-vpn-${instance}-membership "
-            "'.generatedConfig | .network.private_key = ($private_key | rtrimstr(\"\\n\")) "
-            "| .network.membership_key = ($membership_key | rtrimstr(\"\\n\"))' "
-            "/tmp/node-a-eval.json > /tmp/node-a-generated.json"
-        )
-        node_b.succeed(
-            "jq --rawfile private_key /run/agenix/p2p-vpn-${instance}-identity "
-            "--rawfile membership_key /run/agenix/p2p-vpn-${instance}-membership "
-            "'.generatedConfig | .network.private_key = ($private_key | rtrimstr(\"\\n\")) "
-            "| .network.membership_key = ($membership_key | rtrimstr(\"\\n\"))' "
-            "/tmp/node-b-eval.json > /tmp/node-b-generated.json"
-        )
-        node_a.succeed("chmod 0600 /tmp/node-a-generated.json && p2p-vpn status --config /tmp/node-a-generated.json >/dev/null")
-        node_b.succeed("chmod 0600 /tmp/node-b-generated.json && p2p-vpn status --config /tmp/node-b-generated.json >/dev/null")
-        node_a.succeed("systemctl stop p2p-vpn-${instance}.service && mkdir -p /run/p2p-vpn-generated-a")
-        node_b.succeed("systemctl stop p2p-vpn-${instance}.service && mkdir -p /run/p2p-vpn-generated-b")
-        node_a.succeed(
-            "systemd-run --unit=p2p-vpn-generated-a --property=Type=simple --property=Restart=no "
-            "--setenv=PATH=${runtimePath} ${package}/bin/p2p-vpn up --config /tmp/node-a-generated.json "
-            "--metrics-interval-seconds 30 --control-socket /run/p2p-vpn-generated-a/control.sock"
-        )
-        node_b.succeed(
-            "systemd-run --unit=p2p-vpn-generated-b --property=Type=simple --property=Restart=no "
-            "--setenv=PATH=${runtimePath} ${package}/bin/p2p-vpn up --config /tmp/node-b-generated.json "
-            "--metrics-interval-seconds 30 --control-socket /run/p2p-vpn-generated-b/control.sock"
-        )
-        node_a.wait_for_file("/run/p2p-vpn-generated-a/control.sock")
-        node_b.wait_for_file("/run/p2p-vpn-generated-b/control.sock")
-        node_a.succeed("${health "/run/p2p-vpn-generated-a/control.sock"} | grep -q '^daemon_health_ready true$'")
-        node_b.succeed("${health "/run/p2p-vpn-generated-b/control.sock"} | grep -q '^daemon_health_ready true$'")
+    with subtest("generated Nix rebuilds and switches through the upstream module"):
+        for node, name, vpn_ip in [
+            (node_a, "node-a", "${nodeA.vpnIp}"),
+            (node_b, "node-b", "${nodeB.vpnIp}"),
+        ]:
+            old_system = node.succeed("readlink -f /run/current-system").strip()
+            old_invocation = node.succeed("systemctl show p2p-vpn-${instance}.service -p InvocationID --value").strip()
+            identity_hash = node.succeed("sha256sum /run/agenix/p2p-vpn-${instance}-identity").strip()
+            node.succeed("activate-p2p-vpn-code-pairing " + name + " /tmp/" + name + ".nix " + vpn_ip, timeout=timedelta(seconds=300))
+            assert node.succeed("readlink -f /run/current-system").strip() != old_system
+            node.wait_for_unit("p2p-vpn-${instance}.service")
+            node.wait_for_file("${socket}")
+            assert node.succeed("systemctl show p2p-vpn-${instance}.service -p InvocationID --value").strip() != old_invocation
+            assert node.succeed("sha256sum /run/agenix/p2p-vpn-${instance}-identity").strip() == identity_hash
+            node.succeed(
+                "jq -e '.interface.mtu == 1360 "
+                "and .network.listen_addresses == [\"/ip4/0.0.0.0/tcp/4555\"] "
+                "and (.network.member_records | length) == 2 "
+                "and .peers == []' /run/p2p-vpn-${instance}/config.json"
+            )
+        node_a.succeed("${health socket} | grep -q '^daemon_health_ready true$'")
+        node_b.succeed("${health socket} | grep -q '^daemon_health_ready true$'")
         node_a.wait_until_succeeds("ping -I pv0 -c 5 -W 2 ${nodeB.vpnIp}", timeout=90)
         node_b.wait_until_succeeds("ping -I pv0 -c 5 -W 2 ${nodeA.vpnIp}", timeout=90)
   '';

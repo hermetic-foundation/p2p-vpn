@@ -53,6 +53,10 @@ nix build --offline --option substitute false --max-jobs 1 --cores 2 \
 - It does **not** rebuild/switch the generated Nix configuration. That activation workflow remains unverified here.
 - This is URI pairing, not code-based PAKE pairing; fixture transport/discovery overrides remain in use.
 
+The later [code-pairing activation check](nixos-pairing-activation-review.md)
+builds and switches both guest systems using their actual generated Nix imports.
+That stronger evidence is separate from this historical URI-pairing run.
+
 ### Network Evidence
 
 - Minimal LAN traffic is five IPv4 pings in each direction, not sustained-load evidence.
