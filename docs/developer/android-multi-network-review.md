@@ -2,6 +2,44 @@
 
 ## Latest Attempt
 
+The rebuilt APK and Linux fixture at `fe950142` failed the final isolation stage
+on 2026-09-07. The run lasted 652 seconds, from 00:05:06Z through 00:15:58Z.
+It recorded 65 passing steps and one failure; two final checks were not reached.
+
+| Evidence | Result |
+| --- | --- |
+| Earlier lifecycle stages | Pairing, dual-stack concurrent traffic, updates, underlay transitions, and reboot passed |
+| After alpha fixture termination | Beta Linux-to-Android IPv4 and IPv6 each received 5/5 replies |
+| Beta Android-to-Linux IPv4 | Received 4/5 replies, sequences 1, 2, 3, 4 |
+| Failed measurement interval | Epoch milliseconds `1788740130522` through `1788740135550` |
+| Remaining checks | Reverse IPv6 and final isolation assertion were not reached |
+| Cleanup | All six harness cleanup safeguards reported success |
+
+The probe used `ping -c 5 -W 5`. The fixture generates incoming echo replies
+directly in `AgentPacketWriter::write_packet`, without a probe deadline there.
+This does not establish whether the missing packet was lost or delayed.
+
+Final Android diagnostics show one expired 84-byte queued packet and ten
+outbound drops. These are aggregate counters, not per-network measurement
+deltas; they cannot identify the missing packet or establish its cause.
+
+- Original evidence: `/tmp/p2p-vpn-review-final-multi-network/evidence.json`.
+- Cached native rebuild, offline Gradle unit tests, lint, and APK assembly passed.
+- No retry or relaxed assertion replaced the failed measurement.
+- Next: capture per-network packet progress and counter deltas around isolation.
+
+### Latest Artifacts
+
+| Artifact | SHA-256 |
+| --- | --- |
+| Debug APK | `7b88fcc3f11c5df76674ac5f26fd1a0b25e518f473bf420ca70b1641cdd8f847` |
+| Unstripped x86_64 JNI | `2875e212a1ba42f388467dc132e6f1179cec87c74422838a27670d7dcdc20240` |
+| Stripped JNI / library extracted from APK | `972b7732a25c540a65186fe1baafc690f1ff5589b77d585065f97dc57609a1b8` |
+| Linux fixture | `3450e4079b16bf9a03a83752c23811eac783442e9df9da7e9bcdf6a32ed5dd75` |
+| Linux CLI | `649b8ffe2a536df7563d8d4b3cf3dd720883c851f331088e7316e0ba8853eae1` |
+
+## Earlier Passing Attempt
+
 The rebuilt APK and Linux fixture at `643d798e` passed all 68 checks on
 2026-09-06. The run took 913 seconds, from 21:02:01Z through 21:17:14Z.
 No manual connection or service intervention occurred during the scenario.
