@@ -120,19 +120,45 @@ APK, ARM64, and physical-device builds/deployments were not performed.
 | `Behaviour::on_address_change` | Replaces an address, or adds the new endpoint while retaining a protected seed |
 | `remove_address`, `remove_peer`, and failed-address handling | Must release accounting without losing the last usable recovery address accidentally |
 
-### Protected Seed Gap
+### Protected Seed Enforcement
 
-`Addresses::protected` currently prevents address-rotation eviction. It does not
-protect the containing peer from `KBucket::apply_pending`, which evicts the first
-disconnected node. Aggregate admission must not assume whole-peer protection
-already exists.
+The initial regression reproduced whole-peer seed eviction during pending
+replacement. Address protection previously applied only to address rotation.
+
+Bucket selection now skips protected values. A pending candidate retains the
+selected victim's key; promotion rechecks that the same victim is disconnected
+and unprotected. It does not silently choose another, unprobed peer.
+
+An all-protected bucket rejects new candidates at the existing capacity.
+Explicit removal remains available. These changes protect seeds within bucket
+capacity; they do not establish aggregate routing count or byte limits.
+
+The real-behaviour regression covers five seeded scenarios: one protected peer,
+an all-protected bucket, late protection with and without another eligible peer,
+and ordinary unprotected replacement. It checks the probe target, retained peers,
+bucket capacity, and admission after explicit removal.
+
+| Seed Checkpoint | Result |
+| --- | --- |
+| Before-fix reproduction | Failed: protected seed evicted |
+| Expanded regression and workspace | 1,275 passed; 22 opt-in tests ignored |
+| DHT, forced-relay pairing, peerless code namespaces | Passed |
+| Owned QUIC and relay/direct network-move namespaces | Both passed |
+| Android x86_64 native library | Compiled offline; four existing warnings |
+| Nix source integration | Passed with cached tool overrides |
+| Formatting and Clippy correctness/suspicious/perf | Passed; existing style warnings remain |
+
+Logs use `/tmp/p2p-vpn-kad-seed-` with suffixes `before.log`, `workspace.log`,
+`dht.log`, `relay.log`, `code.log`, `quic.log`, `move.log`, `android.log`,
+`nix.log`, and `clippy.log`.
+No new formal model, full Nix package, APK, ARM64, or device validation is claimed.
 
 ### Required Routing Regressions
 
 1. Fill present and pending entries together; assert entry and encoded-address budgets.
 2. Promote pending entries through lookup and iteration; account for deferred eviction notifications.
 3. Update a peer at the global byte ceiling; retain fresh LAN/public/relay alternatives within bounds.
-4. Attempt pending replacement of a disconnected protected seed; preserve it without bypassing the budget.
+4. Preserve a disconnected protected seed during pending replacement: verified at bucket capacity; aggregate budget coverage remains open.
 5. Remove entries and drain deferred notifications; prove capacity becomes available again.
 6. Exercise explicit address addition, connection discovery, and address migration through the same admission policy.
 

@@ -26,6 +26,7 @@ changelog, generated protocol source, and tests.
 | `src/query/retained.rs` | Bound candidate identities and address bytes across learning, migration, failure, and result extraction. |
 | `src/jobs.rs` | Document the shared background batch default; remove stopped providers from pending snapshots. |
 | `src/handler.rs`, `src/handler/pending.rs` | Opt-in request admission/expiry, bounded rejection reporting, and negotiation queue accounting. |
+| `src/kbucket.rs`, `src/kbucket/bucket.rs` | Preserve protected seed peers during pending replacement; retain and recheck the probed victim identity. |
 
 The library configuration defaults are unchanged. p2p-vpn disables automatic and periodic bootstrap
 explicitly so its scheduler owns bootstrap initiation. Explicit `bootstrap()` is
@@ -42,6 +43,11 @@ prevents repeated responses from replacing failed identities indefinitely.
 Excess candidates are ignored, so heavily branching lookups can return fewer
 results. Fixed-peer operations preserve their original quorum requirement.
 `QueryRef::resource_usage()` exposes admission, encoded bytes, and rejection counts.
+
+Whole-peer bucket eviction also preserves protected seeds. If all eligible
+disconnected peers are protected, insertion fails at the existing bucket limit.
+Pending replacement does not switch to another victim if the probed peer becomes
+protected or reconnects; explicit removal still releases capacity.
 
 Provider and record jobs share background admission capacity and alternate first
 access. Defaults remain a 100-query ceiling and batch size ten, but the batch is

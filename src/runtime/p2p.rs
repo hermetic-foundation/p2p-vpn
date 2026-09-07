@@ -2019,6 +2019,127 @@ mod tests {
     }
 
     #[test]
+    fn routing_pending_replacement_preserves_protected_peers() {
+        let peer_for = |seed| {
+            libp2p::identity::Keypair::ed25519_from_bytes([seed; 32])
+                .unwrap()
+                .public()
+                .to_peer_id()
+        };
+        for (protect_first, protect_second, protect_after) in [
+            (true, false, false),
+            (true, true, false),
+            (true, false, true),
+            (false, false, false),
+            (false, false, true),
+        ] {
+            let local = peer_for(0);
+            let mut config = controlled_kademlia_config(StreamProtocol::new(
+                crate::config::PUBLIC_IPFS_KADEMLIA_PROTOCOL,
+            ));
+            config
+                .set_kbucket_size(NonZeroUsize::new(2).unwrap())
+                .set_kbucket_pending_timeout(Duration::from_millis(100));
+            let mut kad =
+                kad::Behaviour::with_config(local, kad::store::MemoryStore::new(local), config);
+            let first = peer_for(1);
+            let range = kad.kbucket(first).unwrap().range();
+            let peers = (2..=255)
+                .map(peer_for)
+                .filter(|peer| kad.kbucket(*peer).unwrap().range() == range)
+                .take(2)
+                .collect::<Vec<_>>();
+            assert_eq!(peers.len(), 2);
+            let (second, candidate) = (peers[0], peers[1]);
+            let address: Multiaddr = "/memory/1".parse().unwrap();
+            assert_eq!(
+                if protect_first {
+                    kad.add_protected_address(&first, address.clone())
+                } else {
+                    kad.add_address(&first, address.clone())
+                },
+                kad::RoutingUpdate::Success
+            );
+            assert_eq!(
+                if protect_second {
+                    kad.add_protected_address(&second, address.clone())
+                } else {
+                    kad.add_address(&second, address.clone())
+                },
+                kad::RoutingUpdate::Success
+            );
+            let endpoint = libp2p::core::ConnectedPoint::Dialer {
+                address: address.clone(),
+                role_override: libp2p::core::Endpoint::Dialer,
+                port_use: libp2p::core::transport::PortUse::Reuse,
+            };
+            kad.on_swarm_event(libp2p::swarm::FromSwarm::ConnectionEstablished(
+                libp2p::swarm::behaviour::ConnectionEstablished {
+                    peer_id: candidate,
+                    connection_id: libp2p::swarm::ConnectionId::new_unchecked(1),
+                    endpoint: &endpoint,
+                    failed_addresses: &[],
+                    other_established: 0,
+                },
+            ));
+            assert_eq!(
+                kad.add_address(&candidate, address.clone()),
+                if protect_second {
+                    kad::RoutingUpdate::Failed
+                } else {
+                    kad::RoutingUpdate::Pending
+                }
+            );
+            let victim = if protect_first { second } else { first };
+            if protect_after {
+                assert_eq!(
+                    kad.add_protected_address(&victim, address.clone()),
+                    kad::RoutingUpdate::Success
+                );
+            }
+            let waker = futures::task::noop_waker();
+            let mut cx = std::task::Context::from_waker(&waker);
+            let mut probes = Vec::new();
+            for _ in 0..100 {
+                if let std::task::Poll::Ready(libp2p::swarm::ToSwarm::Dial { opts }) =
+                    kad.poll(&mut cx)
+                {
+                    probes.push(opts.get_peer_id().unwrap());
+                }
+            }
+            assert_eq!(probes, if protect_second { vec![] } else { vec![victim] });
+            std::thread::sleep(Duration::from_millis(150));
+            let retained = kad
+                .kbucket(first)
+                .unwrap()
+                .iter()
+                .map(|entry| *entry.node.key.preimage())
+                .collect::<HashSet<_>>();
+            if protect_first {
+                assert!(retained.contains(&first), "protected seed was evicted");
+            }
+            assert_eq!(retained.len(), 2, "protection bypassed bucket capacity");
+            let mut expected = HashSet::from([first, second]);
+            if !protect_second && !protect_after {
+                expected.remove(&victim);
+                expected.insert(candidate);
+            }
+            assert_eq!(
+                retained, expected,
+                "replacement changed the selected victim"
+            );
+            if protect_second {
+                assert!(kad.remove_peer(&first).is_some());
+                assert_eq!(
+                    kad.add_address(&candidate, address),
+                    kad::RoutingUpdate::Success,
+                    "explicit removal did not restore admission"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn routing_address_limits_preserve_seeds_lan_and_relay_under_churn() {
         let mut kad = bounded_routing_test_dht();
         let peer = PeerId::random();

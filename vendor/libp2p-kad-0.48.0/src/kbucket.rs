@@ -196,6 +196,13 @@ where
         }
     }
 
+    /// Installs an application policy for excluding values from churn eviction.
+    pub(crate) fn set_value_protection(&mut self, protected: fn(&TVal) -> bool) {
+        for bucket in &mut self.buckets {
+            bucket.set_value_protection(protected);
+        }
+    }
+
     /// Returns the local key.
     pub(crate) fn local_key(&self) -> &TKey {
         &self.local_key

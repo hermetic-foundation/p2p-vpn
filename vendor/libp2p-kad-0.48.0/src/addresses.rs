@@ -93,6 +93,10 @@ impl Addresses {
         true
     }
 
+    pub(crate) fn is_protected(&self) -> bool {
+        !self.protected.is_empty()
+    }
+
     /// Gets a reference to the first address in the list.
     pub fn first(&self) -> &Multiaddr {
         &self.addrs[0]

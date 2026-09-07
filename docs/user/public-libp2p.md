@@ -66,6 +66,10 @@ A full DHT request queue rejects new work without closing the connection used
 by VPN traffic. Rejection reporting is bounded too; extreme overload may wait
 for the query deadline instead of reporting every rejection immediately.
 
+Configured bootstrap seeds are protected from routing-address rotation and
+whole-peer bucket replacement. Protection does not increase bucket capacity;
+a full bucket of protected seeds rejects additional peers.
+
 The five-second scheduler does not launch a DHT batch on every tick.
 Changed local addresses still receive a bounded publication while ordinary
 maintenance rests. New changes replace stale publication work with the latest

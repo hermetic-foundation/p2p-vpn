@@ -521,6 +521,8 @@ where
     /// Creates a new `Kademlia` network behaviour with the given configuration.
     pub fn with_config(id: PeerId, store: TStore, config: Config) -> Self {
         let local_key = kbucket::Key::from(id);
+        let mut kbuckets = KBucketsTable::new(local_key, config.kbucket_config);
+        kbuckets.set_value_protection(Addresses::is_protected);
 
         let put_record_job = config
             .record_replication_interval
@@ -542,7 +544,7 @@ where
             handler_queue_limits: config.handler_queue_limits,
             store,
             caching: config.caching,
-            kbuckets: KBucketsTable::new(local_key, config.kbucket_config),
+            kbuckets,
             kbucket_inserts: config.kbucket_inserts,
             protocol_config: config.protocol_config,
             address_limits: config.address_limits,

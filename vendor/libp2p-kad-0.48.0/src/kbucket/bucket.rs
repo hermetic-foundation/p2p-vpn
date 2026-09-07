@@ -38,6 +38,9 @@ pub(crate) struct PendingNode<TKey, TVal> {
 
     /// The instant at which the pending node is eligible for insertion into a bucket.
     replace: Instant,
+
+    /// The disconnected peer selected for the connectivity probe.
+    replace_key: TKey,
 }
 
 /// The status of a node in a bucket.
@@ -123,6 +126,8 @@ pub(crate) struct KBucket<TKey, TVal> {
     /// if the least-recently connected node is not updated as being connected
     /// in the meantime.
     pending_timeout: Duration,
+
+    protected: fn(&TVal) -> bool,
 }
 
 /// The result of inserting an entry into a bucket.
@@ -166,6 +171,7 @@ impl<TKey, TVal> Default for KBucket<TKey, TVal> {
             first_connected_pos: None,
             pending: None,
             pending_timeout: Duration::from_secs(60),
+            protected: |_| false,
         }
     }
 }
@@ -183,7 +189,21 @@ where
             first_connected_pos: None,
             pending: None,
             pending_timeout: config.pending_timeout,
+            protected: |_| false,
         }
+    }
+
+    /// Installs an application policy for excluding values from churn eviction.
+    pub(crate) fn set_value_protection(&mut self, protected: fn(&TVal) -> bool) {
+        self.protected = protected;
+    }
+
+    fn eviction_position(&self) -> Option<Position> {
+        self.nodes
+            .iter()
+            .take(self.first_connected_pos.unwrap_or(self.nodes.len()))
+            .position(|node| !(self.protected)(&node.value))
+            .map(Position)
     }
 
     /// Returns a reference to the pending node of the bucket, if there is any.
@@ -221,37 +241,26 @@ where
         if let Some(pending) = self.pending.take() {
             if pending.replace <= Instant::now() {
                 if self.nodes.len() >= self.capacity {
-                    if self.status(Position(0)) == NodeStatus::Connected {
-                        // The bucket is full with connected nodes. Drop the pending node.
+                    let Some(victim) = self.position(&pending.replace_key) else {
+                        return None;
+                    };
+                    if self.status(victim) == NodeStatus::Connected
+                        || (self.protected)(&self.nodes[victim.0].value)
+                    {
+                        // Do not switch to an unprobed victim after selection.
                         return None;
                     }
-                    debug_assert!(self.first_connected_pos.is_none_or(|p| p > 0)); // (*)
-                                                                                   // The pending node will be inserted.
                     let inserted = pending.node.clone();
-                    // A connected pending node goes at the end of the list for
-                    // the connected peers, removing the least-recently connected.
-                    if pending.status == NodeStatus::Connected {
-                        let evicted = Some(self.nodes.remove(0));
-                        self.first_connected_pos = self
-                            .first_connected_pos
-                            .map_or_else(|| Some(self.nodes.len()), |p| p.checked_sub(1));
-                        self.nodes.push(pending.node);
-                        return Some(AppliedPending { inserted, evicted });
-                    }
-                    // A disconnected pending node goes at the end of the list
-                    // for the disconnected peers.
-                    else if let Some(p) = self.first_connected_pos {
-                        let insert_pos = p.checked_sub(1).expect("by (*)");
-                        let evicted = Some(self.nodes.remove(0));
-                        self.nodes.insert(insert_pos, pending.node);
-                        return Some(AppliedPending { inserted, evicted });
-                    } else {
-                        // All nodes are disconnected. Insert the new node as the most
-                        // recently disconnected, removing the least-recently disconnected.
-                        let evicted = Some(self.nodes.remove(0));
-                        self.nodes.push(pending.node);
-                        return Some(AppliedPending { inserted, evicted });
-                    }
+                    let (evicted, _, _) = self
+                        .remove(&pending.replace_key)
+                        .expect("selected victim exists");
+                    return match self.insert(pending.node, pending.status) {
+                        InsertResult::Inserted => Some(AppliedPending {
+                            inserted,
+                            evicted: Some(evicted),
+                        }),
+                        _ => unreachable!("Victim removal released a bucket slot."),
+                    };
                 } else {
                     // There is room in the bucket, so just insert the pending node.
                     let inserted = pending.node.clone();
@@ -293,10 +302,15 @@ where
         // prefix list of disconnected nodes or the suffix list of connected
         // nodes (i.e. most-recently disconnected or most-recently connected,
         // respectively).
-        if let Some((node, _status, pos)) = self.remove(key) {
-            // If the least-recently connected node re-establishes its
-            // connected status, drop the pending node.
-            if pos == Position(0) && status == NodeStatus::Connected {
+        if let Some((node, _status, _pos)) = self.remove(key) {
+            // Only the peer selected for the connectivity probe owns this
+            // replacement; protected entries can precede it in the bucket.
+            if status == NodeStatus::Connected
+                && self
+                    .pending
+                    .as_ref()
+                    .is_some_and(|pending| pending.replace_key.as_ref() == key.as_ref())
+            {
                 self.pending = None
             }
             // Reinsert the node with the desired status.
@@ -331,16 +345,18 @@ where
         match status {
             NodeStatus::Connected => {
                 if self.nodes.len() >= self.capacity {
-                    if self.first_connected_pos == Some(0) || self.pending.is_some() {
+                    let victim = self.eviction_position();
+                    if victim.is_none() || self.pending.is_some() {
                         return InsertResult::Full;
                     } else {
                         self.pending = Some(PendingNode {
                             node,
                             status: NodeStatus::Connected,
                             replace: Instant::now() + self.pending_timeout,
+                            replace_key: self.nodes[victim.expect("checked victim").0].key.clone(),
                         });
                         return InsertResult::Pending {
-                            disconnected: self.nodes[0].key.clone(),
+                            disconnected: self.nodes[victim.expect("checked victim").0].key.clone(),
                         };
                     }
                 }
