@@ -2,6 +2,10 @@
 
 ## Result
 
+**Recovery remains under investigation.** A later repeat failed its first
+post-pressure ping check. The passing runs below do not establish reliable
+recovery across repetitions; see [Repeated Workload](#repeated-workload).
+
 The new TCP-only namespace test passed in 39.88 seconds. It exercised real Linux
 TUN traffic, queue overflow, and recovery in two daemon processes. No production
 runtime change was required.
@@ -99,6 +103,59 @@ Non-fatal style warnings remain; no VM or Android deployment was repeated.
 - Final report SHA-256: `915d5093aa8ea5587fa6a75a742c6e3bc1795e51e816bb44c02d6ae6ec9f50d6`.
 - Final executable SHA-256: `94fe7ba840c2e2853bf72cf504af4c416be236ceff8509c4731b2ee477fd2e69`.
 - Final fixture SHA-256: `bfd1b10be1102bec98e89a44e8e86748147d4c1ecef615af691fc3f01abc7da2`.
+
+## Repeated Workload
+
+The default remains one cycle. Set `P2P_VPN_TUN_E2E_PRESSURE_ROUNDS` to an
+integer from one through five to repeat pressure and recovery on the same daemons.
+Invalid values are rejected; no new production configuration is introduced.
+
+```bash
+TOKIO_WORKER_THREADS=2 P2P_VPN_TUN_E2E_KEEP_TEMP=1 \
+  P2P_VPN_TUN_E2E_PRESSURE_ROUNDS=3 \
+  cargo test --offline --test tun_namespace \
+  tun_namespace_recovers_after_tcp_queue_pressure -- --ignored --exact --nocapture
+```
+
+| Contract | Behavior |
+| --- | --- |
+| One cycle | Existing root-level artifacts remain in place |
+| Multiple cycles | Each saves its own `round-N/` reports and ping summary |
+| Series checkpoint | `queue-pressure-series.json` records requested/completed counts and `complete` |
+| Process continuity | First-cycle start ticks must match every later cycle's final observations |
+| Recovery | Each cycle independently requires queue drops, empty queues, and 5/5 pings both ways |
+| Supervision | Default orchestrator budget is 90 seconds per requested cycle; explicit overrides still apply |
+| Replay | Generated commands preserve the pressure-round environment setting |
+| Failure diagnostics | Each recovery ping saves stdout, stderr, exit code, and before/after observations before assertions |
+
+### Repetition Evidence
+
+The first three-cycle attempt failed in cycle one after 37.21 seconds.
+Its log records a replacement TCP connection followed by another stream-upgrade
+timeout and path demotion. Causality is not yet established.
+
+- Failure log: `/tmp/p2p-vpn-review-pressure-series-run.log`.
+- Partial artifacts: `/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-2460255/round-1/`.
+- No successful series report was produced. Recovery-ping output was not retained in that attempt.
+
+After adding failure diagnostics only, three cycles passed in 119.64 seconds.
+Every cycle required 5/5 replies in both directions, empty final queues, and
+unchanged daemon start ticks. No production runtime fix was made.
+
+| Cycle | Transmitted Packets | A RSS Before / After, KiB | B RSS Before / After, KiB |
+| --- | ---: | ---: | ---: |
+| 1 | 1,982 | 33,320 / 34,448 | 33,276 / 33,872 |
+| 2 | 1,981 | 34,448 / 35,024 | 33,872 / 34,600 |
+| 3 | 1,981 | 35,024 / 35,112 | 34,600 / 34,696 |
+
+- Successful run: `/tmp/p2p-vpn-review-pressure-diagnostics-run.log`.
+- Series: `/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-2464869/queue-pressure-series.json`.
+- Namespace unit checks: 11 passed, 12 opt-in scenarios ignored.
+- These observations do not resolve the earlier intermittent recovery failure.
+
+The checkpoints compare current-process RSS under repeated work. They do not
+identify allocating owners or prove an asymptotic heap bound. A plateau over a
+few cycles is evidence for that workload only, not a general leak-free guarantee.
 
 ## Interpretation Limits
 

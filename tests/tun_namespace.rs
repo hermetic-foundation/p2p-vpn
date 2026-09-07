@@ -361,6 +361,8 @@ fn reexec_orchestrator(test_name: &str) {
     });
     let default_timeout = if test_name == RELAY_PROMOTION_TEST_NAME {
         Duration::from_secs(150)
+    } else if test_name == QUEUE_PRESSURE_TEST_NAME {
+        Duration::from_secs(90 * queue_pressure::requested_rounds())
     } else {
         Duration::from_secs(90)
     };
@@ -1770,6 +1772,7 @@ fn namespace_replay_env_exports() -> String {
             ORCHESTRATOR_TIMEOUT_ENV,
             WAIT_TIMEOUT_SCALE_ENV,
             idle_sample::SAMPLE_ENV,
+            queue_pressure::ROUNDS_ENV,
         ]
         .into_iter()
         .map(|name| (name, env::var(name).ok())),

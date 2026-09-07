@@ -1,4 +1,5 @@
 use std::{
+    env,
     fs::{self, File},
     net::Ipv4Addr,
     path::Path,
@@ -12,7 +13,63 @@ use super::{
     node_control_socket, ns_command, ns_command_output, state_metric_count, wait_for_selected_path,
 };
 
+pub const ROUNDS_ENV: &str = "P2P_VPN_TUN_E2E_PRESSURE_ROUNDS";
+
+fn parse_rounds(value: &str) -> Option<u64> {
+    value.parse().ok().filter(|rounds| (1..=5).contains(rounds))
+}
+
+pub fn requested_rounds() -> u64 {
+    match env::var(ROUNDS_ENV) {
+        Err(env::VarError::NotPresent) => 1,
+        Ok(value) => parse_rounds(&value).expect("pressure rounds must be 1..=5"),
+        Err(error) => panic!("invalid {ROUNDS_ENV}: {error}"),
+    }
+}
+
 pub fn capture(temp: &Path, pid_a: u32, pid_b: u32, destination: Ipv4Addr) {
+    let rounds = requested_rounds();
+    let mut series = Vec::<serde_json::Value>::new();
+    for round in 1..=rounds {
+        let output = if rounds == 1 {
+            temp.to_path_buf()
+        } else {
+            temp.join(format!("round-{round}"))
+        };
+        fs::create_dir_all(&output).expect("pressure artifact directory");
+        let report = capture_round(temp, &output, pid_a, pid_b, destination);
+        if let Some(first) = series.first() {
+            for role in ["a", "b"] {
+                assert_eq!(
+                    first["before"][role]["process"]["start_ticks"],
+                    report["after"][role]["process"]["start_ticks"],
+                    "daemon restarted between rounds"
+                );
+            }
+        }
+        series.push(serde_json::json!({
+            "round": round, "before": report["before"], "after_load": report["after_load"],
+            "after": report["after"], "transmitted_packets": report["transmitted_packets"],
+        }));
+        fs::write(
+            temp.join("queue-pressure-series.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "schema_version": 1, "requested_rounds": rounds, "completed_rounds": series.len(),
+                "complete": round == rounds, "rounds": series,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    }
+}
+
+fn capture_round(
+    temp: &Path,
+    output: &Path,
+    pid_a: u32,
+    pid_b: u32,
+    destination: Ipv4Addr,
+) -> serde_json::Value {
     let started = Instant::now();
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -51,7 +108,7 @@ pub fn capture(temp: &Path, pid_a: u32, pid_b: u32, destination: Ipv4Addr) {
             "limit", "16",
         ],
     );
-    let log = File::create(temp.join("pressure-ping.log")).unwrap();
+    let log = File::create(output.join("pressure-ping.log")).unwrap();
     let mut traffic = NamespaceChild {
         child: Command::new("nsenter")
             .env("LC_ALL", "C")
@@ -96,14 +153,14 @@ pub fn capture(temp: &Path, pid_a: u32, pid_b: u32, destination: Ipv4Addr) {
     }
     ns_command(pid_a, "tc", &["qdisc", "del", "dev", "veth-a", "root"]);
     let after_load = observe();
-    let ping_log = fs::read_to_string(temp.join("pressure-ping.log")).unwrap();
+    let ping_log = fs::read_to_string(output.join("pressure-ping.log")).unwrap();
     let transmitted: usize = ping_log
         .lines()
         .find_map(|line| line.split_once(" packets transmitted")?.0.parse().ok())
         .expect("ping transmission summary");
     assert!(transmitted > 0 && transmitted <= 3000);
     fs::write(
-        temp.join("queue-pressure-partial.json"),
+        output.join("queue-pressure-partial.json"),
         serde_json::to_vec_pretty(&serde_json::json!({
             "stage": "load_completed", "before": before, "samples": samples,
             "after_load": after_load, "transmitted_packets": transmitted,
@@ -132,11 +189,12 @@ pub fn capture(temp: &Path, pid_a: u32, pid_b: u32, destination: Ipv4Addr) {
         );
         thread::sleep(Duration::from_millis(250));
     }
-    for (pid, interface, address) in [
-        (pid_a, "hse2ea", destination),
-        (pid_b, "hse2eb", NODE_A_LOCAL_ROUTE_ADDRESS),
+    for (role, pid, interface, address) in [
+        ("a", pid_a, "hse2ea", destination),
+        ("b", pid_b, "hse2eb", NODE_A_LOCAL_ROUTE_ADDRESS),
     ] {
-        let output = ns_command_output(
+        let before_ping = observe();
+        let ping_output = ns_command_output(
             pid,
             "env",
             &[
@@ -151,10 +209,31 @@ pub fn capture(temp: &Path, pid_a: u32, pid_b: u32, destination: Ipv4Addr) {
                 &address.to_string(),
             ],
         );
-        assert_output_success("post-pressure ping", &output);
+        fs::write(
+            output.join(format!("recovery-ping-{role}.stdout")),
+            &ping_output.stdout,
+        )
+        .unwrap();
+        fs::write(
+            output.join(format!("recovery-ping-{role}.stderr")),
+            &ping_output.stderr,
+        )
+        .unwrap();
+        fs::write(
+            output.join(format!("recovery-ping-{role}.json")),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "before": before_ping,
+                "after": observe(),
+                "exit_code": ping_output.status.code(),
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert_output_success("post-pressure ping", &ping_output);
         assert!(
-            String::from_utf8_lossy(&output.stdout).contains("5 received"),
-            "post-pressure ping lost packets"
+            String::from_utf8_lossy(&ping_output.stdout).contains("5 received"),
+            "post-pressure ping from {role} lost packets: {}",
+            String::from_utf8_lossy(&ping_output.stdout)
         );
     }
     let after = observe();
@@ -165,15 +244,36 @@ pub fn capture(temp: &Path, pid_a: u32, pid_b: u32, destination: Ipv4Addr) {
         );
         assert_eq!(after[role]["queued_packets"], 0);
     }
-    fs::write(temp.join("queue-pressure.json"), serde_json::to_vec_pretty(&serde_json::json!({
+    let report = serde_json::json!({
         "schema_version": 1, "before": before, "samples": samples, "after_load": after_load, "after": after,
         "packet_limit": 3000, "transmitted_packets": transmitted,
         "traffic_deadline_seconds": 20, "ping_payload_bytes": 1000, "interval_millis": 5,
         "underlay_rate_kbit": 64, "underlay_delay_millis": 50,
         "queue_packet_limit": 4, "queue_byte_limit": 8192,
-    })).unwrap()).unwrap();
+    });
+    fs::write(
+        output.join("queue-pressure.json"),
+        serde_json::to_vec_pretty(&report).unwrap(),
+    )
+    .unwrap();
     eprintln!(
         "queue pressure report: {}",
-        temp.join("queue-pressure.json").display()
+        output.join("queue-pressure.json").display()
     );
+    report
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rounds_are_bounded_and_invalid_values_are_rejected() {
+        for value in ["", "0", "6", "-1", "1.5", "no", "18446744073709551616"] {
+            assert_eq!(parse_rounds(value), None);
+        }
+        for rounds in 1..=5 {
+            assert_eq!(parse_rounds(&rounds.to_string()), Some(rounds));
+        }
+    }
 }
