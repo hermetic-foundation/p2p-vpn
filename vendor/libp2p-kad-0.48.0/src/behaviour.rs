@@ -77,6 +77,8 @@ pub struct Behaviour<TStore> {
 
     handler_queue_limits: Option<crate::HandlerQueueLimits>,
 
+    handler_resources: crate::handler::HandlerResources,
+
     address_limits: AddressLimits,
 
     routing_budget: Option<RoutingBudget>,
@@ -606,6 +608,7 @@ where
         Behaviour {
             routing_budget: routing_budget.clone(),
             handler_queue_limits: config.handler_queue_limits,
+            handler_resources: Default::default(),
             store,
             caching: config.caching,
             kbuckets,
@@ -831,6 +834,26 @@ where
 
     pub fn query_pool_usage(&self) -> crate::QueryPoolUsage {
         self.queries.usage()
+    }
+
+    /// Cumulative phase lifecycle and selected-request outcomes, including retired work.
+    pub fn query_lifecycle_usage(&self) -> crate::QueryLifecycleUsage {
+        self.queries.lifecycle_usage()
+    }
+
+    /// Bounded query-peer caches across all retained phases, including finished phases.
+    pub fn query_resource_snapshot(&self) -> crate::QueryResourceSnapshot {
+        self.queries.resource_snapshot()
+    }
+
+    /// Local dial intent accounting; dispatch does not imply a socket was opened.
+    pub fn dial_queue_usage(&self) -> crate::DialQueueUsage {
+        self.queued_events.dial_usage()
+    }
+
+    /// Live connection-handler resources with lifetime counters and reported per-handler peaks.
+    pub fn handler_resource_usage(&self) -> crate::HandlerResourceUsage {
+        self.handler_resources.usage()
     }
 
     pub fn pending_rpc_usage(&self) -> crate::PendingRpcUsage {
@@ -1421,7 +1444,7 @@ where
     /// The caller must discard its query ownership. Already dispatched dials and
     /// requests, connection-handler work, and remote side effects are not recalled.
     pub fn cancel_query(&mut self, id: &QueryId) -> bool {
-        let query = self.queries.remove(id);
+        let query = self.queries.cancel(id);
         if query
             .as_ref()
             .is_some_and(|query| matches!(query.info, QueryInfo::Bootstrap { .. }))
@@ -2712,7 +2735,8 @@ where
             peer,
             self.mode,
             self.handler_queue_limits,
-        );
+        )
+        .with_resource_observer(&self.handler_resources);
         self.preload_new_handler(&mut handler, connection_id, peer);
 
         Ok(handler)
@@ -2738,7 +2762,8 @@ where
             peer,
             self.mode,
             self.handler_queue_limits,
-        );
+        )
+        .with_resource_observer(&self.handler_resources);
         self.preload_new_handler(&mut handler, connection_id, peer);
 
         Ok(handler)

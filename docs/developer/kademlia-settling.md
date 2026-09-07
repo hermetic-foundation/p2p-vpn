@@ -4,7 +4,7 @@
 
 Phase 2 is active. Starting revision: `63a380cbcd1a`.
 Signed freshness, AutoNAT admission, and synchronous relay-error fixes pass
-their checkpoint checks.
+their checkpoint checks. DHT resource reporting also passes its checkpoint gates.
 No acceptance soak has run. The remaining findings and phase-wide acceptance
 cases below are still open.
 
@@ -279,7 +279,7 @@ physical-device/WAN behavior, formal proof, or the sustained acceptance soak.
 - It disables Kademlia and mDNS, and shortens packet-session lifetime to three seconds.
 - `run_ready_node` disables the default-bootstrap flag and LAN-first holdoff.
 - Existing idle sampling lasts at most five minutes and only supports the direct UDP fixture.
-- Runtime counters do not yet expose the complete retained-owner inventory from phase 1.
+- DHT reporting and sampled namespace bounds pass; full soak assertions and application recovery-owner reporting remain pending.
 - Tokio time advancement alone does not advance `std::time::Instant`, signed wall time, or vendored timers.
 - Normal packet-session renewal occurs every 600 seconds; do not misclassify it as failed recovery.
 - Process-tree timeout containment and private artifact directories are now verified; the full soak driver is still missing.
@@ -303,6 +303,74 @@ discovery; budget that separately from later fallback to retained alternatives.
 
 Sources: [namespace harness](../../tests/tun_namespace.rs) and
 [idle sampler](../../tests/support/idle_sample.rs).
+
+## DHT Resource Observation
+
+`daemon-status` and `daemon-state` append the same numeric `kad_primary_*` and
+`kad_pairing_*` snapshots. Collection is on diagnostic requests only, not the
+packet hot path. Missing optional DHTs emit only `present 0`, not fictional zeros.
+
+| Owner | Fields After DHT Prefix | Semantics |
+| --- | --- | --- |
+| Routing | `routing_entries`, `routing_address_bytes`, rejection counters | Includes retained reservations, not just visible table entries. |
+| Query pool | `query_pool_retained`, `query_pool_capacity`, `query_pool_limited`, `query_pool_rejected` | Finished-but-retained phases count; capacity is meaningful only when limited is `1`. |
+| Query lifecycle | `query_phases_*`, `query_requests`, `query_successes`, `query_failures` | Counters include retired phases; a multi-stage operation may reuse its ID. |
+| Query caches | `query_bounded_caches`, `query_candidates`, `query_address_bytes`, `query_max_*` | Aggregate retained caches and current per-query maxima; not historical peaks. |
+| Query metadata | `query_payload_bytes`, result/provider/iterator slot counts | Retained metadata, including consumed fixed-iterator backing slots. |
+| Pending RPCs | `pending_rpc_*` | Aggregate pre-handler requests/bytes and admission rejections. |
+| Background jobs | `background_*` | Bounded batches, cursors, skip storage, and rejection counters. |
+| Behavior queue | `events`, `event_bytes`, limits and rejections | Unsent events and retained payloads; separate limited flags distinguish unlimited from zero. |
+| Dial intents | `dial_intents_attempted`, `admitted`, `dispatched`, `discarded` | Local Kademlia intents only, not all swarm socket attempts or connection successes. |
+| Handlers | `handlers`, `handler_pending_*`, stream gauges, rejection/expiry counters | Gauges sum live handlers; lifetime counters survive handler closure. |
+| Handler peaks | `handler_peak_*` | Historical maximum reported on any one handler, not an aggregate maximum. |
+
+### Accounting Contracts
+
+- `admitted_phases - retired_phases == query_pool_retained` before counter saturation.
+- Retired phases split into completed, timed-out, and canceled phases; explicit finish is completion, not application success.
+- Selected query requests remain counted after retirement; repeated snapshots must not double-count them.
+- Admitted dial intents minus dispatched/discarded intents equal retained queued dial intents.
+- Handler closure removes its live gauges without erasing prior rejection or expiry counters.
+- `query_retained_rejected_reports` belongs to currently retained caches and may decrease at retirement.
+
+Query requests count iterator selection, not successful remote receipt. Observed
+payload bytes exclude allocator/container overhead unless the owner explicitly
+accounts for capacity. These reports are not RSS or a phase-3 resource comparison.
+
+Handler accounting uses one fixed-size shared aggregate per DHT and one previous
+snapshot per handler. It has no history map or event backlog; unchanged snapshots
+avoid locking. Peaks are sampled at callback/poll boundaries, not internal allocations.
+
+The namespace state poller now checks reported resources against the frozen
+[phase-1 ceilings](kademlia-final-ownership-audit.md#per-dht-storage). Missing fields,
+inconsistent phase totals, orphaned query payloads, and excessive handler peaks
+fail immediately. This checks each observed state, not unsampled runtime intervals.
+
+### Observation Checkpoint Verification
+
+| Check | Result |
+| --- | --- |
+| Query lifecycle | Admission, rejected starts, finish, timeout, repeated cancellation, bootstrap continuation, and two-phase publication pass. |
+| Retained caches | Finished-but-retained state is reported; retirement releases bytes and current maxima; request totals remain monotonic. |
+| Dial intents | Admission rejection, dispatch, queued cancellation, and unrelated-query preservation pass; swarm-originated dials are not counted as Kademlia intents. |
+| Handler ownership | Eight exact-source owner tests plus real handler construction/preload/callback/drop tests pass. |
+| Live handler wiring | TCP and QUIC loopback connect/query/disconnect cycles pass for both independently accounted DHTs. |
+| Diagnostic contract | Both control views preserve prior lines and report the same DHT fields; absent DHTs and unlimited library limits are explicit. |
+| Namespace validator | Synthetic missing, duplicate, nonnumeric, over-budget, and orphaned-state reports are rejected. |
+| Offline workspace | 1,358 passed; 23 opt-in tests ignored. |
+| Complete opt-in namespace suite | All 13 passed in 265.79 seconds, including TCP pressure, network movement, and relay promotion, with resource assertions on state polls. |
+| Clippy / formatting / whitespace | Required correctness, suspicious, and performance groups pass; nonfatal style warnings remain. Rust formatting and whitespace checks pass. |
+| Android x86_64 native library | Compiled offline in 40.50 seconds; four existing target-specific warnings. |
+| Nix desktop/Android source parity | Passed with cached tools and unchanged assertions. |
+
+Logs use `/tmp/p2p-vpn-settling-telemetry-` with `focused.log`, `workspace.log`,
+`namespace.log`, `clippy.log`, `android.log`, and `nix.log` suffixes.
+Task temporary storage stayed near 5.07 GiB. No build downloads occurred, and
+no task builds ran during the namespace observations.
+
+These results establish the diagnostic checkpoint, not the sustained acceptance
+soak, a before/after resource comparison, full Nix packages, APK/ARM64 builds,
+formal verification, or physical-device/WAN acceptance. The goal remains active.
 
 ## Namespace Lifecycle Checkpoint
 

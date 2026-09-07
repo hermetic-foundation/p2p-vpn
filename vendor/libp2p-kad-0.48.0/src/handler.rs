@@ -48,8 +48,12 @@ use crate::{
 const MAX_NUM_STREAMS: usize = 32;
 
 mod inbound;
+mod observation;
 mod pending;
 use inbound::InboundStreams;
+use observation::HandlerResourceTracker;
+pub use observation::HandlerResourceUsage;
+pub(crate) use observation::HandlerResources;
 use pending::PendingRequests;
 pub use pending::{HandlerQueueLimits, HandlerQueueUsage};
 
@@ -96,6 +100,8 @@ pub struct Handler {
     protocol_status: Option<ProtocolStatus>,
 
     remote_supported_protocols: SupportedProtocols,
+
+    resource_observer: Option<HandlerResourceTracker>,
 }
 
 /// The states of protocol confirmation that a connection
@@ -476,7 +482,15 @@ impl Handler {
             pending_messages: PendingRequests::new(queue_limits, substreams_timeout),
             protocol_status: None,
             remote_supported_protocols: Default::default(),
+            resource_observer: None,
         }
+    }
+
+    /// Attach the DHT's shared resource observer when constructing a handler.
+    pub(crate) fn with_resource_observer(mut self, resources: &HandlerResources) -> Self {
+        self.resource_observer = Some(resources.register());
+        self.observe_resources();
+        self
     }
 
     /// Inspect waiting requests, independently of the active stream limit.
@@ -489,6 +503,16 @@ impl Handler {
             pending_negotiations: self.pending_streams.len(),
             active_outbound_streams: self.outbound_substreams.len(),
             ..self.pending_messages.usage()
+        }
+    }
+
+    fn observe_resources(&mut self) {
+        if self.resource_observer.is_none() {
+            return;
+        }
+        let usage = self.pending_request_usage();
+        if let Some(observer) = &mut self.resource_observer {
+            observer.update(usage);
         }
     }
 
@@ -711,6 +735,7 @@ impl ConnectionHandler for Handler {
                 self.mode = new_mode;
             }
         }
+        self.observe_resources();
     }
 
     #[tracing::instrument(level = "trace", name = "ConnectionHandler::poll", skip(self, cx))]
@@ -718,6 +743,53 @@ impl ConnectionHandler for Handler {
         &mut self,
         cx: &mut Context<'_>,
     ) -> Poll<ConnectionHandlerEvent<Self::OutboundProtocol, (), Self::ToBehaviour>> {
+        let result = self.poll_inner(cx);
+        self.observe_resources();
+        result
+    }
+
+    fn on_connection_event(
+        &mut self,
+        event: ConnectionEvent<Self::InboundProtocol, Self::OutboundProtocol>,
+    ) {
+        match event {
+            ConnectionEvent::FullyNegotiatedOutbound(fully_negotiated_outbound) => {
+                self.on_fully_negotiated_outbound(fully_negotiated_outbound)
+            }
+            ConnectionEvent::FullyNegotiatedInbound(fully_negotiated_inbound) => {
+                self.on_fully_negotiated_inbound(fully_negotiated_inbound)
+            }
+            ConnectionEvent::DialUpgradeError(ev) => {
+                if let Some(sender) = self.pending_streams.pop_front() {
+                    let _ = sender.send(Err(ev.error));
+                }
+            }
+            ConnectionEvent::RemoteProtocolsChange(change) => {
+                let dirty = self.remote_supported_protocols.on_protocols_change(change);
+
+                if dirty {
+                    let remote_supports_our_kademlia_protocols = self
+                        .remote_supported_protocols
+                        .iter()
+                        .any(|p| self.protocol_config.protocol_names().contains(p));
+
+                    self.protocol_status = Some(compute_new_protocol_status(
+                        remote_supports_our_kademlia_protocols,
+                        self.protocol_status,
+                    ))
+                }
+            }
+            _ => {}
+        }
+        self.observe_resources();
+    }
+}
+
+impl Handler {
+    fn poll_inner(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<ConnectionHandlerEvent<ProtocolConfig, (), HandlerEvent>> {
         loop {
             if let Some(query_id) = self.pending_messages.poll_expired(cx) {
                 return Poll::Ready(ConnectionHandlerEvent::NotifyBehaviour(
@@ -798,41 +870,6 @@ impl ConnectionHandler for Handler {
                 ));
             }
             return Poll::Pending;
-        }
-    }
-
-    fn on_connection_event(
-        &mut self,
-        event: ConnectionEvent<Self::InboundProtocol, Self::OutboundProtocol>,
-    ) {
-        match event {
-            ConnectionEvent::FullyNegotiatedOutbound(fully_negotiated_outbound) => {
-                self.on_fully_negotiated_outbound(fully_negotiated_outbound)
-            }
-            ConnectionEvent::FullyNegotiatedInbound(fully_negotiated_inbound) => {
-                self.on_fully_negotiated_inbound(fully_negotiated_inbound)
-            }
-            ConnectionEvent::DialUpgradeError(ev) => {
-                if let Some(sender) = self.pending_streams.pop_front() {
-                    let _ = sender.send(Err(ev.error));
-                }
-            }
-            ConnectionEvent::RemoteProtocolsChange(change) => {
-                let dirty = self.remote_supported_protocols.on_protocols_change(change);
-
-                if dirty {
-                    let remote_supports_our_kademlia_protocols = self
-                        .remote_supported_protocols
-                        .iter()
-                        .any(|p| self.protocol_config.protocol_names().contains(p));
-
-                    self.protocol_status = Some(compute_new_protocol_status(
-                        remote_supports_our_kademlia_protocols,
-                        self.protocol_status,
-                    ))
-                }
-            }
-            _ => {}
         }
     }
 }

@@ -368,6 +368,28 @@ sudo p2p-vpn daemon-status --socket /run/p2p-vpn/control.sock \
 
 This count does not include VPN members or grant route authority.
 
+### Discovery Resource Counters
+
+Both `daemon-status` and `daemon-state` include numeric DHT resource fields:
+
+```sh
+sudo p2p-vpn daemon-status --socket /run/p2p-vpn/control.sock \
+  | rg '^kad_(primary|pairing)_'
+```
+
+| Field Suffix | Interpretation |
+| --- | --- |
+| `present` | `1` means this DHT exists. `kad_pairing_present 0` means there is no separate pairing DHT. |
+| `query_pool_retained` | Includes finished queries still awaiting cleanup, not just active lookups. |
+| `query_phases_admitted`, `query_phases_retired` | Compare increments to see whether new work also retires. One operation can have several phases. |
+| `dial_intents_*` | Kademlia's queued dialing requests, not all socket attempts or established connections. |
+| `handler_pending_requests`, `handler_pending_bytes` | Pending work summed over live Kademlia connection handlers. |
+| `handler_peak_*` | Largest reported value on any single handler since this DHT started. |
+
+Counters reset when the DHT restarts. Periodic maintenance is normal; nonzero
+counters or retained routing entries alone do not establish a connection storm.
+These fields add no configuration requirements or network authority.
+
 ## More References
 
 Strict checks and deeper debugging guides live in:

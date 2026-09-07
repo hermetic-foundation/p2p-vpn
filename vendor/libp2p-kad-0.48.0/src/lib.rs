@@ -57,7 +57,7 @@ mod proto {
 use std::num::NonZeroUsize;
 
 pub use addresses::{AddressLimits, Addresses, RoutingLimits, RoutingUsage};
-pub use behaviour::queue::{BehaviourQueueLimits, BehaviourQueueUsage};
+pub use behaviour::queue::{BehaviourQueueLimits, BehaviourQueueUsage, DialQueueUsage};
 pub use behaviour::{
     AddProviderContext, AddProviderError, AddProviderOk, AddProviderPhase, AddProviderResult,
     Behaviour, BootstrapError, BootstrapOk, BootstrapResult, BucketInserts, Caching, Config, Event,
@@ -67,7 +67,7 @@ pub use behaviour::{
     PutRecordError, PutRecordOk, PutRecordPhase, PutRecordResult, QueryInfo, QueryMut, QueryRef,
     QueryResult, QueryStats, Quorum, RoutingUpdate, StoreInserts,
 };
-pub use handler::{HandlerQueueLimits, HandlerQueueUsage};
+pub use handler::{HandlerQueueLimits, HandlerQueueUsage, HandlerResourceUsage};
 pub use jobs::{BackgroundJobLimits, BackgroundJobUsage};
 pub use kbucket::{
     Distance as KBucketDistance, EntryView, KBucketRef, Key as KBucketKey, NodeStatus, U256,
@@ -76,8 +76,8 @@ use libp2p_swarm::StreamProtocol;
 pub use protocol::{ConnectionType, KadPeer};
 pub use query::{
     PendingRpcLimits, PendingRpcUsage, QueryCapacityError, QueryId, QueryInputTooLarge,
-    QueryLimits, QueryMetadataLimits, QueryMetadataUsage, QueryPoolUsage, QueryResourceUsage,
-    QueryStartError,
+    QueryLifecycleUsage, QueryLimits, QueryMetadataLimits, QueryMetadataUsage, QueryPoolUsage,
+    QueryResourceSnapshot, QueryResourceUsage, QueryStartError,
 };
 pub use record::{store, Key as RecordKey, ProviderRecord, Record};
 

@@ -28,6 +28,7 @@ changelog, generated protocol source, and tests.
 | `src/query/peers/fixed.rs` | Retain normalized fixed-peer vectors without recollection; report allocated slots through query metadata usage. |
 | `src/jobs.rs`, `src/jobs/bounded.rs` | Shared background admission, bounded key batches and skip bookkeeping, fresh record selection, and explicit removal from pending jobs. |
 | `src/handler.rs`, `src/handler/pending.rs` | Opt-in request admission/expiry, bounded rejection reporting, and negotiation queue accounting. |
+| `src/handler/observation.rs` | Fixed-size per-DHT aggregate of live handler gauges, cumulative rejection/expiry counters, and reported per-handler peaks. |
 | `src/handler/inbound.rs` | Strict inbound slot bound, wakeable in-place idle replacement, request/idle timeout, and saturation counters. |
 | `src/kbucket.rs`, `src/kbucket/bucket.rs` | Preserve protected seed peers during pending replacement; retain and recheck the probed victim identity. |
 | `src/addresses/budget.rs` | Shared aggregate entry-generation and encoded-buffer reservations, including retained snapshots and deferred eviction storage. |
@@ -217,6 +218,24 @@ p2p-vpn selects 64 waiting requests and 256 KiB per handler. The existing
 32-stream limit also caps FIFO negotiation entries, including entries whose
 stream tasks timed out before the swarm returned their upgrade callbacks.
 `pending_request_usage()` exposes queue, rejection, expiry, and negotiation counts.
+
+## Runtime Observation
+
+| API | Meaning |
+| --- | --- |
+| `query_lifecycle_usage()` | Cumulative admitted, retired, completed, timed-out, and canceled query phases; request outcomes include retained and retired phases. |
+| `query_resource_snapshot()` | All retained bounded peer caches, including finished phases awaiting retirement; current per-query maxima, not historical peaks. |
+| `dial_queue_usage()` | Attempted/admitted local dial intents; dispatch and discard are counted separately. Not socket attempts or successful connections. |
+| `handler_resource_usage()` | Live handler gauges, cumulative counters surviving handler closure, and reported per-handler high-water marks. |
+
+- Multi-stage queries may admit several phases under one ID; completion is not application success.
+- Query requests count iterator-selected requests, not bytes or successful remote RPCs.
+- Retained cache rejection reports are a gauge; removing their query removes that count.
+- Handler observation runs after behavior/connection callbacks and each handler poll; it does not measure transient allocations inside a callback.
+
+The behavior owns one fixed-size shared aggregate. Each handler retains one last
+snapshot; unchanged snapshots skip locking. Handler drop subtracts live gauges
+without losing cumulative counters. No per-connection registry or event queue is added.
 
 ## Build Integration
 

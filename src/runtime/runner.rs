@@ -2447,6 +2447,10 @@ where
                     request => request,
                 };
                 let control_context = RuntimeControlContext {
+                    kademlia: matches!(
+                        &request,
+                        RuntimeControlRequest::Status { .. } | RuntimeControlRequest::State { .. }
+                    ).then(|| super::kademlia_resources::KademliaResources::capture(node.swarm.behaviour())),
                     forwarder: &forwarder,
                     paths: &paths,
                     peer_capabilities: &peer_capabilities,
@@ -5017,6 +5021,7 @@ fn handle_runtime_network_change(
 }
 
 struct RuntimeControlContext<'a> {
+    kademlia: Option<super::kademlia_resources::KademliaResources>,
     forwarder: &'a Forwarder,
     paths: &'a PathSet,
     peer_capabilities: &'a PeerCapabilities,
@@ -5041,7 +5046,7 @@ fn handle_runtime_control_request(
 ) -> Option<ShutdownReason> {
     match request {
         RuntimeControlRequest::Status { respond_to } => {
-            let lines = runtime_status_lines(RuntimeStatusView {
+            let mut lines = runtime_status_lines(RuntimeStatusView {
                 metrics: context.metrics,
                 queue: context.queue,
                 path_stats: context.path_stats,
@@ -5053,13 +5058,16 @@ fn handle_runtime_control_request(
                 packet_plane_replay_windows_per_session: context
                     .packet_plane_replay_windows_per_session,
             });
+            if let Some(kademlia) = &context.kademlia {
+                kademlia.extend_lines(&mut lines);
+            }
             if respond_to.send(lines).is_err() {
                 eprintln!("control socket status response receiver dropped");
             }
             None
         }
         RuntimeControlRequest::State { respond_to } => {
-            let lines = runtime_state_lines(&RuntimeStateView {
+            let mut lines = runtime_state_lines(&RuntimeStateView {
                 forwarder: context.forwarder,
                 paths: context.paths,
                 peer_capabilities: context.peer_capabilities,
@@ -5076,6 +5084,9 @@ fn handle_runtime_control_request(
                 packet_plane_replay_windows_per_session: context
                     .packet_plane_replay_windows_per_session,
             });
+            if let Some(kademlia) = &context.kademlia {
+                kademlia.extend_lines(&mut lines);
+            }
             if respond_to.send(lines).is_err() {
                 eprintln!("control socket state response receiver dropped");
             }
@@ -26530,6 +26541,7 @@ mod tests {
         let reason = handle_runtime_control_request(
             RuntimeControlRequest::Shutdown { respond_to },
             &RuntimeControlContext {
+                kademlia: None,
                 forwarder: &forwarder,
                 paths: &paths,
                 peer_capabilities: &peer_capabilities,
@@ -26554,6 +26566,83 @@ mod tests {
             response.try_recv().expect("shutdown response"),
             vec!["shutdown accepted".to_owned()]
         );
+    }
+
+    #[tokio::test]
+    async fn runtime_control_reports_retained_kademlia_resources_in_both_views() {
+        for protocol in [PUBLIC_IPFS_KADEMLIA_PROTOCOL, "/test/private/kad"] {
+            let (config, mut node) = autonat_query_test_node(protocol, Duration::from_secs(60), 32);
+            let kad = &mut node.swarm.behaviour_mut().kad;
+            let finished = kad.get_closest_peers(peer_id());
+            kad.get_closest_peers(peer_id());
+            kad.query_mut(&finished).unwrap().finish();
+            assert_eq!(kad.iter_queries().count(), 1);
+            if let Some(pairing) = node.swarm.behaviour_mut().pairing_kad.as_mut() {
+                pairing.get_closest_peers(peer_id());
+            }
+            let forwarder = Forwarder::from_config(&config).unwrap();
+            let context = RuntimeControlContext {
+                kademlia: Some(
+                    super::super::kademlia_resources::KademliaResources::capture(
+                        node.swarm.behaviour(),
+                    ),
+                ),
+                forwarder: &forwarder,
+                paths: &PathSet::new(),
+                peer_capabilities: &PeerCapabilities::default(),
+                local_capabilities: &ControlCapabilities::local("lab", None, 1280),
+                metrics: &RuntimeMetrics::default(),
+                queue: crate::queue::QueueStats::default(),
+                path_stats: crate::path::PathRuntimeStats::default(),
+                packet_in_flight: PacketInFlightStats::default(),
+                auto_relay: AutoRelaySnapshot::default(),
+                public_routing_peers: 0,
+                relay_infrastructure: RelayInfrastructureSnapshot::default(),
+                packet_plane: PacketPlaneSnapshot::default(),
+                packet_plane_quic: PacketPlaneQuicSnapshot::default(),
+                packet_plane_session_ttl: Duration::from_secs(600),
+                packet_plane_replay_windows_per_session: 512,
+                dns: None,
+            };
+            let mut reports = Vec::new();
+            for status in [true, false] {
+                let (respond_to, mut response) = tokio::sync::oneshot::channel();
+                let request = if status {
+                    RuntimeControlRequest::Status { respond_to }
+                } else {
+                    RuntimeControlRequest::State { respond_to }
+                };
+                assert_eq!(handle_runtime_control_request(request, &context), None);
+                let lines = response.try_recv().unwrap();
+                assert!(lines.iter().any(|line| !line.starts_with("kad_")));
+                let fields = lines
+                    .iter()
+                    .filter(|line| line.starts_with("kad_"))
+                    .map(|line| line.split_once(' ').unwrap())
+                    .collect::<std::collections::BTreeMap<_, _>>();
+                assert_eq!(fields["kad_primary_query_pool_retained"], "2");
+                assert_eq!(fields["kad_primary_query_bounded_caches"], "2");
+                assert_eq!(fields["kad_primary_query_phases_admitted"], "2");
+                assert_eq!(fields["kad_primary_query_phases_retired"], "0");
+                assert_eq!(fields["kad_primary_handlers"], "0");
+                assert_eq!(fields["kad_primary_dial_intents_attempted"], "0");
+                if protocol == PUBLIC_IPFS_KADEMLIA_PROTOCOL {
+                    assert_eq!(fields["kad_pairing_present"], "0");
+                    assert!(!fields.contains_key("kad_pairing_query_pool_retained"));
+                } else {
+                    assert_eq!(fields["kad_pairing_present"], "1");
+                    assert_eq!(fields["kad_pairing_query_pool_retained"], "1");
+                    assert_eq!(fields["kad_pairing_query_phases_admitted"], "1");
+                }
+                reports.push(
+                    fields
+                        .into_iter()
+                        .map(|(key, value)| (key.to_owned(), value.to_owned()))
+                        .collect::<Vec<_>>(),
+                );
+            }
+            assert_eq!(reports[0], reports[1]);
+        }
     }
 
     #[test]
@@ -26684,6 +26773,7 @@ mod tests {
         let reason = handle_runtime_control_request(
             RuntimeControlRequest::NetworkPeers { respond_to },
             &RuntimeControlContext {
+                kademlia: None,
                 forwarder: &forwarder,
                 paths: &PathSet::new(),
                 peer_capabilities: &PeerCapabilities::default(),
@@ -26855,6 +26945,7 @@ mod tests {
         let reason = handle_runtime_control_request(
             RuntimeControlRequest::PeerSnapshot { respond_to },
             &RuntimeControlContext {
+                kademlia: None,
                 forwarder: &forwarder,
                 paths: &paths,
                 peer_capabilities: &PeerCapabilities::default(),

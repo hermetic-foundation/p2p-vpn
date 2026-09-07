@@ -35,6 +35,8 @@ use p2p_vpn::{
 const CHILD_ENV: &str = "P2P_VPN_TUN_E2E_MODE";
 #[path = "support/idle_sample.rs"]
 mod idle_sample;
+#[path = "support/kademlia_resources.rs"]
+mod kademlia_resources;
 #[path = "support/queue_pressure.rs"]
 mod queue_pressure;
 const KEEP_TEMP_ENV: &str = "P2P_VPN_TUN_E2E_KEEP_TEMP";
@@ -2148,6 +2150,9 @@ where
     loop {
         match runtime.block_on(query_state(&socket, Duration::from_millis(500))) {
             Ok(lines) => {
+                kademlia_resources::validate(&lines).unwrap_or_else(|error| {
+                    panic!("node {role} resource accounting during {context}: {error}")
+                });
                 if predicate(&lines) {
                     return lines;
                 }

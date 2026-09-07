@@ -60,6 +60,7 @@ pub(crate) struct QueryPool {
     queries: FnvHashMap<QueryId, Query>,
     rejected: u64,
     rejected_inputs: u64,
+    lifecycle: QueryLifecycleUsage,
     pending_rpc_budget: Option<PendingRpcBudget>,
     deadline: Option<(Instant, Delay)>,
 }
@@ -75,6 +76,33 @@ pub struct QueryPoolUsage {
     pub retained: usize,
     pub capacity: Option<usize>,
     pub rejected: u64,
+}
+
+/// Cumulative phase ownership and request outcomes, including retired queries.
+/// Multi-stage operations can admit and retire several phases with the same ID.
+/// Completion includes explicit finish; it does not imply application success.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct QueryLifecycleUsage {
+    pub admitted_phases: u64,
+    pub retired_phases: u64,
+    pub completed_phases: u64,
+    pub timed_out_phases: u64,
+    pub cancelled_phases: u64,
+    pub requests: u64,
+    pub successes: u64,
+    pub failures: u64,
+}
+
+/// All pool-owned peer caches, including finished-but-not-retired phases.
+/// Maxima describe currently retained queries, not historical high-water marks.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct QueryResourceSnapshot {
+    pub bounded_queries: usize,
+    pub candidates: usize,
+    pub address_bytes: usize,
+    pub max_candidates: usize,
+    pub max_address_bytes: usize,
+    pub rejected_reports: usize,
 }
 
 /// The observable states emitted by [`QueryPool::poll`].
@@ -100,6 +128,7 @@ impl QueryPool {
             queries: Default::default(),
             rejected: 0,
             rejected_inputs: 0,
+            lifecycle: QueryLifecycleUsage::default(),
             deadline: None,
         }
     }
@@ -131,6 +160,38 @@ impl QueryPool {
         self.pending_rpc_budget
             .as_ref()
             .map_or_else(PendingRpcUsage::default, PendingRpcBudget::usage)
+    }
+
+    pub(crate) fn lifecycle_usage(&self) -> QueryLifecycleUsage {
+        let mut usage = self.lifecycle;
+        for query in self.queries.values() {
+            usage.requests = usage
+                .requests
+                .saturating_add(u64::from(query.stats.requests));
+            usage.successes = usage
+                .successes
+                .saturating_add(u64::from(query.stats.success));
+            usage.failures = usage
+                .failures
+                .saturating_add(u64::from(query.stats.failure));
+        }
+        usage
+    }
+
+    pub(crate) fn resource_snapshot(&self) -> QueryResourceSnapshot {
+        let mut snapshot = QueryResourceSnapshot::default();
+        for query in self.queries.values() {
+            if let Some(usage) = query.peers.addresses.usage() {
+                snapshot.bounded_queries += 1;
+                snapshot.candidates = snapshot.candidates.saturating_add(usage.candidates);
+                snapshot.address_bytes = snapshot.address_bytes.saturating_add(usage.address_bytes);
+                snapshot.max_candidates = snapshot.max_candidates.max(usage.candidates);
+                snapshot.max_address_bytes = snapshot.max_address_bytes.max(usage.address_bytes);
+                snapshot.rejected_reports =
+                    snapshot.rejected_reports.saturating_add(usage.rejected);
+            }
+        }
+        snapshot
     }
 
     pub(crate) fn check_capacity(&mut self) -> Result<(), QueryCapacityError> {
@@ -230,6 +291,7 @@ impl QueryPool {
             self.pending_rpc_budget.clone(),
         );
         self.queries.insert(id, query);
+        self.lifecycle.admitted_phases = self.lifecycle.admitted_phases.saturating_add(1);
     }
 
     /// Adds a query to the pool that iterates towards the closest peers to the target.
@@ -301,6 +363,7 @@ impl QueryPool {
             self.pending_rpc_budget.clone(),
         );
         self.queries.insert(id, query);
+        self.lifecycle.admitted_phases = self.lifecycle.admitted_phases.saturating_add(1);
     }
 
     pub(crate) fn next_query_id(&mut self) -> QueryId {
@@ -319,12 +382,33 @@ impl QueryPool {
         self.queries.get_mut(id)
     }
 
-    pub(crate) fn remove(&mut self, id: &QueryId) -> Option<Query> {
+    fn remove(&mut self, id: &QueryId) -> Option<Query> {
         let query = self.queries.remove(id);
+        if let Some(query) = &query {
+            self.lifecycle.retired_phases = self.lifecycle.retired_phases.saturating_add(1);
+            self.lifecycle.requests = self
+                .lifecycle
+                .requests
+                .saturating_add(u64::from(query.stats.requests));
+            self.lifecycle.successes = self
+                .lifecycle
+                .successes
+                .saturating_add(u64::from(query.stats.success));
+            self.lifecycle.failures = self
+                .lifecycle
+                .failures
+                .saturating_add(u64::from(query.stats.failure));
+        }
         if self.queries.is_empty() {
             self.deadline = None;
         }
         query
+    }
+
+    pub(crate) fn cancel(&mut self, id: &QueryId) -> Option<Query> {
+        let query = self.remove(id)?;
+        self.lifecycle.cancelled_phases = self.lifecycle.cancelled_phases.saturating_add(1);
+        Some(query)
     }
 
     /// Start deadlines and find terminal work even while the behaviour queue is busy.
@@ -341,6 +425,11 @@ impl QueryPool {
 
     pub(crate) fn remove_with_end(&mut self, id: &QueryId, now: Instant) -> Option<Query> {
         let mut query = self.remove(id)?;
+        if query.is_finished() {
+            self.lifecycle.completed_phases = self.lifecycle.completed_phases.saturating_add(1);
+        } else {
+            self.lifecycle.timed_out_phases = self.lifecycle.timed_out_phases.saturating_add(1);
+        }
         query.stats.end = Some(now);
         Some(query)
     }

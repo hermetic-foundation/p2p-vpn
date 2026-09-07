@@ -38,12 +38,22 @@ pub struct BehaviourQueueUsage {
     pub rejected: u64,
 }
 
+/// Local Kademlia dial intents, not socket attempts by the swarm.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DialQueueUsage {
+    pub attempted: u64,
+    pub admitted: u64,
+    pub dispatched: u64,
+    pub discarded: u64,
+}
+
 pub(super) struct QueuedEvents {
     events: VecDeque<(ToSwarm<Event, HandlerIn>, Option<Reservations>, usize)>,
     limits: Option<BehaviourQueueLimits>,
     usage: BehaviourQueueUsage,
     routing_budget: Option<RoutingBudget>,
     address_limits: AddressLimits,
+    dials: DialQueueUsage,
 }
 
 impl QueuedEvents {
@@ -59,16 +69,26 @@ impl QueuedEvents {
             usage: BehaviourQueueUsage::default(),
             routing_budget,
             address_limits,
+            dials: DialQueueUsage::default(),
         }
     }
 
     pub(super) fn push_dial(&mut self, peer: PeerId) -> bool {
-        self.insert(
+        self.dials.attempted = self.dials.attempted.saturating_add(1);
+        let admitted = self.insert(
             ToSwarm::Dial {
                 opts: DialOpts::peer_id(peer).build(),
             },
             0,
-        )
+        );
+        if admitted {
+            self.dials.admitted = self.dials.admitted.saturating_add(1);
+        }
+        admitted
+    }
+
+    pub(super) fn dial_usage(&self) -> DialQueueUsage {
+        self.dials
     }
 
     pub(super) fn usage(&self) -> BehaviourQueueUsage {
@@ -180,6 +200,9 @@ impl QueuedEvents {
     pub(super) fn pop_front(&mut self) -> Option<ToSwarm<Event, HandlerIn>> {
         self.events.pop_front().map(|(event, _reservation, bytes)| {
             self.usage.bytes -= bytes;
+            if matches!(&event, ToSwarm::Dial { .. }) {
+                self.dials.dispatched = self.dials.dispatched.saturating_add(1);
+            }
             event
         })
     }
@@ -194,6 +217,9 @@ impl QueuedEvents {
                 true
             } else {
                 self.usage.bytes -= bytes;
+                if matches!(event, ToSwarm::Dial { .. }) {
+                    self.dials.discarded = self.dials.discarded.saturating_add(1);
+                }
                 false
             }
         });

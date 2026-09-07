@@ -4,6 +4,7 @@ pub mod control;
 pub mod control_socket;
 pub mod dns;
 pub mod forward;
+mod kademlia_resources;
 pub mod membership_store;
 mod membership_sync_history;
 pub mod p2p;

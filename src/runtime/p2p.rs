@@ -679,6 +679,10 @@ mod queue_tests;
 
 #[cfg(test)]
 mod tests {
+    mod resource_tests {
+        include!("p2p/resource_tests.rs");
+    }
+
     use std::time::Duration;
 
     use base64::Engine as _;
@@ -1526,6 +1530,14 @@ mod tests {
                 other => panic!("expected initial candidate dial, got {other:?}"),
             }
         };
+        assert_eq!(
+            kad.query_lifecycle_usage(),
+            kad::QueryLifecycleUsage {
+                admitted_phases: 1,
+                requests: 1,
+                ..Default::default()
+            }
+        );
         std::thread::sleep(Duration::from_millis(30));
         kad.on_swarm_event(FromSwarm::DialFailure(
             libp2p::swarm::behaviour::DialFailure {
@@ -1537,6 +1549,8 @@ mod tests {
         if finish {
             kad.query_mut(&query).unwrap().finish();
         }
+        assert_eq!(kad.query_lifecycle_usage().retired_phases, 0);
+        assert_eq!(kad.query_resource_snapshot().bounded_queries, 1);
         let mut reported = false;
         for _ in 0..10 {
             match kad.poll(&mut cx) {
@@ -1567,6 +1581,19 @@ mod tests {
             "query must report its result instead of silently disappearing"
         );
         assert!(kad.query(&query).is_none());
+        assert_eq!(
+            kad.query_lifecycle_usage(),
+            kad::QueryLifecycleUsage {
+                admitted_phases: 1,
+                retired_phases: 1,
+                completed_phases: u64::from(finish),
+                timed_out_phases: u64::from(!finish),
+                requests: 1,
+                failures: 1,
+                ..Default::default()
+            }
+        );
+        assert_eq!(kad.query_resource_snapshot(), Default::default());
     }
 
     fn bounded_routing_test_dht() -> kad::Behaviour<kad::store::MemoryStore> {
@@ -1756,6 +1783,8 @@ mod tests {
         assert_eq!(usage.expired, 32);
         assert_eq!(usage.pending_negotiations, 32);
         assert_eq!(usage.active_outbound_streams, 0);
+        assert_eq!(kad.handler_resource_usage().handlers, 1);
+        assert_eq!(kad.handler_resource_usage().usage, usage);
         let endpoint = ConnectedPoint::Dialer {
             address: address.clone(),
             role_override: Endpoint::Dialer,
@@ -2284,6 +2313,15 @@ mod tests {
                 },
             );
             assert_eq!(kad.pending_rpc_usage().requests, 0);
+            assert_eq!(
+                kad.query_lifecycle_usage(),
+                kad::QueryLifecycleUsage {
+                    admitted_phases: 1,
+                    requests: 1,
+                    successes: 1,
+                    ..Default::default()
+                }
+            );
             let mut result = None;
             for _ in 0..64 {
                 if let std::task::Poll::Ready(ToSwarm::GenerateEvent(
@@ -2306,6 +2344,18 @@ mod tests {
                 assert_eq!(kad.pending_rpc_usage().requests, 0);
                 assert_eq!(kad.pending_rpc_usage().byte_rejections, 1);
                 assert!(!kad.query_is_retained(&query));
+                assert_eq!(
+                    kad.query_lifecycle_usage(),
+                    kad::QueryLifecycleUsage {
+                        admitted_phases: 2,
+                        retired_phases: 2,
+                        completed_phases: 2,
+                        requests: 2,
+                        successes: 1,
+                        failures: 1,
+                        ..Default::default()
+                    }
+                );
                 continue;
             }
             assert!(
@@ -2314,6 +2364,17 @@ mod tests {
             );
             assert!(kad.query_is_retained(&query));
             assert_eq!(kad.pending_rpc_usage().requests, 1);
+            assert_eq!(
+                kad.query_lifecycle_usage(),
+                kad::QueryLifecycleUsage {
+                    admitted_phases: 2,
+                    retired_phases: 1,
+                    completed_phases: 1,
+                    requests: 2,
+                    successes: 1,
+                    ..Default::default()
+                }
+            );
             let handler = kad
                 .handle_established_outbound_connection(
                     ConnectionId::new_unchecked(2),
@@ -2339,6 +2400,17 @@ mod tests {
                 }
             }
             assert!(matches!(result, Some(Ok(_))));
+            assert_eq!(
+                kad.query_lifecycle_usage(),
+                kad::QueryLifecycleUsage {
+                    admitted_phases: 2,
+                    retired_phases: 2,
+                    completed_phases: 2,
+                    requests: 2,
+                    successes: 2,
+                    ..Default::default()
+                }
+            );
         }
     }
 
@@ -2461,10 +2533,19 @@ mod tests {
         let keep = kad
             .try_start_query(|kad| kad.get_closest_peers(PeerId::random()))
             .unwrap();
+        let admitted = kad::QueryLifecycleUsage {
+            admitted_phases: 2,
+            ..Default::default()
+        };
+        assert_eq!(kad.query_lifecycle_usage(), admitted);
+        let retained = kad.query_resource_snapshot();
+        assert_eq!(retained.bounded_queries, 2);
         kad.query_mut(&first).unwrap().finish();
         assert!(kad.query(&first).is_none());
         assert!(kad.query_is_retained(&first));
         assert_eq!(kad.query_pool_usage().retained, 2);
+        assert_eq!(kad.query_resource_snapshot(), retained);
+        assert_eq!(kad.query_lifecycle_usage(), admitted);
         let attempted = std::cell::Cell::new(false);
         let rejected = kad.try_start_query(|_| attempted.set(true));
         assert_eq!(rejected, Err(kad::QueryCapacityError));
@@ -2489,10 +2570,20 @@ mod tests {
         ));
         assert_eq!(kad.query_pool_usage().retained, 2);
         assert!(denied.iter().all(|id| !kad.query_is_retained(id)));
+        assert_eq!(kad.query_lifecycle_usage(), admitted);
         assert!(kad.cancel_query(&first));
         assert!(!kad.cancel_query(&first));
+        assert_eq!(
+            kad.query_lifecycle_usage(),
+            kad::QueryLifecycleUsage {
+                retired_phases: 1,
+                cancelled_phases: 1,
+                ..admitted
+            }
+        );
         assert_eq!(kad.query_pool_usage().retained, 1);
         let admitted = kad.try_start_query(|kad| kad.get_record(key)).unwrap();
+        assert_eq!(kad.query_lifecycle_usage().admitted_phases, 3);
         assert!(kad.query_is_retained(&admitted));
         assert!(kad.query_is_retained(&keep));
         let waker = futures::task::noop_waker();
@@ -2557,6 +2648,15 @@ mod tests {
             }
             assert!(kad.query_pool_usage().retained <= 2);
             assert!(kad.query_is_retained(&keep));
+            let lifecycle = kad.query_lifecycle_usage();
+            assert_eq!(lifecycle.retired_phases, phases);
+            assert_eq!(lifecycle.completed_phases, phases);
+            assert_eq!(lifecycle.timed_out_phases, 0);
+            assert_eq!(lifecycle.cancelled_phases, 0);
+            assert_eq!(
+                lifecycle.admitted_phases - lifecycle.retired_phases,
+                kad.query_pool_usage().retained as u64
+            );
             if !kad.query_is_retained(&bootstrap) {
                 break;
             }
@@ -2566,6 +2666,7 @@ mod tests {
         assert_eq!(kad.query_pool_usage().retained, 1);
         assert_eq!(kad.query_pool_usage().rejected, 0);
         for provider in [false, true] {
+            let before = kad.query_lifecycle_usage();
             let key = kad::RecordKey::new(&b"publish");
             let publish = kad
                 .try_start_query(|kad| {
@@ -2599,6 +2700,12 @@ mod tests {
             assert!(completed, "fixed publication phase failed to retire");
             assert_eq!(kad.query_pool_usage().retained, 1);
             assert_eq!(kad.query_pool_usage().rejected, 0);
+            let after = kad.query_lifecycle_usage();
+            assert_eq!(after.admitted_phases - before.admitted_phases, 2);
+            assert_eq!(after.retired_phases - before.retired_phases, 2);
+            assert_eq!(after.completed_phases - before.completed_phases, 2);
+            assert_eq!(after.timed_out_phases, 0);
+            assert_eq!(after.cancelled_phases, 0);
         }
         assert!(
             kad.try_start_query(|kad| kad.get_record(kad::RecordKey::new(&b"after")))
