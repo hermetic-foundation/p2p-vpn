@@ -53,6 +53,7 @@ server duties or advertise itself as a Kademlia server.
 | Query address storage | At most 256 KiB of encoded addresses per phase, with the same per-peer limits. |
 | Library background jobs | One new query per poll, only below two existing queries; provider and record jobs share the allowance. |
 | Waiting DHT requests | Per connection: at most 64 requests and 256 KiB of retained payload data; queued requests expire after ten seconds. |
+| Aggregate routing storage | Per DHT: 512 retained entry versions and 2 MiB of encoded address buffers, including pending entries and routing snapshots. |
 
 Routing-address limits apply to both DHTs and standalone code pairing, including internally learned addresses.
 At capacity, unprotected addresses rotate while preserving LAN and relay alternatives
@@ -69,6 +70,11 @@ for the query deadline instead of reporting every rejection immediately.
 Configured bootstrap seeds are protected from routing-address rotation and
 whole-peer bucket replacement. Protection does not increase bucket capacity;
 a full bucket of protected seeds rejects additional peers.
+
+Old routing snapshots remain charged until released. At capacity, new entries
+are rejected until space is available; updates can replace unprotected alternatives.
+Updates that cannot fit leave existing routes intact; no extra setup is needed.
+Routing notifications share the limit and may be dropped under overload.
 
 The five-second scheduler does not launch a DHT batch on every tick.
 Changed local addresses still receive a bounded publication while ordinary

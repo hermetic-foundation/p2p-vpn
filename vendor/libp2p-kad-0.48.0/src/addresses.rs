@@ -23,6 +23,11 @@ use std::{collections::HashSet, fmt, num::NonZeroUsize};
 use libp2p_core::{multiaddr::Protocol, Multiaddr};
 use smallvec::SmallVec;
 
+mod budget;
+pub(crate) use budget::Reservations;
+pub(crate) use budget::RoutingBudget;
+pub use budget::{RoutingLimits, RoutingUsage};
+
 /// A non-empty list of (unique) addresses of a peer in the routing table.
 /// Every address must be a fully-qualified /p2p address.
 #[derive(Clone)]
@@ -30,6 +35,7 @@ pub struct Addresses {
     addrs: SmallVec<[Multiaddr; 6]>,
     limits: AddressLimits,
     protected: HashSet<Multiaddr>,
+    reservations: Option<Reservations>,
 }
 
 /// Optional routing-address budgets. Unconfigured library users retain the
@@ -73,23 +79,57 @@ impl Addresses {
             addrs,
             limits: AddressLimits::default(),
             protected: HashSet::new(),
+            reservations: None,
         }
     }
 
-    pub(crate) fn with_limits(addr: Multiaddr, limits: AddressLimits) -> Option<Self> {
+    pub(crate) fn with_limits(
+        addr: Multiaddr,
+        limits: AddressLimits,
+        budget: Option<&RoutingBudget>,
+    ) -> Option<Self> {
         if !limits.accepts(&addr) {
             return None;
         }
+        let reservations = match budget {
+            Some(budget) => Some(Reservations::new(budget, &addr)?),
+            None => None,
+        };
         let mut addresses = Self::new(addr);
         addresses.limits = limits;
+        addresses.reservations = reservations;
         Some(addresses)
     }
 
-    pub(crate) fn protect(&mut self, addr: &Multiaddr) -> bool {
-        if !self.addrs.contains(addr) {
-            return false;
+    fn candidate(&self) -> Self {
+        let mut candidate = self.clone();
+        candidate.reservations = None;
+        candidate
+    }
+
+    fn commit_candidate(&mut self, mut candidate: Self, incoming: Option<&Multiaddr>) -> bool {
+        while !self
+            .reservations
+            .as_mut()
+            .expect("budgeted collection")
+            .revise(&candidate.addrs)
+        {
+            let Some(victim) = incoming.and_then(|address| candidate.eviction_candidate(address))
+            else {
+                return false;
+            };
+            candidate.addrs.remove(victim);
         }
-        self.protected.insert(addr.clone());
+        candidate.reservations = self.reservations.take();
+        *self = candidate;
+        true
+    }
+
+    pub(crate) fn protect(&mut self, addr: &Multiaddr) -> bool {
+        let Some(retained) = self.addrs.iter().find(|address| *address == addr) else {
+            return false;
+        };
+        self.protected.insert(retained.clone());
         true
     }
 
@@ -127,6 +167,15 @@ impl Addresses {
     /// otherwise unreachable.
     #[allow(clippy::result_unit_err)]
     pub fn remove(&mut self, addr: &Multiaddr) -> Result<(), ()> {
+        if self.reservations.is_some() {
+            let mut candidate = self.candidate();
+            candidate.remove(addr)?;
+            assert!(
+                self.commit_candidate(candidate, None),
+                "removal cannot increase usage"
+            );
+            return Ok(());
+        }
         if self.addrs.len() == 1 && self.addrs[0] == *addr {
             return Err(());
         }
@@ -149,6 +198,11 @@ impl Addresses {
     /// At capacity, rotates the oldest unprotected address, preferring the
     /// incoming address's category, then a category with multiple addresses.
     pub fn insert(&mut self, addr: Multiaddr) -> bool {
+        if self.reservations.is_some() {
+            let mut candidate = self.candidate();
+            let inserted = candidate.insert(addr.clone());
+            return self.commit_candidate(candidate, Some(&addr)) && inserted;
+        }
         if !self.limits.accepts(&addr) {
             return false;
         }
@@ -162,25 +216,7 @@ impl Addresses {
             return false;
         }
         if self.addrs.len() >= self.limits.count {
-            let category = address_category(&addr);
-            let mut category_counts = [0_usize; 3];
-            for address in &self.addrs {
-                category_counts[usize::from(address_category(address))] += 1;
-            }
-            let victim = self
-                .addrs
-                .iter()
-                .enumerate()
-                .filter(|(_, a)| !self.protected.contains(*a))
-                .min_by_key(|(_, a)| {
-                    let candidate = address_category(a);
-                    (
-                        candidate != category,
-                        category_counts[usize::from(candidate)] == 1,
-                    )
-                })
-                .map(|(index, _)| index);
-            let Some(victim) = victim else {
+            let Some(victim) = self.eviction_candidate(&addr) else {
                 return false;
             };
             self.addrs.remove(victim);
@@ -189,11 +225,38 @@ impl Addresses {
         true
     }
 
+    fn eviction_candidate(&self, incoming: &Multiaddr) -> Option<usize> {
+        let category = address_category(incoming);
+        let mut category_counts = [0_usize; 3];
+        for address in &self.addrs {
+            category_counts[usize::from(address_category(address))] += 1;
+        }
+        self.addrs
+            .iter()
+            .enumerate()
+            .filter(|(_, address)| *address != incoming && !self.protected.contains(*address))
+            .min_by_key(|(_, address)| {
+                let candidate = address_category(address);
+                (
+                    candidate != category,
+                    category_counts[usize::from(candidate)] == 1,
+                )
+            })
+            .map(|(index, _)| index)
+    }
+
     /// Replaces an old address, or learns the new address while keeping a protected seed.
     ///
     /// Returns true if the old address was found and the new address is retained.
     /// Bounded collections refresh recency and collapse duplicate replacements.
     pub fn replace(&mut self, old: &Multiaddr, new: &Multiaddr) -> bool {
+        if self.reservations.is_some() {
+            let mut candidate = self.candidate();
+            if !candidate.replace(old, new) {
+                return false;
+            }
+            return self.commit_candidate(candidate, Some(new));
+        }
         if !self.limits.accepts(new) {
             return false;
         }
@@ -305,6 +368,7 @@ mod tests {
             addrs: SmallVec::from_iter(addresses),
             limits: AddressLimits::default(),
             protected: HashSet::new(),
+            reservations: None,
         }
     }
 

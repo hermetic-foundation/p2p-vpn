@@ -162,9 +162,80 @@ No new formal model, full Nix package, APK, ARM64, or device validation is claim
 5. Remove entries and drain deferred notifications; prove capacity becomes available again.
 6. Exercise explicit address addition, connection discovery, and address migration through the same admission policy.
 
-These are audit findings and outstanding tests, not an implemented routing cap.
-The routing solution must cover actual owners without treating cloned events or
-public bucket iterators as authoritative aggregate accounting.
+### Aggregate Routing Admission
+
+| Limit | Value Per DHT | Rationale |
+| --- | ---: | --- |
+| Retained entry generations | 512 | Room for normal populated buckets plus pending work and short-lived snapshots |
+| Encoded address buffers | 2 MiB | Aggregate storage bound independent of per-peer address limits |
+| Per-peer addresses / per-address bytes | 64 / 2,048 | Existing limits also bound metadata and each admission attempt |
+
+Main discovery, separate public pairing, and standalone pairing use these defaults.
+No JSON or Nix configuration additions are required. The vendored library's
+`set_routing_limits` remains opt-in; wire formats are unchanged.
+
+| Transition | Accounting |
+| --- | --- |
+| Create present or pending entry | Reserve an entry generation and its first address before insertion |
+| Clone a routing snapshot | Share reservations; existing buffers remain charged once |
+| Add data while old snapshots live | Reserve another entry generation, bounding snapshot metadata as well as buffers |
+| Apply pending replacement | Keep the evicted entry charged until deferred notifications release it |
+| Remove an address or peer | Release each reservation after its last owner drops |
+| Queue a raw routing notification | Reserve from the same budget until dispatch or removal; excess reports are dropped |
+| Migrate / rotate an address | Credit only uniquely owned removed buffers; snapshots cannot be credited prematurely |
+| Admission fails | Preserve previously admitted entries and alternatives; do not close connections |
+
+At the byte ceiling, replacement prefers unprotected addresses in the incoming
+category, then duplicated categories. Protected seeds never fund replacement.
+If no valid replacement fits, the update fails without discarding existing data.
+
+Snapshots may delay admission after a peer disappears from the visible table.
+Draining notifications releases capacity automatically. Holding snapshots in a
+consumer intentionally keeps their reservations alive.
+
+`Behaviour::routing_resource_usage()` reports retained generations, encoded bytes,
+and rejection-attempt counters. It includes pending and deferred routing storage;
+it is not a visible-peer count or RSS estimate. Raw addresses transferred into
+query/transport owners are governed by those owners' separate limits.
+
+The behaviour queue charges raw `RoutablePeer`, `PendingRoutablePeer`,
+`UnroutablePeer`, and `NewExternalAddrOfPeer` notifications too. Otherwise a full
+table could move rejected addresses into an unbounded reporting queue. Existing
+`RoutingUpdated` snapshots already carry their reservations.
+
+### Aggregate Routing Regressions
+
+- Count saturation across peers, retained snapshots, removal, and resumed admission.
+- Snapshot-generation saturation for repeated updates to one peer; removal still works at capacity.
+- Byte saturation with 99 address replacements, seed/LAN/relay preservation, migration, and oversized-update rollback.
+- Pending admission under count/byte ceilings, lazy promotion, deferred eviction retention, and final release.
+- Raw notification admission at capacity, bounded rejection, and release on dispatch.
+
+### Routing Checkpoint Evidence
+
+| Check | Result |
+| --- | --- |
+| Five aggregate routing regressions and workspace | 1,280 passed; 22 opt-in tests ignored |
+| Internal connection learning, shared and separate DHTs | Passed: 65 connections each; 64 addresses retained |
+| Namespace DHT, forced relay pairing, peerless code, and owned QUIC | Passed |
+| Namespace relay/direct network move | Passed |
+| Android x86_64 native library | Built offline; four existing warnings |
+| Nix desktop / Android source parity | Passed with cached tool overrides, including both new modules |
+| Root / changed vendor formatting | Passed |
+| Workspace Clippy correctness, suspicious, and perf groups | Passed; style warnings remain |
+
+Logs use `/tmp/p2p-vpn-kad-aggregate-routing-`: `workspace-queue.log`,
+`internal-queue.log`, `dht-queue.log`, `relay-queue.log`, `code-queue.log`,
+`quic-queue.log`, `move-queue.log`, `android-queue.log`, `nix-queue.log`, and `clippy.log`.
+
+The initial queue adapter lacked its batch-insertion method; that compile error
+is fixed. `queue-check.log` and `workspace-verified.log` record the failed
+intermediate builds, not acceptance evidence.
+
+Full upstream vendor unit tests, full Nix packaging, ARM64 compilation, APKs,
+and physical deployments were not repeated. No RSS or sustained settling claim
+is made. Total query-pool limits and combined overload tests remain open;
+the phase is not complete.
 
 ## Implementation Order
 

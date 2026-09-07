@@ -20,10 +20,11 @@
 
 //! Implementation of the `Kademlia` network behaviour.
 
+mod queue;
 mod test;
 
 use std::{
-    collections::{BTreeMap, HashMap, HashSet, VecDeque},
+    collections::{BTreeMap, HashMap, HashSet},
     fmt,
     num::NonZeroUsize,
     task::{Context, Poll, Waker},
@@ -47,7 +48,7 @@ use web_time::Instant;
 
 pub use crate::query::QueryStats;
 use crate::{
-    addresses::{AddressLimits, Addresses},
+    addresses::{AddressLimits, Addresses, RoutingBudget, RoutingLimits, RoutingUsage},
     bootstrap,
     handler::{Handler, HandlerEvent, HandlerIn, RequestId},
     jobs::*,
@@ -79,6 +80,8 @@ pub struct Behaviour<TStore> {
 
     address_limits: AddressLimits,
 
+    routing_budget: Option<RoutingBudget>,
+
     /// Configuration of [`RecordStore`] filtering.
     record_filtering: StoreInserts,
 
@@ -108,7 +111,7 @@ pub struct Behaviour<TStore> {
     provider_record_ttl: Option<Duration>,
 
     /// Queued events to return when the behaviour is being polled.
-    queued_events: VecDeque<ToSwarm<Event, HandlerIn>>,
+    queued_events: queue::QueuedEvents,
 
     listen_addresses: ListenAddresses,
 
@@ -185,6 +188,7 @@ pub enum StoreInserts {
 /// The configuration is consumed by [`Behaviour::new`].
 #[derive(Debug, Clone)]
 pub struct Config {
+    routing_limits: Option<RoutingLimits>,
     handler_queue_limits: Option<crate::HandlerQueueLimits>,
     background_query_limit: usize,
     background_query_batch: usize,
@@ -233,6 +237,7 @@ impl Config {
     /// Builds a new `Config` with the given protocol name.
     pub fn new(protocol_name: StreamProtocol) -> Self {
         Config {
+            routing_limits: None,
             handler_queue_limits: None,
             kbucket_config: KBucketConfig::default(),
             query_config: QueryConfig::default(),
@@ -258,6 +263,13 @@ impl Config {
     /// beyond the bounded error queue are left to the original query deadline.
     pub fn set_handler_queue_limits(&mut self, limits: crate::HandlerQueueLimits) -> &mut Self {
         self.handler_queue_limits = Some(limits);
+        self
+    }
+
+    /// Bounds retained routing entries and encoded addresses, including pending
+    /// entries and snapshots. Admission resumes when their last owner releases capacity.
+    pub fn set_routing_limits(&mut self, limits: RoutingLimits) -> &mut Self {
+        self.routing_limits = Some(limits);
         self
     }
 
@@ -523,6 +535,7 @@ where
         let local_key = kbucket::Key::from(id);
         let mut kbuckets = KBucketsTable::new(local_key, config.kbucket_config);
         kbuckets.set_value_protection(Addresses::is_protected);
+        let routing_budget = config.routing_limits.map(RoutingBudget::new);
 
         let put_record_job = config
             .record_replication_interval
@@ -541,6 +554,7 @@ where
             .map(AddProviderJob::new);
 
         Behaviour {
+            routing_budget: routing_budget.clone(),
             handler_queue_limits: config.handler_queue_limits,
             store,
             caching: config.caching,
@@ -549,7 +563,11 @@ where
             protocol_config: config.protocol_config,
             address_limits: config.address_limits,
             record_filtering: config.record_filtering,
-            queued_events: VecDeque::with_capacity(config.query_config.replication_factor.get()),
+            queued_events: queue::QueuedEvents::new(
+                config.query_config.replication_factor.get(),
+                routing_budget,
+                config.address_limits,
+            ),
             listen_addresses: Default::default(),
             queries: QueryPool::new(config.query_config),
             connected_peers: Default::default(),
@@ -672,8 +690,13 @@ where
                 }
             }
             Some(kbucket::Entry::Absent(entry)) => {
-                let addresses = Addresses::with_limits(address, self.address_limits)
-                    .expect("address checked against configured limits");
+                let Some(addresses) = Addresses::with_limits(
+                    address,
+                    self.address_limits,
+                    self.routing_budget.as_ref(),
+                ) else {
+                    return RoutingUpdate::Failed;
+                };
                 let status = if self.connected_peers.contains(peer) {
                     NodeStatus::Connected
                 } else {
@@ -731,6 +754,14 @@ where
             addresses.protect(&address);
         }
         result
+    }
+
+    /// Aggregate routing reservations, including snapshots not yet dropped.
+    /// Returns zero usage when aggregate limits are not configured.
+    pub fn routing_resource_usage(&self) -> RoutingUsage {
+        self.routing_budget
+            .as_ref()
+            .map_or_else(RoutingUsage::default, RoutingBudget::usage)
     }
 
     /// Removes an address of a peer from the routing table.
@@ -1150,7 +1181,7 @@ where
                     .then_some(query.id())
             })
             .collect::<HashSet<_>>();
-        for action in &self.queued_events {
+        for action in self.queued_events.iter() {
             match action {
                 ToSwarm::NotifyHandler {
                     event:
@@ -1608,8 +1639,16 @@ where
                             }));
                     }
                     (Some(a), BucketInserts::OnConnected) => {
-                        let addresses = Addresses::with_limits(a, self.address_limits)
-                            .expect("connection address checked against configured limits");
+                        let Some(addresses) = Addresses::with_limits(
+                            a.clone(),
+                            self.address_limits,
+                            self.routing_budget.as_ref(),
+                        ) else {
+                            self.queued_events.push_back(ToSwarm::GenerateEvent(
+                                Event::RoutablePeer { peer, address: a },
+                            ));
+                            return;
+                        };
                         match entry.insert(addresses.clone(), new_status) {
                             kbucket::InsertResult::Inserted => {
                                 self.bootstrap_on_low_peers();

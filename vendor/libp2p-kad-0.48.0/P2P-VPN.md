@@ -27,6 +27,8 @@ changelog, generated protocol source, and tests.
 | `src/jobs.rs` | Document the shared background batch default; remove stopped providers from pending snapshots. |
 | `src/handler.rs`, `src/handler/pending.rs` | Opt-in request admission/expiry, bounded rejection reporting, and negotiation queue accounting. |
 | `src/kbucket.rs`, `src/kbucket/bucket.rs` | Preserve protected seed peers during pending replacement; retain and recheck the probed victim identity. |
+| `src/addresses/budget.rs` | Shared aggregate entry-generation and encoded-buffer reservations, including retained snapshots and deferred eviction storage. |
+| `src/behaviour/queue.rs` | Charge raw routing notifications to the same aggregate budget; retire reservations on dispatch or queue removal. |
 
 The library configuration defaults are unchanged. p2p-vpn disables automatic and periodic bootstrap
 explicitly so its scheduler owns bootstrap initiation. Explicit `bootstrap()` is
@@ -48,6 +50,18 @@ Whole-peer bucket eviction also preserves protected seeds. If all eligible
 disconnected peers are protected, insertion fails at the existing bucket limit.
 Pending replacement does not switch to another victim if the probed peer becomes
 protected or reconnects; explicit removal still releases capacity.
+
+`set_routing_limits()` enables aggregate routing reservations; p2p-vpn selects
+512 retained entry generations and 2 MiB of encoded addresses per DHT. Snapshots
+share existing buffer reservations but updates need another generation while
+older snapshots live. This also bounds notification snapshot metadata growth.
+
+Reservations retire with their last owner, including pending entries and deferred
+eviction notifications. Address replacement credits only uniquely owned removed
+buffers. Rejected admission preserves existing data; seed protection never
+bypasses the limits. `routing_resource_usage()` exposes usage and rejection attempts.
+Raw routing notifications share these limits and are dropped when admission fails;
+`RoutingUpdated` snapshots already retain reservations for their data.
 
 Provider and record jobs share background admission capacity and alternate first
 access. Defaults remain a 100-query ceiling and batch size ten, but the batch is

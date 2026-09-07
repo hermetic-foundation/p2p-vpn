@@ -445,6 +445,10 @@ pub(super) fn controlled_kademlia_config(protocol: StreamProtocol) -> kad::Confi
             NonZeroUsize::new(64).unwrap(),
             NonZeroUsize::new(256 * 1024).unwrap(),
         ))
+        .set_routing_limits(kad::RoutingLimits::new(
+            NonZeroUsize::new(512).unwrap(),
+            NonZeroUsize::new(2 * 1024 * 1024).unwrap(),
+        ))
         .set_background_query_limits(NonZeroUsize::new(2).unwrap(), NonZeroUsize::MIN)
         .set_address_limits(address_limits)
         .set_query_limits(kad::QueryLimits::new(
@@ -2016,6 +2020,397 @@ mod tests {
         }
         assert_eq!(providers.len(), 10, "provider publication starved");
         assert_eq!(records.len(), 10, "record publication starved");
+    }
+
+    #[test]
+    fn aggregate_routing_entries_retire_only_after_snapshots_release() {
+        let local = PeerId::random();
+        let mut config = controlled_kademlia_config(StreamProtocol::new(
+            crate::config::PUBLIC_IPFS_KADEMLIA_PROTOCOL,
+        ));
+        config.set_routing_limits(kad::RoutingLimits::new(
+            NonZeroUsize::new(2).unwrap(),
+            NonZeroUsize::new(4096).unwrap(),
+        ));
+        let mut kad =
+            kad::Behaviour::with_config(local, kad::store::MemoryStore::new(local), config);
+        let peers = [PeerId::random(), PeerId::random(), PeerId::random()];
+        let address: Multiaddr = "/memory/1".parse().unwrap();
+        for peer in &peers[..2] {
+            assert_eq!(
+                kad.add_address(peer, address.clone()),
+                kad::RoutingUpdate::Success
+            );
+        }
+        let snapshots = drain_routing_snapshots(&mut kad);
+        assert_eq!(snapshots.len(), 2);
+        assert_eq!(kad.routing_resource_usage().entries, 2);
+        drop(kad.remove_peer(&peers[0]).unwrap());
+        assert_eq!(
+            kad.routing_resource_usage().entries,
+            2,
+            "snapshot released too early"
+        );
+        assert_eq!(
+            kad.add_address(&peers[2], address.clone()),
+            kad::RoutingUpdate::Failed
+        );
+        drop(snapshots);
+        assert_eq!(kad.routing_resource_usage().entries, 1);
+        assert_eq!(
+            kad.add_address(&peers[2], address),
+            kad::RoutingUpdate::Success
+        );
+        for peer in &peers[1..] {
+            drop(kad.remove_peer(peer).unwrap());
+        }
+        drop(drain_routing_snapshots(&mut kad));
+        let usage = kad.routing_resource_usage();
+        assert_eq!(usage.entries, 0);
+        assert_eq!(usage.address_bytes, 0);
+        assert!(usage.entry_rejections > 0);
+    }
+
+    fn drain_routing_snapshots(
+        kad: &mut kad::Behaviour<kad::store::MemoryStore>,
+    ) -> Vec<kad::Addresses> {
+        let waker = futures::task::noop_waker();
+        let mut cx = std::task::Context::from_waker(&waker);
+        let mut snapshots = Vec::new();
+        for _ in 0..1000 {
+            match kad.poll(&mut cx) {
+                std::task::Poll::Ready(libp2p::swarm::ToSwarm::GenerateEvent(
+                    kad::Event::RoutingUpdated { addresses, .. },
+                )) => snapshots.push(addresses),
+                std::task::Poll::Pending => return snapshots,
+                _ => {}
+            }
+        }
+        panic!("routing event queue did not drain");
+    }
+
+    #[test]
+    fn aggregate_routing_snapshot_generations_cannot_bypass_entry_limit() {
+        let local = PeerId::random();
+        let peer = PeerId::random();
+        let mut config = controlled_kademlia_config(StreamProtocol::new(
+            crate::config::PUBLIC_IPFS_KADEMLIA_PROTOCOL,
+        ));
+        config.set_routing_limits(kad::RoutingLimits::new(
+            NonZeroUsize::new(2).unwrap(),
+            NonZeroUsize::new(4096).unwrap(),
+        ));
+        let mut kad =
+            kad::Behaviour::with_config(local, kad::store::MemoryStore::new(local), config);
+        let address = |port| format!("/memory/{port}").parse::<Multiaddr>().unwrap();
+        for port in 1..=2 {
+            assert_eq!(
+                kad.add_address(&peer, address(port)),
+                kad::RoutingUpdate::Success
+            );
+        }
+        assert_eq!(kad.routing_resource_usage().entries, 2);
+        assert_eq!(
+            kad.add_address(&peer, address(3)),
+            kad::RoutingUpdate::Failed
+        );
+        let before = kad.routing_resource_usage().address_bytes;
+        assert!(kad.remove_address(&peer, &address(1)).is_none());
+        assert_eq!(
+            kad.routing_resource_usage().address_bytes,
+            before,
+            "old snapshots still own the removed buffer"
+        );
+        drop(drain_routing_snapshots(&mut kad));
+        assert_eq!(kad.routing_resource_usage().entries, 1);
+        assert!(kad.routing_resource_usage().address_bytes < before);
+        assert_eq!(
+            kad.add_address(&peer, address(3)),
+            kad::RoutingUpdate::Success
+        );
+        drop(kad.remove_peer(&peer).unwrap());
+        drop(drain_routing_snapshots(&mut kad));
+        assert_eq!(kad.routing_resource_usage().entries, 0);
+        assert_eq!(kad.routing_resource_usage().address_bytes, 0);
+    }
+
+    #[test]
+    fn aggregate_routing_bytes_preserve_seeds_and_fresh_alternatives() {
+        let local = PeerId::random();
+        let peer = PeerId::random();
+        let seed: Multiaddr = "/ip4/11.1.1.1/tcp/4001".parse().unwrap();
+        let lan: Multiaddr = "/ip4/192.168.1.2/tcp/4001".parse().unwrap();
+        let relay: Multiaddr = format!(
+            "/ip4/11.1.1.2/tcp/4001/p2p/{}/p2p-circuit",
+            PeerId::random()
+        )
+        .parse()
+        .unwrap();
+        let wan = |port| {
+            format!("/ip4/11.1.1.3/tcp/{port}")
+                .parse::<Multiaddr>()
+                .unwrap()
+        };
+        let limit = [seed.clone(), lan.clone(), relay.clone(), wan(1)]
+            .into_iter()
+            .map(|address| address.with_p2p(peer).unwrap().len())
+            .sum();
+        let mut config = controlled_kademlia_config(StreamProtocol::new(
+            crate::config::PUBLIC_IPFS_KADEMLIA_PROTOCOL,
+        ));
+        config.set_routing_limits(kad::RoutingLimits::new(
+            NonZeroUsize::new(16).unwrap(),
+            NonZeroUsize::new(limit).unwrap(),
+        ));
+        let mut kad =
+            kad::Behaviour::with_config(local, kad::store::MemoryStore::new(local), config);
+        assert_eq!(
+            kad.add_protected_address(&peer, seed.clone()),
+            kad::RoutingUpdate::Success
+        );
+        for address in [lan.clone(), relay.clone(), wan(1)] {
+            assert_eq!(kad.add_address(&peer, address), kad::RoutingUpdate::Success);
+        }
+        assert_eq!(kad.routing_resource_usage().address_bytes, limit);
+        assert_eq!(
+            kad.add_address(&peer, wan(2)),
+            kad::RoutingUpdate::Failed,
+            "snapshots still retain the old buffers"
+        );
+        drop(drain_routing_snapshots(&mut kad));
+        for port in 2..=100 {
+            assert_eq!(
+                kad.add_address(&peer, wan(port)),
+                kad::RoutingUpdate::Success
+            );
+            assert_eq!(kad.routing_resource_usage().address_bytes, limit);
+            drop(drain_routing_snapshots(&mut kad));
+        }
+        let old = libp2p::core::ConnectedPoint::Dialer {
+            address: wan(100).with_p2p(peer).unwrap(),
+            role_override: libp2p::core::Endpoint::Dialer,
+            port_use: libp2p::core::transport::PortUse::Reuse,
+        };
+        let new = libp2p::core::ConnectedPoint::Dialer {
+            address: wan(101).with_p2p(peer).unwrap(),
+            role_override: libp2p::core::Endpoint::Dialer,
+            port_use: libp2p::core::transport::PortUse::Reuse,
+        };
+        kad.on_swarm_event(libp2p::swarm::FromSwarm::AddressChange(
+            libp2p::swarm::behaviour::AddressChange {
+                peer_id: peer,
+                connection_id: libp2p::swarm::ConnectionId::new_unchecked(1),
+                old: &old,
+                new: &new,
+            },
+        ));
+        assert_eq!(
+            kad.add_address(
+                &peer,
+                Multiaddr::empty().with(Protocol::Dns("a".repeat(limit).into()))
+            ),
+            kad::RoutingUpdate::Failed,
+            "an impossible admission must leave existing alternatives intact"
+        );
+        let retained = kad.remove_peer(&peer).unwrap().node.value;
+        assert_eq!(retained.len(), 4);
+        for address in [seed, lan, relay, wan(101)] {
+            assert!(
+                retained
+                    .iter()
+                    .any(|a| a == &address.clone().with_p2p(peer).unwrap())
+            );
+        }
+        assert_eq!(kad.routing_resource_usage().address_bytes, limit);
+        drop(retained);
+        assert_eq!(kad.routing_resource_usage().entries, 0);
+        assert_eq!(kad.routing_resource_usage().address_bytes, 0);
+    }
+
+    #[test]
+    fn aggregate_routing_counts_pending_and_deferred_eviction_storage() {
+        let peer_for = |seed| {
+            libp2p::identity::Keypair::ed25519_from_bytes([seed; 32])
+                .unwrap()
+                .public()
+                .to_peer_id()
+        };
+        for address_slots in [1, 2] {
+            let local = peer_for(0);
+            let first = peer_for(1);
+            let address: Multiaddr = "/memory/1".parse().unwrap();
+            let bytes = address.clone().with_p2p(first).unwrap().len();
+            let mut config = controlled_kademlia_config(StreamProtocol::new(
+                crate::config::PUBLIC_IPFS_KADEMLIA_PROTOCOL,
+            ));
+            config
+                .set_kbucket_size(NonZeroUsize::MIN)
+                .set_kbucket_pending_timeout(Duration::from_millis(100))
+                .set_routing_limits(kad::RoutingLimits::new(
+                    NonZeroUsize::new(2).unwrap(),
+                    NonZeroUsize::new(bytes * address_slots).unwrap(),
+                ));
+            let mut kad =
+                kad::Behaviour::with_config(local, kad::store::MemoryStore::new(local), config);
+            let range = kad.kbucket(first).unwrap().range();
+            let candidate = (2..=255)
+                .map(peer_for)
+                .find(|peer| kad.kbucket(*peer).unwrap().range() == range)
+                .unwrap();
+            let other = (2..=255)
+                .map(peer_for)
+                .find(|peer| kad.kbucket(*peer).unwrap().range() != range)
+                .unwrap();
+            assert_eq!(
+                kad.add_address(&first, address.clone()),
+                kad::RoutingUpdate::Success
+            );
+            let endpoint = libp2p::core::ConnectedPoint::Dialer {
+                address: address.clone(),
+                role_override: libp2p::core::Endpoint::Dialer,
+                port_use: libp2p::core::transport::PortUse::Reuse,
+            };
+            kad.on_swarm_event(libp2p::swarm::FromSwarm::ConnectionEstablished(
+                libp2p::swarm::behaviour::ConnectionEstablished {
+                    peer_id: candidate,
+                    connection_id: libp2p::swarm::ConnectionId::new_unchecked(1),
+                    endpoint: &endpoint,
+                    failed_addresses: &[],
+                    other_established: 0,
+                },
+            ));
+            assert_eq!(
+                kad.add_protected_address(&candidate, address.clone()),
+                if address_slots == 2 {
+                    kad::RoutingUpdate::Pending
+                } else {
+                    kad::RoutingUpdate::Failed
+                }
+            );
+            let usage = kad.routing_resource_usage();
+            assert_eq!(usage.entries, address_slots);
+            assert_eq!(usage.address_bytes, bytes * address_slots);
+            assert_eq!(
+                kad.kbucket(first).unwrap().has_pending(),
+                address_slots == 2
+            );
+            assert_eq!(
+                kad.add_address(&other, address.clone()),
+                kad::RoutingUpdate::Failed
+            );
+            let initial_snapshots = drain_routing_snapshots(&mut kad);
+            assert_eq!(initial_snapshots.len(), 1);
+            drop(initial_snapshots);
+            std::thread::sleep(Duration::from_millis(150));
+            let present = kad
+                .kbucket(first)
+                .unwrap()
+                .iter()
+                .map(|entry| *entry.node.key.preimage())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                present,
+                vec![if address_slots == 2 { candidate } else { first }]
+            );
+            // Lazy promotion still owns the evicted node until behaviour polling.
+            assert_eq!(kad.routing_resource_usage().entries, address_slots);
+            assert_eq!(
+                kad.routing_resource_usage().address_bytes,
+                bytes * address_slots
+            );
+            drop(drain_routing_snapshots(&mut kad));
+            assert_eq!(kad.routing_resource_usage().entries, 1);
+            assert_eq!(kad.routing_resource_usage().address_bytes, bytes);
+            let removed = kad.remove_peer(&present[0]).unwrap();
+            assert_eq!(kad.routing_resource_usage().entries, 1);
+            drop(removed);
+            assert_eq!(kad.routing_resource_usage().entries, 0);
+            assert_eq!(kad.routing_resource_usage().address_bytes, 0);
+            assert_eq!(
+                kad.add_address(&other, address),
+                kad::RoutingUpdate::Success
+            );
+        }
+    }
+
+    #[test]
+    fn aggregate_routing_raw_notifications_share_admission_and_retire_on_dispatch() {
+        let peer_for = |seed| {
+            libp2p::identity::Keypair::ed25519_from_bytes([seed; 32])
+                .unwrap()
+                .public()
+                .to_peer_id()
+        };
+        for slots in [2, 3] {
+            let local = peer_for(0);
+            let first = peer_for(1);
+            let address: Multiaddr = "/memory/1".parse().unwrap();
+            let bytes = address.clone().with_p2p(first).unwrap().len();
+            let mut config = controlled_kademlia_config(StreamProtocol::new(
+                crate::config::PUBLIC_IPFS_KADEMLIA_PROTOCOL,
+            ));
+            config
+                .set_kbucket_size(NonZeroUsize::MIN)
+                .set_kbucket_pending_timeout(Duration::from_millis(100))
+                .set_routing_limits(kad::RoutingLimits::new(
+                    NonZeroUsize::new(slots).unwrap(),
+                    NonZeroUsize::new(bytes * slots).unwrap(),
+                ));
+            let mut kad =
+                kad::Behaviour::with_config(local, kad::store::MemoryStore::new(local), config);
+            let range = kad.kbucket(first).unwrap().range();
+            let candidate = (2..=255)
+                .map(peer_for)
+                .find(|peer| kad.kbucket(*peer).unwrap().range() == range)
+                .unwrap();
+            assert_eq!(
+                kad.add_address(&first, address.clone()),
+                kad::RoutingUpdate::Success
+            );
+            let endpoint = libp2p::core::ConnectedPoint::Dialer {
+                address: address.clone(),
+                role_override: libp2p::core::Endpoint::Dialer,
+                port_use: libp2p::core::transport::PortUse::Reuse,
+            };
+            kad.on_swarm_event(libp2p::swarm::FromSwarm::ConnectionEstablished(
+                libp2p::swarm::behaviour::ConnectionEstablished {
+                    peer_id: candidate,
+                    connection_id: libp2p::swarm::ConnectionId::new_unchecked(1),
+                    endpoint: &endpoint,
+                    failed_addresses: &[],
+                    other_established: 0,
+                },
+            ));
+            assert_eq!(
+                kad.add_address(&candidate, address),
+                kad::RoutingUpdate::Pending
+            );
+            drop(drain_routing_snapshots(&mut kad));
+            std::thread::sleep(Duration::from_millis(150));
+            assert_eq!(kad.kbucket(first).unwrap().num_entries(), 1);
+            assert_eq!(kad.routing_resource_usage().entries, 2);
+            let waker = futures::task::noop_waker();
+            let mut cx = std::task::Context::from_waker(&waker);
+            let routing = kad.poll(&mut cx);
+            assert!(
+                matches!(&routing, std::task::Poll::Ready(libp2p::swarm::ToSwarm::GenerateEvent(kad::Event::RoutingUpdated { peer, .. })) if *peer == candidate)
+            );
+            assert_eq!(kad.routing_resource_usage().entries, slots - 1);
+            drop(kad.remove_peer(&candidate).unwrap());
+            drop(routing);
+            assert_eq!(kad.routing_resource_usage().entries, slots - 2);
+            let notification = kad.poll(&mut cx);
+            if slots == 3 {
+                assert!(
+                    matches!(notification, std::task::Poll::Ready(libp2p::swarm::ToSwarm::NewExternalAddrOfPeer { peer_id, .. }) if peer_id == candidate)
+                );
+            } else {
+                assert!(notification.is_pending());
+                assert!(kad.routing_resource_usage().entry_rejections > 0);
+            }
+            assert_eq!(kad.routing_resource_usage().entries, 0);
+            assert_eq!(kad.routing_resource_usage().address_bytes, 0);
+        }
     }
 
     #[test]

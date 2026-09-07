@@ -24,7 +24,7 @@ See [Aggregate Bounds](kademlia-aggregate-bounds.md) for phase 1 ownership and t
 
 | Area | Required Evidence | Status |
 | --- | --- | --- |
-| Internal addresses | Count/byte bounds for present and pending buckets, address changes, and query caches | Per-peer routing and per-query retention verified; aggregate routing open |
+| Internal addresses | Count/byte bounds for present and pending buckets, address changes, and query caches | Aggregate routing and per-query retention verified; total query retention open |
 | Query state | Bounded candidate identities, active queries, and retained results | Candidates/addresses verified; aggregate admission and result audit open |
 | Scheduling | Bounded bootstrap, discovery, and dial activity under failure and churn | Cooldown and automatic bootstrap fixed; aggregate audit open |
 | Recovery | LAN-first lookup, relay fallback, network-change recovery, and healthy-path settling | Open |
@@ -385,8 +385,9 @@ Callers must discard ownership of the canceled ID.
 
 Handler queue enforcement is now covered by the
 [aggregate-bounds checkpoint](kademlia-aggregate-bounds.md#implemented-admission).
-Aggregate routing/query admission and sustained process-resource measurements
-remain open. Synthetic cancellation tests do not measure remote record expiry.
+Aggregate routing now includes retained generations, buffers, and notifications.
+Total query admission and sustained process-resource measurements remain open.
+Synthetic cancellation tests do not measure remote record expiry.
 
 #### Join Lookup Ownership
 
@@ -512,13 +513,15 @@ Vendor behavior is exercised through the workspace tests and native compilation.
 The fixed-query comparison injects dial failures without opening sockets. It is
 not a network dial-rate, CPU, or RSS benchmark. No physical-device, public-WAN,
 ARM64-native, or full Nix-package validation is claimed for this patch.
-Active-query admission and aggregate routing/measurement gates remain open.
+Active-query admission and measurement gates remain open. Aggregate routing
+enforcement is covered by the [phase-1 checkpoint](kademlia-aggregate-bounds.md#aggregate-routing-admission).
 
 ### Routing-Address Owner
 
 Both runtime DHTs enable a 64-address limit per routing peer and a 2,048-byte
 limit per encoded address. The library's default remains unbounded unless its
-caller opts in. This is not yet an aggregate routing or query-memory budget.
+caller opts in. These per-peer limits now compose with the shared aggregate
+routing budget; total query-memory admission remains unfinished.
 
 The standalone pre-network code-pairing host also uses this shared configuration,
 including disabled automatic bootstrap and protected seeds/candidate hints.
