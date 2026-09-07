@@ -1586,6 +1586,41 @@ mod tests {
     }
 
     #[test]
+    fn canceling_bootstrap_releases_automatic_bootstrap_suppression() {
+        use libp2p::swarm::NetworkBehaviour;
+        use std::task::Context;
+        let local = PeerId::random();
+        let mut config = controlled_kademlia_config(StreamProtocol::new(
+            crate::config::PUBLIC_IPFS_KADEMLIA_PROTOCOL,
+        ));
+        config.set_periodic_bootstrap_interval(Some(Duration::from_millis(1)));
+        let mut kad =
+            kad::Behaviour::with_config(local, kad::store::MemoryStore::new(local), config);
+        kad.add_address(&PeerId::random(), "/memory/1".parse().unwrap());
+        let first = kad.bootstrap().unwrap();
+        let second = kad.bootstrap().unwrap();
+        assert!(kad.cancel_query(&first));
+        std::thread::sleep(Duration::from_millis(5));
+        let waker = futures::task::noop_waker();
+        let mut cx = Context::from_waker(&waker);
+        for _ in 0..10 {
+            let _ = kad.poll(&mut cx);
+        }
+        assert_eq!(kad.iter_queries().count(), 1);
+        assert!(kad.query(&second).is_some());
+        assert!(kad.cancel_query(&second));
+        assert!(!kad.cancel_query(&second));
+        for _ in 0..10 {
+            let _ = kad.poll(&mut cx);
+        }
+        assert_eq!(
+            kad.iter_queries().count(),
+            1,
+            "automatic bootstrap stayed suppressed after all explicit queries were canceled"
+        );
+    }
+
+    #[test]
     fn stopping_provider_retires_queries_without_affecting_other_work() {
         let mut kad = bounded_routing_test_dht();
         kad.add_address(&PeerId::random(), "/memory/1".parse().unwrap());

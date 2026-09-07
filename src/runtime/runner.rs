@@ -2643,9 +2643,7 @@ impl KademliaMaintenance {
     fn cancel_queries(&mut self, kademlia: &mut kad::Behaviour<kad::store::MemoryStore>) -> usize {
         let queries = self.queries.drain().collect::<Vec<_>>();
         for query in &queries {
-            if let Some(mut query) = kademlia.query_mut(query) {
-                query.finish();
-            }
+            kademlia.cancel_query(query);
         }
         self.started_at = None;
         queries.len()
@@ -9529,9 +9527,7 @@ fn finish_targeted_recovery_queries(
     queries: Vec<kad::QueryId>,
 ) -> usize {
     for query in &queries {
-        if let Some(mut pending) = kademlia.query_mut(query) {
-            pending.finish();
-        }
+        kademlia.cancel_query(query);
     }
     queries.len()
 }
@@ -27209,6 +27205,50 @@ mod tests {
         assert_eq!(snapshot.outbound_drop_queue_expired_packets, 1);
         assert_eq!(snapshot.queue.queued_packets, 1);
         assert_eq!(snapshot.queue.expired_packets, 1);
+    }
+
+    #[tokio::test]
+    async fn scheduler_cancellation_removes_retained_query_state() {
+        let identity = NodeIdentity::generate_ed25519().unwrap();
+        let mut node = pairing_test_node(&identity);
+        let kad = &mut node.swarm.behaviour_mut().kad;
+        kad.add_address(&peer_id(), "/memory/1".parse().unwrap());
+        let unrelated = kad.get_closest_peers(peer_id());
+        let now = Instant::now();
+        let mut maintenance = KademliaMaintenance::new(now);
+        for cycle in 0..64 {
+            let query = match cycle % 3 {
+                0 => kad.bootstrap().unwrap(),
+                1 => kad
+                    .start_providing(kad::RecordKey::new(&b"maintenance"))
+                    .unwrap(),
+                _ => kad.get_record(kad::RecordKey::new(&b"recovery")),
+            };
+            match cycle % 4 {
+                0 => {
+                    maintenance.record_started(query, now);
+                    assert_eq!(maintenance.cancel_queries(kad), 1);
+                }
+                1 => {
+                    maintenance.record_started(query, now);
+                    assert_eq!(maintenance.reset(kad, now), 1);
+                }
+                2 => {
+                    maintenance.record_started(query, now);
+                    assert_eq!(
+                        maintenance.expire_queries(kad, now + KADEMLIA_MAINTENANCE_QUERY_TIMEOUT),
+                        1
+                    );
+                }
+                _ => assert_eq!(finish_targeted_recovery_queries(kad, vec![query]), 1),
+            }
+            assert!(
+                !kad.cancel_query(&query),
+                "scheduler released ownership but retained query state or queued actions"
+            );
+            assert!(kad.query(&unrelated).is_some());
+            assert_eq!(maintenance.pending_queries(), 0);
+        }
     }
 
     #[tokio::test]

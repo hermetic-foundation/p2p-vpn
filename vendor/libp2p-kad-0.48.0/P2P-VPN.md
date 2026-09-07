@@ -62,6 +62,10 @@ actions without advancing phases or emitting completion. Unsent dials needed by
 another query remain queued. Already dispatched dials, handler requests, and
 remote provider records are not recalled; remote records expire normally.
 
+Canceling a retained bootstrap query also releases its active-bootstrap count.
+Automatic bootstrap stays suppressed while another bootstrap remains active,
+then resumes according to configuration. Repeated cancellation is a no-op.
+
 ## Build Integration
 
 - The root `[patch.crates-io]` selects this source for the entire Cargo dependency graph.

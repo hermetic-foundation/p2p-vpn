@@ -209,6 +209,61 @@ fixed-peer queries use the replication factor. Both default counts are 20.
 
 Aggregate limits and comparable resource measurements remain open.
 
+#### Scheduler Retirement
+
+Maintenance preemption, reset, expiry, and targeted recovery cleanup now use
+immediate `cancel_query` retirement. Previously they called `QueryMut::finish`,
+which hides a query from running-query inspection without immediately removing
+its retained state; multi-stage operations may also continue when polled.
+
+The regression failed on its first bootstrap cancellation before the fix. It
+exercises 64 cancellation cycles across bootstrap, provider publication, and
+record lookup, while preserving an unrelated query. A second cancellation must
+find neither query state nor queued actions for the retired ID.
+
+Timeouts, recovery cooldowns, authorization checks, and metrics are unchanged.
+Dispatched handler work remains outside this local retirement guarantee.
+Negative-control log: `/tmp/p2p-vpn-kad-retire-before.log`.
+
+Review also found that cancellation must decrement the library's active-bootstrap
+counter. Removing only the query left automatic bootstrap suppressed. The fix and
+regression preserve suppression while a second bootstrap remains, then permit
+periodic bootstrap after both are canceled, without double-decrementing.
+
+Both regressions failed before their respective fixes. The bootstrap counter's
+negative-control log is `/tmp/p2p-vpn-kad-retire-bootstrap-before.log`.
+
+#### Verified Scheduler Checks
+
+| Check | Result |
+| --- | --- |
+| Workspace | 1,270 passed; 22 opt-in tests ignored |
+| Clippy correctness, suspicious, performance groups | Passed; style warnings remain |
+| Peerless code pairing / forced-relay pairing | Passed: 13.42 / 17.64 seconds |
+| DHT / owned QUIC / relay-direct network move | Passed: 16.73 / 16.08 / 52.35 seconds |
+| Native x86_64 Android | Built offline in 39.12 seconds; existing native-target warnings remain |
+| Nix source parity / formatting / whitespace | Passed |
+
+Final logs use `/tmp/p2p-vpn-kad-retire-` with `workspace`, `clippy`, `code`,
+`relay`, `dht`, `quic`, `move`, `android`, and `nix` `-verified.log` suffixes.
+Earlier runs without that suffix preceded the bootstrap-counter correction.
+
+Nix source output:
+`/nix/store/p7p3xc2mgsafswg4h3i04vcmhnjv05iz-p2p-vpn-rust-test-sources`.
+These are controlled regression checks, not sustained resource measurements or
+physical-network validation. No full Nix package or ARM64 build was performed.
+
+#### Address Publication Admission Gap
+
+`publish_kademlia_peer_address_record` discards the query ID returned by its
+publication helper. Listener/external-address changes and relay acceptance call
+this path independently of the one-query maintenance owner. Query lifetime alone
+does not prove bounded admission under event churn.
+
+Next: coalesce and bound event-triggered publication while retaining the newest
+reachable addresses. Do not suppress required post-migration publication merely
+because maintenance or an older publication is still running.
+
 ### Background Job Admission
 
 Provider and record jobs previously reused the same available query capacity

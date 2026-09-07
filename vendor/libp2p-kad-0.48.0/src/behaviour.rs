@@ -1176,6 +1176,12 @@ where
     /// requests, connection-handler work, and remote side effects are not recalled.
     pub fn cancel_query(&mut self, id: &QueryId) -> bool {
         let query = self.queries.remove(id);
+        if query
+            .as_ref()
+            .is_some_and(|query| matches!(query.info, QueryInfo::Bootstrap { .. }))
+        {
+            self.bootstrap_status.on_finish();
+        }
         let needed = self
             .queries
             .iter()
