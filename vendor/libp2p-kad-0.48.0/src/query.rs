@@ -165,6 +165,9 @@ impl QueryPool {
         };
         for query in self.queries.values() {
             query.info.add_metadata_usage(&mut usage);
+            if let QueryPeerIter::Fixed(iter) = &query.peers.peer_iter {
+                usage.fixed_peer_slots += iter.capacity();
+            }
         }
         usage
     }
@@ -212,6 +215,12 @@ impl QueryPool {
                     .map_or(usize::MAX, |limits| limits.candidates),
             )
             .collect::<Vec<_>>();
+        // In-place collection can preserve the caller's allocation through filter/take.
+        let peers = if self.config.limits.is_some() {
+            peers.into_boxed_slice().into_vec()
+        } else {
+            peers
+        };
         let peer_iter = QueryPeerIter::Fixed(FixedPeersIter::new(peers, parallelism));
         let query = Query::new(
             id,

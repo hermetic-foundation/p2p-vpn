@@ -25,6 +25,7 @@ changelog, generated protocol source, and tests.
 | `src/query.rs` | Enforce deadlines and initial candidate admission; share retention accounting with iterative discovery; remove canceled queries. |
 | `src/query/retained.rs` | Bound candidate identities and address bytes across learning, migration, failure, and result extraction. |
 | `src/query/metadata.rs` | Bound query input and result metadata; normalize retained buffers; expose aggregate usage and typed admission errors. |
+| `src/query/peers/fixed.rs` | Retain normalized fixed-peer vectors without recollection; report allocated slots through query metadata usage. |
 | `src/jobs.rs`, `src/jobs/bounded.rs` | Shared background admission, bounded key batches and skip bookkeeping, fresh record selection, and explicit removal from pending jobs. |
 | `src/handler.rs`, `src/handler/pending.rs` | Opt-in request admission/expiry, bounded rejection reporting, and negotiation queue accounting. |
 | `src/handler/inbound.rs` | Strict inbound slot bound, wakeable in-place idle replacement, request/idle timeout, and saturation counters. |
@@ -54,6 +55,22 @@ so inbound activity cannot starve retirement of those payloads.
 `tests/kad_inbound_owner.rs` includes the production owner directly in workspace
 testing. Its two test-only dependencies were already present in the lockfile;
 no package versions or production dependencies changed.
+
+### Retained Buffer Capacity
+
+Limited routing, query caches, provider metadata, and raw routing notifications
+detach accepted multiaddresses from caller-owned spare capacity. Snapshot leases
+share these normalized buffers rather than allocating a second address copy.
+Unlimited routing/query collections retain their previous sharing behavior.
+
+Limited fixed-peer phases normalize vector capacity before iterator ownership.
+`query_metadata_usage().fixed_peer_slots` counts the backing allocation, including
+consumed positions and finished phases. Production admits at most 8,192 such
+slots per DHT; cancellation or phase retirement releases the allocation.
+
+Workspace regressions exercise oversized backing buffers, learning, replacement,
+snapshots, phase completion, and cancellation. Routing-only admission also
+normalizes raw notifications when behaviour-queue limits are not configured.
 
 ### Behaviour Queue
 
@@ -111,7 +128,7 @@ Legacy starts rejected by this opt-in cap return an unretained ID without a
 completion event; local result events and bootstrap suppression are not retained
 for that ID. No rejection queue is created. The application constructor enables
 32 retained queries per DHT and application starts use checked admission.
-Queued result/action bounds remain unfinished; background storage is bounded below.
+Queued results/actions and background storage have separate bounds described here.
 
 `set_query_metadata_limits()` bounds input key/value bytes, stored result peers,
 and provider addresses. Production selects 256 KiB input, 256 result peers,
@@ -141,7 +158,7 @@ reservations. `pending_rpc_usage()` exposes aggregate usage and rejections.
 Provider requests awaiting connection no longer complete before handoff.
 `AddProviderError::NoPeersReached` reports an all-failed publication phase;
 it is a local API addition, not a wire change. Handler dispatch still does not
-prove remote receipt. Queued result/action bounds remain unfinished.
+prove remote receipt. The behaviour queue independently bounds unsent actions.
 
 Provider and record jobs share background admission capacity and alternate first
 access. Defaults remain a 100-query ceiling and batch size ten, but the batch is

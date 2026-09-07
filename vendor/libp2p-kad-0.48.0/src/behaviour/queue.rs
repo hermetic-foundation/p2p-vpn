@@ -129,8 +129,18 @@ impl QueuedEvents {
                 ToSwarm::GenerateEvent(event) => payload::normalize_event(event),
                 ToSwarm::NotifyHandler { event, .. } => payload::normalize_handler(event),
                 ToSwarm::NewExternalAddrOfPeer { address, .. } => {
-                    *address = libp2p_core::Multiaddr::try_from(address.to_vec())
-                        .expect("existing multiaddr is valid");
+                    *address = crate::addresses::normalized_address(address);
+                }
+                _ => {}
+            }
+        } else if self.routing_budget.is_some() {
+            match &mut event {
+                ToSwarm::NewExternalAddrOfPeer { address, .. }
+                | ToSwarm::GenerateEvent(
+                    Event::RoutablePeer { address, .. }
+                    | Event::PendingRoutablePeer { address, .. },
+                ) => {
+                    *address = crate::addresses::normalized_address(address);
                 }
                 _ => {}
             }

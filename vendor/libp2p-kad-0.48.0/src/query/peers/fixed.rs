@@ -34,6 +34,8 @@ pub(crate) struct FixedPeersIter {
 
     /// The backlog of peers that can still be emitted.
     iter: vec::IntoIter<PeerId>,
+    /// Allocation survives consumption of the iterator until this phase is dropped.
+    capacity: usize,
 
     /// The internal state of the iterator.
     state: State,
@@ -58,19 +60,18 @@ enum PeerState {
 }
 
 impl FixedPeersIter {
-    #[allow(clippy::needless_collect)]
-    pub(crate) fn new<I>(peers: I, parallelism: NonZeroUsize) -> Self
-    where
-        I: IntoIterator<Item = PeerId>,
-    {
-        let peers = peers.into_iter().collect::<Vec<_>>();
-
+    pub(crate) fn new(peers: Vec<PeerId>, parallelism: NonZeroUsize) -> Self {
         Self {
             parallelism,
             peers: FnvHashMap::default(),
+            capacity: peers.capacity(),
             iter: peers.into_iter(),
             state: State::Waiting { num_waiting: 0 },
         }
+    }
+
+    pub(crate) fn capacity(&self) -> usize {
+        self.capacity
     }
 
     /// Callback for delivering the result of a successful request to a peer.

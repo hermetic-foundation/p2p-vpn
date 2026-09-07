@@ -106,7 +106,7 @@ fn normalize_key(key: &mut record::Key) {
 
 fn normalize_addresses(addresses: &mut [Multiaddr]) {
     for address in addresses {
-        *address = Multiaddr::try_from(address.to_vec()).expect("existing multiaddr is valid");
+        *address = crate::addresses::normalized_address(address);
     }
 }
 

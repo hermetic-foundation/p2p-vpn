@@ -36,6 +36,7 @@ pub struct Addresses {
     limits: AddressLimits,
     protected: HashSet<Multiaddr>,
     reservations: Option<Reservations>,
+    normalize_buffers: bool,
 }
 
 /// Optional routing-address budgets. Unconfigured library users retain the
@@ -69,6 +70,10 @@ impl AddressLimits {
     }
 }
 
+pub(crate) fn normalized_address(address: &Multiaddr) -> Multiaddr {
+    Multiaddr::try_from(address.to_vec()).expect("existing multiaddress is valid")
+}
+
 #[allow(clippy::len_without_is_empty)]
 impl Addresses {
     /// Creates a new list of addresses.
@@ -80,6 +85,7 @@ impl Addresses {
             limits: AddressLimits::default(),
             protected: HashSet::new(),
             reservations: None,
+            normalize_buffers: false,
         }
     }
 
@@ -91,6 +97,13 @@ impl Addresses {
         if !limits.accepts(&addr) {
             return None;
         }
+        let normalize_buffers =
+            budget.is_some() || limits.count != usize::MAX || limits.bytes != usize::MAX;
+        let addr = if normalize_buffers {
+            normalized_address(&addr)
+        } else {
+            addr
+        };
         let reservations = match budget {
             Some(budget) => Some(Reservations::new(budget, &addr)?),
             None => None,
@@ -98,6 +111,7 @@ impl Addresses {
         let mut addresses = Self::new(addr);
         addresses.limits = limits;
         addresses.reservations = reservations;
+        addresses.normalize_buffers = normalize_buffers;
         Some(addresses)
     }
 
@@ -221,7 +235,11 @@ impl Addresses {
             };
             self.addrs.remove(victim);
         }
-        self.addrs.push(addr);
+        self.addrs.push(if self.normalize_buffers {
+            normalized_address(&addr)
+        } else {
+            addr
+        });
         true
     }
 
@@ -272,7 +290,11 @@ impl Addresses {
             return self.insert(new.clone()) || self.addrs.contains(new);
         }
         if self.limits.count == usize::MAX {
-            self.addrs[index] = new.clone();
+            self.addrs[index] = if self.normalize_buffers {
+                normalized_address(new)
+            } else {
+                new.clone()
+            };
         } else {
             self.addrs.remove(index);
             self.insert(new.clone());
@@ -369,6 +391,7 @@ mod tests {
             limits: AddressLimits::default(),
             protected: HashSet::new(),
             reservations: None,
+            normalize_buffers: false,
         }
     }
 

@@ -1,6 +1,7 @@
 use std::num::NonZeroUsize;
 
 use crate::{
+    addresses::normalized_address,
     behaviour::{AddProviderPhase, PutRecordPhase},
     AddressLimits, QueryInfo,
 };
@@ -57,6 +58,8 @@ pub struct QueryMetadataUsage {
     pub provider_addresses: usize,
     /// Conservative retained slots for partially consumed bootstrap iterators.
     pub bootstrap_target_slots: usize,
+    /// Fixed-peer iterator allocation slots, including consumed positions.
+    pub fixed_peer_slots: usize,
     pub rejected_inputs: u64,
 }
 
@@ -91,6 +94,9 @@ impl QueryInfo {
                 {
                     external_addresses.retain(|address| limits.provider_addresses.accepts(address));
                     external_addresses.truncate(limits.provider_addresses.count);
+                    for address in external_addresses.iter_mut() {
+                        *address = normalized_address(address);
+                    }
                     *external_addresses = std::mem::take(external_addresses)
                         .into_boxed_slice()
                         .into_vec();

@@ -376,6 +376,53 @@ fn connect(kad: &mut Dht, connection: ConnectionId, peer: PeerId) {
 }
 
 #[test]
+fn routing_only_budget_detaches_raw_notification_backing() {
+    let local = PeerId::random();
+    let peer = PeerId::random();
+    let mut config = kad::Config::new(StreamProtocol::new(
+        crate::config::PUBLIC_IPFS_KADEMLIA_PROTOCOL,
+    ));
+    config
+        .set_periodic_bootstrap_interval(None)
+        .set_automatic_bootstrap_throttle(None)
+        .set_kbucket_inserts(kad::BucketInserts::Manual)
+        .set_routing_limits(kad::RoutingLimits::new(
+            NonZeroUsize::new(4).unwrap(),
+            NonZeroUsize::new(8192).unwrap(),
+        ));
+    let mut kad = Dht::with_config(local, kad::store::MemoryStore::new(local), config);
+    let connection = ConnectionId::new_unchecked(1);
+    connect(&mut kad, connection, peer);
+    drain(&mut kad);
+    let encoded: libp2p::Multiaddr = format!("/memory/1/p2p/{peer}").parse().unwrap();
+    let mut bytes = Vec::with_capacity(256 * 1024);
+    bytes.extend_from_slice(encoded.as_ref());
+    let original = libp2p::Multiaddr::try_from(bytes).unwrap();
+    kad.on_connection_handler_event(
+        peer,
+        connection,
+        HandlerEvent::ProtocolConfirmed {
+            endpoint: ConnectedPoint::Dialer {
+                address: original.clone(),
+                role_override: libp2p::core::Endpoint::Dialer,
+                port_use: libp2p::core::transport::PortUse::Reuse,
+            },
+        },
+    );
+    assert_eq!(kad.behaviour_queue_usage().event_limit, None);
+    assert_eq!(kad.routing_resource_usage().address_bytes, original.len());
+    let events = drain(&mut kad);
+    let [ToSwarm::GenerateEvent(kad::Event::RoutablePeer { address, .. })] = &events[..] else {
+        panic!("raw routing notification")
+    };
+    assert_eq!(address, &original);
+    let retained: &[u8] = address.as_ref();
+    let source: &[u8] = original.as_ref();
+    assert_ne!(retained.as_ptr(), source.as_ptr());
+    assert_eq!(kad.routing_resource_usage().address_bytes, 0);
+}
+
+#[test]
 fn queue_overflow_does_not_discard_latest_mode_or_close_connections() {
     let mut kad = limited_dht(1, 8);
     let mut connections = HashSet::new();

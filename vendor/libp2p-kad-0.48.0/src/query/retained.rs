@@ -5,7 +5,7 @@ use libp2p_core::Multiaddr;
 use libp2p_identity::PeerId;
 use smallvec::SmallVec;
 
-use crate::AddressLimits;
+use crate::{addresses::normalized_address, AddressLimits};
 
 /// Optional per-query candidate and encoded-address budgets.
 ///
@@ -100,7 +100,7 @@ impl RetainedPeers {
                 continue;
             }
             self.usage.address_bytes += address.len();
-            retained.push(address.clone());
+            retained.push(normalized_address(address));
         }
         self.addresses.insert(peer, retained);
         true
@@ -155,7 +155,7 @@ impl RetainedPeers {
                 addresses.remove(index);
                 self.usage.address_bytes = remaining;
             } else {
-                addresses[index] = new.clone();
+                addresses[index] = normalized_address(new);
                 self.usage.address_bytes = remaining + new.len();
             }
         } else {

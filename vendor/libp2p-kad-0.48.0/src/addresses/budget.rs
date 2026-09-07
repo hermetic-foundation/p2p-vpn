@@ -81,6 +81,8 @@ impl Reservations {
         Self::notification(budget, Some(address))
     }
 
+    /// Callers normalize the owned address before reservation, so its lease key
+    /// shares the charged buffer instead of allocating a second copy.
     pub(crate) fn notification(
         budget: &RoutingBudget,
         address: Option<&Multiaddr>,
