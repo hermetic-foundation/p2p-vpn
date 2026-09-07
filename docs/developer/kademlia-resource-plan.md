@@ -2,8 +2,23 @@
 
 ## Status
 
-Active. This workstream does not complete the broader reliability review.
+The original broad goal was superseded without being marked complete.
+The active goal is now **Aggregate Resource Bounds**, phase 1 below.
+This workstream does not complete the broader reliability review.
 Starting revision: `5ecb01ea`. No deployed service or physical device has changed.
+
+## Remaining Phases
+
+| Phase | Scope | Acceptance |
+| --- | --- | --- |
+| 1. Aggregate Resource Bounds | Handler pending work, total routing storage, total retained query state | Enforced limits, bounded overload behavior, deterministic saturation and recovery tests |
+| 2. Sustained Recovery And Settling | Prolonged failures, churn, transitions, healthy idle behavior | Controlled long-running tests that recover without intervention and settle when healthy |
+| 3. Before/After Measurements | Sockets, dial/query rates, CPU, RSS | Comparable baseline/current captures with reproducible commands and limitations |
+| 4. Final Acceptance | All original requirements, documentation, packaging | Requirement-by-requirement evidence audit and explicit residual risks |
+
+Completing phase 1 does not complete phases 2-4. Verified commits remain valid;
+the completion gates below retain the original workstream's full scope.
+See [Aggregate Bounds](kademlia-aggregate-bounds.md) for phase 1 ownership and tests.
 
 ## Completion Gates
 
