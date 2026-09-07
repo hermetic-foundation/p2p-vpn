@@ -110,6 +110,11 @@ Repeated reachability changes do not bypass the lookup cooldown. A deferred
 lookup can start on a later eligible event after capacity is released; it does
 not evict unrelated discovery or pairing work to make room.
 
+Automatic relay candidates are removed after two unsuccessful reservation
+attempts, including synchronous listener errors. The default retry interval is
+30 seconds. This frees candidate capacity; it does not revoke membership or
+change explicitly configured relay reservations.
+
 Configured bootstrap seeds are protected from routing-address rotation and
 whole-peer bucket replacement. Protection does not increase bucket capacity;
 a full bucket of protected seeds rejects additional peers.

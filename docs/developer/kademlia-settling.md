@@ -3,7 +3,8 @@
 ## Status
 
 Phase 2 is active. Starting revision: `63a380cbcd1a`.
-Signed address renewal and AutoNAT admission fixes pass their checkpoint checks.
+Signed freshness, AutoNAT admission, and synchronous relay-error fixes pass
+their checkpoint checks.
 No acceptance soak has run. The remaining findings and phase-wide acceptance
 cases below are still open.
 
@@ -24,15 +25,15 @@ See the [workstream plan](kademlia-resource-plan.md) and the completed
 | Case | Required Outcome | Status |
 | --- | --- | --- |
 | Unavailable bootstrap/routing peers | Backoff survives long failures; useful discovery resumes automatically | Pending |
-| Failed or stale relay | Retire failed attempts; discover or select a usable alternative | Pending |
+| Failed or stale relay | Retire failed attempts; discover or select a usable alternative | Synchronous-error component verified; live remote-failure case pending |
 | Repeated network/address changes | LAN-first discovery, relay fallback, eventual direct recovery where available | Pending |
 | Foreground/background contention | Preserve unrelated VPN traffic; retire stale owners; resume after release | Pending |
-| All overlay peers healthy | Suppress redundant queries/dials; retain legitimate maintenance and fresh records | Pending |
-| Shared-public and separate-public-pairing DHTs | Same bounded behavior with independent budgets | Pending |
-| AutoNAT with periodic maintenance disabled | No stranded owner or event-driven query storm | Pending |
-| Deterministic long timeline | At least 24 simulated hours with timer-boundary assertions | Pending |
+| All overlay peers healthy | Suppress redundant queries/dials; retain legitimate maintenance and fresh records | Signed freshness and AutoNAT quiet-mode components verified; whole-runtime case pending |
+| Shared-public and separate-public-pairing DHTs | Same bounded behavior with independent budgets | Both profiles covered by component tests; full scenario matrix pending |
+| AutoNAT with periodic maintenance disabled | No stranded owner or event-driven query storm | Cadence, policy, capacity and cleanup tests pass; sustained runtime evidence pending |
+| Deterministic long timeline | At least 24 simulated hours with timer-boundary assertions | Freshness, AutoNAT and synchronous-relay timelines pass; remaining timer interactions pending |
 | Real-runtime soak | At least 30 minutes, five fault/recovery cycles, ten continuous healthy minutes | Pending |
-| Negative control | The tests detect suppressed recovery or uncontrolled retries | Pending |
+| Negative control | The tests detect suppressed recovery or uncontrolled retries | Reproduced missing renewal, early AutoNAT retry, policy/capacity bypass, and unaccounted relay errors |
 
 Topology changes are allowed during fault tests. Daemon restarts, configuration
 edits, peer-address injection, manual dialing, and management-plane rescue are
@@ -92,13 +93,28 @@ cadence. Freeze the following assertions before running the regression tests.
 These are event-handler tests with explicit monotonic time, not a simulation of
 all libp2p timers or a proof that a physical network transition produces an event.
 
+### Synchronous Relay Failure Gate
+
+Freeze the existing default retry interval at 30 seconds and candidate eviction
+at two failures. Synchronous listener errors must use the same failure count
+as pending timeouts and unsuccessful listener termination.
+
+- Two fixed failing candidates permit four attempts over 24 simulated hours, with the second attempt per candidate at 30 seconds.
+- Repeated calls before retry eligibility create no new attempts, pending listeners, or reservations.
+- Eviction releases candidate, retry, failure-history, and listener ownership; unrelated query state survives.
+- Freed capacity admits a valid alternative without resetting the relay owner or daemon.
+
+This gate covers one candidate lifetime and local transport-error handling.
+It does not establish remote relay availability or prevent later rediscovery
+from admitting a new candidate lifetime for the same identity.
+
 ## Findings To Reproduce
 
 | Source Finding | Risk | Required Regression |
 | --- | --- | --- |
 | Quiet mode previously suppressed signed address renewal | Unchanged healthy records aged past their signed validity | Reproduced and fixed; see the signed-freshness checkpoint below |
 | AutoNAT Private events previously ignored maintenance `next_due` and candidate policy | Fast completions and repeated transitions bypassed the 120-second cadence | Reproduced and fixed; see the AutoNAT admission checkpoint |
-| Synchronous auto-relay listen failures schedule retries outside timeout failure accounting | Optional failed candidates may be retried indefinitely while overlay paths are healthy | Compare synchronous failure, timeout, candidate retirement, and admission of alternatives |
+| Synchronous auto-relay listen failures previously bypassed failure accounting | Failed candidates could retain their slot and retry indefinitely | Reproduced and fixed; see the synchronous relay failure checkpoint |
 | Configured relay reservations retry independently of healthy suppression | An explicitly requested standby is different from optional discovery | Test explicit reservations separately; do not silently disable configured intent |
 
 Passing discovered addresses into `redial_known_addresses` is not itself an
@@ -210,6 +226,52 @@ its reuse in the scheduler and has no Rust compiler warnings.
 Readable task temporary storage remained about 5.05 GiB, with cached tools and
 at most two Cargo jobs. These checks are not an APK/ARM64 build, full Nix package
 build, formal proof, physical-device/WAN test, or the sustained acceptance soak.
+
+## Synchronous Relay Failure Checkpoint
+
+The negative control failed immediately: both failed listener attempts had
+scheduled retries but neither had recorded its failure. The test exercises the
+actual relay transport's malformed-address error, not an injected error result.
+
+| Change | Behavior |
+| --- | --- |
+| Synchronous `listen_on` error | Release the pending attempt, count the failure, and evict at the existing two-failure threshold |
+| Error diagnostic | Preserve `auto_relay_reservation_failed`; add `evicted` and retain the underlying debug error instead of an empty display string |
+| Retry cadence | Preserve the default 30-second interval and existing configured policy |
+| Other ownership | Leave accepted reservations, listener-conflict handling, unrelated queries, and explicit reservation policy unchanged |
+
+The 24-hour test covers both DHT profiles, repeated calls before retry deadlines,
+complete failed-candidate retirement, and admission of a valid replacement.
+All 26 focused `auto_relay_` tests pass, including timeout/listener regressions.
+
+```sh
+nix develop -c cargo test --offline --locked --lib auto_relay_ -- --test-threads=2
+```
+
+Logs: `/tmp/p2p-vpn-settling-relay-before.log` and
+`/tmp/p2p-vpn-settling-relay-focused.log`.
+
+No transport polling or remote reservation occurs in the new test. The valid
+replacement owns a queued listener request; it is not evidence of an accepted
+reservation, packet delivery, remote relay failure, or rediscovery behavior.
+
+### Checkpoint Verification
+
+| Check | Result |
+| --- | --- |
+| Offline locked workspace suite | 1,336 passed; 22 opt-in tests ignored |
+| DHT, peerless pairing, forced-relay pairing, owned QUIC, network-move namespaces | Five passed; 115.18 seconds combined |
+| Clippy correctness, suspicious, and performance groups | Passed; advisory style warnings remain |
+| Android x86_64 native library | Compiled offline in 33.35 seconds; four existing warnings |
+| Nix desktop/Android source parity | Passed with cached tools and unchanged assertions |
+| Formatting / whitespace | Passed |
+
+Final logs use `/tmp/p2p-vpn-settling-relay-` with `workspace.log`,
+`namespace.log`, `clippy.log`, `android.log`, and `nix.log` suffixes.
+Readable task temporary storage was about 5.01 GiB; no downloads occurred.
+
+These checks do not establish an APK/ARM64 build, full Nix package build,
+physical-device/WAN behavior, formal proof, or the sustained acceptance soak.
 
 ## Harness Gaps
 

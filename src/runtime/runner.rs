@@ -8351,7 +8351,15 @@ fn attempt_auto_relay_reservations(
     auto_relay: &mut AutoRelayState,
     metrics: &RuntimeMetrics,
 ) {
-    let now = Instant::now();
+    attempt_auto_relay_reservations_at(swarm, auto_relay, metrics, Instant::now());
+}
+
+fn attempt_auto_relay_reservations_at(
+    swarm: &mut Swarm<Behaviour>,
+    auto_relay: &mut AutoRelayState,
+    metrics: &RuntimeMetrics,
+    now: Instant,
+) {
     for (relay_peer, relay_address) in auto_relay.next_reservation_targets(now) {
         let reservation_address = relay_address.clone().with(Protocol::P2pCircuit);
         metrics.record_auto_relay_reservation_attempt();
@@ -8382,6 +8390,7 @@ fn attempt_auto_relay_reservations(
             }
             Err(error) => {
                 auto_relay.release_reservation_for_retry_after(relay_peer, now);
+                let evicted = auto_relay.record_reservation_failure(relay_peer);
                 metrics.record_auto_relay_reservation_failure();
                 log_runtime_event(
                     LogLevel::Warn,
@@ -8389,7 +8398,8 @@ fn attempt_auto_relay_reservations(
                     &[
                         ("relay", &relay_peer.to_string()),
                         ("address", &reservation_address.to_string()),
-                        ("error", &error.to_string()),
+                        ("error", &format!("{error:?}")),
+                        ("evicted", &evicted.to_string()),
                     ],
                 );
             }
@@ -31862,6 +31872,133 @@ mod tests {
             ),
             vec![(relay, address)]
         );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn auto_relay_synchronous_listen_failures_settle_for_twenty_four_hours() {
+        for protocol in [
+            PUBLIC_IPFS_KADEMLIA_PROTOCOL,
+            crate::config::PRIVATE_KADEMLIA_PROTOCOL,
+        ] {
+            let (_, mut node) = autonat_query_test_node(protocol, Duration::from_secs(600), 1);
+            let mut auto_relay = AutoRelayState::new(AutoRelayConfig {
+                max_candidates: 2,
+                ..AutoRelayConfig::default()
+            });
+            let metrics = RuntimeMetrics::default();
+            let start = Instant::now();
+            assert_eq!(auto_relay.policy.max_reservations, 2);
+            assert_eq!(auto_relay.policy.retry_interval(), Duration::from_secs(30));
+            assert_eq!(AUTO_RELAY_CANDIDATE_FAILURE_EVICTION_THRESHOLD, 2);
+            let unrelated = node
+                .swarm
+                .behaviour_mut()
+                .kad
+                .try_get_closest_peers(peer_id())
+                .unwrap();
+
+            // A peer ID without a relay transport address produces MissingRelayAddr
+            // before libp2p-relay queues a ListenReq. This is a real synchronous error.
+            let malformed = Multiaddr::empty()
+                .with(Protocol::P2p(peer_id()))
+                .with(Protocol::P2pCircuit);
+            assert!(matches!(
+                node.swarm.listen_on(malformed),
+                Err(libp2p::core::transport::TransportError::Other(_))
+            ));
+            let candidates = [peer_id(), peer_id()];
+            for relay in candidates {
+                assert!(
+                    auto_relay
+                        .record_candidate(relay, Multiaddr::empty().with(Protocol::P2p(relay)),)
+                );
+            }
+            let alternative = peer_id();
+            let alternative_address: Multiaddr =
+                format!("/ip4/127.0.0.1/tcp/4001/p2p/{alternative}")
+                    .parse()
+                    .unwrap();
+            assert!(!auto_relay.record_candidate(alternative, alternative_address.clone()));
+
+            // Never poll the swarm or its behaviours: advance only the retry clock.
+            // Include t=86400 and probe twice at each due/between-due timestamp.
+            for elapsed in (0..2_880_u64)
+                .flat_map(|cycle| [cycle * 30, cycle * 30 + 1, cycle * 30 + 29])
+                .chain(std::iter::once(86_400))
+            {
+                let now = start + Duration::from_secs(elapsed);
+                let remaining = if elapsed < 30 { 2 } else { 0 };
+                let attempts = if elapsed < 30 { 2 } else { 4 };
+                for _ in 0..2 {
+                    attempt_auto_relay_reservations_at(
+                        &mut node.swarm,
+                        &mut auto_relay,
+                        &metrics,
+                        now,
+                    );
+                    let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+                    assert_eq!(
+                        snapshot.auto_relay_reservation_attempts, attempts,
+                        "{protocol}, elapsed={elapsed}"
+                    );
+                    assert_eq!(snapshot.auto_relay_reservation_failures, attempts);
+                    assert_eq!(snapshot.auto_relay_discovery_queries, 0);
+                    assert_eq!(auto_relay.candidates.len(), remaining);
+                    assert_eq!(auto_relay.retry_after.len(), remaining);
+                    assert_eq!(auto_relay.reservation_failures.len(), remaining);
+                    for relay in candidates {
+                        assert_eq!(
+                            auto_relay.reservation_failures.get(&relay).copied(),
+                            (elapsed < 30).then_some(1)
+                        );
+                        assert_eq!(
+                            auto_relay.retry_after.get(&relay).copied(),
+                            (elapsed < 30).then_some(start + Duration::from_secs(30))
+                        );
+                    }
+                    assert!(auto_relay.attempted_reservations.is_empty());
+                    assert!(auto_relay.pending_reservations.is_empty());
+                    assert!(auto_relay.accepted_reservation_peers.is_empty());
+                    assert!(auto_relay.reservation_listeners.is_empty());
+                    assert_eq!(auto_relay.reservation_slots(), 0);
+                    assert_eq!(node.swarm.listeners().count(), 0);
+                    assert!(node.swarm.behaviour().kad.query_is_retained(&unrelated));
+                    let usage = node.swarm.behaviour().kad.query_pool_usage();
+                    assert_eq!(usage.retained, 1);
+                    assert_eq!(usage.rejected, 0);
+                }
+            }
+
+            // A valid alternative can own a pending listener after eviction. The
+            // relay request is only queued; no polling, sockets, or network I/O.
+            assert!(auto_relay.record_candidate(alternative, alternative_address.clone()));
+            let now = start + Duration::from_secs(86_400);
+            attempt_auto_relay_reservations_at(&mut node.swarm, &mut auto_relay, &metrics, now);
+            assert_eq!(
+                auto_relay.candidates,
+                vec![(alternative, alternative_address.clone())]
+            );
+            assert_eq!(auto_relay.pending_reservations.len(), 1);
+            let pending = auto_relay.pending_reservations.get(&alternative).unwrap();
+            assert_eq!(pending.address, alternative_address);
+            assert_eq!(
+                pending.expires_at,
+                now + AUTO_RELAY_RESERVATION_PENDING_TIMEOUT
+            );
+            assert_eq!(auto_relay.reservation_listeners.len(), 1);
+            assert!(auto_relay.reservation_listeners.contains_key(&alternative));
+            assert_eq!(auto_relay.attempted_reservations.len(), 1);
+            assert_eq!(auto_relay.reservation_slots(), 1);
+            assert!(auto_relay.accepted_reservation_peers.is_empty());
+            assert!(auto_relay.reservation_failures.is_empty());
+            assert!(auto_relay.retry_after.is_empty());
+            let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+            assert_eq!(snapshot.auto_relay_reservation_attempts, 5);
+            assert_eq!(snapshot.auto_relay_reservation_failures, 4);
+            assert!(node.swarm.behaviour().kad.query_is_retained(&unrelated));
+            assert_eq!(node.swarm.behaviour().kad.query_pool_usage().retained, 1);
+        }
     }
 
     #[test]
