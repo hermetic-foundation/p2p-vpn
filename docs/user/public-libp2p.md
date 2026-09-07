@@ -43,6 +43,7 @@ server duties or advertise itself as a Kademlia server.
 | --- | --- |
 | Maintenance cadence | At most once every two minutes. |
 | Query overlap | A second cycle cannot start while one is active. |
+| AutoNAT-triggered relay lookup | Shares the two-minute cadence; pauses when acquisition is disabled, candidates or reservations are sufficient, or query capacity is full. |
 | Query timeout | Stale cycle queries are canceled after 90 seconds. |
 | Healthy overlay | Ordinary lookup cycles stop; signed address refresh continues. |
 | Address changes | Coalesced into one pending update; at most one event-driven publication every five seconds. |
@@ -104,6 +105,10 @@ These limits retire individual DHT streams, not the shared VPN connection.
 AutoNAT relay lookups retain their own cleanup even when periodic DHT discovery
 is disabled. Completion or timeout releases lookup ownership, allowing later
 relay discovery without restarting the daemon.
+
+Repeated reachability changes do not bypass the lookup cooldown. A deferred
+lookup can start on a later eligible event after capacity is released; it does
+not evict unrelated discovery or pairing work to make room.
 
 Configured bootstrap seeds are protected from routing-address rotation and
 whole-peer bucket replacement. Protection does not increase bucket capacity;

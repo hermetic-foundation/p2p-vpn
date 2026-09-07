@@ -3,7 +3,7 @@
 ## Status
 
 Phase 2 is active. Starting revision: `63a380cbcd1a`.
-Signed address renewal is implemented and its checkpoint checks pass.
+Signed address renewal and AutoNAT admission fixes pass their checkpoint checks.
 No acceptance soak has run. The remaining findings and phase-wide acceptance
 cases below are still open.
 
@@ -77,12 +77,27 @@ within five seconds of its due time; capacity rejection retains the pending work
 - Address churn still shares the five-second start limit and one publication owner.
 - Empty or permanently rejected snapshots must not become recurring retry work.
 
+### AutoNAT Admission Gate
+
+AutoNAT-triggered candidate lookup shares the existing 120-second maintenance
+cadence. Freeze the following assertions before running the regression tests.
+
+- Immediate completions and repeated Private/Public transitions permit at most 720 starts in `[0, 86400)`.
+- Quiet mode, disabled acquisition, full candidates, or sufficient accepted reservations permit zero new candidate queries.
+- A full retained-query pool defers admission without claiming an owner or advancing the start deadline.
+- Released capacity permits admission on the next eligible event; unrelated primary and pairing queries remain retained.
+- Maintenance and targeted-recovery owners continue to exclude concurrent AutoNAT discovery.
+- Existing terminal-completion and redial-timeout cleanup remain required with periodic maintenance disabled.
+
+These are event-handler tests with explicit monotonic time, not a simulation of
+all libp2p timers or a proof that a physical network transition produces an event.
+
 ## Findings To Reproduce
 
 | Source Finding | Risk | Required Regression |
 | --- | --- | --- |
 | Quiet mode previously suppressed signed address renewal | Unchanged healthy records aged past their signed validity | Reproduced and fixed; see the signed-freshness checkpoint below |
-| AutoNAT Private events test pending ownership but not maintenance `next_due` | Fast completions and repeated transitions can bypass the 120-second cadence | Repeated status transitions with immediate completion, full candidates, and disabled automatic relays |
+| AutoNAT Private events previously ignored maintenance `next_due` and candidate policy | Fast completions and repeated transitions bypassed the 120-second cadence | Reproduced and fixed; see the AutoNAT admission checkpoint |
 | Synchronous auto-relay listen failures schedule retries outside timeout failure accounting | Optional failed candidates may be retried indefinitely while overlay paths are healthy | Compare synchronous failure, timeout, candidate retirement, and admission of alternatives |
 | Configured relay reservations retry independently of healthy suppression | An explicitly requested standby is different from optional discovery | Test explicit reservations separately; do not silently disable configured intent |
 
@@ -141,6 +156,60 @@ suffixes. Readable task temporary storage was approximately 5.05 GiB.
 All builds used cached dependencies and at most two Cargo jobs. These checks
 are not the phase-2 soak, remote publication acceptance, an APK/ARM64 build,
 a full Nix package build, a formal proof, or a physical-device/WAN deployment.
+
+## AutoNAT Admission Checkpoint
+
+The negative-control run used the original admission conditions with the new
+explicit clock and tests. It failed in three independent cases; all 16 focused
+AutoNAT tests pass with the admission fix.
+
+| Negative Control | Observed Failure |
+| --- | --- |
+| Immediate result followed by another Private transition | Second lookup started at one second, before the 120-second deadline |
+| Automatic relay candidates disabled | Candidate discovery still started |
+| Full retained-query pool | An unnecessary rejected query-start attempt was recorded |
+
+The handler now reuses the existing maintenance deadline, checks whether relay
+candidates are needed, and checks retained capacity before generating a lookup
+target. No new timers, owners, wire fields, or configuration options are added.
+
+### Regression Scope
+
+- Both public-primary and private-primary/separate-public-pairing configurations are exercised.
+- The 24-hour timeline delivers real terminal Kademlia events for 720 starts per active profile and zero while quiet.
+- Capacity tests retain finished-but-not-retired work and unrelated queries, then release space and verify readmission.
+- Candidate/reservation policy, pending recovery ownership, terminal cleanup, and disabled-maintenance expiry remain covered.
+
+The event-handler timeline does not poll network transports. It cannot establish
+physical AutoNAT event delivery, relay availability, or whole-runtime settling.
+The acceptance soak remains pending.
+
+```sh
+nix develop -c cargo test --offline --locked --lib autonat_ -- --test-threads=2
+```
+
+Logs: `/tmp/p2p-vpn-settling-autonat-before.log` and
+`/tmp/p2p-vpn-settling-autonat-focused.log`.
+
+### Checkpoint Verification
+
+| Check | Result |
+| --- | --- |
+| Offline locked workspace suite | 1,335 passed; 22 opt-in tests ignored |
+| DHT, peerless pairing, forced-relay pairing, owned QUIC, network-move namespaces | Five passed; 115.23 seconds combined |
+| Clippy correctness, suspicious, and performance groups | Passed; advisory warnings remain, including duration-unit suggestions in new tests |
+| Android x86_64 native library | Compiled offline in 33.22 seconds; four existing warnings |
+| Nix desktop/Android source parity | Passed with cached tools and unchanged assertions |
+| Formatting / whitespace | Passed |
+
+Final logs use `/tmp/p2p-vpn-settling-autonat-` with `workspace-final.log`,
+`namespace.log`, `clippy.log`, `android.log`, and `nix-final.log` suffixes.
+The first workspace run exposed a now-unused helper; the final run includes
+its reuse in the scheduler and has no Rust compiler warnings.
+
+Readable task temporary storage remained about 5.05 GiB, with cached tools and
+at most two Cargo jobs. These checks are not an APK/ARM64 build, full Nix package
+build, formal proof, physical-device/WAN test, or the sustained acceptance soak.
 
 ## Harness Gaps
 

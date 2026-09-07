@@ -2599,7 +2599,7 @@ impl KademliaMaintenance {
     }
 
     fn should_start(&self, now: Instant, suppressed: bool) -> bool {
-        !suppressed && self.queries.is_empty() && now >= self.next_due
+        !suppressed && !self.has_pending_query() && now >= self.next_due
     }
 
     fn record_started(&mut self, query: kad::QueryId, now: Instant) {
@@ -20175,6 +20175,29 @@ fn handle_autonat_event(
     public_discovery_quiet: bool,
     event: autonat::Event,
 ) {
+    handle_autonat_event_monotonic_at(
+        swarm,
+        auto_relay,
+        kademlia_maintenance,
+        discovered_peer_addresses,
+        metrics,
+        public_discovery_quiet,
+        event,
+        Instant::now(),
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_autonat_event_monotonic_at(
+    swarm: &mut Swarm<Behaviour>,
+    auto_relay: &mut AutoRelayState,
+    kademlia_maintenance: &mut KademliaMaintenance,
+    discovered_peer_addresses: &DiscoveredPeerAddresses,
+    metrics: &RuntimeMetrics,
+    public_discovery_quiet: bool,
+    event: autonat::Event,
+    now: Instant,
+) {
     match event {
         autonat::Event::StatusChanged { old, new } => {
             if let autonat::NatStatus::Public(address) = &new {
@@ -20183,15 +20206,19 @@ fn handle_autonat_event(
             let reachability = autonat_reachability(&new);
             auto_relay.record_reachability(reachability);
             metrics.record_autonat_status(reachability);
+            let query_usage = swarm.behaviour().kad.query_pool_usage();
             if auto_relay.private_reachability()
-                && !public_discovery_quiet
-                && !kademlia_maintenance.has_pending_query()
+                && auto_relay.should_discover_candidates()
+                && kademlia_maintenance.should_start(now, public_discovery_quiet)
                 && !discovered_peer_addresses.has_pending_recovery_discovery_query()
+                && query_usage
+                    .capacity
+                    .is_none_or(|capacity| query_usage.retained < capacity)
             {
                 if let Some(query) =
                     query_auto_relay_infrastructure(swarm, metrics, "autonat_private")
                 {
-                    kademlia_maintenance.record_started(query, Instant::now());
+                    kademlia_maintenance.record_started(query, now);
                 }
             }
             if !public_discovery_quiet {
@@ -33970,6 +33997,10 @@ mod tests {
         .unwrap();
         assert!(node.swarm.behaviour().autonat.is_enabled());
         assert!(node.kademlia_rendezvous_key.is_none());
+        assert_eq!(
+            node.swarm.behaviour().pairing_kad.is_enabled(),
+            protocol != PUBLIC_IPFS_KADEMLIA_PROTOCOL
+        );
         let lookup_keys = kademlia_lookup_keys(
             &node.network_name,
             node.kademlia_rendezvous_key.as_ref(),
@@ -34039,6 +34070,412 @@ mod tests {
         })
     }
 
+    async fn next_autonat_query_test_result(node: &mut P2pNode) -> kad::Event {
+        // Poll only Kademlia: no transport dials or public bootstrap traffic.
+        timeout(
+            Duration::from_secs(2),
+            futures::future::poll_fn(|cx| {
+                loop {
+                    match libp2p::swarm::NetworkBehaviour::poll(
+                        &mut node.swarm.behaviour_mut().kad,
+                        cx,
+                    ) {
+                        std::task::Poll::Ready(libp2p::swarm::ToSwarm::GenerateEvent(
+                            event @ kad::Event::OutboundQueryProgressed { .. },
+                        )) => {
+                            return std::task::Poll::Ready(event);
+                        }
+                        std::task::Poll::Ready(_) => {}
+                        std::task::Poll::Pending => return std::task::Poll::Pending,
+                    }
+                }
+            }),
+        )
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn autonat_queries_obey_cadence_for_twenty_four_hours() {
+        assert_eq!(KADEMLIA_MAINTENANCE_INTERVAL, Duration::from_secs(120));
+        for protocol in [
+            PUBLIC_IPFS_KADEMLIA_PROTOCOL,
+            crate::config::PRIVATE_KADEMLIA_PROTOCOL,
+        ] {
+            for quiet in [false, true] {
+                let (config, mut node) =
+                    autonat_query_test_node(protocol, Duration::from_secs(600), 1);
+                let start = Instant::now();
+                let mut maintenance = KademliaMaintenance::new(start);
+                let mut auto_relay = AutoRelayState::default();
+                let discovered = DiscoveredPeerAddresses::default();
+                let metrics = RuntimeMetrics::default();
+                let public_address: Multiaddr = "/ip4/203.0.113.10/tcp/4001".parse().unwrap();
+                let mut status = autonat::NatStatus::Unknown;
+                let mut starts = 0;
+
+                // Sample each due time, fast completion + 1s, and the second before due.
+                // The half-open day includes the first lookup at t=0, not t=86400.
+                for cycle in 0..720_u64 {
+                    for offset in [0, 1, 119] {
+                        let elapsed = cycle * 120 + offset;
+                        let now = start + Duration::from_secs(elapsed);
+                        for new in [
+                            autonat::NatStatus::Public(public_address.clone()),
+                            autonat::NatStatus::Private,
+                        ] {
+                            let should_start = !quiet
+                                && offset == 0
+                                && matches!(&new, autonat::NatStatus::Private);
+                            let old = std::mem::replace(&mut status, new.clone());
+                            handle_autonat_event_monotonic_at(
+                                &mut node.swarm,
+                                &mut auto_relay,
+                                &mut maintenance,
+                                &discovered,
+                                &metrics,
+                                quiet,
+                                autonat::Event::StatusChanged { old, new },
+                                now,
+                            );
+                            assert_eq!(
+                                maintenance.pending_queries(),
+                                usize::from(should_start),
+                                "{protocol}, quiet={quiet}, elapsed={elapsed}, status={status:?}"
+                            );
+                            if should_start {
+                                starts += 1;
+                                let query = *maintenance.queries.iter().next().unwrap();
+                                assert_eq!(maintenance.started_at, Some(now));
+                                assert_eq!(maintenance.next_due, now + Duration::from_secs(120));
+                                assert_eq!(
+                                    node.swarm.behaviour().kad.query_pool_usage().retained,
+                                    1
+                                );
+                                let event = next_autonat_query_test_result(&mut node).await;
+                                assert!(matches!(&event, kad::Event::OutboundQueryProgressed {
+                                    id, step, result: kad::QueryResult::GetClosestPeers(Ok(_)), ..
+                                } if *id == query && step.last));
+                                assert!(!node.swarm.behaviour().kad.query_is_retained(&query));
+                                dispatch_autonat_query_test_event(
+                                    &mut node,
+                                    &config,
+                                    &mut maintenance,
+                                    &mut auto_relay,
+                                    &metrics,
+                                    BehaviourEvent::Kad(event),
+                                );
+                            }
+                            assert!(!maintenance.has_pending_query());
+                            assert!(maintenance.started_at.is_none());
+                            let usage = node.swarm.behaviour().kad.query_pool_usage();
+                            assert_eq!(usage.retained, 0);
+                            assert_eq!(usage.rejected, 0);
+                            assert_eq!(
+                                metrics
+                                    .snapshot(crate::queue::QueueStats::default())
+                                    .auto_relay_discovery_queries,
+                                starts
+                            );
+                        }
+                    }
+                }
+                assert_eq!(starts, if quiet { 0 } else { 720 });
+                let now = start + Duration::from_secs(86_400);
+                handle_autonat_event_monotonic_at(
+                    &mut node.swarm,
+                    &mut auto_relay,
+                    &mut maintenance,
+                    &discovered,
+                    &metrics,
+                    false,
+                    autonat::Event::StatusChanged {
+                        old: status,
+                        new: autonat::NatStatus::Private,
+                    },
+                    now,
+                );
+                assert_eq!(maintenance.pending_queries(), 1);
+                assert_eq!(maintenance.started_at, Some(now));
+                assert_eq!(
+                    maintenance.cancel_queries(&mut node.swarm.behaviour_mut().kad),
+                    1
+                );
+                assert_eq!(node.swarm.behaviour().kad.query_pool_usage().retained, 0);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn autonat_queries_respect_candidate_policy() {
+        for protocol in [
+            PUBLIC_IPFS_KADEMLIA_PROTOCOL,
+            crate::config::PRIVATE_KADEMLIA_PROTOCOL,
+        ] {
+            for case in [
+                "candidates_disabled",
+                "reservations_disabled",
+                "candidates_full",
+                "reservations_full",
+            ] {
+                let (_, mut node) = autonat_query_test_node(protocol, Duration::from_secs(600), 1);
+                let start = Instant::now();
+                let mut maintenance = KademliaMaintenance::new(start);
+                let mut auto_relay = AutoRelayState::new(AutoRelayConfig {
+                    max_candidates: 1,
+                    max_reservations: 1,
+                    ..AutoRelayConfig::default()
+                });
+                match case {
+                    "candidates_disabled" => auto_relay.policy.max_candidates = 0,
+                    "reservations_disabled" => auto_relay.policy.max_reservations = 0,
+                    "candidates_full" => {
+                        let relay = peer_id();
+                        let address = format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}")
+                            .parse()
+                            .unwrap();
+                        assert!(auto_relay.record_candidate(relay, address));
+                        // Keep reservation retries ineligible; only query admission is under test.
+                        auto_relay
+                            .retry_after
+                            .insert(relay, start + Duration::from_secs(86_401));
+                    }
+                    "reservations_full" => auto_relay.record_reservation_accepted(peer_id()),
+                    _ => unreachable!(),
+                }
+                assert!(!auto_relay.should_discover_candidates(), "{case}");
+                let metrics = RuntimeMetrics::default();
+                for elapsed in [0, 1, 119, 120, 86_399, 86_400] {
+                    handle_autonat_event_monotonic_at(
+                        &mut node.swarm,
+                        &mut auto_relay,
+                        &mut maintenance,
+                        &DiscoveredPeerAddresses::default(),
+                        &metrics,
+                        false,
+                        autonat::Event::StatusChanged {
+                            old: autonat::NatStatus::Unknown,
+                            new: autonat::NatStatus::Private,
+                        },
+                        start + Duration::from_secs(elapsed),
+                    );
+                    assert!(!maintenance.has_pending_query(), "{case}");
+                    assert!(maintenance.started_at.is_none());
+                    assert_eq!(maintenance.next_due, start);
+                    let usage = node.swarm.behaviour().kad.query_pool_usage();
+                    assert_eq!(usage.retained, 0);
+                    assert_eq!(usage.rejected, 0);
+                }
+                let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+                assert_eq!(snapshot.auto_relay_discovery_queries, 0, "{case}");
+                assert_eq!(snapshot.auto_relay_reservation_attempts, 0, "{case}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn autonat_capacity_deferral_preserves_owners_and_resumes() {
+        for protocol in [
+            PUBLIC_IPFS_KADEMLIA_PROTOCOL,
+            crate::config::PRIVATE_KADEMLIA_PROTOCOL,
+        ] {
+            let (_, mut node) = autonat_query_test_node(protocol, Duration::from_secs(600), 2);
+            let start = Instant::now();
+            let mut maintenance = KademliaMaintenance::new(start);
+            let mut auto_relay = AutoRelayState::default();
+            let metrics = RuntimeMetrics::default();
+            let unrelated = node
+                .swarm
+                .behaviour_mut()
+                .kad
+                .try_get_closest_peers(peer_id())
+                .unwrap();
+            let held = node
+                .swarm
+                .behaviour_mut()
+                .kad
+                .try_get_closest_peers(peer_id())
+                .unwrap();
+            node.swarm
+                .behaviour_mut()
+                .kad
+                .query_mut(&held)
+                .unwrap()
+                .finish();
+            let pairing_query = node
+                .swarm
+                .behaviour_mut()
+                .pairing_kad
+                .as_mut()
+                .map(|kad| kad.try_get_closest_peers(peer_id()).unwrap());
+
+            for elapsed in [0, 1, 119, 120, 3600] {
+                handle_autonat_event_monotonic_at(
+                    &mut node.swarm,
+                    &mut auto_relay,
+                    &mut maintenance,
+                    &DiscoveredPeerAddresses::default(),
+                    &metrics,
+                    false,
+                    autonat::Event::StatusChanged {
+                        old: autonat::NatStatus::Unknown,
+                        new: autonat::NatStatus::Private,
+                    },
+                    start + Duration::from_secs(elapsed),
+                );
+                assert!(!maintenance.has_pending_query());
+                assert!(maintenance.started_at.is_none());
+                assert_eq!(maintenance.next_due, start);
+                assert!(node.swarm.behaviour().kad.query_is_retained(&held));
+                assert!(node.swarm.behaviour().kad.query_is_retained(&unrelated));
+                let usage = node.swarm.behaviour().kad.query_pool_usage();
+                assert_eq!(usage.retained, 2);
+                assert_eq!(usage.rejected, 0);
+                assert_eq!(
+                    metrics
+                        .snapshot(crate::queue::QueueStats::default())
+                        .auto_relay_discovery_queries,
+                    0
+                );
+            }
+            assert!(node.swarm.behaviour_mut().kad.cancel_query(&held));
+            let first_start = start + Duration::from_secs(3601);
+            for (offset, expected_starts) in [(0, 1), (119, 1), (120, 2)] {
+                let now = first_start + Duration::from_secs(offset);
+                handle_autonat_event_monotonic_at(
+                    &mut node.swarm,
+                    &mut auto_relay,
+                    &mut maintenance,
+                    &DiscoveredPeerAddresses::default(),
+                    &metrics,
+                    false,
+                    autonat::Event::StatusChanged {
+                        old: autonat::NatStatus::Unknown,
+                        new: autonat::NatStatus::Private,
+                    },
+                    now,
+                );
+                if offset == 119 {
+                    assert!(!maintenance.has_pending_query());
+                } else {
+                    assert_eq!(maintenance.pending_queries(), 1);
+                    assert_eq!(maintenance.started_at, Some(now));
+                    let query = *maintenance.queries.iter().next().unwrap();
+                    assert_eq!(node.swarm.behaviour().kad.query_pool_usage().retained, 2);
+                    assert_eq!(
+                        maintenance.cancel_queries(&mut node.swarm.behaviour_mut().kad),
+                        1
+                    );
+                    assert!(!node.swarm.behaviour().kad.query_is_retained(&query));
+                }
+                assert!(maintenance.started_at.is_none());
+                assert!(node.swarm.behaviour().kad.query_is_retained(&unrelated));
+                assert_eq!(node.swarm.behaviour().kad.query_pool_usage().retained, 1);
+                assert_eq!(
+                    metrics
+                        .snapshot(crate::queue::QueueStats::default())
+                        .auto_relay_discovery_queries,
+                    expected_starts
+                );
+                if let Some(query) = pairing_query {
+                    let kad = node.swarm.behaviour().pairing_kad.as_ref().unwrap();
+                    assert!(kad.query_is_retained(&query));
+                    assert_eq!(kad.query_pool_usage().retained, 1);
+                }
+            }
+            assert!(node.swarm.behaviour_mut().kad.cancel_query(&unrelated));
+            assert_eq!(node.swarm.behaviour().kad.query_pool_usage().retained, 0);
+            if let Some(query) = pairing_query {
+                let kad = node.swarm.behaviour_mut().pairing_kad.as_mut().unwrap();
+                assert!(kad.cancel_query(&query));
+                assert_eq!(kad.query_pool_usage().retained, 0);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn autonat_queries_wait_for_pending_owners() {
+        for protocol in [
+            PUBLIC_IPFS_KADEMLIA_PROTOCOL,
+            crate::config::PRIVATE_KADEMLIA_PROTOCOL,
+        ] {
+            for recovery in [false, true] {
+                let (_, mut node) = autonat_query_test_node(protocol, Duration::from_secs(600), 2);
+                let start = Instant::now();
+                let now = start + KADEMLIA_MAINTENANCE_INTERVAL;
+                let mut maintenance = KademliaMaintenance::new(start);
+                let mut discovered = DiscoveredPeerAddresses::default();
+                let mut auto_relay = AutoRelayState::default();
+                let metrics = RuntimeMetrics::default();
+                let peer = peer_id();
+                let held = node
+                    .swarm
+                    .behaviour_mut()
+                    .kad
+                    .try_get_closest_peers(peer)
+                    .unwrap();
+                if recovery {
+                    assert!(discovered.should_query_recovery_discovery_at(peer, start));
+                    discovered.record_recovery_discovery_queries(peer, [held], start);
+                } else {
+                    maintenance.record_started(held, start);
+                }
+                handle_autonat_event_monotonic_at(
+                    &mut node.swarm,
+                    &mut auto_relay,
+                    &mut maintenance,
+                    &discovered,
+                    &metrics,
+                    false,
+                    autonat::Event::StatusChanged {
+                        old: autonat::NatStatus::Unknown,
+                        new: autonat::NatStatus::Private,
+                    },
+                    now,
+                );
+                assert_eq!(maintenance.pending_queries(), usize::from(!recovery));
+                assert!(node.swarm.behaviour().kad.query_is_retained(&held));
+                assert_eq!(node.swarm.behaviour().kad.query_pool_usage().retained, 1);
+                assert_eq!(
+                    metrics
+                        .snapshot(crate::queue::QueueStats::default())
+                        .auto_relay_discovery_queries,
+                    0
+                );
+                let cancelled = if recovery {
+                    discovered
+                        .cancel_recovery_discovery_queries(&mut node.swarm.behaviour_mut().kad, now)
+                } else {
+                    maintenance.cancel_queries(&mut node.swarm.behaviour_mut().kad)
+                };
+                assert_eq!(cancelled, 1);
+                assert_eq!(node.swarm.behaviour().kad.query_pool_usage().retained, 0);
+                handle_autonat_event_monotonic_at(
+                    &mut node.swarm,
+                    &mut auto_relay,
+                    &mut maintenance,
+                    &discovered,
+                    &metrics,
+                    false,
+                    autonat::Event::StatusChanged {
+                        old: autonat::NatStatus::Private,
+                        new: autonat::NatStatus::Private,
+                    },
+                    now,
+                );
+                assert_eq!(maintenance.pending_queries(), 1);
+                assert_eq!(maintenance.started_at, Some(now));
+                assert_eq!(
+                    maintenance.cancel_queries(&mut node.swarm.behaviour_mut().kad),
+                    1
+                );
+                assert_eq!(node.swarm.behaviour().kad.query_pool_usage().retained, 0);
+            }
+        }
+    }
+
     #[tokio::test]
     async fn autonat_query_completion_releases_owner_without_kademlia_maintenance() {
         exercise_autonat_query_terminal_without_maintenance(false).await;
@@ -34090,6 +34527,10 @@ mod tests {
             }
 
             for attempt in 1..=2 {
+                if attempt == 2 {
+                    // This fixture checks terminal cleanup, not the simulated cadence above.
+                    maintenance.next_due = Instant::now();
+                }
                 dispatch_autonat_query_test_event(
                     &mut node,
                     &config,
@@ -34102,28 +34543,7 @@ mod tests {
                 let query = *maintenance.queries.iter().next().unwrap();
                 assert!(node.swarm.behaviour().kad.query_is_retained(&query));
 
-                // Poll only Kademlia: no transport dials or public bootstrap traffic.
-                let event = timeout(
-                    Duration::from_secs(2),
-                    futures::future::poll_fn(|cx| {
-                        loop {
-                            match libp2p::swarm::NetworkBehaviour::poll(
-                                &mut node.swarm.behaviour_mut().kad,
-                                cx,
-                            ) {
-                                std::task::Poll::Ready(libp2p::swarm::ToSwarm::GenerateEvent(
-                                    event @ kad::Event::OutboundQueryProgressed { .. },
-                                )) => {
-                                    return std::task::Poll::Ready(event);
-                                }
-                                std::task::Poll::Ready(_) => {}
-                                std::task::Poll::Pending => return std::task::Poll::Pending,
-                            }
-                        }
-                    }),
-                )
-                .await
-                .unwrap();
+                let event = next_autonat_query_test_result(&mut node).await;
                 assert!(
                     matches!(&event, kad::Event::OutboundQueryProgressed { id, step, .. } if *id == query && step.last)
                 );
@@ -34169,7 +34589,11 @@ mod tests {
                 .kad
                 .try_get_closest_peers(peer_id())
                 .unwrap();
-            for _ in 0..2 {
+            for attempt in 0..2 {
+                if attempt == 1 {
+                    // Start another cleanup cycle only after explicitly making it eligible.
+                    maintenance.next_due = Instant::now();
+                }
                 dispatch_autonat_query_test_event(
                     &mut node,
                     &config,
@@ -34200,6 +34624,8 @@ mod tests {
                 assert!(node.swarm.behaviour().kad.query_is_retained(&unrelated));
                 assert_eq!(node.swarm.behaviour().kad.query_pool_usage().retained, 1);
             }
+            assert!(node.swarm.behaviour_mut().kad.cancel_query(&unrelated));
+            assert_eq!(node.swarm.behaviour().kad.query_pool_usage().retained, 0);
         }
     }
 
