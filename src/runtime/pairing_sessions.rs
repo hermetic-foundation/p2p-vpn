@@ -203,6 +203,7 @@ struct PairingReplayToken {
 }
 
 pub struct CodePairingSessions {
+    join_lookup: Option<(String, kad::QueryId)>,
     open: Option<OpenOperation>,
     join: Option<JoinOperation>,
     enrollments: Vec<PairingEnrollment>,
@@ -247,7 +248,6 @@ struct JoinOperation {
     expires_in_seconds: u64,
     public_lookup_started: bool,
     next_public_lookup_at: Option<Instant>,
-    public_lookup_query: Option<kad::QueryId>,
     public_lookup_attempts: u16,
     public_providers_found: u16,
     peer_attempts: HashMap<Libp2pPeerId, PeerAttemptState>,
@@ -484,6 +484,7 @@ impl CodePairingSessions {
     #[must_use]
     pub fn new() -> Self {
         Self {
+            join_lookup: None,
             open: None,
             join: None,
             enrollments: Vec::new(),
@@ -657,7 +658,6 @@ impl CodePairingSessions {
             expires_in_seconds,
             public_lookup_started: false,
             next_public_lookup_at: None,
-            public_lookup_query: None,
             public_lookup_attempts: 0,
             public_providers_found: 0,
             peer_attempts: HashMap::new(),
@@ -1808,6 +1808,7 @@ impl CodePairingSessions {
         Ok(Self {
             open,
             join,
+            join_lookup: None,
             enrollments,
             receipts,
             replay_tokens,
@@ -2104,7 +2105,7 @@ impl CodePairingSessions {
             && operation
                 .next_public_lookup_at
                 .is_none_or(|next_lookup| now >= next_lookup)
-            && operation.public_lookup_query.is_none())
+            && self.join_lookup.is_none())
         .then_some(operation.locator.as_str())
     }
 
@@ -2114,7 +2115,8 @@ impl CodePairingSessions {
         query_id: kad::QueryId,
         now: Instant,
     ) {
-        if let Some(operation) = self.join.as_mut()
+        if self.join_lookup.is_none()
+            && let Some(operation) = self.join.as_mut()
             && operation.locator == locator
             && operation.terminal.is_none()
             && operation.completed.is_none()
@@ -2122,13 +2124,18 @@ impl CodePairingSessions {
             operation.public_lookup_started = true;
             operation.public_lookup_attempts = operation.public_lookup_attempts.saturating_add(1);
             operation.next_public_lookup_at = Some(now + CODE_PAIRING_PUBLIC_LOOKUP_INTERVAL);
-            operation.public_lookup_query = Some(query_id);
+            self.join_lookup = Some((operation.id.clone(), query_id));
         }
     }
 
     pub fn record_join_providers_found(&mut self, query_id: kad::QueryId, providers: usize) {
+        let owner = self
+            .join_lookup
+            .as_ref()
+            .filter(|(_, query)| *query == query_id)
+            .map(|(owner, _)| owner.clone());
         if let Some(operation) = self.active_join_mut()
-            && operation.public_lookup_query == Some(query_id)
+            && owner.as_deref() == Some(operation.id.as_str())
         {
             operation.public_providers_found = operation
                 .public_providers_found
@@ -2137,11 +2144,23 @@ impl CodePairingSessions {
     }
 
     pub fn finish_join_lookup(&mut self, query_id: kad::QueryId) {
-        if let Some(operation) = self.active_join_mut()
-            && operation.public_lookup_query == Some(query_id)
+        if self
+            .join_lookup
+            .as_ref()
+            .is_some_and(|(_, query)| *query == query_id)
         {
-            operation.public_lookup_query = None;
+            self.join_lookup = None;
         }
+    }
+
+    /// Retain lookup ownership across terminal state and operation replacement
+    /// until the driver can retire the underlying query.
+    pub fn take_inactive_join_lookup(&mut self) -> Option<kad::QueryId> {
+        let (owner, _) = self.join_lookup.as_ref()?;
+        if self.active_join().is_some_and(|join| &join.id == owner) {
+            return None;
+        }
+        self.join_lookup.take().map(|(_, query)| query)
     }
 
     #[must_use]
@@ -3630,7 +3649,6 @@ impl PersistedJoinOperation {
             expires_in_seconds: self.expires_in_seconds,
             public_lookup_started: false,
             next_public_lookup_at: None,
-            public_lookup_query: None,
             public_lookup_attempts: self.public_lookup_attempts,
             public_providers_found: self.public_providers_found,
             peer_attempts,
@@ -4444,6 +4462,103 @@ mod tests {
                 ..
             }) if hostname == "worker-2"
         ));
+    }
+
+    #[test]
+    fn join_lookup_owner_survives_terminal_operations_and_replacement() {
+        let mut sessions = CodePairingSessions::new();
+        let now = Instant::now();
+        let local = peer(8);
+        let mut kad = kad::Behaviour::new(local, kad::store::MemoryStore::new(local));
+        kad.add_address(&peer(9), "/memory/9".parse().unwrap());
+        for index in 0..64 {
+            let started = sessions
+                .join(
+                    "runners",
+                    PairingCode::generate(),
+                    None,
+                    Vec::new(),
+                    600,
+                    1_000,
+                    now,
+                )
+                .unwrap();
+            let public_now = now + CODE_PAIRING_LAN_GRACE;
+            let locator = sessions
+                .should_start_join_lookup(public_now)
+                .unwrap()
+                .to_owned();
+            let query = kad.get_providers(kad::RecordKey::new(&locator));
+            sessions.mark_join_lookup_started(&locator, query, public_now);
+            assert_eq!(sessions.take_inactive_join_lookup(), None);
+            match index % 4 {
+                0 => {
+                    sessions.cancel(&started.operation_id).unwrap();
+                }
+                1 => {
+                    sessions.expire(1_601, now + Duration::from_secs(601));
+                }
+                2 => sessions.fail_join(&started.operation_id, "test failure"),
+                _ => sessions
+                    .complete_join(
+                        &started.operation_id,
+                        test_offer(peer(1)),
+                        test_response(peer(1), local),
+                    )
+                    .unwrap(),
+            }
+            let replacement = sessions
+                .join(
+                    "runners",
+                    PairingCode::generate(),
+                    None,
+                    Vec::new(),
+                    600,
+                    1_000,
+                    now,
+                )
+                .unwrap();
+            assert_eq!(
+                sessions.should_start_join_lookup(public_now),
+                None,
+                "replacement must wait for retirement of its predecessor's query"
+            );
+            sessions.record_join_providers_found(query, 3);
+            assert_eq!(sessions.join.as_ref().unwrap().public_providers_found, 0);
+            let retired = sessions.take_inactive_join_lookup().unwrap();
+            assert_eq!(retired, query);
+            assert!(kad.cancel_query(&retired));
+            assert_eq!(kad.iter_queries().count(), 0);
+            assert_eq!(sessions.take_inactive_join_lookup(), None);
+            assert!(sessions.should_start_join_lookup(public_now).is_some());
+            sessions.cancel(&replacement.operation_id).unwrap();
+        }
+    }
+
+    #[test]
+    fn terminal_join_lookup_completion_releases_owner() {
+        let mut sessions = CodePairingSessions::new();
+        let now = Instant::now();
+        let started = sessions
+            .join(
+                "runners",
+                PairingCode::generate(),
+                None,
+                Vec::new(),
+                600,
+                1_000,
+                now,
+            )
+            .unwrap();
+        let locator = sessions.active_join_locator().unwrap().to_owned();
+        let local = peer(8);
+        let mut kad = kad::Behaviour::new(local, kad::store::MemoryStore::new(local));
+        let query = kad.get_providers(kad::RecordKey::new(&locator));
+        sessions.mark_join_lookup_started(&locator, query, now);
+        sessions.cancel(&started.operation_id).unwrap();
+        sessions.finish_join_lookup(query);
+        assert_eq!(sessions.take_inactive_join_lookup(), None);
+        assert!(sessions.join_lookup.is_none());
     }
 
     #[test]

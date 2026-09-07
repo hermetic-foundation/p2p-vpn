@@ -3113,6 +3113,9 @@ fn drive_code_pairing_discovery(
     discovery: &DiscoveryConfig,
     metrics: &RuntimeMetrics,
 ) {
+    if let Some(query) = sessions.take_inactive_join_lookup() {
+        swarm.behaviour_mut().kad.cancel_query(&query);
+    }
     reconcile_pairing_mdns(swarm, sessions, discovery);
     let now = Instant::now();
     let local_peer = *swarm.local_peer_id();
@@ -22685,6 +22688,64 @@ mod tests {
         );
         forwarder.commit_reconfigure(prepared.forwarder);
         assert!(forwarder.is_configured_transport_peer(joiner));
+    }
+
+    #[tokio::test]
+    async fn pairing_driver_retires_inactive_join_lookup() {
+        let identity = NodeIdentity::generate_ed25519().unwrap();
+        let mut node = pairing_test_node(&identity);
+        let mut sessions = CodePairingSessions::new();
+        let now = Instant::now();
+        let started = sessions
+            .join(
+                "lab",
+                crate::pairing_code::PairingCode::generate(),
+                None,
+                Vec::new(),
+                600,
+                1_000,
+                now,
+            )
+            .unwrap();
+        let locator = sessions.active_join_locator().unwrap().to_owned();
+        node.swarm
+            .behaviour_mut()
+            .kad
+            .add_address(&peer_id(), "/memory/1".parse().unwrap());
+        let query = node
+            .swarm
+            .behaviour_mut()
+            .kad
+            .get_providers(kademlia_pairing_code_key(&locator));
+        sessions.mark_join_lookup_started(&locator, query, now);
+        let unrelated = node.swarm.behaviour_mut().kad.get_closest_peers(peer_id());
+        let discovery = DiscoveryConfig {
+            mdns: false,
+            kademlia: false,
+            ..DiscoveryConfig::default()
+        };
+        let metrics = RuntimeMetrics::default();
+        drive_code_pairing_discovery(
+            &mut node.swarm,
+            &mut sessions,
+            &identity,
+            "lab",
+            &discovery,
+            &metrics,
+        );
+        assert!(node.swarm.behaviour().kad.query(&query).is_some());
+        sessions.cancel(&started.operation_id).unwrap();
+        drive_code_pairing_discovery(
+            &mut node.swarm,
+            &mut sessions,
+            &identity,
+            "lab",
+            &discovery,
+            &metrics,
+        );
+        assert!(node.swarm.behaviour().kad.query(&query).is_none());
+        assert!(node.swarm.behaviour().kad.query(&unrelated).is_some());
+        assert_eq!(sessions.take_inactive_join_lookup(), None);
     }
 
     fn pairing_test_node(identity: &NodeIdentity) -> P2pNode {

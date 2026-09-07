@@ -276,9 +276,50 @@ The additive `cancel_query` API supports immediate local retirement. Unlike
 graceful `QueryMut::finish`, it does not emit completion or start another phase.
 Callers must discard ownership of the canceled ID.
 
-Join-lookup cancellation, handler queue bounds, aggregate foreground admission,
+Handler queue bounds, aggregate foreground admission,
 and sustained process-resource measurements remain open. These synthetic
 cancellation tests do not measure real sockets or remote record expiry.
+
+#### Join Lookup Ownership
+
+The join lookup owner now lives in `CodePairingSessions`, outside the replaceable
+join operation. Its single slot retains the operation ID and query ID until
+completion or explicit retirement. New lookups wait for that slot to clear.
+
+| Transition | Behavior |
+| --- | --- |
+| Active operation | Keep the lookup and suppress duplicate admission |
+| Cancel / expire / fail / complete | Retire the lookup on the next discovery-driver tick |
+| Replace terminal operation | Preserve the old lookup owner until retirement |
+| Late provider result | Count only for the active operation that owns the lookup |
+| Final query event | Release ownership even if its operation has ended |
+| Process restart | Restore no runtime query IDs; persisted pairing format is unchanged |
+
+The driver runs on the existing one-second pairing timer. This is a scheduling
+interval, not a hard cancellation deadline under load. Already dispatched
+network requests retain the limitations described under Provider Cancellation.
+
+Regression coverage exercises 64 terminal/replacement transitions, late results,
+and completion after cancellation. A runtime-driver test checks actual query
+retirement while preserving an unrelated lookup. No new configuration is needed.
+
+#### Verified Join Checks
+
+| Check | Result |
+| --- | --- |
+| Workspace | 1,268 passed; 22 opt-in tests ignored |
+| Clippy correctness, suspicious, performance groups | Passed; style warnings remain |
+| Peerless code pairing / forced-relay pairing | Passed: 13.28 / 7.53 seconds |
+| DHT / owned QUIC / relay-direct network move | Passed: 16.73 / 16.04 / 52.35 seconds |
+| Native x86_64 Android | Built offline in 37.68 seconds; existing native-target warnings remain |
+| Nix source parity / formatting / whitespace | Passed |
+
+Logs use `/tmp/p2p-vpn-kad-join-` with `workspace`, `clippy`, `code`, `relay`,
+`dht`, `quic`, `move`, `android`, and `nix` `.log` suffixes. Nix source output:
+`/nix/store/idl62sqh9h74mhn6jbx5ims1g5x6vn82-p2p-vpn-rust-test-sources`.
+
+No full Nix package, ARM64 build, or physical-device deployment was performed.
+These checks do not establish aggregate resource bounds or performance gains.
 
 #### Verified Cancellation Checks
 
