@@ -63,7 +63,8 @@ No host interfaces, routes, services, or physical devices are modified.
 - Repeat: `/tmp/p2p-vpn-review-private-restart-fixed-repeat.log`.
 - Earlier loopback/documentation-address attempts were invalid publication setups.
 - This checks path restoration, not packet delivery, loss, carrier NAT, or Android lifecycle.
-- The Android process/reboot/isolation failures remain open pending device verification.
+- The subsequent [Android scenario](android-multi-network-review.md#latest-attempt) passed all 68 checks with the fix.
+- This does not establish that every earlier Android packet loss shared this cause.
 
 ## Verification
 

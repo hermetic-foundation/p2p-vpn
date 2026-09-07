@@ -2,6 +2,59 @@
 
 ## Latest Attempt
 
+The rebuilt APK and Linux fixture at `deedd041` passed all 68 checks on
+2026-09-07, from 01:17:04Z through 01:23:42Z (398 seconds). The scenario used
+the unchanged deadlines and packet assertions, with no manual recovery.
+
+| Stage | Result |
+| --- | --- |
+| Pairing and concurrent traffic | Both identities carried 5/5 packets in every direction and family |
+| Disable, overlap rejection, and updates | Network selection and traffic remained isolated |
+| Wi-Fi / emulated cellular / Wi-Fi | Both networks recovered without restarting the shared runtime |
+| Process death, APK replacement, lockdown | Both identities and traffic restored automatically |
+| Reboot | Both networks restored and passed concurrent dual-stack traffic |
+| Alpha fixture termination | Beta received 5/5 replies in both directions/families; process and runtime generation remained continuous |
+| Cleanup | All six safeguards passed; no emulator or fixture remained |
+
+Readiness retried before fixed traffic measurements: alpha Linux IPv4 needed
+six attempts after cellular transition and three after reboot; beta needed two
+after APK replacement. This is not uninterrupted-delivery evidence.
+
+The [bootstrap admission fix](private-discovery-restart-review.md) has a failing
+local reproduction and two passing fixed runs. This Android pass supports the
+fix, but does not prove every earlier packet loss had that same cause.
+
+- Original: `/tmp/p2p-vpn-review-admission-multi-network/evidence.json`.
+- Portable [sanitized evidence](android-multi-network-admission-review-sample.json).
+- Cached native build and offline Gradle unit tests, lint, and assembly passed.
+- The separate native-failure health-poll instrumentation was not rerun here.
+- Physical carrier/VPN behavior and sustained overload remain outside this run.
+
+### Latest Resource Samples
+
+| Sample | PSS (KiB) | Java Threads | Queued Packets / Bytes |
+| --- | ---: | ---: | --- |
+| Two networks after reboot | 69,848 | 6 | 0 / 0 |
+| Final diagnostics after isolation | 74,987 | 6 | 0 / 0 |
+
+Final counters include one expired 84-byte packet and five outbound drops.
+The final path snapshot has one direct TCP stream and 17 public routing peers;
+this does not establish an all-QUIC data path or battery efficiency.
+
+### Latest Artifacts
+
+| Artifact | SHA-256 |
+| --- | --- |
+| Debug APK | `6ea45c88e8550831e12cf3f10e527e9baab4d10a3a70d5d662eb67386a855c0d` |
+| Unstripped x86_64 JNI | `497c4571067b44259e0e56f69c87528546ce1faa300b32910ba262ff7307e175` |
+| Stripped JNI / library extracted from APK | `639de79413a529b63c52a2ec039960fffeaec3bc186cef458d2c3d623a12c804` |
+| Linux fixture | `6d13b154005b6929c55c957a5ea0889b2a0ba950e0ebed6fa6fdfcbe61eacec6` |
+
+The CLI remains the packaged `461894ad` runtime; Android and fixture runtimes
+contain the admission fix. The CLI performs management, not fixture forwarding.
+
+## Earlier Labelled Attempt
+
 The network-labelled build at `23e5159d` failed automatic process-death recovery
 on 2026-09-07. It recorded 46 passing steps and one failure from 00:48:01Z
 through 00:56:01Z (480 seconds). Reboot and final isolation were not reached.
@@ -27,7 +80,7 @@ need a focused restart reproduction before attributing a transport defect.
 
 The subsequent [private restart reproduction](private-discovery-restart-review.md)
 found and fixed pairing-protocol support suppressing routing admission. Its
-delayed changed-port test passes; these Android failures have not been rerun with the fix.
+delayed changed-port test and the latest Android scenario above pass with the fix.
 
 ### Labelled Run Artifacts
 
@@ -76,12 +129,12 @@ thread IDs in older Android logs cannot reliably identify a network.
 - Linux and Android use the same additive field, including startup failures.
 - Independent spawned tasks and library logs do not inherit this task-local scope.
 - A fixture's bootstrap and overlay runtimes share a network name; this label alone does not distinguish those roles.
-- This is diagnostic instrumentation, not a recovery fix; the labelled run above failed recovery.
+- This instrumentation alone did not fix recovery; the later admission fix passes the scenario above.
 
 Verification passed: three focused log tests, the workspace suite (1,231 passed,
 19 opt-in ignored), required Clippy categories, Rust formatting, and the Nix
-`rust-test-sources` check. The labelled emulator run verifies attribution;
-physical-device verification and successful recovery remain open.
+`rust-test-sources` check. The labelled emulator runs verify attribution;
+the latest run verifies scenario recovery, while physical-device verification remains open.
 
 ## Earlier Isolation Failure
 

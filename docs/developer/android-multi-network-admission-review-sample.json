@@ -1,0 +1,633 @@
+{
+  "source_revision": "deedd041",
+  "apk_sha256": "6ea45c88e8550831e12cf3f10e527e9baab4d10a3a70d5d662eb67386a855c0d",
+  "native_x86_64_apk_sha256": "639de79413a529b63c52a2ec039960fffeaec3bc186cef458d2c3d623a12c804",
+  "host_fixture_sha256": "6d13b154005b6929c55c957a5ea0889b2a0ba950e0ebed6fa6fdfcbe61eacec6",
+  "host_cli_revision": "461894ad",
+  "started_utc": "2026-09-07T01:17:04Z",
+  "finished_utc": "2026-09-07T01:23:42Z",
+  "status": "passed",
+  "detail": "Concurrent multi-network traffic, isolation, and lifecycle restoration passed",
+  "api_level": "35",
+  "abi": "x86_64",
+  "multi_network": {
+    "migration": {
+      "legacy_profile_migrated": true,
+      "identity_preserved": true,
+      "encrypted_storage": true
+    },
+    "activation": {
+      "network_count": 2,
+      "independently_paired": true,
+      "isolated_identities": true,
+      "shared_tun": true
+    },
+    "readiness_attempts": {
+      "alpha_linux_ipv4": 1,
+      "alpha_linux_ipv6": 1,
+      "beta_linux_ipv4": 1,
+      "beta_linux_ipv6": 1,
+      "alpha_android_ipv4": 1,
+      "alpha_android_ipv6": 1,
+      "beta_android_ipv4": 1,
+      "beta_android_ipv6": 1
+    },
+    "traffic": {
+      "packets_per_direction_and_family": 5,
+      "started_monotonic_millis": {
+        "initial": 616883620,
+        "after_overlap": 616887920,
+        "after_reenable": 616953180,
+        "cellular_underlay": 616968920,
+        "wifi_underlay_restored": 616979470,
+        "process_restore": 617012640,
+        "update_restore": 617027610,
+        "reboot_restore": 617113620,
+        "lockdown_restore": 617073070
+      },
+      "initial_concurrent_millis": 4160,
+      "after_overlap_millis": 4160,
+      "after_reenable_millis": 4340,
+      "cellular_underlay_millis": 4050,
+      "wifi_underlay_restored_millis": 4060,
+      "process_restore_millis": 4130,
+      "update_restore_millis": 4050,
+      "reboot_restore_millis": 4050,
+      "lockdown_restore_millis": 4450
+    },
+    "overlap_rejection": {
+      "rejected_before_activation": true,
+      "collection_unchanged": true,
+      "runtime_generation_unchanged": true,
+      "runtime_directories": 2,
+      "live_traffic_preserved": true
+    },
+    "lifecycle": {
+      "disabled_route_removed": true,
+      "sibling_remained_reachable": true,
+      "disabled_set_restored_after_update": true,
+      "reenabled_set_restored": true,
+      "underlay_changed_without_runtime_restart": true,
+      "process_death_restored": true,
+      "update_restored": true,
+      "reboot_restored": true,
+      "lockdown_restored": true,
+      "identities_preserved": true
+    },
+    "failure_isolation": {
+      "failed_network_unreachable": true,
+      "sibling_traffic_preserved": true,
+      "android_process_continuous": true,
+      "runtime_generation_continuous": true,
+      "connected_peers_before": 2,
+      "connected_peers_after": 1,
+      "queued_packets": 0,
+      "queued_bytes": 0
+    },
+    "resources": {
+      "active_threads": 6,
+      "maximum_active_threads": 128,
+      "total_pss_kib": 69848,
+      "maximum_total_pss_kib": 524288,
+      "queued_packets": 0,
+      "maximum_queued_packets": 512,
+      "queued_bytes": 0,
+      "maximum_queued_bytes": 2097152
+    }
+  },
+  "final_resources": {
+    "process_cpu_millis": 3160,
+    "total_pss_kib": 74987,
+    "private_dirty_kib": 33732,
+    "java_heap_used_bytes": 2817584,
+    "java_heap_max_bytes": 201326592,
+    "active_threads": 6
+  },
+  "final_drops": {
+    "queue_packets": 1,
+    "queue_bytes": 84,
+    "expired_packets": 1,
+    "expired_bytes": 84,
+    "outbound_packets": 5,
+    "inbound_packets": 0,
+    "packet_plane_datagrams": 0,
+    "path_fallbacks_to_relay": 0,
+    "packet_plane_path_demotions": 0,
+    "stream_path_demotions": 0
+  },
+  "final_paths": {
+    "connected_peers": 1,
+    "direct_udp_datagram": 0,
+    "direct_quic_datagram": 0,
+    "direct_quic_stream": 0,
+    "direct_tcp_stream": 1,
+    "relay": 0,
+    "public_routing_peers": 17,
+    "packet_plane_quic_sessions": 0,
+    "outbound_quic_datagram_packets": 0,
+    "outbound_direct_tcp_stream_packets": 42,
+    "promotions_to_direct": 2
+  },
+  "cleanup": {
+    "emulator_stopped": true,
+    "fixture_stopped": true,
+    "private_state_removed": true,
+    "logs_redacted": true,
+    "diagnostic_report_redacted": true,
+    "always_on_cleared": true
+  },
+  "steps": [
+    {
+      "name": "preflight",
+      "status": "passed",
+      "detail": "Required Android E2E capabilities are available",
+      "recorded_unix_millis": 1788743824892
+    },
+    {
+      "name": "fixture_start",
+      "status": "started",
+      "detail": "Waiting for private discovery and rootless Linux peer",
+      "recorded_unix_millis": 1788743824903
+    },
+    {
+      "name": "fixture_start",
+      "status": "passed",
+      "detail": "Private discovery and rootless Linux peer are ready",
+      "recorded_unix_millis": 1788743825945
+    },
+    {
+      "name": "secondary_fixture_start",
+      "status": "started",
+      "detail": "Waiting for secondary private discovery and rootless Linux peer",
+      "recorded_unix_millis": 1788743825955
+    },
+    {
+      "name": "secondary_fixture_start",
+      "status": "passed",
+      "detail": "secondary private discovery and rootless Linux peer is ready",
+      "recorded_unix_millis": 1788743826976
+    },
+    {
+      "name": "emulator_start",
+      "status": "started",
+      "detail": "Waiting for a clean API 35 emulator",
+      "recorded_unix_millis": 1788743827002
+    },
+    {
+      "name": "emulator_start",
+      "status": "passed",
+      "detail": "Emulator reported an ADB serial",
+      "recorded_unix_millis": 1788743855108
+    },
+    {
+      "name": "selected_apk",
+      "status": "passed",
+      "detail": "Installed and launched the selected APK before scenario checks",
+      "recorded_unix_millis": 1788743857119
+    },
+    {
+      "name": "device_contract",
+      "status": "passed",
+      "detail": "API 35 x86_64 device contract verified",
+      "recorded_unix_millis": 1788743857322
+    },
+    {
+      "name": "package",
+      "status": "passed",
+      "detail": "Debug package is installed",
+      "recorded_unix_millis": 1788743857329
+    },
+    {
+      "name": "activity",
+      "status": "passed",
+      "detail": "Main activity is running",
+      "recorded_unix_millis": 1788743857335
+    },
+    {
+      "name": "debug_automation",
+      "status": "passed",
+      "detail": "ADB-authorized structured status is available",
+      "recorded_unix_millis": 1788743857341
+    },
+    {
+      "name": "alpha_profile_creation",
+      "status": "passed",
+      "detail": "alpha was added with isolated discovery bootstrap configuration",
+      "recorded_unix_millis": 1788743858526
+    },
+    {
+      "name": "legacy_collection_migration",
+      "status": "passed",
+      "detail": "Encrypted legacy storage migrated disabled without changing identity or addresses",
+      "recorded_unix_millis": 1788743859919
+    },
+    {
+      "name": "vpn_consent",
+      "status": "passed",
+      "detail": "ADB authorized the normal VpnService consent gate",
+      "recorded_unix_millis": 1788743862082
+    },
+    {
+      "name": "vpn_connect",
+      "status": "passed",
+      "detail": "Enabling alpha started the shared Android VPN",
+      "recorded_unix_millis": 1788743862087
+    },
+    {
+      "name": "alpha_pairing",
+      "status": "passed",
+      "detail": "Android paired the selected alpha network without a configured overlay address",
+      "recorded_unix_millis": 1788743917063
+    },
+    {
+      "name": "beta_profile_creation",
+      "status": "passed",
+      "detail": "beta was added with isolated discovery bootstrap configuration",
+      "recorded_unix_millis": 1788743918162
+    },
+    {
+      "name": "beta_activation",
+      "status": "passed",
+      "detail": "The shared TUN activated two independently identified network runtimes",
+      "recorded_unix_millis": 1788743919257
+    },
+    {
+      "name": "beta_pairing",
+      "status": "passed",
+      "detail": "Android paired the selected beta network without a configured overlay address",
+      "recorded_unix_millis": 1788743953441
+    },
+    {
+      "name": "concurrent_activation",
+      "status": "passed",
+      "detail": "Both isolated runtimes are running behind one shared TUN",
+      "recorded_unix_millis": 1788743953493
+    },
+    {
+      "name": "concurrent_traffic_readiness",
+      "status": "passed",
+      "detail": "Both networks converged independently in both directions and address families",
+      "recorded_unix_millis": 1788743954024
+    },
+    {
+      "name": "initial_concurrent_traffic",
+      "status": "passed",
+      "detail": "Both networks carried 5 of 5 packets in every direction and address family during the initial shared-TUN measurement",
+      "recorded_unix_millis": 1788743958208
+    },
+    {
+      "name": "after-overlap_concurrent_traffic",
+      "status": "passed",
+      "detail": "Both networks carried 5 of 5 packets in every direction and address family after rejecting an overlapping network",
+      "recorded_unix_millis": 1788743962515
+    },
+    {
+      "name": "overlap_rejection",
+      "status": "passed",
+      "detail": "Overlapping routes were rejected before persistence or live-runtime mutation",
+      "recorded_unix_millis": 1788743962521
+    },
+    {
+      "name": "multi_network_always_on",
+      "status": "passed",
+      "detail": "Android always-on ownership retained both enabled networks",
+      "recorded_unix_millis": 1788743977303
+    },
+    {
+      "name": "disabled-beta_traffic_readiness",
+      "status": "passed",
+      "detail": "Bidirectional dual-stack forwarding converged while alpha was disabled after 1/1 Linux and 1/1 Android attempts",
+      "recorded_unix_millis": 1788743984747
+    },
+    {
+      "name": "disabled-beta_linux_to_android_ipv4",
+      "status": "passed",
+      "detail": "Linux received 5 of 5 IPv4 replies while alpha was disabled",
+      "recorded_unix_millis": 1788743984785
+    },
+    {
+      "name": "disabled-beta_linux_to_android_ipv6",
+      "status": "passed",
+      "detail": "Linux received 5 of 5 IPv6 replies while alpha was disabled",
+      "recorded_unix_millis": 1788743984829
+    },
+    {
+      "name": "disabled-beta_android_to_linux_ipv4",
+      "status": "passed",
+      "detail": "Android received 5 of 5 IPv4 replies while alpha was disabled",
+      "recorded_unix_millis": 1788743988869,
+      "measurement": {
+        "started_unix_millis": 1788743984835,
+        "finished_unix_millis": 1788743988863,
+        "reply_sequences": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ]
+      }
+    },
+    {
+      "name": "disabled-beta_android_to_linux_ipv6",
+      "status": "passed",
+      "detail": "Android received 5 of 5 IPv6 replies while alpha was disabled",
+      "recorded_unix_millis": 1788743992909,
+      "measurement": {
+        "started_unix_millis": 1788743988874,
+        "finished_unix_millis": 1788743992903,
+        "reply_sequences": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ]
+      }
+    },
+    {
+      "name": "independent_disable",
+      "status": "passed",
+      "detail": "Disabling selected alpha removed its routes while beta remained dual-stack reachable",
+      "recorded_unix_millis": 1788743996941
+    },
+    {
+      "name": "updated-disabled-beta_traffic_readiness",
+      "status": "passed",
+      "detail": "Bidirectional dual-stack forwarding converged after restoring the disabled set through an app update after 1/1 Linux and 1/1 Android attempts",
+      "recorded_unix_millis": 1788744000559
+    },
+    {
+      "name": "updated-disabled-beta_linux_to_android_ipv4",
+      "status": "passed",
+      "detail": "Linux received 5 of 5 IPv4 replies after restoring the disabled set through an app update",
+      "recorded_unix_millis": 1788744000609
+    },
+    {
+      "name": "updated-disabled-beta_linux_to_android_ipv6",
+      "status": "passed",
+      "detail": "Linux received 5 of 5 IPv6 replies after restoring the disabled set through an app update",
+      "recorded_unix_millis": 1788744000659
+    },
+    {
+      "name": "updated-disabled-beta_android_to_linux_ipv4",
+      "status": "passed",
+      "detail": "Android received 5 of 5 IPv4 replies after restoring the disabled set through an app update",
+      "recorded_unix_millis": 1788744004705,
+      "measurement": {
+        "started_unix_millis": 1788744000663,
+        "finished_unix_millis": 1788744004699,
+        "reply_sequences": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ]
+      }
+    },
+    {
+      "name": "updated-disabled-beta_android_to_linux_ipv6",
+      "status": "passed",
+      "detail": "Android received 5 of 5 IPv6 replies after restoring the disabled set through an app update",
+      "recorded_unix_millis": 1788744008751,
+      "measurement": {
+        "started_unix_millis": 1788744004710,
+        "finished_unix_millis": 1788744008745,
+        "reply_sequences": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ]
+      }
+    },
+    {
+      "name": "disabled_set_update_restore",
+      "status": "passed",
+      "detail": "A fresh app process restored selected-disabled alpha and active beta",
+      "recorded_unix_millis": 1788744008757
+    },
+    {
+      "name": "reenabled_alpha_traffic_readiness",
+      "status": "passed",
+      "detail": "Bidirectional dual-stack forwarding converged after independently re-enabling alpha on alpha after 1/1 Linux and 1/1 Android attempts",
+      "recorded_unix_millis": 1788744022314
+    },
+    {
+      "name": "reenabled_beta_traffic_readiness",
+      "status": "passed",
+      "detail": "Bidirectional dual-stack forwarding converged after independently re-enabling alpha on beta after 1/1 Linux and 1/1 Android attempts",
+      "recorded_unix_millis": 1788744023581
+    },
+    {
+      "name": "reenabled_concurrent_traffic",
+      "status": "passed",
+      "detail": "Both networks carried 5 of 5 packets in every direction and address family after independently re-enabling alpha",
+      "recorded_unix_millis": 1788744027952
+    },
+    {
+      "name": "independent_reenable",
+      "status": "passed",
+      "detail": "Re-enabling alpha restored concurrent dual-stack traffic",
+      "recorded_unix_millis": 1788744027957
+    },
+    {
+      "name": "cellular_alpha_traffic_readiness",
+      "status": "passed",
+      "detail": "Bidirectional dual-stack forwarding converged after a Wi-Fi-to-cellular underlay transition on alpha after 6/1 Linux and 1/1 Android attempts",
+      "recorded_unix_millis": 1788744039231
+    },
+    {
+      "name": "cellular_beta_traffic_readiness",
+      "status": "passed",
+      "detail": "Bidirectional dual-stack forwarding converged after a Wi-Fi-to-cellular underlay transition on beta after 1/1 Linux and 1/1 Android attempts",
+      "recorded_unix_millis": 1788744039320
+    },
+    {
+      "name": "cellular_concurrent_traffic",
+      "status": "passed",
+      "detail": "Both networks carried 5 of 5 packets in every direction and address family after a Wi-Fi-to-cellular underlay transition",
+      "recorded_unix_millis": 1788744043405
+    },
+    {
+      "name": "wifi-restored_alpha_traffic_readiness",
+      "status": "passed",
+      "detail": "Bidirectional dual-stack forwarding converged after returning to the preferred Wi-Fi underlay on alpha after 1/1 Linux and 1/1 Android attempts",
+      "recorded_unix_millis": 1788744049780
+    },
+    {
+      "name": "wifi-restored_beta_traffic_readiness",
+      "status": "passed",
+      "detail": "Bidirectional dual-stack forwarding converged after returning to the preferred Wi-Fi underlay on beta after 1/1 Linux and 1/1 Android attempts",
+      "recorded_unix_millis": 1788744049878
+    },
+    {
+      "name": "wifi-restored_concurrent_traffic",
+      "status": "passed",
+      "detail": "Both networks carried 5 of 5 packets in every direction and address family after returning to the preferred Wi-Fi underlay",
+      "recorded_unix_millis": 1788744053962
+    },
+    {
+      "name": "multi_network_underlay_change",
+      "status": "passed",
+      "detail": "Both runtimes changed underlay twice without a shared-runtime restart",
+      "recorded_unix_millis": 1788744053968
+    },
+    {
+      "name": "process-restored_alpha_traffic_readiness",
+      "status": "passed",
+      "detail": "Bidirectional dual-stack forwarding converged after autonomous process-death restoration on alpha after 1/1 Linux and 1/1 Android attempts",
+      "recorded_unix_millis": 1788744082947
+    },
+    {
+      "name": "process-restored_beta_traffic_readiness",
+      "status": "passed",
+      "detail": "Bidirectional dual-stack forwarding converged after autonomous process-death restoration on beta after 1/1 Linux and 1/1 Android attempts",
+      "recorded_unix_millis": 1788744083040
+    },
+    {
+      "name": "process-restored_concurrent_traffic",
+      "status": "passed",
+      "detail": "Both networks carried 5 of 5 packets in every direction and address family after autonomous process-death restoration",
+      "recorded_unix_millis": 1788744087199
+    },
+    {
+      "name": "multi_network_process_restore",
+      "status": "passed",
+      "detail": "A fresh always-on process restored both identities and traffic",
+      "recorded_unix_millis": 1788744087205
+    },
+    {
+      "name": "update-restored_alpha_traffic_readiness",
+      "status": "passed",
+      "detail": "Bidirectional dual-stack forwarding converged after restoring both networks through an APK update on alpha after 1/1 Linux and 1/1 Android attempts",
+      "recorded_unix_millis": 1788744095645
+    },
+    {
+      "name": "update-restored_beta_traffic_readiness",
+      "status": "passed",
+      "detail": "Bidirectional dual-stack forwarding converged after restoring both networks through an APK update on beta after 2/1 Linux and 1/1 Android attempts",
+      "recorded_unix_millis": 1788744098015
+    },
+    {
+      "name": "update-restored_concurrent_traffic",
+      "status": "passed",
+      "detail": "Both networks carried 5 of 5 packets in every direction and address family after restoring both networks through an APK update",
+      "recorded_unix_millis": 1788744102091
+    },
+    {
+      "name": "multi_network_update_restore",
+      "status": "passed",
+      "detail": "APK replacement restored both enabled network runtimes and traffic",
+      "recorded_unix_millis": 1788744102096
+    },
+    {
+      "name": "lockdown-restored_alpha_traffic_readiness",
+      "status": "passed",
+      "detail": "Bidirectional dual-stack forwarding converged after temporary lockdown rejection on alpha after 1/1 Linux and 1/1 Android attempts",
+      "recorded_unix_millis": 1788744142529
+    },
+    {
+      "name": "lockdown-restored_beta_traffic_readiness",
+      "status": "passed",
+      "detail": "Bidirectional dual-stack forwarding converged after temporary lockdown rejection on beta after 1/1 Linux and 1/1 Android attempts",
+      "recorded_unix_millis": 1788744143471
+    },
+    {
+      "name": "lockdown-restored_concurrent_traffic",
+      "status": "passed",
+      "detail": "Both networks carried 5 of 5 packets in every direction and address family after temporary lockdown rejection",
+      "recorded_unix_millis": 1788744147956
+    },
+    {
+      "name": "multi_network_lockdown_restore",
+      "status": "passed",
+      "detail": "Both networks recovered automatically after temporary lockdown rejection",
+      "recorded_unix_millis": 1788744147961
+    },
+    {
+      "name": "reboot-restored_alpha_traffic_readiness",
+      "status": "passed",
+      "detail": "Bidirectional dual-stack forwarding converged after a full managed-emulator reboot on alpha after 3/1 Linux and 1/1 Android attempts",
+      "recorded_unix_millis": 1788744183927
+    },
+    {
+      "name": "reboot-restored_beta_traffic_readiness",
+      "status": "passed",
+      "detail": "Bidirectional dual-stack forwarding converged after a full managed-emulator reboot on beta after 1/1 Linux and 1/1 Android attempts",
+      "recorded_unix_millis": 1788744184022
+    },
+    {
+      "name": "reboot-restored_concurrent_traffic",
+      "status": "passed",
+      "detail": "Both networks carried 5 of 5 packets in every direction and address family after a full managed-emulator reboot",
+      "recorded_unix_millis": 1788744188101
+    },
+    {
+      "name": "multi_network_reboot_restore",
+      "status": "passed",
+      "detail": "Android rebooted and restored both always-on network runtimes and traffic",
+      "recorded_unix_millis": 1788744188106
+    },
+    {
+      "name": "multi_network_resource_bounds",
+      "status": "passed",
+      "detail": "Two active networks remained within thread, memory, packet, and byte limits",
+      "recorded_unix_millis": 1788744188174
+    },
+    {
+      "name": "isolated-beta_linux_to_android_ipv4",
+      "status": "passed",
+      "detail": "Linux received 5 of 5 IPv4 replies after the alpha fixture terminated",
+      "recorded_unix_millis": 1788744192333
+    },
+    {
+      "name": "isolated-beta_linux_to_android_ipv6",
+      "status": "passed",
+      "detail": "Linux received 5 of 5 IPv6 replies after the alpha fixture terminated",
+      "recorded_unix_millis": 1788744192373
+    },
+    {
+      "name": "isolated-beta_android_to_linux_ipv4",
+      "status": "passed",
+      "detail": "Android received 5 of 5 IPv4 replies after the alpha fixture terminated",
+      "recorded_unix_millis": 1788744196413,
+      "measurement": {
+        "started_unix_millis": 1788744192378,
+        "finished_unix_millis": 1788744196407,
+        "reply_sequences": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ]
+      }
+    },
+    {
+      "name": "isolated-beta_android_to_linux_ipv6",
+      "status": "passed",
+      "detail": "Android received 5 of 5 IPv6 replies after the alpha fixture terminated",
+      "recorded_unix_millis": 1788744200460,
+      "measurement": {
+        "started_unix_millis": 1788744196419,
+        "finished_unix_millis": 1788744200454,
+        "reply_sequences": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ]
+      }
+    },
+    {
+      "name": "per_network_failure_isolation",
+      "status": "passed",
+      "detail": "Alpha became unreachable while beta traffic, process identity, and queue bounds remained stable",
+      "recorded_unix_millis": 1788744200552
+    }
+  ]
+}
