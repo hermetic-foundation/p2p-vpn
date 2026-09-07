@@ -2,6 +2,31 @@
 
 ## Latest Attempt
 
+The opt-in traced fixture at `bac49191` failed reboot recovery on 2026-09-07,
+before reaching final isolation. It recorded 58 passing steps and one failure
+from 00:25:29Z through 00:37:27Z (718 seconds).
+
+| Evidence | Result |
+| --- | --- |
+| Earlier stages | Pairing, concurrent traffic, independent disable, updates, underlay transitions, process restoration, and lockdown recovery passed |
+| Reboot | Android boot completed; both network profiles were enabled and running |
+| Recovery deadline | Only one connected VPN peer returned within the existing 240-second status check |
+| Fixture counters during wait | Alpha reported one supported peer path; beta reported zero |
+| Final Android snapshot | Wi-Fi validated, one direct QUIC stream path, zero relay paths, 37 public routing peers |
+| Final isolation | Not reached; this run cannot explain the earlier missing fifth reply |
+| Cleanup | All six safeguards passed; no manual app restart or repair |
+
+Beta's retained log contains direct-dial timeouts and relay-address removal
+after missing destination reservations. This identifies failed recovery attempts,
+not why fresh reachable addresses failed to restore beta.
+
+- Evidence: `/tmp/p2p-vpn-review-traced-multi-network/evidence.json`.
+- Traced fixture SHA-256: `c2515e7267883431e58f8285879c5e122c3d85db99f4a54c753421c6c6ed5d93`.
+- APK and runtime binaries match the preceding isolation-failure run below.
+- Next: investigate beta's post-reboot address refresh and recovery scheduling.
+
+## Earlier Isolation Failure
+
 The rebuilt APK and Linux fixture at `fe950142` failed the final isolation stage
 on 2026-09-07. The run lasted 652 seconds, from 00:05:06Z through 00:15:58Z.
 It recorded 65 passing steps and one failure; two final checks were not reached.
@@ -46,9 +71,9 @@ compare separate fixture logs with Android ping intervals before attributing los
 
 Validation: all ten fixture tests, Rust formatting, and the repository's required
 Clippy categories passed. Strict `-D warnings` failed on 99 existing core-library
-warnings. An emulator run with this instrumentation remains pending.
+warnings. The traced emulator run above failed before final isolation.
 
-### Latest Artifacts
+### Isolation Run Artifacts
 
 | Artifact | SHA-256 |
 | --- | --- |
@@ -89,7 +114,7 @@ does not establish which change caused either earlier failure to disappear.
 - This run did not execute the separate native-failure health-poll instrumentation case.
 - Cleanup reported all six safeguards successful; no emulator or fixture process remained afterward.
 
-### Current Resource Samples
+### Earlier Passing Resource Samples
 
 | Sample | PSS (KiB) | Java Threads | Queued Packets / Bytes |
 | --- | ---: | ---: | --- |
@@ -100,7 +125,7 @@ Final diagnostics recorded 35 public routing peers, one direct TCP path, one
 expired queued packet, and 24 outbound drops after the failure-isolation stage.
 These debug snapshots do not prove battery efficiency, leak freedom, or zero loss.
 
-### Current Artifacts
+### Earlier Passing Artifacts
 
 | Artifact | SHA-256 |
 | --- | --- |
