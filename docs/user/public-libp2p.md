@@ -52,6 +52,9 @@ server duties or advertise itself as a Kademlia server.
 | Query candidates | At most 256 identities per query phase, including failed candidates. |
 | Query address storage | At most 256 KiB of encoded addresses per phase, with the same per-peer limits. |
 | Retained queries | At most 32 per DHT, including finished queries awaiting retirement. |
+| Query input | At most 256 KiB for a key and record value together; oversized input is rejected. |
+| Query result bookkeeping | At most 256 stored acknowledgement or cache-candidate peers per query; required quorum is unchanged. |
+| Provider publication addresses | At most 64 per query, each at most 2,048 encoded bytes. |
 | RPCs awaiting a connection | Per DHT: at most 256 requests and 1 MiB of retained payload; retired with their queries. |
 | Library background jobs | One new query per poll, only below two existing queries; provider and record jobs share the allowance. |
 | Waiting DHT requests | Per connection: at most 64 requests and 256 KiB of retained payload data; queued requests expire after ten seconds. |
@@ -69,6 +72,12 @@ per-query limits establish a total process-memory or connection limit.
 When the query pool is full, discovery and publication retry later. Pending
 address updates retain the latest state, and pairing publication deferrals do
 not consume the attempt budget. Bootstrap diagnostics report rejected starts.
+
+Oversized input reports `query_input_too_large`, separately from temporary
+`query_capacity` exhaustion. An oversized address snapshot waits for a new
+address update instead of repeatedly retrying the same invalid publication.
+These limits require no additional JSON or Nix settings.
+The input ceiling does not increase existing wire-message or local-store limits.
 
 A full DHT request queue rejects new work without closing the connection used
 by VPN traffic. Rejection reporting is bounded too; extreme overload may wait

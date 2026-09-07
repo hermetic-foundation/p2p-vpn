@@ -1999,7 +1999,7 @@ fn start_public_relay_closest_peer_lookup(node: &mut P2pNode) -> bool {
     node.swarm
         .behaviour_mut()
         .kad
-        .try_start_query(|kad| kad.get_closest_peers(local_peer))
+        .try_get_closest_peers(local_peer)
         .is_ok()
 }
 
@@ -2530,10 +2530,16 @@ fn start_bootstrap_membership_record_dht(
         .swarm
         .behaviour_mut()
         .kad
-        .try_start_query(|kad| kad.get_record(record_key.clone()))
+        .try_get_record(record_key.clone())
     {
         Ok(_) => result.membership_records.lookup_started = true,
-        Err(_) => result.membership_records.last_error = Some("lookup:query_capacity".to_owned()),
+        Err(error) => {
+            let reason = match error {
+                kad::QueryStartError::Capacity(_) => "query_capacity",
+                kad::QueryStartError::InputTooLarge(_) => "query_input_too_large",
+            };
+            result.membership_records.last_error = Some(format!("lookup:{reason}"));
+        }
     }
 
     let records = config
@@ -2555,8 +2561,13 @@ fn start_bootstrap_membership_record_dht(
                 .swarm
                 .behaviour_mut()
                 .kad
-                .try_start_query(|kad| kad.put_record(record, kad::Quorum::One))
-                .map_err(|_| "publish:query_capacity".to_owned())
+                .try_put_record(record, kad::Quorum::One)
+                .map_err(|error| match error {
+                    kad::QueryStartError::Capacity(_) => "publish:query_capacity".to_owned(),
+                    kad::QueryStartError::InputTooLarge(_) => {
+                        "publish:query_input_too_large".to_owned()
+                    }
+                })
                 .and_then(|result| result.map_err(|error| format!("{error:?}")))
             {
                 Ok(_) => result.membership_records.publish_started = true,
@@ -3925,6 +3936,35 @@ mod tests {
         assert_eq!(admitted.membership_records.publish_failures, 0);
         assert!(admitted.membership_records.last_error.is_none());
         assert_eq!(node.swarm.behaviour().kad.query_pool_usage().retained, 2);
+
+        let mut kad_config = crate::runtime::p2p::controlled_kademlia_config(
+            libp2p::StreamProtocol::new(crate::config::PUBLIC_IPFS_KADEMLIA_PROTOCOL),
+        );
+        kad_config.set_query_metadata_limits(Some(kad::QueryMetadataLimits::new(
+            std::num::NonZeroUsize::MIN,
+            std::num::NonZeroUsize::MIN,
+            kad::AddressLimits::default(),
+        )));
+        node.swarm.behaviour_mut().kad =
+            kad::Behaviour::with_config(local, kad::store::MemoryStore::new(local), kad_config);
+        let mut oversized = BootstrapPollResult::default();
+        start_bootstrap_membership_record_dht(&mut node, &config, None, &mut oversized);
+        assert!(!oversized.membership_records.lookup_started);
+        assert!(!oversized.membership_records.publish_started);
+        assert_eq!(oversized.membership_records.publish_failures, 1);
+        assert_eq!(
+            oversized.membership_records.last_error.as_deref(),
+            Some("publish:query_input_too_large")
+        );
+        assert_eq!(node.swarm.behaviour().kad.query_pool_usage().retained, 0);
+        assert!(
+            node.swarm
+                .behaviour_mut()
+                .kad
+                .store_mut()
+                .get(&key)
+                .is_none()
+        );
     }
 
     #[test]

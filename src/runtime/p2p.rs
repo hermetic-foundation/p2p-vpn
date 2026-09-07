@@ -443,6 +443,11 @@ pub(super) fn controlled_kademlia_config(protocol: StreamProtocol) -> kad::Confi
     config
         .set_parallelism(KADEMLIA_QUERY_PARALLELISM)
         .set_query_pool_capacity(KADEMLIA_QUERY_POOL_CAPACITY)
+        .set_query_metadata_limits(Some(kad::QueryMetadataLimits::new(
+            NonZeroUsize::new(256 * 1024).unwrap(),
+            NonZeroUsize::new(KADEMLIA_QUERY_CANDIDATES).unwrap(),
+            address_limits,
+        )))
         .set_pending_rpc_limits(kad::PendingRpcLimits::new(
             NonZeroUsize::new(256).unwrap(),
             NonZeroUsize::new(1024 * 1024).unwrap(),
@@ -652,6 +657,10 @@ impl From<crate::config::ConfigError> for P2pBuildError {
 }
 
 #[cfg(test)]
+#[path = "p2p/metadata_tests.rs"]
+mod metadata_tests;
+
+#[cfg(test)]
 mod tests {
     use std::time::Duration;
 
@@ -794,7 +803,7 @@ mod tests {
             ..DiscoveryConfig::default()
         };
 
-        let node = build_node(&HostConfig {
+        let mut node = build_node(&HostConfig {
             identity: NodeIdentity::generate_ed25519().expect("identity"),
             network_name: "lab".to_owned(),
             membership_tag: None,
@@ -823,6 +832,13 @@ mod tests {
         );
         assert!(!node.startup.kademlia.rendezvous_advertise_started);
         assert!(!node.startup.kademlia.rendezvous_lookup_started);
+        assert!(matches!(
+            node.swarm
+                .behaviour_mut()
+                .kad
+                .try_get_closest_peers(vec![0; 256 * 1024 + 1]),
+            Err(kad::QueryStartError::InputTooLarge(_))
+        ));
     }
 
     #[tokio::test]
@@ -832,7 +848,7 @@ mod tests {
             ..DiscoveryConfig::default()
         };
 
-        let node = build_node(&HostConfig {
+        let mut node = build_node(&HostConfig {
             identity: NodeIdentity::generate_ed25519().expect("identity"),
             network_name: "lab".to_owned(),
             membership_tag: None,
@@ -867,6 +883,13 @@ mod tests {
                 .capacity,
             Some(32)
         );
+        let behaviour = node.swarm.behaviour_mut();
+        for kad in [&mut behaviour.kad, behaviour.pairing_kad.as_mut().unwrap()] {
+            assert!(matches!(
+                kad.try_get_closest_peers(vec![0; 256 * 1024 + 1]),
+                Err(kad::QueryStartError::InputTooLarge(_))
+            ));
+        }
     }
 
     #[test]

@@ -289,6 +289,16 @@ impl Config {
         self
     }
 
+    /// Bounds keys/values, result bookkeeping, and advertised addresses per query.
+    /// Combine with a query-pool cap for an aggregate metadata bound.
+    pub fn set_query_metadata_limits(
+        &mut self,
+        limits: Option<crate::QueryMetadataLimits>,
+    ) -> &mut Self {
+        self.query_config.metadata_limits = limits;
+        self
+    }
+
     /// Sets the timeout for a single query.
     ///
     /// > **Note**: A single query usually comprises at least as many requests
@@ -783,6 +793,8 @@ where
     /// Attempts exactly one query-start operation without changing its return type.
     /// The outer error means the closure was not called and no local side effects
     /// occurred. The closure's result preserves existing store/bootstrap errors.
+    /// This only checks pool capacity. Use the typed `try_get_*`, `try_put_*`,
+    /// and `try_start_providing` methods when metadata input limits are enabled.
     pub fn try_start_query<T>(
         &mut self,
         start: impl FnOnce(&mut Self) -> T,
@@ -797,6 +809,82 @@ where
 
     pub fn pending_rpc_usage(&self) -> crate::PendingRpcUsage {
         self.queries.pending_rpc_usage()
+    }
+
+    pub fn query_metadata_usage(&self) -> crate::QueryMetadataUsage {
+        self.queries.metadata_usage()
+    }
+
+    fn check_query_input(&mut self, bytes: usize) -> Result<(), crate::QueryStartError> {
+        self.queries.check_capacity()?;
+        self.queries.check_input(bytes)?;
+        Ok(())
+    }
+
+    /// Checks both retained-entry capacity and input limits before starting work.
+    pub fn try_get_closest_peers<K>(&mut self, key: K) -> Result<QueryId, crate::QueryStartError>
+    where
+        K: Into<kbucket::Key<K>> + Into<Vec<u8>> + Clone,
+    {
+        let bytes: Vec<u8> = key.clone().into();
+        self.check_query_input(bytes.len())?;
+        Ok(self.get_closest_peers(key))
+    }
+
+    pub fn try_get_n_closest_peers<K>(
+        &mut self,
+        key: K,
+        num_results: NonZeroUsize,
+    ) -> Result<QueryId, crate::QueryStartError>
+    where
+        K: Into<kbucket::Key<K>> + Into<Vec<u8>> + Clone,
+    {
+        let bytes: Vec<u8> = key.clone().into();
+        self.check_query_input(bytes.len())?;
+        Ok(self.get_n_closest_peers(key, num_results))
+    }
+
+    pub fn try_get_record(&mut self, key: record::Key) -> Result<QueryId, crate::QueryStartError> {
+        self.check_query_input(key.as_ref().len())?;
+        Ok(self.get_record(key))
+    }
+
+    pub fn try_get_providers(
+        &mut self,
+        key: record::Key,
+    ) -> Result<QueryId, crate::QueryStartError> {
+        self.check_query_input(key.as_ref().len())?;
+        Ok(self.get_providers(key))
+    }
+
+    pub fn try_start_providing(
+        &mut self,
+        key: record::Key,
+    ) -> Result<Result<QueryId, store::Error>, crate::QueryStartError> {
+        self.check_query_input(key.as_ref().len())?;
+        Ok(self.start_providing(key))
+    }
+
+    pub fn try_put_record(
+        &mut self,
+        record: Record,
+        quorum: Quorum,
+    ) -> Result<Result<QueryId, store::Error>, crate::QueryStartError> {
+        self.check_query_input(record.key.as_ref().len().saturating_add(record.value.len()))?;
+        Ok(self.put_record(record, quorum))
+    }
+
+    pub fn try_put_record_to<I>(
+        &mut self,
+        record: Record,
+        peers: I,
+        quorum: Quorum,
+    ) -> Result<QueryId, crate::QueryStartError>
+    where
+        I: ExactSizeIterator<Item = PeerId>,
+    {
+        self.check_query_input(record.key.as_ref().len().saturating_add(record.value.len()))?;
+        Ok(self.put_record_to(record, peers, quorum))
     }
 
     /// Unlike `query`, this includes finished entries which still occupy capacity.
@@ -1028,6 +1116,17 @@ where
         mut record: Record,
         quorum: Quorum,
     ) -> Result<QueryId, store::Error> {
+        if self
+            .queries
+            .check_input(record.key.as_ref().len().saturating_add(record.value.len()))
+            .is_err()
+        {
+            return Ok(self.queries.next_query_id());
+        }
+        if self.queries.config().metadata_limits.is_some() {
+            record.key = record::Key::new(&record.key);
+            record.value = record.value.into_boxed_slice().into_vec();
+        }
         record.publisher = Some(*self.kbuckets.local_key().preimage());
         self.store.put(record.clone())?;
         record.expires = record
@@ -1182,7 +1281,13 @@ where
     ///
     /// The results of the (repeated) provider announcements sent by this node are
     /// reported via [`Event::OutboundQueryProgressed{QueryResult::StartProviding}`].
-    pub fn start_providing(&mut self, key: record::Key) -> Result<QueryId, store::Error> {
+    pub fn start_providing(&mut self, mut key: record::Key) -> Result<QueryId, store::Error> {
+        if self.queries.check_input(key.as_ref().len()).is_err() {
+            return Ok(self.queries.next_query_id());
+        }
+        if self.queries.config().metadata_limits.is_some() {
+            key = record::Key::new(&key);
+        }
         // Note: We store our own provider records locally without local addresses
         // to avoid redundant storage and outdated addresses. Instead these are
         // acquired on demand when returning a `ProviderRecord` for the local node.
@@ -1493,7 +1598,7 @@ where
                     admitted.push(peer.node_id);
                 }
             }
-            query.on_success(source, admitted)
+            query.on_success(source, admitted);
         }
     }
 
@@ -1814,6 +1919,7 @@ where
                             }
                             target
                         })
+                        .take(256)
                         .collect::<Vec<_>>()
                         .into_iter()
                 });
@@ -1880,7 +1986,16 @@ where
                 phase: AddProviderPhase::GetClosestPeers,
             } => {
                 let provider_id = self.local_peer_id;
-                let external_addresses = self.external_addresses.iter().cloned().collect();
+                let limits = self.queries.config().metadata_limits;
+                let external_addresses = self
+                    .external_addresses
+                    .iter()
+                    .filter(|address| {
+                        limits.is_none_or(|limits| limits.provider_addresses.accepts(address))
+                    })
+                    .take(limits.map_or(usize::MAX, |limits| limits.provider_addresses.count))
+                    .cloned()
+                    .collect();
                 let info = QueryInfo::AddProvider {
                     context,
                     key,
@@ -1974,8 +2089,9 @@ where
                         get_closest_peers_stats,
                     },
             } => {
+                let quorum_reached = u64::from(q.stats.num_successes()) >= quorum.get() as u64;
                 let mk_result = |key: record::Key| {
-                    if success.len() >= quorum.get() {
+                    if quorum_reached {
                         Ok(PutRecordOk { key })
                     } else {
                         Err(PutRecordError::QuorumFailed {
@@ -2607,6 +2723,7 @@ where
         connection: ConnectionId,
         event: THandlerOutEvent<Self>,
     ) {
+        let metadata_limits = self.queries.config().metadata_limits;
         match event {
             HandlerEvent::ProtocolConfirmed { endpoint } => {
                 debug_assert!(self.connected_peers.contains(&source));
@@ -2819,9 +2936,20 @@ where
                                 let source_key = kbucket::Key::from(source);
                                 let target_key = kbucket::Key::from(key.clone());
                                 let distance = source_key.distance(&target_key);
-                                cache_candidates.insert(distance, source);
-                                if cache_candidates.len() > max_peers as usize {
+                                let max_peers = metadata_limits
+                                    .map_or(max_peers as usize, |limits| {
+                                        limits.result_peers.min(max_peers as usize)
+                                    });
+                                if cache_candidates.contains_key(&distance)
+                                    || cache_candidates.len() < max_peers
+                                {
+                                    cache_candidates.insert(distance, source);
+                                } else if cache_candidates
+                                    .last_key_value()
+                                    .is_some_and(|(farthest, _)| distance < *farthest)
+                                {
                                     cache_candidates.pop_last();
+                                    cache_candidates.insert(distance, source);
                                 }
                             }
                         }
@@ -2837,17 +2965,23 @@ where
 
             HandlerEvent::PutRecordRes { query_id, .. } => {
                 if let Some(query) = self.queries.get_mut(&query_id) {
-                    query.on_success(&source, vec![]);
+                    if !query.on_success(&source, vec![]) {
+                        return;
+                    }
+                    let acknowledged = u64::from(query.stats().num_successes());
                     if let QueryInfo::PutRecord {
                         phase: PutRecordPhase::PutRecord { success, .. },
                         quorum,
                         ..
                     } = &mut query.info
                     {
-                        success.push(source);
+                        if metadata_limits.is_none_or(|limits| success.len() < limits.result_peers)
+                        {
+                            success.push(source);
+                        }
 
                         let quorum = quorum.get();
-                        if success.len() >= quorum {
+                        if acknowledged >= quorum as u64 {
                             let peers = success.clone();
                             let finished = query.try_finish(peers.iter());
                             if !finished {

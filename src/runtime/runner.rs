@@ -3207,7 +3207,7 @@ fn drive_code_pairing_discovery(
         let query_id = swarm
             .behaviour_mut()
             .kad
-            .try_start_query(|kad| kad.get_providers(kademlia_pairing_code_key(&locator)));
+            .try_get_providers(kademlia_pairing_code_key(&locator));
         let Ok(query_id) = query_id else {
             return;
         };
@@ -3228,8 +3228,8 @@ fn drive_open_pairing_provider(
         match swarm
             .behaviour_mut()
             .kad
-            .try_start_query(|kad| kad.start_providing(key))
-            .map_err(|_| "query_capacity")
+            .try_start_providing(key)
+            .map_err(|error| kademlia_query_start_error_name(&error))
             .and_then(|result| result.map_err(|error| kademlia_store_error_name(&error)))
         {
             Ok(query_id) => {
@@ -3291,8 +3291,8 @@ fn drive_open_pairing_provider_v2(
     };
     let key = kademlia_pairing_code_v2_key(&locator);
     match public_pairing_kad_mut(swarm.behaviour_mut())
-        .try_start_query(|kad| kad.start_providing(key))
-        .map_err(|_| "query_capacity")
+        .try_start_providing(key)
+        .map_err(|error| kademlia_query_start_error_name(&error))
         .and_then(|result| result.map_err(|error| kademlia_store_error_name(&error)))
     {
         Ok(query_id) => {
@@ -6430,13 +6430,15 @@ fn query_configured_peer_recovery_discovery_for_peer(
             ],
         );
     }
-    let record_query = swarm.behaviour_mut().kad.try_start_query(|kad| {
-        kad.get_record(crate::runtime::p2p::kademlia_peer_addresses_key(
-            network_name,
-            membership_tag,
-            peer,
-        ))
-    });
+    let record_query =
+        swarm
+            .behaviour_mut()
+            .kad
+            .try_get_record(crate::runtime::p2p::kademlia_peer_addresses_key(
+                network_name,
+                membership_tag,
+                peer,
+            ));
     let Ok(record_query) = record_query else {
         return false;
     };
@@ -6809,7 +6811,7 @@ fn refresh_kademlia_rendezvous(
                 match swarm
                     .behaviour_mut()
                     .kad
-                    .try_start_query(|kad| kad.start_providing(context.advertise_key.clone()))
+                    .try_start_providing(context.advertise_key.clone())
                     .ok()?
                 {
                     Ok(query) => {
@@ -6833,7 +6835,7 @@ fn refresh_kademlia_rendezvous(
                 let query = swarm
                     .behaviour_mut()
                     .kad
-                    .try_start_query(|kad| kad.get_providers(key.clone()))
+                    .try_get_providers(key.clone())
                     .ok()?;
                 context.metrics.record_kademlia_provider_lookup();
                 Some(query)
@@ -6847,11 +6849,7 @@ fn refresh_kademlia_rendezvous(
                 context.metrics,
             ),
             KademliaMaintenanceTask::LookupMembership(key) => {
-                let query = swarm
-                    .behaviour_mut()
-                    .kad
-                    .try_start_query(|kad| kad.get_record(key.clone()))
-                    .ok()?;
+                let query = swarm.behaviour_mut().kad.try_get_record(key.clone()).ok()?;
                 context.metrics.record_kademlia_membership_record_lookup();
                 Some(query)
             }
@@ -6918,7 +6916,7 @@ fn publish_kademlia_membership_records(
     match swarm
         .behaviour_mut()
         .kad
-        .try_start_query(|kad| kad.put_record(record, kad::Quorum::One))
+        .try_put_record(record, kad::Quorum::One)
         .ok()?
     {
         Ok(query) => {
@@ -7024,7 +7022,12 @@ fn drive_kademlia_address_publication(
         identity,
     ) {
         Ok(query) => maintenance.address_publication = query.map(|query| (query, now)),
-        Err(_) => maintenance.address_publication_pending = true,
+        Err(kad::QueryStartError::Capacity(_)) => maintenance.address_publication_pending = true,
+        Err(kad::QueryStartError::InputTooLarge(error)) => log_runtime_event(
+            LogLevel::Warn,
+            "kademlia_peer_address_record_publication_failed",
+            &[("reason", &error.to_string())],
+        ),
     }
     log_runtime_event(
         LogLevel::Info,
@@ -7041,7 +7044,7 @@ fn start_kademlia_peer_address_record_publication(
     network_name: &str,
     membership_tag: Option<&str>,
     identity: &NodeIdentity,
-) -> Result<Option<kad::QueryId>, kad::QueryCapacityError> {
+) -> Result<Option<kad::QueryId>, kad::QueryStartError> {
     let addresses = local_advertisable_addresses(swarm);
     let key = crate::runtime::p2p::kademlia_peer_addresses_key(
         network_name,
@@ -7078,7 +7081,7 @@ fn start_kademlia_peer_address_record_publication(
         match swarm
             .behaviour_mut()
             .kad
-            .try_start_query(|kad| kad.put_record(record, kad::Quorum::One))?
+            .try_put_record(record, kad::Quorum::One)?
         {
             Ok(query) => Some(query),
             Err(error) => {
@@ -20400,6 +20403,13 @@ const fn kademlia_add_provider_error_name(error: &kad::AddProviderError) -> &'st
     }
 }
 
+const fn kademlia_query_start_error_name(error: &kad::QueryStartError) -> &'static str {
+    match error {
+        kad::QueryStartError::Capacity(_) => "query_capacity",
+        kad::QueryStartError::InputTooLarge(_) => "query_input_too_large",
+    }
+}
+
 const fn kademlia_store_error_name(error: &kad::store::Error) -> &'static str {
     match error {
         kad::store::Error::MaxRecords => "max_records",
@@ -20543,7 +20553,7 @@ fn query_auto_relay_infrastructure(
     let query = swarm
         .behaviour_mut()
         .kad
-        .try_start_query(|kad| kad.get_closest_peers(target))
+        .try_get_closest_peers(target)
         .ok()?;
     metrics.record_auto_relay_discovery_query();
     log_runtime_event(
@@ -27582,6 +27592,51 @@ mod tests {
             .into_owned();
         let record: KademliaPeerAddressRecord = serde_json::from_slice(&stored.value).unwrap();
         assert_eq!(record.payload.addresses, vec![latest.to_string()]);
+    }
+
+    #[tokio::test]
+    async fn address_publication_discards_oversized_snapshot_until_a_new_update() {
+        let identity = NodeIdentity::generate_ed25519().unwrap();
+        let mut node = pairing_test_node(&identity);
+        let local = *node.swarm.local_peer_id();
+        let mut config = crate::runtime::p2p::controlled_kademlia_config(
+            libp2p::StreamProtocol::new(crate::config::PUBLIC_IPFS_KADEMLIA_PROTOCOL),
+        );
+        config.set_query_metadata_limits(Some(kad::QueryMetadataLimits::new(
+            std::num::NonZeroUsize::MIN,
+            std::num::NonZeroUsize::MIN,
+            kad::AddressLimits::default(),
+        )));
+        node.swarm.behaviour_mut().kad =
+            kad::Behaviour::with_config(local, kad::store::MemoryStore::new(local), config);
+        node.swarm
+            .add_external_address("/ip4/192.168.1.2/tcp/4001".parse().unwrap());
+        let now = Instant::now();
+        let mut maintenance = KademliaMaintenance::new(now);
+        request_kademlia_address_publication(&mut maintenance, &DiscoveryConfig::default());
+        for tick in 0..3 {
+            drive_kademlia_address_publication(
+                &mut node.swarm,
+                &mut maintenance,
+                "lab",
+                None,
+                &identity,
+                now + KADEMLIA_MAINTENANCE_POLL_INTERVAL * tick,
+            );
+            assert!(!maintenance.address_publication_pending);
+            assert!(maintenance.address_publication.is_none());
+            assert_eq!(node.swarm.behaviour().kad.query_pool_usage().retained, 0);
+            assert_eq!(
+                node.swarm
+                    .behaviour()
+                    .kad
+                    .query_metadata_usage()
+                    .rejected_inputs,
+                1
+            );
+        }
+        request_kademlia_address_publication(&mut maintenance, &DiscoveryConfig::default());
+        assert!(maintenance.address_publication_pending);
     }
 
     #[tokio::test]

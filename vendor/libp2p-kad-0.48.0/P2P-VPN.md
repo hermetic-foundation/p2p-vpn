@@ -24,6 +24,7 @@ changelog, generated protocol source, and tests.
 | `src/lib.rs` | Export optional address/query limits and query resource usage. |
 | `src/query.rs` | Enforce deadlines and initial candidate admission; share retention accounting with iterative discovery; remove canceled queries. |
 | `src/query/retained.rs` | Bound candidate identities and address bytes across learning, migration, failure, and result extraction. |
+| `src/query/metadata.rs` | Bound query input and result metadata; normalize retained buffers; expose aggregate usage and typed admission errors. |
 | `src/jobs.rs` | Document the shared background batch default; remove stopped providers from pending snapshots. |
 | `src/handler.rs`, `src/handler/pending.rs` | Opt-in request admission/expiry, bounded rejection reporting, and negotiation queue accounting. |
 | `src/kbucket.rs`, `src/kbucket/bucket.rs` | Preserve protected seed peers during pending replacement; retain and recheck the probed victim identity. |
@@ -72,7 +73,27 @@ Legacy starts rejected by this opt-in cap return an unretained ID without a
 completion event; local result events and bootstrap suppression are not retained
 for that ID. No rejection queue is created. The application constructor enables
 32 retained queries per DHT and application starts use checked admission.
-Additional query-payload/result bounds remain unfinished.
+Queued result/action and background-snapshot bounds remain unfinished.
+
+`set_query_metadata_limits()` bounds input key/value bytes, stored result peers,
+and provider addresses. Production selects 256 KiB input, 256 result peers,
+and 64 addresses of at most 2,048 encoded bytes per query. Bootstrap refresh
+iterators retain at most 256 fixed-size targets, including consumed slots.
+
+Together with the 32-entry pool cap, input and publication-address payloads
+have a conservative 12 MiB aggregate ceiling per DHT. Query-peer caches,
+pending RPCs, queued results, container overhead, and allocator RSS are separate.
+`query_metadata_usage()` includes finished entries awaiting retirement.
+
+Typed `try_get_*`, `try_put_*`, and `try_start_providing` methods distinguish
+`QueryStartError::Capacity` from `InputTooLarge` before side effects. The generic
+`try_start_query` remains capacity-only. Legacy oversized starts return an
+unretained ID without a completion event; metadata admission defaults remain unlimited.
+
+Stored success lists are bounded independently of quorum. Only distinct
+accepted responses increment success statistics; duplicate/unsolicited responses
+cannot satisfy quorum. Error reporting may contain a truncated success list,
+but the original quorum requirement is preserved.
 
 Pending connection RPCs now use shared reservations across the query pool.
 `set_pending_rpc_limits()` is opt-in upstream; p2p-vpn sets 256 requests and
@@ -82,7 +103,7 @@ reservations. `pending_rpc_usage()` exposes aggregate usage and rejections.
 Provider requests awaiting connection no longer complete before handoff.
 `AddProviderError::NoPeersReached` reports an all-failed publication phase;
 it is a local API addition, not a wire change. Handler dispatch still does not
-prove remote receipt. Metadata and queued result bounds remain unfinished.
+prove remote receipt. Queued result/action and job-snapshot bounds remain unfinished.
 
 Provider and record jobs share background admission capacity and alternate first
 access. Defaults remain a 100-query ceiling and batch size ten, but the batch is

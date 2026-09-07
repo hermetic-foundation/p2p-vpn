@@ -4948,25 +4948,23 @@ fn start_pairing_discovery_queries(
             node.swarm
                 .behaviour_mut()
                 .kad
-                .try_start_query(|kad| kad.get_providers(rendezvous_key)),
+                .try_get_providers(rendezvous_key),
         );
     }
 
-    diagnostics.record_discovery_query_start(node.swarm.behaviour_mut().kad.try_start_query(
-        |kad| {
-            kad.get_record(p2p_vpn::runtime::p2p::kademlia_peer_addresses_key(
-                &offer.payload.network_name,
-                None,
-                inviter_peer,
-            ))
-        },
+    diagnostics.record_discovery_query_start(node.swarm.behaviour_mut().kad.try_get_record(
+        p2p_vpn::runtime::p2p::kademlia_peer_addresses_key(
+            &offer.payload.network_name,
+            None,
+            inviter_peer,
+        ),
     ));
 
     diagnostics.record_discovery_query_start(
         node.swarm
             .behaviour_mut()
             .kad
-            .try_start_query(|kad| kad.get_closest_peers(inviter_peer)),
+            .try_get_closest_peers(inviter_peer),
     );
 
     match node
@@ -5035,7 +5033,7 @@ fn handle_pairing_kademlia_query_result(
                         node.swarm
                             .behaviour_mut()
                             .kad
-                            .try_start_query(|kad| kad.get_closest_peers(provider)),
+                            .try_get_closest_peers(provider),
                     );
                 } else {
                     diagnostics.record_ignored_kademlia_provider();

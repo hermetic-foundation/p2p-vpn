@@ -247,13 +247,17 @@ awaiting polling; `query_is_retained(id)` does not hide them like `query(id)` do
 
 ```rust
 config.set_query_pool_capacity(NonZeroUsize::new(32).unwrap());
-let lookup = kad.try_start_query(|kad| kad.get_record(key))?;
+let lookup = kad.try_get_record(key)?;
 let bootstrap = kad.try_start_query(|kad| kad.bootstrap())??;
 ```
 
 The closure must start exactly one query. Capacity errors occur before it runs,
 preserving local storage and caller ownership. The closure's return value keeps
 existing store/bootstrap errors separate from admission failure.
+
+Payload-bearing operations use typed checked starts, such as `try_get_record`.
+Those check metadata input limits too; `try_start_query` checks only capacity
+and remains the wrapper for bootstrap, which has no variable-sized input.
 
 Legacy starts remain available. When a configured cap rejects one, its returned
 ID is not retained and has no completion event. No rejection-result backlog is
@@ -473,6 +477,110 @@ Logs use `/tmp/p2p-vpn-kad-idle-deadline-` with suffixes `workspace.log`,
 `namespace.log`, `move.log`, `android.log`, `nix.log`, and `clippy.log`.
 No full Nix package, APK, ARM64 build, formal model, or physical deployment
 was performed. No sustained performance or total process-memory claim is made.
+
+## Query Metadata Bounds
+
+The production 32-entry pool cap now combines with per-component metadata
+ceilings. Both fixed and iterative admission paths enforce them, including
+phase transitions and finished entries awaiting polling.
+
+| Component | Per Query | Aggregate Per DHT |
+| --- | ---: | ---: |
+| Input key plus record value | 256 KiB | 8 MiB |
+| Provider addresses | 64, each at most 2,048 encoded bytes | 2,048 address slots; 4 MiB encoded payload |
+| Stored publication acknowledgements or cache candidates | 256 peer entries | 8,192 entries |
+| Bootstrap refresh targets | At most 256 fixed-size targets | At most 8,192 slots, including consumed iterator storage |
+
+These are conservative component maxima; not every query owns every component.
+The 12 MiB input/address sum excludes candidate-address caches, pending RPCs,
+queued results, container overhead, and allocator RSS. It is not a total
+query-memory or process-memory claim.
+
+The input ceiling provides headroom for existing control records. It does not
+increase the existing wire-message or record-store size limits.
+
+### Ownership And Overload
+
+- Keys, record values, and provider vectors discard excess backing capacity on admission.
+- Provider addresses are filtered before collection; cache insertion never exceeds its entry ceiling.
+- Cancellation and retirement release metadata; marking a query finished alone does not release its slot.
+- `query_metadata_usage()` includes finished entries, encoded payload, result entries, address slots, and rejected inputs.
+
+Publication quorum uses distinct accepted acknowledgements, not the bounded
+reporting list length. Duplicate or unsolicited responses cannot satisfy quorum.
+Errors retain the original required quorum; their success list may be truncated.
+Candidate admission limits can still prevent reaching an unusually large quorum.
+
+### Checked Production Starts
+
+| API / Result | Behavior |
+| --- | --- |
+| `try_get_closest_peers`, `try_get_n_closest_peers` | Check pool capacity and target-key size |
+| `try_get_record`, `try_get_providers` | Check pool capacity and record-key size |
+| `try_put_record`, `try_put_record_to` | Check combined key/value size before query admission or local store effects |
+| `try_start_providing` | Check key size before retaining a local provider record |
+| `QueryStartError::Capacity` | Temporary rejection; preserve existing retry eligibility |
+| `QueryStartError::InputTooLarge` | Reject without retained query, payload, local store side effect, or completion backlog |
+
+All payload-bearing production callers use the typed starts. Store failures
+remain distinct inner results. Legacy methods remain available; when input
+limits reject them, they return an unretained ID without a completion event.
+Unconfigured vendored users retain unlimited metadata admission.
+
+Address publication retries capacity exhaustion with a fresh snapshot. An
+oversized snapshot reports failure and waits for a new address update instead
+of repeatedly retrying the same invalid input. Bootstrap diagnostics distinguish
+`query_input_too_large` from `query_capacity`.
+
+### Regression Coverage
+
+| Scenario | Required Assertion |
+| --- | --- |
+| Every typed and legacy input path | Oversized input creates no retained query, record, provider, or result |
+| Full pool including finished work | Aggregate bytes stay bounded; cancellation permits immediate readmission |
+| Caller vectors with large spare capacity | Retained key/value buffers are normalized |
+| Duplicate acknowledgements | Do not inflate success count or satisfy quorum |
+| Result list smaller than required quorum | Unique acknowledgements still succeed; partial completion still fails |
+| Cache and provider-address churn | Entry and encoded-address limits hold across response and phase transitions |
+| Shared, separate pairing, standalone constructors | Production input limits are enabled |
+| Address-publication driver | Invalid snapshots do not enter a retry loop; new updates remain eligible |
+
+Focused tests live in `src/runtime/p2p/metadata_tests.rs`, with constructor and
+caller regressions alongside their existing runtime tests.
+
+### Metadata Checkpoint Evidence
+
+| Check | Result |
+| --- | --- |
+| Focused metadata and caller regressions | Seven passed |
+| Offline workspace tests | 1,304 passed; 22 opt-in tests ignored |
+| Namespace DHT, peerless pairing, forced-relay pairing, owned QUIC | All four passed |
+| Namespace relay/direct network move | Passed |
+| Android x86_64 native library | Compiled offline; four existing warnings |
+| Nix desktop/Android source parity | Passed with cached tool overrides, including the new metadata modules |
+| Root and changed vendored Rust formatting / whitespace | Passed |
+| Workspace Clippy correctness, suspicious, and perf groups | Passed; existing style warnings remain |
+
+Logs use `/tmp/p2p-vpn-kad-metadata-` with suffixes `focused.log`,
+`workspace.log`, `namespace.log`, `move.log`, `android.log`, `nix.log`,
+and `clippy.log`. The final workspace run includes the quorum correction.
+Readable project temporary paths total approximately 4.82 GiB; no downloads occurred.
+
+The Nix check used the existing source-parity assertions with cached tool inputs,
+not the full package closure. No full Nix package, ARM64 native build, APK,
+formal model, physical deployment, or public-network measurement is claimed.
+
+### Remaining Query Owners
+
+| Owner | Remaining Work |
+| --- | --- |
+| Behaviour event/action queue | Bound query results and unsent actions without stranding terminal query ownership |
+| Background record/provider jobs | Bound retained snapshots, payload copies, and skipped-key bookkeeping, including work waiting for admission |
+| Final aggregate audit | Account for container high-water storage, cancellation, phase changes, and every producer |
+
+Metadata enforcement does not close these owners. Phase 1 remains active.
+Wire formats, authorization, minimal JSON/Nix configuration, and packet transport
+are unchanged. Public-WAN settling and process measurements remain later phases.
 
 ## Implementation Order
 

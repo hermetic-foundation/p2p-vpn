@@ -506,9 +506,10 @@ fn drive_public_lookup(
     {
         return;
     }
-    let query = swarm.behaviour_mut().kad.try_start_query(|kad| {
-        kad.get_providers(kademlia_pairing_code_v2_key(&code.global_locator()))
-    });
+    let query = swarm
+        .behaviour_mut()
+        .kad
+        .try_get_providers(kademlia_pairing_code_v2_key(&code.global_locator()));
     state.next_public_lookup_at = now + PUBLIC_LOOKUP_INTERVAL;
     let Ok(query_id) = query else {
         return;
@@ -891,6 +892,10 @@ mod tests {
             .unwrap();
         let kad = &mut swarm.behaviour_mut().kad;
         assert_eq!(kad.query_pool_usage().capacity, Some(32));
+        assert!(matches!(
+            kad.try_get_closest_peers(vec![0; 256 * 1024 + 1]),
+            Err(kad::QueryStartError::InputTooLarge(_))
+        ));
         for index in 1..=100 {
             kad.add_address(&peer, format!("/memory/{index}").parse().unwrap());
         }

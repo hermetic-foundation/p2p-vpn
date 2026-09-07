@@ -18,10 +18,12 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
+mod metadata;
 mod peers;
 mod pending;
 mod retained;
 
+pub use metadata::{QueryInputTooLarge, QueryMetadataLimits, QueryMetadataUsage, QueryStartError};
 use pending::{Budget as PendingRpcBudget, PendingRpcs};
 pub use pending::{PendingRpcLimits, PendingRpcUsage};
 use retained::RetainedPeers;
@@ -57,6 +59,7 @@ pub(crate) struct QueryPool {
     config: QueryConfig,
     queries: FnvHashMap<QueryId, Query>,
     rejected: u64,
+    rejected_inputs: u64,
     pending_rpc_budget: Option<PendingRpcBudget>,
     deadline: Option<(Instant, Delay)>,
 }
@@ -96,6 +99,7 @@ impl QueryPool {
             config,
             queries: Default::default(),
             rejected: 0,
+            rejected_inputs: 0,
             deadline: None,
         }
     }
@@ -141,6 +145,30 @@ impl QueryPool {
         Ok(())
     }
 
+    pub(crate) fn check_input(&mut self, bytes: usize) -> Result<(), QueryInputTooLarge> {
+        if let Some(limits) = self.config.metadata_limits {
+            if bytes > limits.payload_bytes {
+                self.rejected_inputs = self.rejected_inputs.saturating_add(1);
+                return Err(QueryInputTooLarge {
+                    bytes,
+                    limit: limits.payload_bytes,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn metadata_usage(&self) -> QueryMetadataUsage {
+        let mut usage = QueryMetadataUsage {
+            rejected_inputs: self.rejected_inputs,
+            ..Default::default()
+        };
+        for query in self.queries.values() {
+            query.info.add_metadata_usage(&mut usage);
+        }
+        usage
+    }
+
     /// Returns an iterator that allows modifying each query in the pool.
     pub(crate) fn iter_mut(&mut self) -> impl Iterator<Item = &mut Query> {
         self.queries.values_mut()
@@ -159,13 +187,19 @@ impl QueryPool {
     /// Continues an earlier query with a fixed set of peers, reusing
     /// the given query ID, which must be from a query that finished
     /// earlier.
-    pub(crate) fn continue_fixed<I>(&mut self, id: QueryId, peers: I, info: QueryInfo)
+    pub(crate) fn continue_fixed<I>(&mut self, id: QueryId, peers: I, mut info: QueryInfo)
     where
         I: IntoIterator<Item = PeerId>,
     {
         assert!(!self.queries.contains_key(&id));
         if self.check_capacity().is_err() {
             return;
+        }
+        if self.check_input(info.input_bytes()).is_err() {
+            return;
+        }
+        if let Some(limits) = self.config.metadata_limits {
+            info.normalize_metadata(limits);
         }
         let parallelism = self.config.replication_factor;
         let mut retained = RetainedPeers::new(self.config.limits);
@@ -206,7 +240,7 @@ impl QueryPool {
         id: QueryId,
         target: T,
         peers: I,
-        info: QueryInfo,
+        mut info: QueryInfo,
     ) where
         T: Into<KeyBytes> + Clone,
         I: IntoIterator<Item = Key<PeerId>>,
@@ -214,6 +248,12 @@ impl QueryPool {
         assert!(!self.queries.contains_key(&id));
         if self.check_capacity().is_err() {
             return;
+        }
+        if self.check_input(info.input_bytes()).is_err() {
+            return;
+        }
+        if let Some(limits) = self.config.metadata_limits {
+            info.normalize_metadata(limits);
         }
         let num_results = match info {
             QueryInfo::GetClosestPeers {
@@ -254,7 +294,7 @@ impl QueryPool {
         self.queries.insert(id, query);
     }
 
-    fn next_query_id(&mut self) -> QueryId {
+    pub(crate) fn next_query_id(&mut self) -> QueryId {
         let id = QueryId(self.next_id);
         self.next_id = self.next_id.wrapping_add(1);
         id
@@ -366,6 +406,7 @@ impl std::fmt::Display for QueryId {
 /// The configuration for queries in a `QueryPool`.
 #[derive(Debug, Clone)]
 pub(crate) struct QueryConfig {
+    pub(crate) metadata_limits: Option<QueryMetadataLimits>,
     pub(crate) pending_rpc_limits: Option<PendingRpcLimits>,
     pub(crate) capacity: Option<NonZeroUsize>,
     pub(crate) limits: Option<QueryLimits>,
@@ -390,6 +431,7 @@ pub(crate) struct QueryConfig {
 impl Default for QueryConfig {
     fn default() -> Self {
         QueryConfig {
+            metadata_limits: None,
             pending_rpc_limits: None,
             capacity: None,
             limits: None,
@@ -511,7 +553,7 @@ impl Query {
     /// Informs the query that the attempt to contact `peer` succeeded,
     /// possibly resulting in new peers that should be incorporated into
     /// the query, if applicable.
-    pub(crate) fn on_success<I>(&mut self, peer: &PeerId, new_peers: I)
+    pub(crate) fn on_success<I>(&mut self, peer: &PeerId, new_peers: I) -> bool
     where
         I: IntoIterator<Item = PeerId>,
     {
@@ -524,6 +566,7 @@ impl Query {
         if updated {
             self.stats.success += 1;
         }
+        updated
     }
 
     /// Advances the state of the underlying peer iterator.
