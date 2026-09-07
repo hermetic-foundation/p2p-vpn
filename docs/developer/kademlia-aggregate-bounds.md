@@ -2,9 +2,13 @@
 
 ## Status
 
-Active phase; final aggregate ownership and evidence audit remains open.
-Starting revision: `77146fe3`. Existing per-peer, per-query, scheduler, and
-cancellation fixes remain in place.
+Phase 1 is complete. See the [final ownership audit](kademlia-final-ownership-audit.md)
+for aggregate ceilings, production producers, final corrections, and validation.
+Starting revision: `77146fe3`; existing verified fixes remain in place.
+
+The sections below preserve chronological checkpoints. Their open items describe
+that checkpoint, not current acceptance. Sustained settling, comparable resource
+measurements, and original-workstream final acceptance remain outside this phase.
 
 ## Acceptance Gates
 
@@ -756,7 +760,8 @@ and all builds used existing cached dependencies with at most two Cargo jobs.
 
 The Nix check verifies source inclusion, not the full package closure. No ARM64
 native build, APK, formal model, physical deployment, or WAN measurement is claimed.
-The final aggregate ownership/evidence audit remains required; phase 1 is active.
+The final aggregate ownership/evidence audit was still required at this checkpoint.
+It is now recorded in the [acceptance audit](kademlia-final-ownership-audit.md).
 
 ## Implementation Order
 
@@ -779,4 +784,4 @@ rebuilding unchanged binaries.
 
 Long-running settling tests, comparable before/after process measurements, and
 final acceptance remain separate phases in the
-[workstream plan](kademlia-resource-plan.md#remaining-phases).
+[workstream plan](kademlia-resource-plan.md#phase-status).

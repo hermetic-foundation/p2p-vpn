@@ -3,34 +3,38 @@
 ## Status
 
 The original broad goal was superseded without being marked complete.
-The active goal is now **Aggregate Resource Bounds**, phase 1 below.
+**Aggregate Resource Bounds**, phase 1 below, is complete.
 This workstream does not complete the broader reliability review.
 Starting revision: `5ecb01ea`. No deployed service or physical device has changed.
 
-## Remaining Phases
+## Phase Status
 
-| Phase | Scope | Acceptance |
-| --- | --- | --- |
-| 1. Aggregate Resource Bounds | Handler pending work, total routing storage, total retained query state | Enforced limits, bounded overload behavior, deterministic saturation and recovery tests |
-| 2. Sustained Recovery And Settling | Prolonged failures, churn, transitions, healthy idle behavior | Controlled long-running tests that recover without intervention and settle when healthy |
-| 3. Before/After Measurements | Sockets, dial/query rates, CPU, RSS | Comparable baseline/current captures with reproducible commands and limitations |
-| 4. Final Acceptance | All original requirements, documentation, packaging | Requirement-by-requirement evidence audit and explicit residual risks |
+| Phase | Scope | Acceptance | Status |
+| --- | --- | --- | --- |
+| 1. Aggregate Resource Bounds | Handler pending work, total routing storage, total retained query state | Enforced limits and deterministic saturation/recovery evidence | Complete |
+| 2. Sustained Recovery And Settling | Prolonged failures, churn, transitions, healthy idle behavior | Long-running tests recover without intervention and settle when healthy | Open |
+| 3. Before/After Measurements | Sockets, dial/query rates, CPU, RSS | Comparable baseline/current captures, commands, and limitations | Open |
+| 4. Final Acceptance | All original requirements, documentation, packaging | Requirement-by-requirement evidence audit and residual risks | Open |
 
 Completing phase 1 does not complete phases 2-4. Verified commits remain valid;
 the completion gates below retain the original workstream's full scope.
 See [Aggregate Bounds](kademlia-aggregate-bounds.md) for phase 1 ownership and tests.
 
+The [final acceptance audit](kademlia-final-ownership-audit.md) records its complete
+owner/producer inventory and final checks. Historical findings below preserve
+checkpoint-specific gaps; this status table is authoritative for current progress.
+
 ## Completion Gates
 
 | Area | Required Evidence | Status |
 | --- | --- | --- |
-| Internal addresses | Count/byte bounds for present and pending buckets, address changes, and query caches | Aggregate routing and per-query retention verified; total query retention open |
-| Query state | Bounded candidate identities, active queries, and retained results | Admission, pending RPCs, metadata, background storage, and result/action queues verified; final ownership audit open |
-| Scheduling | Bounded bootstrap, discovery, and dial activity under failure and churn | Cooldown and automatic bootstrap fixed; aggregate audit open |
-| Recovery | LAN-first lookup, relay fallback, network-change recovery, and healthy-path settling | Open |
+| Internal addresses | Count/byte bounds for present and pending buckets, address changes, and query caches | Aggregate routing and query retention verified, including backing capacity |
+| Query state | Bounded candidate identities, active queries, and retained results | All retained owners and production producers audited; saturation/retirement verified |
+| Scheduling | Bounded bootstrap, discovery, and dial activity under failure and churn | Aggregate storage complete; sustained activity/settling remains open |
+| Recovery | LAN-first lookup, relay fallback, network-change recovery, and healthy-path settling | Deterministic namespace gates pass; sustained settling remains open |
 | Measurements | Comparable before/after CPU, RSS, sockets, dial rates, and query rates | Open |
-| Packaging | Matching Cargo, desktop Nix, and Android source inclusion | Source parity and native x86_64 Android verified; final checks open |
-| Delivery | Regression tests, broader validation, documentation, atomic verified pushes | In progress |
+| Packaging | Matching Cargo, desktop Nix, and Android source inclusion | Phase-1 source parity and native x86_64 Android verified; broader final acceptance open |
+| Delivery | Regression tests, broader validation, documentation, atomic verified pushes | Phase 1 complete; phases 2-4 remain open |
 
 ## Baseline Reproduction
 

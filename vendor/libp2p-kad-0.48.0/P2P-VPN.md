@@ -232,5 +232,7 @@ stream tasks timed out before the swarm returned their upgrade callbacks.
 3. Reapply only required fixes and update this record.
 4. Run discovery, pairing, recovery, source-parity, and native-target checks.
 
-Aggregate routing storage, active-query limits, and sustained measurements remain
-tracked in `docs/developer/kademlia-resource-plan.md` at the repo root.
+Aggregate handler, routing, and query bounds are verified in
+[`kademlia-final-ownership-audit.md`](../../docs/developer/kademlia-final-ownership-audit.md).
+Sustained settling and comparable resource measurements remain separate phases in
+[`kademlia-resource-plan.md`](../../docs/developer/kademlia-resource-plan.md).
