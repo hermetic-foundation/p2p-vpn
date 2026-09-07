@@ -1,5 +1,9 @@
 # Kademlia Retention Review
 
+Current follow-up: [resource-limits workstream](kademlia-resource-plan.md).
+The audit below records the original diagnostics and patch proposal; it does not
+claim the internal retention gaps have been fixed.
+
 ## Scope
 
 Source audit against pinned `libp2p-kad 0.48.0`, after the public-pairing Identify
