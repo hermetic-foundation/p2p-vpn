@@ -1117,9 +1117,103 @@ where
     ///
     /// This is a local operation. The local node will still be considered as a
     /// provider for the key by other nodes until these provider records expire.
+    ///
+    /// Matching queries and queued behaviour actions are retired without result
+    /// events; callers must discard those query IDs. Work already dispatched to
+    /// a connection handler or the swarm is not recalled.
     pub fn stop_providing(&mut self, key: &record::Key) {
         self.store
             .remove_provider(key, self.kbuckets.local_key().preimage());
+        if let Some(job) = &mut self.add_provider_job {
+            job.remove(key);
+        }
+        let mut queries = self
+            .queries
+            .iter()
+            .filter_map(|query| {
+                matches!(&query.info, QueryInfo::AddProvider { key: pending, .. } if pending == key)
+                    .then_some(query.id())
+            })
+            .collect::<HashSet<_>>();
+        for action in &self.queued_events {
+            match action {
+                ToSwarm::NotifyHandler {
+                    event:
+                        HandlerIn::AddProvider {
+                            key: pending,
+                            query_id,
+                            ..
+                        },
+                    ..
+                } if pending == key => {
+                    queries.insert(*query_id);
+                }
+                ToSwarm::GenerateEvent(Event::OutboundQueryProgressed {
+                    id,
+                    result:
+                        QueryResult::StartProviding(result) | QueryResult::RepublishProvider(result),
+                    ..
+                }) => {
+                    let pending = match result {
+                        Ok(result) => &result.key,
+                        Err(error) => error.key(),
+                    };
+                    if pending == key {
+                        queries.insert(*id);
+                    }
+                }
+                _ => {}
+            }
+        }
+        for query in queries {
+            self.cancel_query(&query);
+        }
+    }
+
+    /// Immediately retire a query and its unsent behaviour actions, without a result event.
+    /// Unlike graceful `QueryMut::finish`, this does not initiate subsequent phases.
+    /// The caller must discard its query ownership. Already dispatched dials and
+    /// requests, connection-handler work, and remote side effects are not recalled.
+    pub fn cancel_query(&mut self, id: &QueryId) -> bool {
+        let query = self.queries.remove(id);
+        let needed = self
+            .queries
+            .iter()
+            .flat_map(|query| query.pending_rpcs.iter().map(|(peer, _)| *peer))
+            .collect::<HashSet<_>>();
+        let abandoned = query
+            .as_ref()
+            .into_iter()
+            .flat_map(|query| query.pending_rpcs.iter())
+            .map(|(peer, _)| *peer)
+            .filter(|peer| !needed.contains(peer))
+            .collect::<HashSet<_>>();
+        let before = self.queued_events.len();
+        self.queued_events.retain(|event| match event {
+            ToSwarm::NotifyHandler {
+                event:
+                    HandlerIn::FindNodeReq { query_id, .. }
+                    | HandlerIn::GetProvidersReq { query_id, .. }
+                    | HandlerIn::AddProvider { query_id, .. }
+                    | HandlerIn::GetRecord { query_id, .. }
+                    | HandlerIn::PutRecord { query_id, .. },
+                ..
+            } => query_id != id,
+            ToSwarm::GenerateEvent(Event::OutboundQueryProgressed { id: pending, .. }) => {
+                pending != id
+            }
+            ToSwarm::Dial { opts } => !opts
+                .get_peer_id()
+                .is_some_and(|peer| abandoned.contains(&peer)),
+            _ => true,
+        });
+        let removed = query.is_some() || before != self.queued_events.len();
+        if removed {
+            if let Some(waker) = self.no_events_waker.take() {
+                waker.wake();
+            }
+        }
+        removed
     }
 
     /// Performs a lookup for providers of a value to the given key.

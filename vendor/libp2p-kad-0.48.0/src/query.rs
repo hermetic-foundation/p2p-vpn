@@ -203,6 +203,10 @@ impl QueryPool {
         self.queries.get_mut(id)
     }
 
+    pub(crate) fn remove(&mut self, id: &QueryId) -> Option<Query> {
+        self.queries.remove(id)
+    }
+
     /// Polls the pool to advance the queries.
     pub(crate) fn poll(&mut self, now: Instant) -> QueryPoolState<'_> {
         let mut finished = None;

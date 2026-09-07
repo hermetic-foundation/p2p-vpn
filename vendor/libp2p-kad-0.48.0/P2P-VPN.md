@@ -19,12 +19,12 @@ changelog, generated protocol source, and tests.
 
 | File | Patch |
 | --- | --- |
-| `src/behaviour.rs` | Bootstrap controls, routing/query admission, protected seeds, and shared background-job scheduling. |
+| `src/behaviour.rs` | Bootstrap controls, routing/query admission, protected seeds, shared background-job scheduling, and provider/query cancellation. |
 | `src/addresses.rs` | Bounded insertion/replacement, category-aware churn rotation, size rejection, and explicit seed protection. |
 | `src/lib.rs` | Export optional address/query limits and query resource usage. |
-| `src/query.rs` | Enforce deadlines and initial candidate admission; share retention accounting with iterative discovery. |
+| `src/query.rs` | Enforce deadlines and initial candidate admission; share retention accounting with iterative discovery; remove canceled queries. |
 | `src/query/retained.rs` | Bound candidate identities and address bytes across learning, migration, failure, and result extraction. |
-| `src/jobs.rs` | Document the shared background batch default. |
+| `src/jobs.rs` | Document the shared background batch default; remove stopped providers from pending snapshots. |
 
 The library configuration defaults are unchanged. p2p-vpn disables automatic and periodic bootstrap
 explicitly so its scheduler owns bootstrap initiation. Explicit `bootstrap()` is
@@ -51,6 +51,16 @@ Expired queries stop issuing new requests when the pool next examines them,
 even if uncontacted candidates remain. Already queued or dispatched requests are
 not canceled by this check. Multi-stage operations retain their existing timeout
 semantics; this does not establish an aggregate operation-lifetime bound.
+
+`stop_providing()` now retires matching provider queries and removes the key
+from pending republication snapshots. Unlike upstream, it silently discards
+matching queued results; callers must release their query IDs. p2p-vpn's pairing
+cleanup already does so.
+
+The additive `cancel_query()` API removes a query and its unsent behaviour
+actions without advancing phases or emitting completion. Unsent dials needed by
+another query remain queued. Already dispatched dials, handler requests, and
+remote provider records are not recalled; remote records expire normally.
 
 ## Build Integration
 

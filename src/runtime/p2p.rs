@@ -1586,6 +1586,120 @@ mod tests {
     }
 
     #[test]
+    fn stopping_provider_retires_queries_without_affecting_other_work() {
+        let mut kad = bounded_routing_test_dht();
+        kad.add_address(&PeerId::random(), "/memory/1".parse().unwrap());
+        let lookup = kad.get_providers(kad::RecordKey::new(&[0_u8]));
+        let keep = kad.start_providing(kad::RecordKey::new(&b"keep")).unwrap();
+        for index in 0..64 {
+            let key = kad::RecordKey::new(&[index]);
+            let stopped = kad.start_providing(key.clone()).unwrap();
+            kad.stop_providing(&key);
+            assert!(
+                kad.query(&stopped).is_none(),
+                "stopped provider query survived cancellation"
+            );
+            assert_eq!(kad.iter_queries().count(), 2);
+            assert!(kad.query(&lookup).is_some());
+            assert!(kad.query(&keep).is_some());
+        }
+    }
+
+    #[test]
+    fn stopping_provider_discards_queued_dials() {
+        check_provider_queued_dial_cancellation(false);
+    }
+
+    #[test]
+    fn stopping_provider_preserves_shared_queued_dials() {
+        check_provider_queued_dial_cancellation(true);
+    }
+
+    fn check_provider_queued_dial_cancellation(shared: bool) {
+        use libp2p::swarm::{NetworkBehaviour, ToSwarm};
+        use std::task::{Context, Poll};
+        let local = PeerId::random();
+        let mut config = controlled_kademlia_config(StreamProtocol::new(
+            crate::config::PUBLIC_IPFS_KADEMLIA_PROTOCOL,
+        ));
+        config.set_parallelism(NonZeroUsize::new(2).unwrap());
+        let mut kad =
+            kad::Behaviour::with_config(local, kad::store::MemoryStore::new(local), config);
+        for port in 1..=2 {
+            kad.add_address(
+                &PeerId::random(),
+                format!("/memory/{port}").parse().unwrap(),
+            );
+        }
+        let key = kad::RecordKey::new(&b"stopped");
+        let query = kad.start_providing(key.clone()).unwrap();
+        let keep = shared.then(|| kad.get_closest_peers(PeerId::random()));
+        let waker = futures::task::noop_waker();
+        let mut cx = Context::from_waker(&waker);
+        let mut dispatched = false;
+        for _ in 0..10 {
+            if matches!(kad.poll(&mut cx), Poll::Ready(ToSwarm::Dial { .. })) {
+                dispatched = true;
+                break;
+            }
+        }
+        assert!(dispatched);
+        assert_eq!(kad.query(&query).unwrap().stats().num_requests(), 2);
+        kad.stop_providing(&key);
+        assert!(kad.query(&query).is_none());
+        if let Some(keep) = keep {
+            assert!(kad.query(&keep).is_some());
+            assert!(
+                matches!(kad.poll(&mut cx), Poll::Ready(ToSwarm::Dial { .. })),
+                "shared dial was discarded"
+            );
+        } else {
+            assert!(
+                matches!(kad.poll(&mut cx), Poll::Pending),
+                "stopped query left unsent actions"
+            );
+        }
+    }
+
+    #[test]
+    fn stopping_providers_clears_background_snapshot() {
+        use libp2p::{kad::store::RecordStore, swarm::NetworkBehaviour};
+        use std::task::{Context, Poll};
+        let local = PeerId::random();
+        let mut config = controlled_kademlia_config(StreamProtocol::new(
+            crate::config::PUBLIC_IPFS_KADEMLIA_PROTOCOL,
+        ));
+        config.set_provider_publication_interval(Some(Duration::from_millis(1)));
+        let mut kad =
+            kad::Behaviour::with_config(local, kad::store::MemoryStore::new(local), config);
+        kad.add_address(&PeerId::random(), "/memory/1".parse().unwrap());
+        let keys = (0..10)
+            .map(|index| kad::RecordKey::new(&[index]))
+            .collect::<Vec<_>>();
+        for key in &keys {
+            kad.store_mut()
+                .add_provider(kad::ProviderRecord::new(key.clone(), local, Vec::new()))
+                .unwrap();
+        }
+        std::thread::sleep(Duration::from_millis(5));
+        let waker = futures::task::noop_waker();
+        let mut cx = Context::from_waker(&waker);
+        let _ = kad.poll(&mut cx);
+        assert_eq!(kad.iter_queries().count(), 1);
+        for key in &keys {
+            kad.stop_providing(key);
+        }
+        assert_eq!(kad.store_mut().provided().count(), 0);
+        for _ in 0..20 {
+            assert!(
+                matches!(kad.poll(&mut cx), Poll::Pending),
+                "stopped snapshot started another action"
+            );
+            assert_eq!(kad.iter_queries().count(), 0);
+        }
+    }
+
+    #[test]
     fn kademlia_background_jobs_yield_to_foreground_and_both_resume() {
         use libp2p::{
             kad::store::RecordStore,

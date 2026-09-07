@@ -252,12 +252,57 @@ not establish aggregate foreground admission, long-duration healthy settling,
 socket rates, public-WAN behavior, or physical-device acceptance.
 Full Nix package and ARM64 native builds were not repeated.
 
-#### Next Ownership Check
+#### Provider Cancellation
 
-Pairing cleanup clears provider query IDs while returning stop-provider locators.
-The runner calls `stop_providing` for those locators. Verify retirement under
-cancel/reopen churn before treating one current pairing session as a bound on
-its outstanding Kademlia queries.
+Pairing cleanup clears provider query IDs and returns stop-provider locators.
+Previously, `stop_providing` only removed the local store record: active queries
+and the background job's snapshot survived. The regression failed on its first
+cancel/reopen cycle before the fix.
+
+| Owner | Cancellation behavior |
+| --- | --- |
+| Query pool | Remove all provider queries for the stopped key, without starting another phase |
+| Background job | Remove matching records from the pending republication snapshot |
+| Behaviour queue | Remove matching requests/results and unneeded queued dials |
+| Other queries | Preserve unrelated work, including lookups for the same key and shared dials |
+| Dispatched work | Not recalled; handler requests and remote announcements may outlive cancellation |
+
+Four regressions cover 64 cancel/reopen cycles, exclusive/shared queued dials,
+and stopping ten providers during an active republication snapshot. Workspace
+verification passed 1,265 tests with 22 opt-in tests ignored. Logs:
+`/tmp/p2p-vpn-kad-stop-before.log` and `...-workspace.log`.
+
+The additive `cancel_query` API supports immediate local retirement. Unlike
+graceful `QueryMut::finish`, it does not emit completion or start another phase.
+Callers must discard ownership of the canceled ID.
+
+Join-lookup cancellation, handler queue bounds, aggregate foreground admission,
+and sustained process-resource measurements remain open. These synthetic
+cancellation tests do not measure real sockets or remote record expiry.
+
+#### Verified Cancellation Checks
+
+| Check | Result |
+| --- | --- |
+| Workspace | 1,265 passed; 22 opt-in tests ignored |
+| Clippy correctness, suspicious, performance groups | Passed; style warnings remain |
+| DHT / forced-relay pairing / peerless code pairing | Passed: 16.64 / 7.48 / 13.28 seconds |
+| Owned QUIC / relay-direct network move | Passed: 15.99 / 51.39 seconds |
+| Native x86_64 Android library | Built offline in 32.72 seconds |
+| Nix source parity | Desktop and both Android source inputs match using cached tools |
+| Formatting / whitespace | Passed |
+
+Logs share `/tmp/p2p-vpn-kad-stop-` with `workspace`, `clippy`, `dht`,
+`relay`, `code-pairing`, `quic`, `move`, `android`, and `nix` `.log` suffixes.
+The build targets and vendor cache total approximately 4.6 GiB.
+
+Android library SHA-256:
+`0717203ac33357ec7fecf3a7ea1f6de4d788cc57ecb09483654cb09293dc05f1`.
+Nix source check output:
+`/nix/store/4m7b340p515nc5fbj68n6c0hz8lc2rfy-p2p-vpn-rust-test-sources`.
+
+No full Nix package, ARM64 build, or physical-device deployment was performed.
+Namespace timings are smoke-test observations, not performance comparisons.
 
 ### Per-Query Retention
 

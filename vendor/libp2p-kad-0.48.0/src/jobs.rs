@@ -264,6 +264,16 @@ pub(crate) struct AddProviderJob {
 }
 
 impl AddProviderJob {
+    /// Remove a stopped provider from an already captured publication batch.
+    pub(crate) fn remove(&mut self, key: &record::Key) {
+        if let PeriodicJobState::Running(records) = &mut self.inner.state {
+            *records = std::mem::take(records)
+                .filter(|record| &record.key != key)
+                .collect::<Vec<_>>()
+                .into_iter();
+        }
+    }
+
     /// Creates a new periodic job for provider announcements.
     pub(crate) fn new(interval: Duration) -> Self {
         let now = Instant::now();
