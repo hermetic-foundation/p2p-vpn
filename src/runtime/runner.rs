@@ -19701,7 +19701,12 @@ fn handle_identify_received(
             );
         }
     }
-    if !context.membership.allows(peer_id) && !pairing_probe && kademlia_routing {
+    // Pairing protocol support alone must not strand a routing peer in the
+    // temporary membership-probe window; only an active code session owns it.
+    if !context.membership.allows(peer_id)
+        && !context.code_pairing_sessions.allows_pairing_probe(peer_id)
+        && kademlia_routing
+    {
         match context.routing_infrastructure_peers.admit(peer_id) {
             RoutingInfrastructureAdmission::Admitted => {
                 classify_membership_probe_as_routing(context.membership_probe_connections, peer_id);

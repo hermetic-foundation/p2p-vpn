@@ -18,7 +18,7 @@ Earlier milestones remain historical evidence, not automatic proof for later cha
 
 | Area | Evidence | Limitation |
 | --- | --- | --- |
-| Workspace | Last full run: 1,231 passed, 19 opt-in tests ignored, including task-scoped network logs, bounded fixture traces, live pairing retry, and persisted restart after partial route/rollback failure. Diagnostics run separately. | Native Linux toolchain; not an Android device run. |
+| Workspace | Last full run: 1,231 passed, 20 opt-in tests ignored, including task-scoped network logs, bounded fixture traces, live pairing retry, and persisted restart after partial route/rollback failure. Private-bootstrap restart regression passed separately. | Native Linux toolchain; not an Android device run. |
 | Namespace integration | All 11 pass with stale-response cleanup and isolated relay-LAN endpoint ports. Logs: `/tmp/p2p-vpn-review-stale-packet-isolated-namespace.log`. | Earlier 10/11 run exposed a direct hole-punch bypass in the fixture; see [isolation evidence](testing.md#namespace-e2e). Controlled topology, not public NAT or saturation evidence. |
 | Static analysis | Required correctness, suspicious, and performance Clippy groups pass. | Existing non-fatal style warnings remain. |
 | Formatting | Changed Rust files pass rustfmt; whitespace checks pass. | Not proof of the complete flake `fmt` target. |
@@ -171,6 +171,7 @@ Logs use `/tmp/p2p-vpn-review-startup-snapshot-*`.
 | Resource comparison | Debug and release signed-ledger samples cover 256 records; timer refresh reuses valid evaluations. Isolate retained allocations and establish daemon/sustained-load impact. |
 | Platform validation | All exported VM scenarios now have review results at the revisions listed above; code-pairing VMs cover the latest status fix. Actual generated-Nix activation and final shared-runtime Android validation remain. Earlier runtime results retain their stated scope. |
 | Android underlay failure | Latest transition passes with independent OS underlay diagnostics. Earlier failure attribution remains unresolved; a pass alone does not establish its cause. |
+| Private bootstrap admission | [Delayed changed-port restart](private-discovery-restart-review.md) failed before the Identify classification fix and passed afterward. Routing clients no longer expire merely because they advertise pairing support. Android process/reboot recovery still needs verification with the fix. |
 | Android update traffic | Latest replacement traffic passes with ping timing and reply sequences retained. Preserve earlier 4/5 evidence and investigate attribution alongside remaining transport ownership work. |
 | Packet stream ownership | [Dispatch, closure, admission, stream budgets, stale accounting, and default inbound ownership](packet-stream-ownership-review.md) have regressions. Default Packet events remain compatible; sustained overload and final platform validation remain open. |
 | Packaging/tooling | Resolve or explicitly account for unverified exported checks without uncontrolled source builds. |

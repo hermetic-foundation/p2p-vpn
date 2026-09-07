@@ -1323,6 +1323,137 @@ const fn default_probe_timeout_millis() -> u64 {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    #[ignore = "rootless private-bootstrap restart diagnostic; binds local TCP sockets"]
+    async fn private_bootstrap_restores_address_only_discovery_after_restart() {
+        assert_eq!(
+            std::env::var("P2P_VPN_PRIVATE_RESTART_NAMESPACE").as_deref(),
+            Ok("1"),
+            "run through scripts/private-discovery-restart.sh in its isolated namespace"
+        );
+        let bootstrap_identity = NodeIdentity::generate_ed25519().unwrap();
+        let first_identity = NodeIdentity::generate_ed25519().unwrap();
+        let second_identity = NodeIdentity::generate_ed25519().unwrap();
+        let port = available_tcp_port().unwrap();
+        let mut bootstrap = bootstrap_config(
+            "restart-test",
+            &bootstrap_identity,
+            port,
+            Ipv4Addr::LOCALHOST,
+            false,
+        )
+        .unwrap();
+        bootstrap.network.relay.auto.max_candidates = 0;
+        bootstrap.network.relay.auto.max_reservations = 0;
+        let membership_key = random_membership_key();
+        let peer_config = |identity: &NodeIdentity, remote: &NodeIdentity| {
+            let mut config = minimal_config("restart-test", identity).unwrap();
+            config.network.discovery = private_discovery(true);
+            config.network.membership_key = Some(membership_key.clone());
+            let peer_port = available_tcp_port().unwrap();
+            config.network.listen_addresses = vec![format!("/ip4/0.0.0.0/tcp/{peer_port}")];
+            config.network.external_addresses = vec![format!("/ip4/192.168.250.1/tcp/{peer_port}")];
+            config.network.bootstrap_peers = vec![BootstrapPeerConfig {
+                id: bootstrap_identity.peer_id.clone(),
+                address: format!(
+                    "/ip4/127.0.0.1/tcp/{port}/p2p/{}",
+                    bootstrap_identity.peer_id
+                ),
+            }];
+            config.network.relay.auto.max_candidates = 0;
+            config.network.relay.auto.max_reservations = 0;
+            config.peers =
+                vec![serde_json::from_value(serde_json::json!({"id": remote.peer_id})).unwrap()];
+            disable_packet_plane(&mut config);
+            config.validate_runtime().unwrap();
+            config
+        };
+        let first = peer_config(&first_identity, &second_identity);
+        let second = peer_config(&second_identity, &first_identity);
+        let start = |config: Config| {
+            let (control, receiver) = runtime_control_channel();
+            let (shutdown, signal) = watch::channel(false);
+            let (tun_sender, packets) = mpsc::channel();
+            let io = PacketIo::new(
+                ChannelPacketReader {
+                    packets,
+                    echo_trace: Arc::new(EchoTrace {
+                        remaining: AtomicU16::new(0),
+                    }),
+                },
+                DiscardPacketWriter,
+            );
+            let platform = RuntimePlatform::new(io, PreconfiguredTunRoutes).with_control(receiver);
+            let task = tokio::spawn(run_config_until_with_runtime_platform(
+                config,
+                platform,
+                None,
+                None,
+                None,
+                None,
+                shutdown_signal(signal),
+            ));
+            (control, shutdown, tun_sender, task)
+        };
+        let mut runtimes = vec![start(bootstrap), start(first), start(second.clone())];
+        let result: Result<(), BoxError> = async {
+            for (control, _, _, _) in &runtimes {
+                wait_for_runtime(control, "private discovery").await?;
+            }
+            wait_for_supported_fixture_path(&runtimes[2].0).await?;
+            eprintln!("event=private_restart_stage stage=initial_path_ready");
+            // Outlive the runtime's 30-second unconfirmed membership-probe window.
+            tokio::time::sleep(Duration::from_secs(40)).await;
+            let new_port = available_tcp_port()?;
+            let (_, shutdown, tun_sender, task) = runtimes.pop().unwrap();
+            shutdown.send_replace(true);
+            drop(tun_sender);
+            tokio::time::timeout(Duration::from_secs(5), task)
+                .await??
+                .map_err(|error| format!("client shutdown: {error:?}"))?;
+            let mut restarted = second;
+            restarted.network.listen_addresses = vec![format!("/ip4/0.0.0.0/tcp/{new_port}")];
+            restarted.network.external_addresses =
+                vec![format!("/ip4/192.168.250.1/tcp/{new_port}")];
+            runtimes.push(start(restarted));
+            wait_for_runtime(&runtimes[2].0, "restarted client").await?;
+            wait_for_supported_fixture_path(&runtimes[2].0).await?;
+            eprintln!("event=private_restart_stage stage=changed_endpoint_recovered");
+            Ok(())
+        }
+        .await;
+        for (_, shutdown, tun_sender, task) in runtimes {
+            shutdown.send_replace(true);
+            drop(tun_sender);
+            tokio::time::timeout(Duration::from_secs(5), task)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+        }
+        result.expect("private bootstrap must restore discovery across restart");
+    }
+
+    async fn wait_for_supported_fixture_path(
+        control: &p2p_vpn::runtime::control_socket::RuntimeControlHandle,
+    ) -> Result<(), BoxError> {
+        tokio::time::timeout(Duration::from_secs(40), async {
+            loop {
+                let status = control.status().await?;
+                if status
+                    .iter()
+                    .any(|line| line.trim() == "path_peers_with_supported_path 1")
+                {
+                    return Ok::<(), io::Error>(());
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .map_err(|_| "no supported peer path within 40 seconds")??;
+        Ok(())
+    }
+
     #[test]
     fn echo_trace_is_bounded_and_omits_addresses_and_payload() {
         let trace = EchoTrace {

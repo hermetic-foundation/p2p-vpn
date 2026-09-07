@@ -25,6 +25,10 @@ need a focused restart reproduction before attributing a transport defect.
 - No manual connection repair or deadline extension occurred.
 - Next: isolate private-bootstrap peer-address lookup across a client restart.
 
+The subsequent [private restart reproduction](private-discovery-restart-review.md)
+found and fixed pairing-protocol support suppressing routing admission. Its
+delayed changed-port test passes; these Android failures have not been rerun with the fix.
+
 ### Labelled Run Artifacts
 
 | Artifact | SHA-256 |
