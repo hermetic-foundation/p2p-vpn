@@ -22933,6 +22933,15 @@ mod tests {
 
     #[tokio::test]
     async fn incompatible_applied_enrollment_compacts_against_declarative_authority() {
+        assert_incompatible_applied_enrollment_compaction(false).await;
+    }
+
+    #[tokio::test]
+    async fn historical_incompatible_enrollment_compacts_without_losing_replacement() {
+        assert_incompatible_applied_enrollment_compaction(true).await;
+    }
+
+    async fn assert_incompatible_applied_enrollment_compaction(replace_operation: bool) {
         let (mut config, inviter, joiner, offer, request, response) =
             code_pairing_runtime_fixture();
         let operation_id = crate::runtime::pairing_sessions::fresh_pairing_operation_id();
@@ -23001,10 +23010,37 @@ mod tests {
         config.network.member_records = vec![root_record, inviter_record];
         config.validate_runtime().expect("declarative config");
 
-        let state_path = test_pairing_state_path("incompatible-applied");
+        let state_path = test_pairing_state_path(if replace_operation {
+            "historical-incompatible-applied"
+        } else {
+            "incompatible-applied"
+        });
         let store = PairingStateStore::new(&state_path);
+        let replacement = replace_operation.then(|| {
+            sessions
+                .open("lab", 600, 1_022, Instant::now())
+                .expect("start replacement pairing")
+        });
         persist_code_pairing_sessions(Some(&store), &sessions, "lab")
             .expect("persist incompatible enrollment");
+        let mut sessions = CodePairingSessions::restore_persisted(
+            &store
+                .load()
+                .expect("load startup state")
+                .expect("state bytes"),
+            "lab",
+            1_023,
+            Instant::now(),
+        )
+        .expect("restore before startup reconciliation");
+        let replacement_before = replacement.as_ref().map(|operation| {
+            sessions
+                .open_status(&operation.operation_id)
+                .expect("replacement status")
+        });
+        let snapshot_before: serde_json::Value =
+            serde_json::from_slice(&sessions.encode_persisted("lab").expect("startup snapshot"))
+                .expect("snapshot JSON");
         let mut node = pairing_test_node(&inviter);
         let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
         let mut membership = OverlayMembership::from_config(&config).expect("membership");
@@ -23028,6 +23064,7 @@ mod tests {
 
         assert!(commands.is_empty());
         assert_eq!(forwarder.config(), &config);
+        assert!(!forwarder.is_configured_transport_peer(joiner_peer));
         assert!(sessions.enrollment(&operation_id).is_none());
         assert!(sessions.receipt(&operation_id).is_some());
         let restored = CodePairingSessions::restore_persisted(
@@ -23039,6 +23076,21 @@ mod tests {
         .expect("restore compacted state");
         assert!(restored.enrollment(&operation_id).is_none());
         assert!(restored.receipt(&operation_id).is_some());
+        if let Some(replacement) = replacement {
+            assert_eq!(
+                restored
+                    .open_status(&replacement.operation_id)
+                    .expect("restored replacement"),
+                replacement_before.expect("replacement baseline"),
+            );
+            let snapshot_after: serde_json::Value = serde_json::from_slice(
+                &restored
+                    .encode_persisted("lab")
+                    .expect("compacted snapshot"),
+            )
+            .expect("snapshot JSON");
+            assert!(snapshot_before["open"] == snapshot_after["open"]);
+        }
         fs::remove_dir_all(state_path.parent().expect("state directory"))
             .expect("remove test state");
     }

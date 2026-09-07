@@ -62,8 +62,8 @@ already corrupted by the old transition. Recovery compatibility remains an open 
 
 1. Inject failure after Prepared persistence and before runtime commit; exercise
    cancellation, rejection, expiry, and same-role replacement before recovery.
-2. Extend historical acknowledgement coverage through daemon startup compaction
-   under incompatible declarative authority and multiple sequential pairings.
+2. Extend historical acknowledgement coverage beyond the inviter startup
+   compaction test to joiner recovery and multiple completed sequential pairings.
 3. Reconcile old invalid snapshots without silently dropping committed membership
    or weakening restored-state authorization checks.
 4. Run affected native, namespace, and Android gates after transaction fixes.
@@ -338,6 +338,45 @@ of private-key and membership-key material from serialized inviter output.
 | Nix `rust-test-sources` | Built offline; source inclusion only |
 
 Android runtime and full NixOS VM checks remain outstanding for the combined changes.
+
+### Historical Startup Compaction
+
+The inviter startup test now covers both a current completed operation and an
+Applied enrollment whose operation slot has been replaced by a new pairing.
+Both cases load the saved state before calling startup reconciliation.
+
+| Boundary | Assertion |
+| --- | --- |
+| Changed declarative authority | Existing configured membership remains authoritative |
+| Old enrollment | Compacted to a receipt, retained after saving and loading again |
+| Old peer | Not restored as an authorized transport peer |
+| Kernel reconciliation | No route commands emitted |
+| Replacement | Status and complete serialized operation remain unchanged after reload |
+
+The first combined run failed because the new and existing tests shared a
+process-scoped state directory. Separate case directories resolved the fixture
+collision; the six-test `incompatible` selection then passed in 0.44 seconds.
+
+```bash
+cargo test --offline --lib incompatible -- --nocapture
+```
+
+- Log: `/tmp/p2p-vpn-review-historical-compaction-fixed.log`.
+- Coverage uses the real state store and startup function with an injected route executor.
+- This is one historical inviter enrollment plus an active replacement, not multiple completed enrollments or joiner startup coverage.
+- No production behavior, persistence schema, or authorization policy changed.
+- No applicable Lean model exists; these are executable checks, not formal proofs.
+
+| Follow-Up Gate | Result |
+| --- | --- |
+| Full native workspace | 1,232 passed, 20 opt-in tests ignored |
+| Clippy | Required correctness, suspicious, and performance groups pass; style warnings remain |
+| Formatting | Changed Rust and whitespace checks pass |
+| Nix test-source inclusion | `rust-test-sources` built offline; source packaging, not a full release build |
+| Platform deployment | Not repeated for this test-only change; earlier VM/Android results retain their scope |
+
+Workspace and Clippy logs use
+`/tmp/p2p-vpn-review-historical-compaction-{workspace,clippy}.log`.
 
 ## Pending Cancellation Decision
 
