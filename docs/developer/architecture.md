@@ -417,6 +417,11 @@ separate from this owner.
 | Authorization removal | Remove that peer's pending work and cooldown. |
 | Completion after cancellation | Ignore an ID the owner no longer tracks. |
 
+Failure cooldown grows from 30 seconds to one hour. Idle history expires 310
+seconds after the later of the last query or retry deadline, so expiry cannot
+shorten a cooldown or reset repeated failures at the next eligible retry.
+The membership-sized state cap and explicit network-reset path remain in effect.
+
 This owner does not schedule routine bootstrap, relay discovery, or publication.
 
 | Work | Policy |

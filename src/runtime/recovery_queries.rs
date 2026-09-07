@@ -61,7 +61,11 @@ impl RecoveryQueries {
 
     pub(super) fn should_query(&mut self, peer: PeerId, now: Instant) -> bool {
         self.peers.retain(|_, state| {
-            state.pending_queries > 0 || now.saturating_duration_since(state.last_query) < STATE_TTL
+            // Idle expiry must not erase a long failure cooldown or reset its
+            // attempt count just as the next retry becomes eligible.
+            state.pending_queries > 0
+                || now.saturating_duration_since(state.last_query.max(state.retry_after))
+                    < STATE_TTL
         });
         if let Some(state) = self.peers.get(&peer) {
             if state.pending_queries > 0 || now < state.retry_after {
@@ -310,5 +314,34 @@ mod tests {
             )
         );
         assert!(owner.should_query(peer, now + CONNECTED_RETRY));
+    }
+
+    #[test]
+    fn sustained_failures_preserve_backoff_past_state_ttl() {
+        let peer = PeerId::random();
+        let other = PeerId::random();
+        let (query, _) = query_ids();
+        let mut owner = RecoveryQueries::default();
+        let mut now = Instant::now();
+        for attempt in 1..=12 {
+            assert!(owner.should_query(peer, now));
+            owner.record(peer, [query], now);
+            owner.finished(query, now);
+            assert_eq!(owner.state(&peer).unwrap().attempt_count, attempt);
+            let retry = now + failure_backoff(attempt);
+            let before_retry = retry - Duration::from_nanos(1);
+            assert!(owner.should_query(other, before_retry));
+            assert!(
+                !owner.should_query(peer, before_retry),
+                "attempt {attempt}: state expiry must not shorten retry backoff"
+            );
+            now = retry;
+        }
+        assert_eq!(failure_backoff(12), BACKOFF_MAX);
+        assert!(owner.should_query(other, now + STATE_TTL));
+        assert!(
+            owner.state(&peer).is_none(),
+            "abandoned state still expires"
+        );
     }
 }
