@@ -1,0 +1,57 @@
+{
+  "status": "partial",
+  "protocol_version": 2,
+  "expected_runs": 48,
+  "recorded_runs": 2,
+  "root": "/tmp/p2p-vpn-phase3-acceptance-20260908",
+  "harness_revision": "2a1ff2047ca1",
+  "harness_sha256": "209a9071d6da7884715fac31fcaad8870991b74666b2fb06d4b8add1605d3225",
+  "controller_sha256": "ecf8823fd308f0f2ebe0ad374b82756f34438b2641167853b177fa0653aecbce",
+  "matrix_manifest_sha256": "0bb435ead9504813834b63f7ed0010a226c45acf0215a5942969036ecad02fee",
+  "pairs": [
+    {
+      "repetition": 1,
+      "cell": 0,
+      "profile": "public",
+      "workload": "idle",
+      "configuration_bytes_equal": true,
+      "runs": [
+        {
+          "subject": "baseline",
+          "status": "completed",
+          "elapsed_seconds": 529.533725993,
+          "artifact_dir": "/tmp/p2p-vpn-resource-cli-smoke.ca5a0f3dfe4027f4",
+          "observations_sha256": "04c541c52042082f6ff066816b45605780aa94155c6496d0149677c6df5fa2c0",
+          "endpoint_samples": 214,
+          "idle_samples_per_endpoint": 61,
+          "missing_idle_observations": 0,
+          "startup_observations_missing_control": 1,
+          "boundary_checks_passed": 4,
+          "idle_maximum_gap_seconds": 5.003923720999978,
+          "idle_process_replacements": 0,
+          "idle_cpu_counter_resets": 0
+        },
+        {
+          "subject": "current",
+          "status": "completed",
+          "elapsed_seconds": 529.553858179,
+          "artifact_dir": "/tmp/p2p-vpn-resource-cli-smoke.c0eeea2dcc0461d6",
+          "observations_sha256": "1bc98a47dccda130b74ce447df12293e2908d931a574952634e04488ea066e4e",
+          "endpoint_samples": 214,
+          "idle_samples_per_endpoint": 61,
+          "missing_idle_observations": 0,
+          "startup_observations_missing_control": 1,
+          "boundary_checks_passed": 4,
+          "idle_maximum_gap_seconds": 5.003264811000008,
+          "idle_process_replacements": 0,
+          "idle_cpu_counter_resets": 0
+        }
+      ]
+    }
+  ],
+  "limitations": [
+    "Partial evidence index, not the final scripted metric aggregation or comparison report.",
+    "Only repetition 1 of public idle is collected; no efficiency or production-readiness conclusion follows.",
+    "Raw artifacts contain ephemeral private keys and must not be published."
+  ]
+}

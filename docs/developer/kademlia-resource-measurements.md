@@ -2,14 +2,36 @@
 
 ## Status
 
-Phase 3 is active. No acceptance measurements have been collected.
+Phase 3 is active. Two of 48 acceptance runs have been collected.
 Subject selection, sampling, CLI smoke, and timed workload preflight are implemented.
 The numeric protocol below is frozen as version 2. The matrix controller has
-passed a four-run smoke campaign; full-run validation, aggregation, and
-acceptance comparison runs are still outstanding.
+passed a four-run smoke campaign and its first timed pair. Aggregation and
+the remaining 46 acceptance runs are still outstanding.
 
 See the [workstream plan](kademlia-resource-plan.md).
 Phases 1 and 2 remain complete; this phase does not establish production readiness.
+
+### First Acceptance Pair
+
+The [partial campaign index](kademlia-resource-campaign.json) records executable
+and observation hashes. Both subjects completed repetition 1 of public-profile
+idle using identical endpoint configuration bytes. This is not the final report.
+
+| Check | Baseline | Current |
+| --- | --- | --- |
+| Timed run including teardown | 529.53 seconds | 529.55 seconds |
+| Idle samples per endpoint | 61 | 61 |
+| Idle span per endpoint | 300.00 seconds | 300.00 seconds |
+| Largest idle sampling gap | 5.004 seconds | 5.003 seconds |
+| Missing idle observations | 0 | 0 |
+| Startup observations missing control | 1 | 1 |
+| Bidirectional boundary checks passed | 4/4 | 4/4 |
+| Idle process replacements / CPU counter resets | 0 / 0 | 0 / 0 |
+
+- Each boundary check requires five transmitted and five received echo requests.
+- The unavailable startup control observations remain in the raw data; they are not zero metrics.
+- The controller paused after this pair. Resume the existing campaign, not a new set of identities.
+- Project temporary storage after this pair: 6.96 GiB. Recheck before each new run.
 
 ### Matrix Controller Preflight
 
@@ -79,7 +101,7 @@ sudo env \
 | --- | --- | --- |
 | Baseline | `5ecb01ea` | Immediately precedes the first workstream fix, `14782e7d`, for recovery-query backoff |
 | Current | `3b503ad2` | Completed aggregate bounds and sustained recovery/settling acceptance |
-| Measurement harness | Not yet frozen | One external orchestrator and infrastructure helper for both subjects |
+| Measurement harness | `2a1ff204` | One external orchestrator and infrastructure helper for both subjects; executable hashes in the campaign evidence |
 
 - Build each subject from its own unchanged runtime, manifest, and lockfile.
 - Record full revisions, binary hashes, compiler, profile, environment, and harness hashes before runs.
