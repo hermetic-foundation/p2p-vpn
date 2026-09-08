@@ -4,11 +4,74 @@
 
 Phase 3 is active. No acceptance measurements have been collected.
 Subject selection, sampling, CLI smoke, and timed workload preflight are implemented.
-The numeric protocol below is frozen as version 2; acceptance orchestration,
-artifact manifests, aggregation, and comparison runs are still outstanding.
+The numeric protocol below is frozen as version 2. The matrix controller has
+passed a four-run smoke campaign; full-run validation, aggregation, and
+acceptance comparison runs are still outstanding.
 
 See the [workstream plan](kademlia-resource-plan.md).
 Phases 1 and 2 remain complete; this phase does not establish production readiness.
+
+### Matrix Controller Preflight
+
+| Evidence | Result |
+| --- | --- |
+| Campaign | `/tmp/p2p-vpn-phase3-matrix-smoke-20260908d` |
+| Subjects / profiles | Both pinned subjects, public and private profiles |
+| Smoke results | Four completed runs in 33.06 seconds; not acceptance measurements |
+| Resume check | Six seconds; all saved results reused without launching subjects |
+| Earlier attempts | `20260908a` and `20260908b` suffixes retain permission failures |
+
+- The controller copies and hashes subjects and the namespace harness into a private campaign directory.
+- Each paired workload receives fixed identities; execution follows the frozen matrix order.
+- Resume verifies controller, harness, subjects, plan, and saved-run identity hashes. Unfinished markers require inspection, not automatic retry.
+- `complete.json` means campaign execution ended; it does not mean analysis or phase-3 acceptance is complete.
+- Reserve an additional 32 MiB for the capped controller log and one MiB for run manifests. Retain failed and censored results.
+- Run under the same OS user for creation and resume. Root-owned historical artifacts may require sudo for complete storage accounting.
+
+The initial permission failures occurred before subject startup. Copying subjects
+into the campaign directory avoids private build-directory traversal from the
+isolated user namespace. No subject runtime changes were made.
+
+Controller verification: 20 measurement tests and 40 non-ignored namespace tests
+passed. Formatting, required Clippy groups, and the cached Nix source-inventory
+check passed. Broader runtime and Android suites were not repeated for this
+measurement-only change; the four smoke runs cover the new process launcher.
+
+### Campaign Commands
+
+Build `resource_measurement` and `tun_namespace` test executables with the cached
+Nix toolchain, offline and with at most two jobs. Set `CONTROLLER` and `HARNESS`
+to their absolute executable paths from Cargo's `--no-run` output.
+
+```bash
+sudo env \
+  P2P_VPN_MATRIX_ROOT=/tmp/p2p-vpn-resource-campaign \
+  P2P_VPN_MATRIX_MODE=full \
+  P2P_VPN_MATRIX_MAX_PAIRS=1 \
+  P2P_VPN_MATRIX_BUILDS="$PWD/docs/developer/kademlia-resource-builds.json" \
+  P2P_VPN_MATRIX_HARNESS="$HARNESS" \
+  "$CONTROLLER" --ignored --exact resource_matrix_campaign --nocapture
+```
+
+`MAX_PAIRS=1` pauses after one newly executed pair without changing the 24-pair
+plan. Omit it to execute all remaining pairs. Do not build during observations.
+For smoke-only validation, use `MODE=smoke` and a separate campaign root.
+
+```bash
+sudo env \
+  P2P_VPN_MATRIX_ROOT=/tmp/p2p-vpn-resource-campaign \
+  P2P_VPN_MATRIX_MODE=full \
+  P2P_VPN_MATRIX_RESUME=1 \
+  P2P_VPN_MATRIX_MAX_PAIRS=1 \
+  P2P_VPN_MATRIX_BUILDS=/tmp/p2p-vpn-resource-campaign/builds.json \
+  P2P_VPN_MATRIX_HARNESS=/tmp/p2p-vpn-resource-campaign/harness \
+  /tmp/p2p-vpn-resource-campaign/controller \
+  --ignored --exact resource_matrix_campaign --nocapture
+```
+
+- Preserve the original subject binaries as well as the campaign copies; both are hash-checked.
+- Keep campaign directories private: `keys.json` and endpoint configs contain ephemeral private keys.
+- Publish redacted summaries and hashes, not raw identity/configuration files.
 
 ## Subjects
 

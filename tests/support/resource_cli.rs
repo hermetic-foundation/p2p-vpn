@@ -219,6 +219,16 @@ fn run(workload: Option<protocol::Workload>) {
         test_name,
     );
     eprintln!("resource CLI smoke artifacts: {}", temp.display());
+    if let Some(pointer) = env::var_os("P2P_VPN_RESOURCE_POINTER") {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(pointer)
+            .unwrap();
+        serde_json::to_writer(file, &json!({"artifact_dir": temp})).unwrap();
+    }
     let values = [
         recovery_soak::minimal_config(&local, &remote, &infra, private),
         recovery_soak::minimal_config(&remote, &local, &infra, private),
@@ -315,7 +325,7 @@ fn run(workload: Option<protocol::Workload>) {
         fs::write(
             temp.join("workload.json"),
             serde_json::to_vec_pretty(&json!({
-                "acceptance_measurement": false,
+                "acceptance_measurement": env::var("P2P_VPN_RESOURCE_ACCEPTANCE").as_deref() == Ok("1"),
                 "protocol_version": protocol::VERSION,
                 "workload": workload,
                 "stages": workload.stages(),

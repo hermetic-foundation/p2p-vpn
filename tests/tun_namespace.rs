@@ -1934,6 +1934,8 @@ fn namespace_replay_env_exports() -> String {
             "P2P_VPN_RESOURCE_SUBJECT",
             "P2P_VPN_RESOURCE_WORKLOAD",
             "P2P_VPN_RESOURCE_KEYS",
+            "P2P_VPN_RESOURCE_POINTER",
+            "P2P_VPN_RESOURCE_ACCEPTANCE",
         ]
         .into_iter()
         .map(|name| (name, env::var(name).ok())),
