@@ -4,7 +4,7 @@
 
 The original broad goal was superseded without being marked complete.
 **Aggregate Resource Bounds**, phase 1 below, is complete.
-Phase 2, [Sustained Recovery And Healthy Settling](kademlia-settling.md), is active.
+Phase 2, [Sustained Recovery And Healthy Settling](kademlia-settling.md), is complete.
 This workstream does not complete the broader reliability review.
 Starting revision: `5ecb01ea`. No deployed service or physical device has changed.
 
@@ -13,11 +13,11 @@ Starting revision: `5ecb01ea`. No deployed service or physical device has change
 | Phase | Scope | Acceptance | Status |
 | --- | --- | --- | --- |
 | 1. Aggregate Resource Bounds | Handler pending work, total routing storage, total retained query state | Enforced limits and deterministic saturation/recovery evidence | Complete |
-| 2. Sustained Recovery And Settling | Prolonged failures, churn, transitions, healthy idle behavior | Long-running tests recover without intervention and settle when healthy | Active; acceptance pending |
+| 2. Sustained Recovery And Settling | Prolonged failures, churn, transitions, healthy idle behavior | Long-running tests recover without intervention and settle when healthy | Complete; both final 30-minute profiles passed |
 | 3. Before/After Measurements | Sockets, dial/query rates, CPU, RSS | Comparable baseline/current captures, commands, and limitations | Open |
 | 4. Final Acceptance | All original requirements, documentation, packaging | Requirement-by-requirement evidence audit and residual risks | Open |
 
-Completing phase 1 does not complete phases 2-4. Verified commits remain valid;
+Completing phases 1-2 does not complete phases 3-4. Verified commits remain valid;
 the completion gates below retain the original workstream's full scope.
 See [Aggregate Bounds](kademlia-aggregate-bounds.md) for phase 1 ownership and tests.
 
@@ -31,11 +31,11 @@ checkpoint-specific gaps; this status table is authoritative for current progres
 | --- | --- | --- |
 | Internal addresses | Count/byte bounds for present and pending buckets, address changes, and query caches | Aggregate routing and query retention verified, including backing capacity |
 | Query state | Bounded candidate identities, active queries, and retained results | All retained owners and production producers audited; saturation/retirement verified |
-| Scheduling | Bounded bootstrap, discovery, and dial activity under failure and churn | Aggregate storage complete; sustained activity/settling remains open |
-| Recovery | LAN-first lookup, relay fallback, network-change recovery, and healthy-path settling | Deterministic namespace gates pass; sustained settling remains open |
+| Scheduling | Bounded bootstrap, discovery, and dial activity under failure and churn | Aggregate bounds and phase-2 sustained activity/settling passed |
+| Recovery | LAN-first lookup, relay fallback, network-change recovery, and healthy-path settling | Namespace gates and both final five-cycle sustained profiles passed |
 | Measurements | Comparable before/after CPU, RSS, sockets, dial rates, and query rates | Open |
-| Packaging | Matching Cargo, desktop Nix, and Android source inclusion | Phase-1 source parity and native x86_64 Android verified; broader final acceptance open |
-| Delivery | Regression tests, broader validation, documentation, atomic verified pushes | Phase 1 complete; phases 2-4 remain open |
+| Packaging | Matching Cargo, desktop Nix, and Android source inclusion | Phase-2 Nix source parity and native x86_64 Android verified; broader final acceptance open |
+| Delivery | Regression tests, broader validation, documentation, atomic verified pushes | Phases 1-2 complete; phases 3-4 remain open |
 
 ## Baseline Reproduction
 
