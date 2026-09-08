@@ -6,22 +6,25 @@ Phase 3 is active. Four version-2 runs are recorded: two completed and two faile
 Subject selection, sampling, CLI smoke, and timed workload preflight are implemented.
 The numeric protocol below is version 3. The replacement generator is integrated
 and passed paired traffic VPN preflight. Version-2 artifacts remain archived separately.
-Version-3 acceptance has started: its first public-idle pair completed.
-Aggregation and the remaining 23 acceptance pairs are outstanding.
+Version-3 execution finished: all 48 outcomes are recorded, with 44 completed
+and four censored. Full collection-integrity verification and index publication
+remain outstanding, followed by separate analysis and reporting goals.
 
 See the [workstream plan](kademlia-resource-plan.md).
 Phases 1 and 2 remain complete; this phase does not establish production readiness.
 
 ### Version-3 Campaign
 
-- [Campaign index](kademlia-resource-campaign-v3.json): 2 of 48 runs recorded, both completed. No comparative efficiency conclusion yet.
-- Root: `/tmp/p2p-vpn-phase3-v3-acceptance-20260908`. The controller paused cleanly after repetition 1, cell 0.
+- [Campaign index](kademlia-resource-campaign-v3.json) currently contains only the first pair; it is not yet the complete collection record.
+- Root: `/tmp/p2p-vpn-phase3-v3-acceptance-20260908`. All 48 result files exist; execution finished successfully after resuming from the first pair.
+- Saved outcome counts: 44 completed, four censored. Full integrity verification is pending; execution success is not collection sign-off.
 - Baseline/current durations were 529.62/529.58 seconds. Paired endpoint configurations match byte for byte.
 - Source integration: `92ca4bc3bf66`; no implementation edits or builds occurred between pressure preflight and campaign launch.
 - The campaign contains pinned copies of both subjects, the harness, the controller, the full 24-pair plan, and per-pair identities.
 - Use the pinned controller for resume. Do not rebuild or replace campaign binaries; do not combine these results with version 2.
 
-Resume the remaining matrix without a pair limit:
+The pinned resume command verifies inputs and reuses saved outcomes; it does not
+rerun completed or censored records:
 
 ```bash
 ROOT=/tmp/p2p-vpn-phase3-v3-acceptance-20260908
@@ -36,6 +39,20 @@ sudo env \
 
 - Root access permits accounting for older root-owned task artifacts; all measured networking remains isolated in namespaces.
 - The controller checks the storage budget before every new subject run and retains failed/censored outcomes.
+
+#### Recorded Censoring
+
+| Repetition | Profile | Subject | Workload | Recorded Reason |
+| --- | --- | --- | --- | --- |
+| 1 | Private | Current | Recovery | Observation-file limit exceeded |
+| 2 | Private | Current | Recovery | Observation-file limit exceeded |
+| 3 | Public | Current | Recovery | Direct recovery did not reach five consecutive bidirectional successes |
+| 3 | Private | Current | Recovery | Observation-file limit exceeded |
+
+- These are censored outcomes, not successful resource comparisons. No automatic retries or limit changes were applied.
+- The resumed controller finished in 42,184.18 seconds; the initial pair took 1,066.91 seconds separately.
+- Post-campaign task storage: 7.50 GiB, below the 10 GiB constraint. Raw evidence is retained.
+- Next: verify every run's provenance, stage records, missing captures, hashes, and applicable observation checks; publish the complete redacted index.
 
 ### First Acceptance Pair
 
