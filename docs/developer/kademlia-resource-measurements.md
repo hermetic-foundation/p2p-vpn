@@ -95,6 +95,41 @@ sudo env \
 - Keep campaign directories private: `keys.json` and endpoint configs contain ephemeral private keys.
 - Publish redacted summaries and hashes, not raw identity/configuration files.
 
+### Process Window Summaries
+
+The `resource_summarize_observations` test executable reads an existing bounded
+JSONL artifact. It writes a new, private JSON summary without running VPN nodes.
+Set `ANALYZER` to the current `resource_measurement` executable from Cargo.
+
+```bash
+sudo env \
+  P2P_VPN_RESOURCE_OBSERVATIONS=/absolute/path/to/observations.jsonl \
+  P2P_VPN_RESOURCE_SUMMARY=/tmp/p2p-vpn-process-summary.json \
+  "$ANALYZER" --ignored --exact resource_summarize_observations --nocapture
+```
+
+| Output | Meaning |
+| --- | --- |
+| `observation_sha256` | Hash of the exact input bytes |
+| `windows` | Separate stage summaries for endpoints A/B and infrastructure |
+| `cpu_seconds`, `cpu_percent_one_core` | Available only with three samples, 95% coverage, and no invalid interval |
+| `observed_cpu_seconds` | Diagnostic sum over valid intervals, even when the full window is unavailable |
+| `invalid_intervals`, `cpu_unavailable_reasons` | Explicit reset, replacement, gap, timing, or coverage failures |
+| `gauges` | RSS, threads, sockets, vanished descriptors, and selected process/namespace TCP states |
+| Gauge `mean`, `sampled_peak` | Sample mean and sampled maximum, not time integration or kernel high-water marks |
+
+- Missing process captures are not zero gauges. First/last values remain unavailable if those captures are missing.
+- An absent TCP state inside a valid captured map means zero sockets in that state.
+- Unknown metadata fields are discarded; configurations and private keys never enter the output.
+- Output creation refuses to overwrite an existing file. Input is bounded by the protocol's 16-MiB observation limit.
+- Incomplete stage boundaries are rejected explicitly; this tool does not yet summarize interrupted windows.
+- This is process-only analysis. Counter aggregation, run-outcome gating, paired deltas, and repetition statistics remain outstanding.
+
+Validation: 26 measurement tests passed, plus analysis of both first-pair
+acceptance artifacts. Each endpoint's idle window had over 99.99% coverage
+and no invalid interval. Required Clippy checks and cached Nix source checks
+passed; no runtime, Android, or Lean verification was added for this reader.
+
 ## Subjects
 
 | Subject | Revision | Rationale |
