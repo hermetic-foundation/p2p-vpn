@@ -6,18 +6,18 @@ Phase 3 is active. Four version-2 runs are recorded: two completed and two faile
 Subject selection, sampling, CLI smoke, and timed workload preflight are implemented.
 The numeric protocol below is version 3. The replacement generator is integrated
 and passed paired traffic VPN preflight. Version-2 artifacts remain archived separately.
-Version-3 execution finished: all 48 outcomes are recorded, with 44 completed
-and four censored. Full collection-integrity verification and index publication
-remain outstanding, followed by separate analysis and reporting goals.
+Version-3 collection is complete: all 48 outcomes are recorded and audited,
+with 44 completed and four censored. The redacted index is published below.
+Comparative analysis and the final report remain separate follow-up goals.
 
 See the [workstream plan](kademlia-resource-plan.md).
 Phases 1 and 2 remain complete; this phase does not establish production readiness.
 
 ### Version-3 Campaign
 
-- [Campaign index](kademlia-resource-campaign-v3.json) currently contains only the first pair; it is not yet the complete collection record.
+- [Campaign index](kademlia-resource-campaign-v3.json): all 48 outcomes, provenance hashes, stage/boundary evidence, missing captures, and process-validation results.
 - Root: `/tmp/p2p-vpn-phase3-v3-acceptance-20260908`. All 48 result files exist; execution finished successfully after resuming from the first pair.
-- Saved outcome counts: 44 completed, four censored. Full integrity verification is pending; execution success is not collection sign-off.
+- Saved outcome counts: 44 completed, four censored. All eight workload/profile cells have three paired repetitions and distinct artifact directories.
 - Baseline/current durations were 529.62/529.58 seconds. Paired endpoint configurations match byte for byte.
 - Source integration: `92ca4bc3bf66`; no implementation edits or builds occurred between pressure preflight and campaign launch.
 - The campaign contains pinned copies of both subjects, the harness, the controller, the full 24-pair plan, and per-pair identities.
@@ -52,7 +52,32 @@ sudo env \
 - These are censored outcomes, not successful resource comparisons. No automatic retries or limit changes were applied.
 - The resumed controller finished in 42,184.18 seconds; the initial pair took 1,066.91 seconds separately.
 - Post-campaign task storage: 7.50 GiB, below the 10 GiB constraint. Raw evidence is retained.
-- Next: verify every run's provenance, stage records, missing captures, hashes, and applicable observation checks; publish the complete redacted index.
+- Full collection audit passed against the saved campaign; pinned executables, identities, paired configs, worker results, stages, and observation hashes were checked.
+
+#### Collection Limitations
+
+| Check | Recorded Result |
+| --- | --- |
+| Missing endpoint process captures | Zero in all runs |
+| Missing control captures | One state and one status capture per run; preserved as missing, not zero |
+| Sampling-gap events | 218 across the campaign |
+| Process-window parsing | 45 runs parsed; three observation-cap truncations have incomplete stage boundaries |
+| Unavailable CPU windows | 56 parsed windows fail the frozen interval/coverage rules |
+| Unavailable window distribution | 27 outage, 23 relay recovery, six startup; includes infrastructure windows |
+| Published index | About 405 KiB; no private keys, effective configs, or raw control-state payloads |
+
+- Resource-limit censoring is collection evidence, not successful execution. The three capped runs cannot supply complete recovery windows.
+- The observation writer checks each complete record before writing. Reaching the 16 MiB budget can leave unused bytes smaller than the next record.
+- Probe-driven failure windows can exceed the five-second cadence. Keep the 7.5-second validity limit; do not silently relax it during analysis.
+- The failed direct-recovery run retained parseable windows but did not meet its connectivity criterion. Exclude its paired efficiency claims.
+- No runtime fix or replacement campaign was introduced. Any later investigation requiring replacements must retain this frozen dataset and document new conditions.
+
+#### Follow-Up Goals
+
+1. Counter aggregation and comparative analysis: common/current-only fields, reset handling, useful-work comparability, paired variation, and censored-window handling.
+2. Final report and validation: investigate regressions and uncertainty, publish conclusions and limitations, and close phase 3 against its original requirements.
+
+Neither phase 3 nor production readiness is established by collection completion.
 
 #### Collection Auditor
 
@@ -165,7 +190,7 @@ These runs are preflight evidence, not acceptance matrix repetitions.
 - Baseline observation SHA-256: `a6dec060dcc3e8e8f79984c0b7239467a4a0d7d05d2eb4601c3fbb2bbee3bb32`.
 - Validation passed 26 measurement and 41 namespace unit tests, required Clippy groups, formatting, and cached Nix source parity.
 - Runtime and vendor sources are unchanged. Full workspace and Android builds were not repeated for this measurement-only integration.
-- Version-3 matrix collection, counter aggregation, and comparative reporting remain outstanding.
+- Version-3 matrix collection is complete; counter aggregation and comparative reporting remain outstanding.
 
 ### Version-3 Pressure Preflight
 
@@ -634,3 +659,11 @@ result. No daemon implementation or Phase 2 acceptance behavior was changed.
 - Before each run, require current usage plus its full allowance to remain below 9.75 GiB; retain the remaining headroom for summaries and diagnostics.
 - On budget pressure, compress completed text artifacts or remove only disposable subject dependency caches, keeping pinned binaries and build manifests.
 - Preserve failed-run outcomes and evidence when rerunning. Recheck the budget for replacements; never silently discard failed comparisons.
+
+### Retention and Cleanup
+
+- Retain the campaign root, all 48 artifact directories listed in the index, archived version-2 evidence, and build manifests until analysis/report closeout.
+- Raw configs and identity files contain test private keys. Keep their private directory permissions; publish only the redacted index.
+- No campaign artifacts were deleted during collection. Do not use a broad `/tmp/p2p-vpn-*` deletion command.
+- Disposable build dependency caches may be removed only after confirming no build is active and preserving pinned campaign executables and required tools.
+- Before eventual archive cleanup, verify observation hashes against the index and preserve a private backup required for reproduction. Review exact paths individually.
