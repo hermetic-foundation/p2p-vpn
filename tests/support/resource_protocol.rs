@@ -1,13 +1,18 @@
 use serde::{Deserialize, Serialize};
 
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 pub const SAMPLE_SECONDS: u64 = 5;
 pub const WATCHDOG_SECONDS: u64 = 2400;
 pub const ENDPOINT_LOG_BYTES: u64 = 8 * 1024 * 1024;
 pub const INFRASTRUCTURE_LOG_BYTES: u64 = 32 * 1024 * 1024;
 pub const OBSERVATION_BYTES: u64 = 16 * 1024 * 1024;
-pub const RUN_ALLOWANCE_BYTES: u64 =
-    2 * ENDPOINT_LOG_BYTES + INFRASTRUCTURE_LOG_BYTES + OBSERVATION_BYTES;
+pub const GENERATOR_LOG_BYTES: u64 = 1024 * 1024;
+pub const GENERATOR_REPORT_BYTES: u64 = 16 * 1024;
+pub const RUN_ALLOWANCE_BYTES: u64 = 2 * ENDPOINT_LOG_BYTES
+    + INFRASTRUCTURE_LOG_BYTES
+    + OBSERVATION_BYTES
+    + GENERATOR_LOG_BYTES
+    + GENERATOR_REPORT_BYTES;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -288,7 +293,7 @@ mod tests {
 
     #[test]
     fn offered_work_and_storage_are_finite() {
-        assert_eq!(VERSION, 2);
+        assert_eq!(VERSION, 3);
         for workload in [Workload::Traffic, Workload::Pressure] {
             let traffic = workload.traffic().unwrap();
             assert_eq!(traffic.preload, 3);
@@ -300,10 +305,10 @@ mod tests {
         }
         assert_eq!(Workload::Idle.traffic(), None);
         assert_eq!(Workload::Recovery.traffic(), None);
-        assert_eq!(RUN_ALLOWANCE_BYTES, 64 * 1024 * 1024);
+        assert_eq!(RUN_ALLOWANCE_BYTES, 65 * 1024 * 1024 + 16 * 1024);
         assert_eq!(
             matrix().len() as u64 * 2 * RUN_ALLOWANCE_BYTES,
-            3 * 1024 * 1024 * 1024
+            3120 * 1024 * 1024 + 768 * 1024
         );
     }
 

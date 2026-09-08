@@ -245,7 +245,7 @@ pub fn summarize(bytes: &[u8]) -> Result<Summary, String> {
         }
     }
     let (version, ticks) = metadata.ok_or("missing metadata")?;
-    if version != resource_protocol::VERSION {
+    if ![2, 3].contains(&version) {
         return Err("unsupported observation protocol version".to_owned());
     }
     if starts.is_empty() || starts.keys().ne(ends.keys()) {
@@ -400,6 +400,20 @@ mod tests {
         let serialized = serde_json::to_string(&result).unwrap();
         assert!(!serialized.contains("secret"));
         assert!(!serialized.contains("private_key"));
+        lines[0]["protocol_version"] = serde_json::json!(2);
+        let archived = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(summarize(archived.as_bytes()).unwrap().protocol_version, 2);
+        lines[0]["protocol_version"] = serde_json::json!(4);
+        let future = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(summarize(future.as_bytes()).is_err());
     }
 
     #[test]

@@ -222,6 +222,7 @@ fn calibrate_paced_ping_rate() {
                     Ipv4Addr::LOCALHOST,
                     Ipv4Addr::LOCALHOST,
                     settings,
+                    Some("lo"),
                 ))
                 .unwrap();
             eprintln!(
@@ -235,6 +236,41 @@ fn calibrate_paced_ping_rate() {
             assert_eq!(report.duplicate_replies, 0);
         }
     }
+}
+
+#[test]
+#[ignore = "internal paced traffic worker; requires explicit source, destination, interface and output"]
+fn paced_traffic() {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let workload: protocol::Workload =
+        serde_json::from_value(json!(required_env("P2P_VPN_RESOURCE_WORKLOAD"))).unwrap();
+    let traffic = workload.traffic().expect("traffic or pressure workload");
+    let settings = paced_ping::Settings {
+        rate: traffic.requests_per_second,
+        seconds: traffic.seconds,
+        payload_bytes: traffic.payload_bytes as usize,
+        preload: traffic.preload,
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let report = runtime
+        .block_on(paced_ping::run(
+            required_env("P2P_VPN_TRAFFIC_SOURCE").parse().unwrap(),
+            required_env("P2P_VPN_TRAFFIC_DESTINATION").parse().unwrap(),
+            settings,
+            Some(&required_env("P2P_VPN_TRAFFIC_INTERFACE")),
+        ))
+        .unwrap();
+    let file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(required_env("P2P_VPN_TRAFFIC_REPORT"))
+        .unwrap();
+    serde_json::to_writer(&file, &report).unwrap();
+    file.sync_all().unwrap();
 }
 
 pub fn reexec() {

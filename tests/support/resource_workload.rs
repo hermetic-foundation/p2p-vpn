@@ -129,35 +129,48 @@ impl Context<'_> {
 }
 
 fn start_traffic(context: &Context<'_>, workload: Workload) -> NamespaceChild {
-    let traffic = workload.traffic().expect("traffic workload");
+    workload.traffic().expect("traffic workload");
+    let source = TunRuntimeConfig::from_config(&context.configs[0])
+        .unwrap()
+        .addresses
+        .ipv4;
     let destination = TunRuntimeConfig::from_config(&context.configs[1])
         .unwrap()
         .addresses
         .ipv4;
     let log = File::create(context.temp.join("traffic.log")).unwrap();
+    ns_command(
+        context.nodes[0],
+        "sysctl",
+        &["-w", "net.ipv4.ping_group_range=0 0"],
+    );
     NamespaceChild {
         child: Command::new("nsenter")
-            .env("LC_ALL", "C")
+            .env(
+                "P2P_VPN_RESOURCE_WORKLOAD",
+                serde_json::to_value(workload).unwrap().as_str().unwrap(),
+            )
+            .env("P2P_VPN_TRAFFIC_SOURCE", source.to_string())
+            .env("P2P_VPN_TRAFFIC_DESTINATION", destination.to_string())
+            .env(
+                "P2P_VPN_TRAFFIC_INTERFACE",
+                &context.configs[0].interface.name,
+            )
+            .env("P2P_VPN_TRAFFIC_REPORT", context.temp.join("traffic.json"))
             .args([
                 "-t",
                 &context.nodes[0].to_string(),
                 "-n",
-                "ping",
-                "-q",
-                "-n",
-                "-l",
-                &traffic.preload.to_string(),
-                "-i",
-                &format!("{}", 1.0 / f64::from(traffic.requests_per_second)),
-                "-s",
-                &traffic.payload_bytes.to_string(),
-                "-c",
-                &traffic.maximum_requests.to_string(),
-                "-W",
-                "1",
-                "-I",
-                &context.configs[0].interface.name,
-                &destination.to_string(),
+                "prlimit",
+                &format!("--fsize={0}:{0}", protocol::GENERATOR_LOG_BYTES),
+                "--",
+            ])
+            .arg(env::current_exe().unwrap())
+            .args([
+                "--ignored",
+                "--exact",
+                "resource_cli::paced_traffic",
+                "--nocapture",
             ])
             .stdout(log.try_clone().unwrap())
             .stderr(log)
@@ -166,16 +179,30 @@ fn start_traffic(context: &Context<'_>, workload: Workload) -> NamespaceChild {
     }
 }
 
-fn stop_traffic(traffic: &mut Option<NamespaceChild>) {
+fn stop_traffic(traffic: &mut Option<NamespaceChild>) -> Result<(), String> {
     if let Some(mut traffic) = traffic.take() {
-        if traffic.child.try_wait().unwrap().is_none() {
-            run_command("kill", &["-INT", &traffic.id().to_string()]);
-            let deadline = Instant::now() + Duration::from_secs(2);
-            while traffic.child.try_wait().unwrap().is_none() && Instant::now() < deadline {
-                thread::sleep(Duration::from_millis(10));
+        // The worker owns its absolute end deadline. Allow bounded startup and
+        // final-report overhead before releasing the shaping configuration.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if let Some(status) = traffic
+                .child
+                .try_wait()
+                .map_err(|error| error.to_string())?
+            {
+                return if status.success() {
+                    Ok(())
+                } else {
+                    Err("failed: traffic worker exited unsuccessfully; see traffic.log".to_owned())
+                };
             }
+            if Instant::now() >= deadline {
+                return Err("failed: traffic worker exceeded finalization deadline".to_owned());
+            }
+            thread::sleep(Duration::from_millis(10));
         }
     }
+    Ok(())
 }
 
 pub fn run(mut context: Context<'_>, workload: Workload) -> Result<(), String> {
@@ -204,7 +231,7 @@ pub fn run(mut context: Context<'_>, workload: Workload) -> Result<(), String> {
         match stage.action {
             Action::None => {}
             Action::StartTraffic => traffic = Some(start_traffic(&context, workload)),
-            Action::StopTraffic => stop_traffic(&mut traffic),
+            Action::StopTraffic => stop_traffic(&mut traffic)?,
             Action::DisconnectLanAndInfrastructure => {
                 set_network_move_direct_link(context.nodes[0], context.nodes[1], false);
                 run_command("ip", &["link", "set", "veth-mv-host", "down"]);
@@ -264,7 +291,7 @@ pub fn run(mut context: Context<'_>, workload: Workload) -> Result<(), String> {
             }
             Action::StopTrafficAndRelease => {
                 context.qdisc("after_load")?;
-                stop_traffic(&mut traffic);
+                stop_traffic(&mut traffic)?;
                 ns_command(
                     context.nodes[0],
                     "tc",
@@ -325,14 +352,25 @@ pub fn run(mut context: Context<'_>, workload: Workload) -> Result<(), String> {
         }
         context.record(&json!({"kind": "stage_end", "stage": stage.name, "elapsed_seconds": context.started.elapsed().as_secs_f64(), "first_success_seconds": first_success, "confirmed_recovery_seconds": confirmed_recovery_seconds, "five_consecutive_successes": stage.probe_each_sample.then_some(recovered)}))?;
     }
-    stop_traffic(&mut traffic);
+    stop_traffic(&mut traffic)?;
     if let Some(offered) = workload.traffic() {
-        let output = fs::read_to_string(context.temp.join("traffic.log"))
+        let mut bytes = Vec::new();
+        File::open(context.temp.join("traffic.json"))
+            .map_err(|error| format!("failed: traffic report: {error}"))?
+            .take(protocol::GENERATOR_REPORT_BYTES + 1)
+            .read_to_end(&mut bytes)
             .map_err(|error| error.to_string())?;
-        let counts =
-            ping_counts(&output).ok_or_else(|| "failed: missing traffic summary".to_owned())?;
-        context.record(&json!({"kind": "traffic_summary", "sent": counts.0, "received": counts.1, "payload_bytes": offered.payload_bytes, "offered": offered, "output": output}))?;
-        if !offered.offered_count_valid(counts.0) || counts.1 == 0 || counts.1 > counts.0 {
+        if bytes.len() as u64 > protocol::GENERATOR_REPORT_BYTES {
+            return Err("failed: traffic report exceeded size limit".to_owned());
+        }
+        let report: paced_ping::Report = serde_json::from_slice(&bytes)
+            .map_err(|_| "failed: invalid traffic report".to_owned())?;
+        context.record(&json!({"kind": "traffic_summary", "sent": report.sent, "received": report.received, "payload_bytes": offered.payload_bytes, "offered": offered, "pacing": report}))?;
+        if !offered.offered_count_valid(report.sent)
+            || report.received == 0
+            || report.received > report.sent
+            || report.invalid_replies != 0
+        {
             failure = Some("failed: invalid or undelivered offered traffic".to_owned());
         }
     }

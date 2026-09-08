@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use socket2::{Domain, Protocol, Socket, Type};
 use std::{
     io,
@@ -48,7 +48,7 @@ impl Settings {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Report {
     pub sent: u64,
     pub received: u64,
@@ -63,9 +63,13 @@ pub async fn run(
     source: Ipv4Addr,
     destination: Ipv4Addr,
     settings: Settings,
+    interface: Option<&str>,
 ) -> io::Result<Report> {
     let count = settings.count()?;
     let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::ICMPV4))?;
+    if let Some(interface) = interface {
+        socket.bind_device(Some(interface.as_bytes()))?;
+    }
     socket.bind(&SocketAddrV4::new(source, 0).into())?;
     socket.connect(&SocketAddrV4::new(destination, 0).into())?;
     socket.set_nonblocking(true)?;

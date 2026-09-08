@@ -4,10 +4,9 @@
 
 Phase 3 is active. Four version-2 runs are recorded: two completed and two failed.
 Subject selection, sampling, CLI smoke, and timed workload preflight are implemented.
-The numeric protocol below is frozen as version 2. The matrix controller has
-passed a four-run smoke campaign and its first timed pair. Aggregation and
-further acceptance collection remain outstanding. The failed traffic pair exposed
-generator underdriving; collection is paused until its replacement is integrated.
+The numeric protocol below is version 3. The replacement generator is integrated
+and passed paired traffic VPN preflight. Version-2 artifacts remain archived separately.
+Aggregation and version-3 acceptance collection remain outstanding.
 
 See the [workstream plan](kademlia-resource-plan.md).
 Phases 1 and 2 remain complete; this phase does not establish production readiness.
@@ -78,8 +77,33 @@ P2P_VPN_PACED_CALIBRATION=full "$HARNESS" \
 - Isolated namespaces permit ping sockets only for their mapped group. No host network sysctl is changed.
 - The full calibration took 480.25 seconds; maximum observed send lateness was 3.44 ms.
 - Validation also passed 41 non-ignored namespace tests, required Clippy groups, formatting, and cached Nix source checks.
-- Integration into the workload runner and a paired VPN preflight are still required. The version-2 campaign remains untouched.
+- The generator is integrated into the version-3 workload runner; paired traffic VPN preflight passed. The version-2 campaign remains untouched.
 - Failed version-2 runs and hashes remain in the campaign index. Do not silently retry them or widen their acceptance threshold.
+
+### Version-3 Traffic Preflight
+
+Both pinned subjects completed the public-profile traffic workload sequentially,
+current first, using identical endpoint configuration bytes and fixed identities.
+These runs are preflight evidence, not acceptance matrix repetitions.
+
+| Measurement | Current | Baseline |
+| --- | --- | --- |
+| Total duration | 687.74 seconds | 687.70 seconds |
+| Offered / received | 9,000 / 9,000 | 9,000 / 9,000 |
+| Skipped / duplicate / invalid | 0 / 0 / 0 | 0 / 0 / 0 |
+| Maximum send lateness | 3.86 ms | 3.51 ms |
+| Endpoint window temporal coverage | Above 99.9% | Above 99.9% |
+| Invalid process intervals | 0 | 0 |
+| Artifact directory suffix | `37450d5f84a25f82` | `0443518b55243491` |
+
+- Artifact directories use `/tmp/p2p-vpn-resource-cli-smoke.<suffix>`; each contains `observations.jsonl` and `traffic.json`.
+- Provenance is in `/tmp/p2p-vpn-phase3-v3-preflight-manifest.json`, with the pre-run source patch, key hash, and unchanged subject hashes.
+- Harness SHA-256: `2e1e871b27cacbe9c86b95e10ef54c817a86ef1499a4f092fd9ba3109b33fe92`.
+- Current observation SHA-256: `688e8ea01672c7570158af770d9b6ab7a3557699b5a355410d4f9f9596397860`.
+- Baseline observation SHA-256: `a6dec060dcc3e8e8f79984c0b7239467a4a0d7d05d2eb4601c3fbb2bbee3bb32`.
+- Validation passed 26 measurement and 41 namespace unit tests, required Clippy groups, formatting, and cached Nix source parity.
+- Runtime and vendor sources are unchanged. Full workspace and Android builds were not repeated for this measurement-only integration.
+- Pressure preflight, version-3 matrix collection, counter aggregation, and comparative reporting remain outstanding.
 
 ### Matrix Controller Preflight
 
@@ -228,15 +252,19 @@ profiles, with three independent paired repetitions: eight cells, 24 pairs,
 | Failure and recovery | Fixed link/infrastructure faults and address changes; automatic recovery or explicit censoring |
 | Pressure and release | Identical bounded offered load and underlay restriction; measured pressure, release, drain, and post-release footprint |
 
-### Frozen Protocol v2
+### Frozen Protocol v3
 
 These timings are selected before acceptance observations. Any necessary protocol
 change must be documented and versioned; do not mix versions in a paired cell.
 Smoke results are excluded from the acceptance dataset.
 
-Version 2 retains version 1's topology, rates, payloads, durations, and ordering.
-It adds a three-packet preload and offered-count validation after preflight
-exposed reply-dependent underdriving. Version 1 preflight data remains excluded.
+Version 3 retains version 2's topology, rates, payload sizes, durations, ordering,
+three-packet preload, and 98% offered-count gate. It replaces `ping` pacing with
+absolute-time ICMP deadlines and a bounded structured traffic report.
+
+- Do not resume the archived version-2 matrix using version-3 executables.
+- The revised matrix will use one newly pinned harness for every pair. Archived observations remain available for audit.
+- The standalone process reader supports both versions; that does not make their workloads interchangeable.
 
 | Common Setting | Value |
 | --- | --- |
@@ -259,7 +287,10 @@ exposed reply-dependent underdriving. Version 1 preflight data remains excluded.
 | Pressure/release | 60 seconds at 200 echo requests/second, 1,000-byte payload, A to B; remove shaping and stop load; drain 100 seconds; observe post-release idle for 180 seconds |
 
 - Traffic caps: 9,000 requests for sustained traffic; 12,000 for pressure. Record actual sent and received counts, not theoretical offered work.
-- Use `ping -l 3 -c COUNT` with the fixed interval; the runner stops traffic at the stage deadline. Do not add ping's `-w`, which changes count-limit behavior.
+- The traffic worker binds to the source TUN interface and address, then follows absolute send deadlines. Kernel ping sockets supply ICMP identifiers and checksums.
+- The worker stops on its own duration/count bounds. The controller permits up to two seconds for startup offset and final report writing before declaring failure.
+- `traffic.json` is limited to 16 KiB when read; the worker's `traffic.log` has a one-MiB file limit. Packet counts and pacing diagnostics appear in `traffic_summary`.
+- Generator CPU is outside the measured VPN and infrastructure processes. The same generator executable and settings apply to both subjects.
 - Require 98% to 100% of the nominal request count. Outside that range, report workload-fidelity failure and exclude efficiency deltas, even if final connectivity works.
 - The three-packet preload allows small bursts; timing precision is not hard real-time. Report actual offered work and account for up to 2% rate deviation in comparisons.
 - Pressure shaping: direct A egress, `netem delay 50ms rate 64kbit limit 16`. Preserve default packet transport and queue configuration.
@@ -513,7 +544,7 @@ result. No daemon implementation or Phase 2 acceptance behavior was changed.
 - No builds or other task workloads during comparative observations.
 - Apply the frozen per-run log/sample caps and retention policy before measurements.
 - Do not remove prior acceptance evidence merely to create build space.
-- Acceptance logs and observations reserve at most 64 MiB per subject: three GiB for 48 runs, excluding small manifests/configs.
+- Version-3 endpoint/infrastructure logs, observations, and generator outputs reserve 65 MiB plus 16 KiB per subject. Controller logs and manifests add their separate allowances.
 - Before each run, require current usage plus its full allowance to remain below 9.75 GiB; retain the remaining headroom for summaries and diagnostics.
 - On budget pressure, compress completed text artifacts or remove only disposable subject dependency caches, keeping pinned binaries and build manifests.
 - Preserve failed-run outcomes and evidence when rerunning. Recheck the budget for replacements; never silently discard failed comparisons.
