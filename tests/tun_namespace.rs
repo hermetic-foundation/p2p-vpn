@@ -41,6 +41,8 @@ mod kademlia_resources;
 mod queue_pressure;
 #[path = "support/recovery_soak.rs"]
 mod recovery_soak;
+#[path = "support/resource_cli.rs"]
+mod resource_cli;
 const KEEP_TEMP_ENV: &str = "P2P_VPN_TUN_E2E_KEEP_TEMP";
 const ORCHESTRATOR_TIMEOUT_ENV: &str = "P2P_VPN_TUN_E2E_ORCHESTRATOR_TIMEOUT_SECONDS";
 const WAIT_TIMEOUT_SCALE_ENV: &str = "P2P_VPN_TUN_E2E_WAIT_SCALE";
@@ -59,6 +61,16 @@ const NETWORK_MOVE_TEST_NAME: &str = "tun_namespace_recovers_relay_and_direct_af
 const DHT_TEST_NAME: &str = "tun_namespace_ping_crosses_dht_discovered_overlay";
 const NETWORK_NAME: &str = "tun-e2e";
 const NODE_A_LOCAL_ROUTE_ADDRESS: Ipv4Addr = Ipv4Addr::new(10, 41, 0, 9);
+
+#[test]
+#[ignore = "requires isolated Linux namespaces and P2P_VPN_RESOURCE_SUBJECT CLI binary"]
+fn tun_namespace_resource_cli_smoke() {
+    match env::var(CHILD_ENV).as_deref() {
+        Ok("orchestrator") => resource_cli::smoke(),
+        Ok("node") => resource_cli::run_node(),
+        _ => resource_cli::reexec(),
+    }
+}
 
 #[test]
 #[ignore = "requires isolated Linux namespaces; production-timer recovery can take 25 minutes"]

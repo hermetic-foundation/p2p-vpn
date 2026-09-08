@@ -3,8 +3,9 @@
 ## Status
 
 Phase 3 is active. No acceptance measurements have been collected.
-Subject selection and sampler development are complete enough for harness work;
-the full numeric protocol must be frozen before acceptance runs start.
+Subject selection, sampling, and CLI smoke support are implemented.
+The numeric protocol below is frozen as version 1; acceptance orchestration,
+artifact manifests, aggregation, and comparison runs are still outstanding.
 
 See the [workstream plan](kademlia-resource-plan.md).
 Phases 1 and 2 remain complete; this phase does not establish production readiness.
@@ -22,6 +23,10 @@ Phases 1 and 2 remain complete; this phase does not establish production readine
 - Use matching optimized build settings; inspect cache and disk budgets before building.
 - Preserve baseline registry Kademlia and current vendored Kademlia. Their implementation difference is part of the comparison.
 - Separate subject artifacts to avoid stale executable reuse documented in the [earlier comparison](idle-resource-comparison.md#reproduction-notes).
+
+Both optimized subjects have been built offline in unchanged, revision-pinned
+Jujutsu workspaces. The [build manifest](kademlia-resource-builds.json) records
+full revisions, binary/lockfile hashes, cached Nix toolchain, and build settings.
 
 ## Harness Boundary
 
@@ -55,9 +60,71 @@ profiles, with three independent paired repetitions: eight cells, 24 pairs,
 | Failure and recovery | Fixed link/infrastructure faults and address changes; automatic recovery or explicit censoring |
 | Pressure and release | Identical bounded offered load and underlay restriction; measured pressure, release, drain, and post-release footprint |
 
-Before accepting data, record numeric warmup, sample cadence, window durations,
-traffic parameters, fault schedule, watchdogs, ordering, and aggregation rules.
-Derive durations from production timers and workload needs, not observed winners.
+### Frozen Protocol v1
+
+These timings are selected before acceptance observations. Any necessary protocol
+change must be documented and versioned; do not mix versions in a paired cell.
+Smoke results are excluded from the acceptance dataset.
+
+| Common Setting | Value |
+| --- | --- |
+| Startup window | 120 seconds from releasing both endpoint start gates; readiness must occur within this window |
+| Warmup | 100 seconds after the fixed startup window, regardless of earlier readiness |
+| Sampling | Five-second scheduled cadence; record actual timestamps, capture time, and missed slots |
+| Control queries | State and status per endpoint; each call limited to one second |
+| Maximum valid interval | 7.5 seconds; never interpolate across an unavailable observation |
+| Runtime workers | `TOKIO_WORKER_THREADS=2` for each endpoint; fixed two-worker infrastructure helper |
+| Logging | Unset `RUST_LOG`; no periodic metrics CLI override; eight MiB per endpoint log and 32 MiB for infrastructure |
+| Observation storage | 16 MiB JSONL limit per subject run; exceeding it censors the run, not silent truncation |
+| Outer watchdog | 2,400 seconds per subject, including setup, workload, final capture, and teardown |
+| Isolation | Fresh namespaces and daemon processes per subject; no Internet route, build, or parallel task workload |
+
+| Workload | Schedule After Warmup |
+| --- | --- |
+| Idle | 300 seconds without application traffic; five-request boundary ping before and after |
+| Traffic | 180 seconds at 50 echo requests/second, 512-byte payload, A to B; 100-second drain; 180-second post-load idle |
+| Failure/recovery | Disable direct LAN and infrastructure link for 130 seconds; restore infrastructure for 960 seconds; change LAN addresses and restore direct link for 375 seconds; observe another 180 seconds |
+| Pressure/release | 60 seconds at 200 echo requests/second, 1,000-byte payload, A to B; remove shaping and stop load; drain 100 seconds; observe post-release idle for 180 seconds |
+
+- Traffic caps: 9,000 requests for sustained traffic; 12,000 for pressure. Record actual sent and received counts, not theoretical offered work.
+- Pressure shaping: direct A egress, `netem delay 50ms rate 64kbit limit 16`. Preserve default packet transport and queue configuration.
+- Capture `tc -s -j qdisc` before, during, and after pressure; record actual shaping activity and path changes rather than assuming offered load reached the bottleneck.
+- Recovery addressing: move direct underlay `10.253.0.1/2` to `10.253.1.1/2`; keep overlay identity and configuration unchanged.
+- Recovery probes: one echo request in each direction every five seconds. Record first success and first five consecutive bidirectional successes.
+- Recovery stages end at fixed times, not on first success. Record relay/direct path evidence; do not infer path type from ping success alone.
+- Boundary probes have a separate ten-second budget each, outside resource windows. A failed boundary gate invalidates equivalent-work comparisons.
+
+### Timer Rationale
+
+| Production Timer | Measurement Consequence |
+| --- | --- |
+| 60-second swarm idle timeout; 120-second maintenance interval | A 300-second idle window crosses multiple idle and maintenance opportunities |
+| 90-second query owner deadline; up to ten seconds cleanup allowance | Use 100-second warmup/drain, matching Phase 2 cleanup reasoning |
+| 15-second stream in-flight deadline | Sixty seconds of pressure spans multiple timeout opportunities |
+| LAN-first grace, discovery backoff, relay reservation, and direct address quarantine | Reuse Phase 2's 130-second outage, 960-second relay and 375-second direct recovery budgets |
+| 600-second packet sessions; 900-second address publication refresh | Long recovery runs cross these timers; short idle/traffic runs do not establish renewal or long-term leak behavior |
+
+Timer sources: [runtime constants](../../src/runtime/runner.rs),
+[swarm idle timeout](../../src/runtime/p2p.rs), and the accepted
+[recovery fixture](../../tests/support/recovery_soak.rs).
+No timer is shortened in either subject to make this experiment pass.
+
+### Ordering and Comparability
+
+1. Repeat three times; within each repetition visit public then private profiles.
+2. Within each profile run idle, traffic, recovery, then pressure.
+3. Number the eight cells from zero. Baseline runs first when cell index plus zero-based repetition index is even; otherwise current runs first.
+4. Reuse each pair's generated identities, config bytes, and infrastructure identity. Start fresh processes and namespaces for the second subject.
+5. Record full source revisions, binary/config hashes, toolchain, kernel, clock tick rate, effective config, and helper revision before acceptance runs.
+
+- Keep failures, watchdog expiries, missing metrics, and exclusions in the report. Never replace a failed subject with a favorable smoke result.
+- Per window, report CPU seconds, one-core-normalized CPU, sample count, coverage, sampled RSS mean/peak, socket/connection counts, and counter deltas/rates.
+- CPU ratios use total valid CPU seconds divided by total valid elapsed time, not an unweighted mean of unequal intervals.
+- Require at least 95% temporal coverage, three samples, and no invalid interval for a window's paired CPU delta. Report rejected windows and retained raw observations.
+- RSS/socket gauge means are sample means, not time-integrated values. Peaks are sampled peaks, not kernel or allocator high-water marks.
+- Preserve current-only owner/admission gauges separately. Compare common metrics only when both subjects expose them and counters do not reset.
+- Report all three paired results plus median and range of absolute values/deltas. Percentage deltas require a nonzero baseline.
+- Diagnose contaminated or invalid harness runs before replacements; retain original outcomes and document the replacement. No result-driven ordering changes.
 
 ## Process Sampling
 
@@ -100,7 +167,48 @@ Implementation: [resource analysis](../../tests/support/resource_analysis.rs).
 
 The caller must supply matching workload/metric windows and a frozen maximum
 sampling gap. Interval checks alone do not establish workload equivalence.
-Run-level aggregation and the external orchestrator remain to be implemented.
+Run-level aggregation and acceptance workload orchestration remain to be implemented.
+
+### CLI Harness Smoke
+
+The [CLI harness](../../tests/support/resource_cli.rs) reuses the namespace and
+infrastructure helpers without running the measured daemon inside a test binary.
+It accepts an external subject executable through `P2P_VPN_RESOURCE_SUBJECT`.
+
+| Component | Smoke Behavior |
+| --- | --- |
+| Endpoints | Execute the supplied CLI with minimal configuration and two Tokio workers |
+| Process identity | `exec` preserves the namespace child's PID for external sampling |
+| Underlay | Direct LAN link plus isolated bridge ports to the DHT/relay helper; no Internet route |
+| Infrastructure | Existing Phase 2 server-mode helper, identical for either subject |
+| Readiness | Successful control queries, process capture, and bidirectional overlay ping within 120 seconds |
+| Watchdog | 180 seconds for the enclosing namespace process tree |
+| Artifacts | Private temporary directory containing configs, bounded daemon logs, observations, and smoke result |
+
+```sh
+nix develop -c cargo build --locked --bin p2p-vpn
+P2P_VPN_RESOURCE_SUBJECT="$PWD/target/debug/p2p-vpn" \
+P2P_VPN_TUN_E2E_RECOVERY_PROFILE=public \
+  nix develop -c cargo test --locked --test tun_namespace \
+  tun_namespace_resource_cli_smoke -- --ignored --exact --nocapture
+```
+
+Repeat with `P2P_VPN_TUN_E2E_RECOVERY_PROFILE=private` for a private primary DHT
+and separate public pairing DHT. Set the subject path to the actual Cargo target
+directory when overriding `CARGO_TARGET_DIR`.
+
+Smoke artifacts explicitly contain `acceptance_measurement: false`. This check
+does not measure idle efficiency, sustained traffic, fault recovery, or pressure.
+It does not require baseline-absent Kademlia owner gauges to declare readiness.
+
+The optimized baseline and current subjects each passed public and private smoke
+checks sequentially with one common harness binary. Evidence directories and
+hashes are recorded in the build manifest. No builds ran during these checks.
+
+The namespace target passed 31 non-ignored tests; 15 opt-in tests were ignored in
+that invocation. The four CLI smoke invocations above were run separately.
+Earlier full sustained acceptance was not repeated for helper visibility and
+measurement-only additions; production runtime and vendor sources are unchanged.
 
 ### Checks
 
@@ -127,7 +235,12 @@ result. No daemon implementation or Phase 2 acceptance fixture was changed.
 ## Resource Limits
 
 - Initial retained task storage: 5.13 GiB; total limit: 10 GiB.
+- After isolated optimized subject builds: 6.45 GiB, including previous acceptance artifacts.
 - At most two Cargo build jobs across the task; downloads capped at 10 Mbps.
 - No builds or other task workloads during comparative observations.
 - Freeze per-run log/sample caps and retention policy before measurements.
 - Do not remove prior acceptance evidence merely to create build space.
+- Acceptance logs and observations reserve at most 64 MiB per subject: three GiB for 48 runs, excluding small manifests/configs.
+- Before each run, require current usage plus its full allowance to remain below 9.75 GiB; retain the remaining headroom for summaries and diagnostics.
+- On budget pressure, compress completed text artifacts or remove only disposable subject dependency caches, keeping pinned binaries and build manifests.
+- Preserve failed-run outcomes and evidence when rerunning. Recheck the budget for replacements; never silently discard failed comparisons.

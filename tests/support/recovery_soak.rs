@@ -38,7 +38,7 @@ pub fn requested_watchdog() -> Duration {
     }
 }
 
-fn private_profile() -> bool {
+pub(super) fn private_profile() -> bool {
     match env::var(PROFILE_ENV).as_deref() {
         Err(env::VarError::NotPresent) | Ok("public") => false,
         Ok("private") => true,
@@ -46,7 +46,7 @@ fn private_profile() -> bool {
     }
 }
 
-fn minimal_config(
+pub(super) fn minimal_config(
     local: &NodeIdentity,
     remote: &NodeIdentity,
     infra: &NodeIdentity,

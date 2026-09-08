@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "acceptance_measurements_collected": false,
+  "compiler": {
+    "release": "1.97.1",
+    "commit": "8bab26f4f68e0e26f0bb7960be334d5b520ea452",
+    "host": "x86_64-unknown-linux-gnu",
+    "llvm": "21.1.8",
+    "path": "/nix/store/hjh2pcv59jhxwh6japwx1v437w4yrbp1-rustc-1.97.1/bin/rustc"
+  },
+  "build": {
+    "cargo": "/tmp/p2p-vpn-review-cargo/bin/.cargo-wrapped",
+    "command": "cargo build --offline --locked --release --bin p2p-vpn",
+    "profile": "Cargo release defaults, opt-level=3, debug=0",
+    "environment": {
+      "CARGO_BUILD_JOBS": "2",
+      "CARGO_INCREMENTAL": "0",
+      "CARGO_PROFILE_DEV_DEBUG": "0",
+      "CARGO_PROFILE_TEST_DEBUG": "0",
+      "RUST_MIN_STACK": "8388608",
+      "RUSTDOC": "/nix/store/hjh2pcv59jhxwh6japwx1v437w4yrbp1-rustc-1.97.1/bin/rustdoc",
+      "PATH_prefix": "/tmp/p2p-vpn-review-clippy/bin:/nix/store/3d1c302vw7kc8a5vknhmn34c0pd7zm6m-gcc-wrapper-15.3.0/bin"
+    },
+    "cache_reuse": "Copied cached release dependencies into separate subject targets; cargo clean --offline --release -p p2p-vpn before each build",
+    "source_changes": "None in either subject workspace; no runtime or harness backports"
+  },
+  "subjects": {
+    "baseline": {
+      "revision": "5ecb01ea2e6a737d9a15a56927150402937365e5",
+      "workspace": "/tmp/p2p-vpn-resource-baseline",
+      "target": "/tmp/p2p-vpn-resource-baseline-target",
+      "binary": "/tmp/p2p-vpn-resource-baseline-target/release/p2p-vpn",
+      "sha256": "d8b468a44d5c4b2c5d85414e3a3fd034db133dc1037d4747f727cbce29df8ea1",
+      "cargo_lock_sha256": "99fa1d37cf043f53b7abbbc7eec120a803a5e428435a472298fa32992999d757",
+      "build_log": "/tmp/p2p-vpn-phase3-baseline-build.log",
+      "kademlia": "unmodified registry libp2p-kad 0.48.0"
+    },
+    "current": {
+      "revision": "3b503ad2e5f983725ae419ae4090553a060b6153",
+      "workspace": "/tmp/p2p-vpn-resource-current",
+      "target": "/tmp/p2p-vpn-resource-current-target",
+      "binary": "/tmp/p2p-vpn-resource-current-target/release/p2p-vpn",
+      "sha256": "e7a69b6b4988b6a2159260b728a313f974984b306c58472ea9dd3ea6adfc212d",
+      "cargo_lock_sha256": "1c4cf5844d4f5e88e9d1a119cd67e7c17c0572aca3354d85cfb0efd7b0aa8523",
+      "build_log": "/tmp/p2p-vpn-phase3-current-build.log",
+      "kademlia": "revision-pinned vendored libp2p-kad 0.48.0"
+    }
+  },
+  "smoke_harness": {
+    "binary": "/tmp/p2p-vpn-review-target/debug/deps/tun_namespace-f1b215d83e77c124",
+    "sha256": "4442d624af493156a231d74e11246edc99faae6b33a9642ae0544adcf4adaa42",
+    "profile": "dev/test, debug=0, incremental=0",
+    "baseline_public": "/tmp/p2p-vpn-resource-cli-smoke.1f2677c1b4e68e34",
+    "baseline_private": "/tmp/p2p-vpn-resource-cli-smoke.05faea954698fc05",
+    "current_public": "/tmp/p2p-vpn-resource-cli-smoke.df0f082f4d1641de",
+    "current_private": "/tmp/p2p-vpn-resource-cli-smoke.a2dfce371ea0dbbe",
+    "result": "All four sequential smoke checks passed; no concurrent builds or acceptance measurements"
+  }
+}
