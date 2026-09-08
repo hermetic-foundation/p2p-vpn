@@ -54,6 +54,25 @@ sudo env \
 - Post-campaign task storage: 7.50 GiB, below the 10 GiB constraint. Raw evidence is retained.
 - Next: verify every run's provenance, stage records, missing captures, hashes, and applicable observation checks; publish the complete redacted index.
 
+#### Collection Auditor
+
+`tests/support/resource_collection.rs` audits saved artifacts without rerunning
+subjects. It checks the frozen plan, pinned binaries, paired config hashes,
+identity-file hashes, worker provenance, stages, boundaries, and offered work.
+
+```bash
+sudo env \
+  P2P_VPN_COLLECTION_ROOT=/tmp/p2p-vpn-phase3-v3-acceptance-20260908 \
+  P2P_VPN_COLLECTION_OUTPUT=/tmp/p2p-vpn-collection-audit-new.json \
+  "$MEASUREMENT_TEST" --ignored --exact resource_collection_audit --nocapture
+```
+
+- `MEASUREMENT_TEST` is the newly built `resource_measurement` test executable, not the campaign's pinned controller.
+- Output must not exist. The auditor writes a mode-0600 redacted index; it never copies raw private configuration or control-state records.
+- Missing process/state/status captures are counted explicitly. Existing process-window validation reports gaps and incomplete censored windows.
+- Validation scope: measurement unit tests, the complete saved campaign, required Clippy groups, formatting, and cached Nix source parity.
+- No runtime changes or new measurements: full workspace and Android builds were not repeated for this collection-only tooling.
+
 ### First Acceptance Pair
 
 The [partial campaign index](kademlia-resource-campaign.json) records executable
