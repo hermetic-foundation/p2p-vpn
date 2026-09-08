@@ -2,11 +2,12 @@
 
 ## Status
 
-Phase 3 is active. Two of 48 acceptance runs have been collected.
+Phase 3 is active. Four version-2 runs are recorded: two completed and two failed.
 Subject selection, sampling, CLI smoke, and timed workload preflight are implemented.
 The numeric protocol below is frozen as version 2. The matrix controller has
 passed a four-run smoke campaign and its first timed pair. Aggregation and
-the remaining 46 acceptance runs are still outstanding.
+further acceptance collection remain outstanding. The failed traffic pair exposed
+generator underdriving; collection is paused until its replacement is integrated.
 
 See the [workstream plan](kademlia-resource-plan.md).
 Phases 1 and 2 remain complete; this phase does not establish production readiness.
@@ -32,6 +33,53 @@ idle using identical endpoint configuration bytes. This is not the final report.
 - The unavailable startup control observations remain in the raw data; they are not zero metrics.
 - The controller paused after this pair. Resume the existing campaign, not a new set of identities.
 - Project temporary storage after this pair: 6.96 GiB. Recheck before each new run.
+
+### Traffic Pacing Failure
+
+Both version-2 traffic subjects sent and received 8,799 packets in 180 seconds.
+The frozen gate requires at least 8,820 of 9,000 nominal requests. All boundary
+checks passed, but this pair remains excluded from efficiency comparisons.
+
+The independent `calibrate_sustained_ping_rate` diagnostic reproduced the
+shortfall on isolated loopback: 8,806 sent and received, without VPN processes.
+Its exit status checks delivery; inspect `offered_count_valid` for rate fidelity.
+
+### Replacement Generator
+
+`tests/support/paced_ping.rs` supplies absolute-time ICMP echo pacing using Linux
+ping sockets and the already-cached `socket2` development dependency. No VPN
+runtime or pinned subject binary changes are included.
+
+| Contract | Behavior |
+| --- | --- |
+| Timing | Deadlines anchored to one start time, independent of replies |
+| Packet sizes and rates | Same 512/1,000-byte payloads and 50/200 requests per second |
+| Preload | At most three overdue slots; longer pauses skip slots rather than unlimited catch-up |
+| Bounds | Finite request count, bounded reply tracking, send deadline, and run deadline |
+| Delivery | Unique echo replies matched to issued sequence numbers and payloads |
+| Diagnostics | Sent, received, skipped slots, duplicate/invalid replies, elapsed time, and maximum lateness |
+
+Full-duration standalone calibration passed all four cases:
+
+| Rate | Duration | Loss | Sent | Received | Skipped Slots |
+| --- | --- | --- | --- | --- | --- |
+| 50/s | 180 seconds | 0% | 9,000 | 9,000 | 0 |
+| 200/s | 60 seconds | 0% | 12,000 | 12,000 | 0 |
+| 50/s | 180 seconds | 100% | 9,000 | 0 | 0 |
+| 200/s | 60 seconds | 100% | 12,000 | 0 | 0 |
+
+```bash
+P2P_VPN_PACED_CALIBRATION=full "$HARNESS" \
+  --ignored --exact resource_cli::calibrate_paced_ping_rate --nocapture
+```
+
+- Use the newly built namespace test executable, not the archived version-2 campaign harness.
+- Omitting `P2P_VPN_PACED_CALIBRATION` runs two-second smoke cases, not full-duration validation.
+- Isolated namespaces permit ping sockets only for their mapped group. No host network sysctl is changed.
+- The full calibration took 480.25 seconds; maximum observed send lateness was 3.44 ms.
+- Validation also passed 41 non-ignored namespace tests, required Clippy groups, formatting, and cached Nix source checks.
+- Integration into the workload runner and a paired VPN preflight are still required. The version-2 campaign remains untouched.
+- Failed version-2 runs and hashes remain in the campaign index. Do not silently retry them or widen their acceptance threshold.
 
 ### Matrix Controller Preflight
 

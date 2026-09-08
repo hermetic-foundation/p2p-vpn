@@ -2,7 +2,9 @@
   "status": "partial",
   "protocol_version": 2,
   "expected_runs": 48,
-  "recorded_runs": 2,
+  "recorded_runs": 4,
+  "completed_runs": 2,
+  "failed_runs": 2,
   "root": "/tmp/p2p-vpn-phase3-acceptance-20260908",
   "harness_revision": "2a1ff2047ca1",
   "harness_sha256": "209a9071d6da7884715fac31fcaad8870991b74666b2fb06d4b8add1605d3225",
@@ -47,11 +49,42 @@
           "idle_cpu_counter_resets": 0
         }
       ]
+    },
+    {
+      "repetition": 1,
+      "cell": 1,
+      "profile": "public",
+      "workload": "traffic",
+      "configuration_bytes_equal": true,
+      "comparable": false,
+      "exclusion_reason": "Both subjects received all packets, but the generator offered fewer than the required 8820 requests.",
+      "runs": [
+        {
+          "subject": "current",
+          "status": "failed",
+          "elapsed_seconds": 689.840677484,
+          "artifact_dir": "/tmp/p2p-vpn-resource-cli-smoke.8ecad5e61dac2b35",
+          "observations_sha256": "f351e8d970cacba3dcde44a2241206926d20dabc93b09c07c20e416669234a84",
+          "sent": 8799,
+          "received": 8799,
+          "boundary_checks_passed": 4
+        },
+        {
+          "subject": "baseline",
+          "status": "failed",
+          "elapsed_seconds": 689.67399595,
+          "artifact_dir": "/tmp/p2p-vpn-resource-cli-smoke.021e96c3eb7099c0",
+          "observations_sha256": "7179c8b7afe628cbf93b13cc1988daeef5736b28215484ae1871a9e8e2ce5f08",
+          "sent": 8799,
+          "received": 8799,
+          "boundary_checks_passed": 4
+        }
+      ]
     }
   ],
   "limitations": [
     "Partial evidence index, not the final scripted metric aggregation or comparison report.",
-    "Only repetition 1 of public idle is collected; no efficiency or production-readiness conclusion follows.",
+    "Only repetition 1 of public idle completed successfully. The public traffic pair failed workload fidelity; no efficiency or production-readiness conclusion follows.",
     "Raw artifacts contain ephemeral private keys and must not be published."
   ]
 }

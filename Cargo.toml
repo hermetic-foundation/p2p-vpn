@@ -58,5 +58,6 @@ tun = "0.8.14"
 log = "0.4.29"
 
 [dev-dependencies]
+socket2 = { version = "0.6.5", features = ["all"] }
 futures-timer = "3.0.3"
 web-time = "1.1.0"

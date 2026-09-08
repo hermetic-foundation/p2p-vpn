@@ -37,6 +37,8 @@ const CHILD_ENV: &str = "P2P_VPN_TUN_E2E_MODE";
 mod idle_sample;
 #[path = "support/kademlia_resources.rs"]
 mod kademlia_resources;
+#[path = "support/paced_ping.rs"]
+mod paced_ping;
 #[path = "support/queue_pressure.rs"]
 mod queue_pressure;
 #[path = "support/recovery_soak.rs"]

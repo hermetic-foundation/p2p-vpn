@@ -115,6 +115,128 @@ fn calibrate_ping_rate() {
     }
 }
 
+#[test]
+#[ignore = "three-minute diagnostic of sustained ping pacing on isolated loopback; not an acceptance run"]
+fn calibrate_sustained_ping_rate() {
+    const NAME: &str = "resource_cli::calibrate_sustained_ping_rate";
+    if env::var(CHILD_ENV).as_deref() != Ok("orchestrator") {
+        let executable = env::current_exe().unwrap();
+        let output = namespace_orchestrator_output(
+            &[
+                executable.to_str().unwrap(),
+                "--ignored",
+                "--exact",
+                NAME,
+                "--nocapture",
+            ],
+            &[(CHILD_ENV, "orchestrator")],
+            Duration::from_secs(200),
+        )
+        .unwrap();
+        assert_output_success("sustained ping diagnostic namespace", &output);
+        eprint!("{}", String::from_utf8_lossy(&output.stderr));
+        return;
+    }
+    run_command("ip", &["link", "set", "lo", "up"]);
+    let output = command_output(
+        "ping",
+        &[
+            "-q",
+            "-n",
+            "-l",
+            "3",
+            "-i",
+            "0.02",
+            "-s",
+            "512",
+            "-w",
+            "180",
+            "127.0.0.1",
+        ],
+        &[("LC_ALL", "C")],
+        Duration::from_secs(190),
+    )
+    .unwrap();
+    assert_output_success("sustained loopback ping", &output);
+    let (sent, received) = resource_workload::ping_counts(&String::from_utf8_lossy(&output.stdout))
+        .expect("diagnostic packet counts");
+    assert!(sent > 0);
+    assert_eq!(sent, received);
+    eprintln!(
+        "{}",
+        json!({"diagnostic_only": true, "seconds": 180, "nominal_requests": 9000, "sent": sent, "received": received, "offered_count_valid": protocol::Workload::Traffic.traffic().unwrap().offered_count_valid(sent), "output": String::from_utf8_lossy(&output.stdout)})
+    );
+}
+
+#[test]
+#[ignore = "isolated absolute-time ICMP calibration; full mode takes eight minutes"]
+fn calibrate_paced_ping_rate() {
+    const NAME: &str = "resource_cli::calibrate_paced_ping_rate";
+    let mode = env::var("P2P_VPN_PACED_CALIBRATION").unwrap_or_else(|_| "short".to_owned());
+    assert!(["short", "full"].contains(&mode.as_str()));
+    if env::var(CHILD_ENV).as_deref() != Ok("orchestrator") {
+        let executable = env::current_exe().unwrap();
+        let output = namespace_orchestrator_output(
+            &[
+                executable.to_str().unwrap(),
+                "--ignored",
+                "--exact",
+                NAME,
+                "--nocapture",
+            ],
+            &[
+                (CHILD_ENV, "orchestrator"),
+                ("P2P_VPN_PACED_CALIBRATION", &mode),
+            ],
+            Duration::from_secs(520),
+        )
+        .unwrap();
+        assert_output_success("paced ping calibration namespace", &output);
+        eprint!("{}", String::from_utf8_lossy(&output.stderr));
+        return;
+    }
+    run_command("ip", &["link", "set", "lo", "up"]);
+    run_command("sysctl", &["-w", "net.ipv4.ping_group_range=0 0"]);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    for loss in ["0%", "100%"] {
+        run_command(
+            "tc",
+            &[
+                "qdisc", "replace", "dev", "lo", "root", "netem", "loss", loss,
+            ],
+        );
+        for workload in [protocol::Workload::Traffic, protocol::Workload::Pressure] {
+            let traffic = workload.traffic().unwrap();
+            let seconds = if mode == "full" { traffic.seconds } else { 2 };
+            let settings = paced_ping::Settings {
+                rate: traffic.requests_per_second,
+                seconds,
+                payload_bytes: traffic.payload_bytes as usize,
+                preload: traffic.preload,
+            };
+            let report = runtime
+                .block_on(paced_ping::run(
+                    Ipv4Addr::LOCALHOST,
+                    Ipv4Addr::LOCALHOST,
+                    settings,
+                ))
+                .unwrap();
+            eprintln!(
+                "{}",
+                json!({"diagnostic_only": true, "mode": mode, "loss": loss, "rate": settings.rate, "seconds": seconds, "report": report})
+            );
+            assert_eq!(report.sent, u64::from(settings.rate) * u64::from(seconds));
+            assert_eq!(report.skipped_slots, 0);
+            assert_eq!(report.received, if loss == "0%" { report.sent } else { 0 });
+            assert_eq!(report.invalid_replies, 0);
+            assert_eq!(report.duplicate_replies, 0);
+        }
+    }
+}
+
 pub fn reexec() {
     reexec_test(TEST_NAME, Duration::from_secs(180));
 }
