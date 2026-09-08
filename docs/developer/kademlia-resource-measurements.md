@@ -3,7 +3,7 @@
 ## Status
 
 Phase 3 is active. No acceptance measurements have been collected.
-Subject selection, sampling, and CLI smoke support are implemented.
+Subject selection, sampling, CLI smoke, and timed workload preflight are implemented.
 The numeric protocol below is frozen as version 1; acceptance orchestration,
 artifact manifests, aggregation, and comparison runs are still outstanding.
 
@@ -167,7 +167,7 @@ Implementation: [resource analysis](../../tests/support/resource_analysis.rs).
 
 The caller must supply matching workload/metric windows and a frozen maximum
 sampling gap. Interval checks alone do not establish workload equivalence.
-Run-level aggregation and acceptance workload orchestration remain to be implemented.
+Acceptance matrix execution and run-level aggregation remain to be implemented.
 
 ### CLI Harness Smoke
 
@@ -205,40 +205,109 @@ The optimized baseline and current subjects each passed public and private smoke
 checks sequentially with one common harness binary. Evidence directories and
 hashes are recorded in the build manifest. No builds ran during these checks.
 
-The namespace target passed 31 non-ignored tests; 15 opt-in tests were ignored in
+At the CLI smoke checkpoint, the namespace target passed 31 non-ignored tests; 15 opt-in tests were ignored in
 that invocation. The four CLI smoke invocations above were run separately.
 Earlier full sustained acceptance was not repeated for helper visibility and
 measurement-only additions; production runtime and vendor sources are unchanged.
 
-### Checks
+### Timed Workload Preflight
+
+The [typed protocol](../../tests/support/resource_protocol.rs) defines the 24
+pairs, subject order, stage durations/actions, offered traffic, and storage caps.
+The [workload runner](../../tests/support/resource_workload.rs) executes these
+stages against the supplied CLI, retaining raw observations and fault evidence.
+
+```sh
+P2P_VPN_RESOURCE_KEYS=/tmp/p2p-vpn-measurement-keys.json \
+  nix develop -c cargo test --locked --test tun_namespace \
+  resource_cli::generate_pair_keys -- --ignored --exact --nocapture
+
+P2P_VPN_RESOURCE_KEYS=/tmp/p2p-vpn-measurement-keys.json \
+P2P_VPN_RESOURCE_WORKLOAD=pressure \
+P2P_VPN_RESOURCE_SUBJECT=/path/to/pinned/p2p-vpn \
+P2P_VPN_TUN_E2E_RECOVERY_PROFILE=public \
+  nix develop -c cargo test --locked --test tun_namespace \
+  tun_namespace_resource_workload -- --ignored --exact --nocapture
+```
+
+- The key file contains three isolated test identities, is created mode `0600`, and is never overwritten. Reuse it for paired subjects.
+- Workloads: `idle`, `traffic`, `recovery`, `pressure`. Timings are not shortened through environment overrides.
+- These invocations write `acceptance_measurement: false`; they are preflight tools, not the acceptance matrix executor.
+- Endpoint, infrastructure, and control-query observations remain distinct. Failed captures retain their errors and do not become zero samples.
+- Delayed sampling records skipped slots instead of producing a burst of catch-up observations.
+- Recovery confirmation checks the expected validated peer and actual selected path, not only successful ping.
+
+### Pressure Preflight Evidence
+
+| Item | Observed Result |
+| --- | --- |
+| Subject/profile | Optimized current `3b503ad2`, public primary DHT |
+| Artifacts | `/tmp/p2p-vpn-resource-cli-smoke.edee6791209e29da` |
+| Harness SHA-256 | `833b0f97a3ceeeca558db0e061939f17865cc658649430ba0918ee56508617be` |
+| Duration | 567.89 seconds including enclosing namespace setup/teardown |
+| Stage behavior | Full startup, warmup, pressure, drain, and post-release windows completed |
+| Pressure evidence | Kernel queue reached 16 packets; 5,275 shaping drops before release |
+| Release evidence | Shaping removed; both application queues observed empty in post-release idle |
+| Final delivery | Five of five requests succeeded in each direction |
+| Samples | 234 endpoint observations; no skipped sampling slots |
+| Missing observation | One startup control-socket absence, retained explicitly |
+| **Fidelity limitation** | Generator sent 5,956 requests in 60 seconds, below the configured 200 requests/second |
+
+This preflight verifies stage execution and recovery after pressure, **not a valid
+fixed-rate resource comparison**. Its workload result indicates functional
+completion only. No acceptance run has been collected or inferred from it.
+
+### Generator Investigation
+
+An isolated loopback calibration reproduced the rate change without p2p-vpn.
+At a five-millisecond interval, the installed ping sent 401 requests in two
+seconds with replies, but only 197 with 100% loss. Flood mode did not fix it.
+
+```sh
+nix develop -c cargo test --locked --test tun_namespace \
+  resource_cli::calibrate_ping_rate -- --ignored --exact --nocapture
+```
+
+The generator must deliver the intended offered rate independently of reply loss
+before acceptance comparisons begin. Keep the failed-fidelity preflight; do not
+silently reinterpret its requested traffic rate as its actual rate.
+
+### Verification Scope
 
 ```sh
 cargo test --offline --locked --test resource_measurement -- --test-threads=2
 ```
 
-Eleven sampler/analysis tests passed with cached Nix Rust tooling. Coverage includes inode
+Fifteen sampler/analysis/protocol tests passed with cached Nix Rust tooling. Coverage includes inode
 attribution, unowned TCP rows, malformed/missing fields, unit validation, process
 replacement, CPU overflow/reset, and a live process listener.
+
 The live check also verifies duplicate socket descriptors do not create extra
 socket-inode or TCP-connection counts.
+
 Analysis tests cover CPU normalization, missing samples and serialized fields,
 counter resets, process replacement, sampling gaps, failed/censored outcomes,
 and zero-baseline comparisons.
+
+The namespace target passed 39 non-ignored tests. Full-duration public/current
+pressure preflight and isolated ping calibration were run separately. Other timed
+workload/profile combinations have not yet received end-to-end verification.
 
 Required Clippy groups, formatting, whitespace, and cached Nix test-source
 integration passed. The full workspace and namespace acceptance suites were not
 rerun for these independent measurement-tooling checkpoints.
 
 This is tooling validation, not baseline/current acceptance or a performance
-result. No daemon implementation or Phase 2 acceptance fixture was changed.
+result. No daemon implementation or Phase 2 acceptance behavior was changed.
 
 ## Resource Limits
 
 - Initial retained task storage: 5.13 GiB; total limit: 10 GiB.
 - After isolated optimized subject builds: 6.45 GiB, including previous acceptance artifacts.
+- After workload preflight and calibration: 6.46 GiB.
 - At most two Cargo build jobs across the task; downloads capped at 10 Mbps.
 - No builds or other task workloads during comparative observations.
-- Freeze per-run log/sample caps and retention policy before measurements.
+- Apply the frozen per-run log/sample caps and retention policy before measurements.
 - Do not remove prior acceptance evidence merely to create build space.
 - Acceptance logs and observations reserve at most 64 MiB per subject: three GiB for 48 runs, excluding small manifests/configs.
 - Before each run, require current usage plus its full allowance to remain below 9.75 GiB; retain the remaining headroom for summaries and diagnostics.

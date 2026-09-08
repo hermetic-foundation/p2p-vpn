@@ -73,6 +73,16 @@ fn tun_namespace_resource_cli_smoke() {
 }
 
 #[test]
+#[ignore = "requires isolated namespaces, a pinned subject, workload and fixed identity file; up to 40 minutes"]
+fn tun_namespace_resource_workload() {
+    match env::var(CHILD_ENV).as_deref() {
+        Ok("orchestrator") => resource_cli::workload(),
+        Ok("node") => resource_cli::run_node(),
+        _ => resource_cli::reexec_workload(),
+    }
+}
+
+#[test]
 #[ignore = "requires isolated Linux namespaces; production-timer recovery can take 25 minutes"]
 fn tun_namespace_automatic_discovery_recovers_after_link_changes() {
     match env::var(CHILD_ENV).as_deref() {
@@ -1921,6 +1931,9 @@ fn namespace_replay_env_exports() -> String {
             queue_pressure::ROUNDS_ENV,
             recovery_soak::PROFILE_ENV,
             recovery_soak::SOAK_ENV,
+            "P2P_VPN_RESOURCE_SUBJECT",
+            "P2P_VPN_RESOURCE_WORKLOAD",
+            "P2P_VPN_RESOURCE_KEYS",
         ]
         .into_iter()
         .map(|name| (name, env::var(name).ok())),
@@ -1936,6 +1949,24 @@ fn namespace_replay_env_exports_from<'a>(
             value.map(|value| format!("export {name}={}\n", shell_quote(&value)))
         })
         .collect()
+}
+
+#[test]
+fn resource_workload_replay_preserves_subject_and_fixed_keys() {
+    let output = namespace_replay_env_exports_from([
+        (
+            "P2P_VPN_RESOURCE_SUBJECT",
+            Some("/tmp/subject binary".to_owned()),
+        ),
+        ("P2P_VPN_RESOURCE_WORKLOAD", Some("pressure".to_owned())),
+        (
+            "P2P_VPN_RESOURCE_KEYS",
+            Some("/tmp/pair-keys.json".to_owned()),
+        ),
+    ]);
+    assert!(output.contains("export P2P_VPN_RESOURCE_SUBJECT='/tmp/subject binary'"));
+    assert!(output.contains("export P2P_VPN_RESOURCE_WORKLOAD='pressure'"));
+    assert!(output.contains("export P2P_VPN_RESOURCE_KEYS='/tmp/pair-keys.json'"));
 }
 
 fn command_metadata(program: &str, args: &[&str]) -> String {

@@ -5,18 +5,111 @@ use std::os::unix::process::CommandExt as _;
 
 #[path = "process_sample.rs"]
 mod process_sample;
+#[path = "resource_protocol.rs"]
+mod protocol;
+#[path = "resource_workload.rs"]
+mod resource_workload;
 
 const TEST_NAME: &str = "tun_namespace_resource_cli_smoke";
 const SUBJECT_ENV: &str = "P2P_VPN_RESOURCE_SUBJECT";
+const WORKLOAD_TEST: &str = "tun_namespace_resource_workload";
+
+#[test]
+#[ignore = "creates a new private identity file at P2P_VPN_RESOURCE_KEYS for workload preflight"]
+fn generate_pair_keys() {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let keys: [String; 3] =
+        std::array::from_fn(|_| NodeIdentity::generate_ed25519().unwrap().private_key);
+    let path = PathBuf::from(required_env("P2P_VPN_RESOURCE_KEYS"));
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)
+        .unwrap();
+    serde_json::to_writer(&mut file, &keys).unwrap();
+    file.write_all(b"\n").unwrap();
+    eprintln!("fixed pair keys: {}", path.display());
+}
+
+#[test]
+#[ignore = "isolated calibration of ping offered rate with and without reply loss"]
+fn calibrate_ping_rate() {
+    const NAME: &str = "resource_cli::calibrate_ping_rate";
+    if env::var(CHILD_ENV).as_deref() != Ok("orchestrator") {
+        let executable = env::current_exe().unwrap();
+        let output = namespace_orchestrator_output(
+            &[
+                executable.to_str().unwrap(),
+                "--ignored",
+                "--exact",
+                NAME,
+                "--nocapture",
+            ],
+            &[(CHILD_ENV, "orchestrator")],
+            Duration::from_secs(30),
+        )
+        .unwrap();
+        assert_output_success("ping calibration namespace", &output);
+        eprint!("{}", String::from_utf8_lossy(&output.stderr));
+        return;
+    }
+    run_command("ip", &["link", "set", "lo", "up"]);
+    for (loss, flood) in [("0%", false), ("100%", false), ("0%", true), ("100%", true)] {
+        run_command(
+            "tc",
+            &[
+                "qdisc", "replace", "dev", "lo", "root", "netem", "loss", loss,
+            ],
+        );
+        let mut arguments = vec![
+            "-q",
+            "-n",
+            "-i",
+            "0.005",
+            "-s",
+            "1000",
+            "-w",
+            "2",
+            "127.0.0.1",
+        ];
+        if flood {
+            arguments.insert(0, "-f");
+        }
+        let output = command_output(
+            "ping",
+            &arguments,
+            &[("LC_ALL", "C")],
+            Duration::from_secs(5),
+        )
+        .unwrap();
+        eprintln!(
+            "loss={loss} flood={flood} exit={} {}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
+}
 
 pub fn reexec() {
+    reexec_test(TEST_NAME, Duration::from_secs(180));
+}
+
+pub fn reexec_workload() {
+    reexec_test(
+        WORKLOAD_TEST,
+        Duration::from_secs(protocol::WATCHDOG_SECONDS),
+    );
+}
+
+fn reexec_test(test_name: &str, timeout: Duration) {
     let subject = fs::canonicalize(required_env(SUBJECT_ENV)).expect("subject executable");
     let harness = env::current_exe().expect("test executable");
     let output = namespace_orchestrator_output(
         &[
             harness.to_str().unwrap(),
             "--ignored",
-            TEST_NAME,
+            test_name,
             "--exact",
             "--nocapture",
         ],
@@ -24,7 +117,7 @@ pub fn reexec() {
             (CHILD_ENV, "orchestrator"),
             (SUBJECT_ENV, subject.to_str().unwrap()),
         ],
-        Duration::from_secs(180),
+        timeout,
     )
     .expect("resource smoke namespace");
     eprint!("{}", String::from_utf8_lossy(&output.stderr));
@@ -47,7 +140,11 @@ pub fn run_node() {
         &[
             "--pid",
             &std::process::id().to_string(),
-            "--fsize=33554432:33554432",
+            &if env::var_os("P2P_VPN_RESOURCE_WORKLOAD").is_some() {
+                format!("--fsize={0}:{0}", protocol::ENDPOINT_LOG_BYTES)
+            } else {
+                "--fsize=33554432:33554432".to_owned()
+            },
         ],
     );
     // exec preserves the namespace child's PID, so /proc samples belong to the CLI.
@@ -63,6 +160,21 @@ pub fn run_node() {
 }
 
 pub fn smoke() {
+    run(None);
+}
+
+pub fn workload() {
+    let workload = serde_json::from_value(json!(required_env("P2P_VPN_RESOURCE_WORKLOAD")))
+        .expect("workload must be idle, traffic, recovery, or pressure");
+    run(Some(workload));
+}
+
+fn run(workload: Option<protocol::Workload>) {
+    let test_name = if workload.is_some() {
+        WORKLOAD_TEST
+    } else {
+        TEST_NAME
+    };
     let subject = required_env(SUBJECT_ENV);
     let hash = Command::new("sha256sum").arg(&subject).output().unwrap();
     assert_output_success("subject fingerprint", &hash);
@@ -70,12 +182,17 @@ pub fn smoke() {
     let subject_sha256 = subject_sha256.split_whitespace().next().unwrap();
     let harness_sha256 = idle_sample::fingerprint().unwrap();
     let private = recovery_soak::private_profile();
-    let local = NodeIdentity::generate_ed25519().unwrap();
-    let remote = NodeIdentity::generate_ed25519().unwrap();
-    let infra = NodeIdentity::generate_ed25519().unwrap();
+    let [local, remote, infra] = if workload.is_some() {
+        let keys: [String; 3] =
+            serde_json::from_slice(&fs::read(required_env("P2P_VPN_RESOURCE_KEYS")).unwrap())
+                .expect("three fixed private keys in JSON array");
+        keys.map(|key| NodeIdentity::from_private_key(&key).unwrap())
+    } else {
+        std::array::from_fn(|_| NodeIdentity::generate_ed25519().unwrap())
+    };
     let temp = init_namespace_temp_dir(
         &env::temp_dir().join("p2p-vpn-resource-cli-smoke"),
-        TEST_NAME,
+        test_name,
     );
     eprintln!("resource CLI smoke artifacts: {}", temp.display());
     let values = [
@@ -93,7 +210,7 @@ pub fn smoke() {
         .unwrap();
     }
     let a = spawn_node(
-        TEST_NAME,
+        test_name,
         "a",
         &local,
         None,
@@ -102,7 +219,7 @@ pub fn smoke() {
         &temp.join("start-a"),
     );
     let b = spawn_node(
-        TEST_NAME,
+        test_name,
         "b",
         &remote,
         None,
@@ -111,7 +228,7 @@ pub fn smoke() {
         &temp.join("start-b"),
     );
     let relay = spawn_node(
-        TEST_NAME,
+        test_name,
         "relay",
         &infra,
         None,
@@ -158,6 +275,37 @@ pub fn smoke() {
         .unwrap();
     let deadline = started + Duration::from_secs(120);
     let mut evidence = File::create(temp.join("observations.jsonl")).unwrap();
+    if let Some(workload) = workload {
+        let result = resource_workload::run(
+            resource_workload::Context {
+                nodes: [a.id(), b.id()],
+                infrastructure: relay.id(),
+                configs: &configs,
+                temp: &temp,
+                runtime: &runtime,
+                evidence: &mut evidence,
+                started,
+            },
+            workload,
+        );
+        fs::write(
+            temp.join("workload.json"),
+            serde_json::to_vec_pretty(&json!({
+                "acceptance_measurement": false,
+                "protocol_version": protocol::VERSION,
+                "workload": workload,
+                "stages": workload.stages(),
+                "profile": if private { "private" } else { "public" },
+                "subject": subject, "subject_sha256": subject_sha256,
+                "harness_sha256": harness_sha256,
+                "result": result,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(result.is_ok(), "workload preflight failed: {result:?}");
+        return;
+    }
     loop {
         let mut healthy = true;
         for (index, (child, role)) in [(&a, "a"), (&b, "b")].into_iter().enumerate() {
