@@ -145,14 +145,14 @@ fn start_traffic(context: &Context<'_>, workload: Workload) -> NamespaceChild {
                 "ping",
                 "-q",
                 "-n",
+                "-l",
+                &traffic.preload.to_string(),
                 "-i",
                 &format!("{}", 1.0 / f64::from(traffic.requests_per_second)),
                 "-s",
                 &traffic.payload_bytes.to_string(),
                 "-c",
                 &traffic.maximum_requests.to_string(),
-                "-w",
-                &traffic.seconds.to_string(),
                 "-W",
                 "1",
                 "-I",
@@ -332,11 +332,7 @@ pub fn run(mut context: Context<'_>, workload: Workload) -> Result<(), String> {
         let counts =
             ping_counts(&output).ok_or_else(|| "failed: missing traffic summary".to_owned())?;
         context.record(&json!({"kind": "traffic_summary", "sent": counts.0, "received": counts.1, "payload_bytes": offered.payload_bytes, "offered": offered, "output": output}))?;
-        if counts.0 == 0
-            || counts.0 > u64::from(offered.maximum_requests)
-            || counts.1 == 0
-            || counts.1 > counts.0
-        {
+        if !offered.offered_count_valid(counts.0) || counts.1 == 0 || counts.1 > counts.0 {
             failure = Some("failed: invalid or undelivered offered traffic".to_owned());
         }
     }
@@ -374,7 +370,7 @@ fn path_matches(lines: &[String], peer: &str, stage: &str) -> bool {
         })
 }
 
-fn ping_counts(output: &str) -> Option<(u64, u64)> {
+pub(super) fn ping_counts(output: &str) -> Option<(u64, u64)> {
     output.lines().find_map(|line| {
         let fields: Vec<_> = line.split_whitespace().collect();
         if fields.get(1..3) != Some(&["packets", "transmitted,"][..])

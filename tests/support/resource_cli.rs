@@ -47,7 +47,7 @@ fn calibrate_ping_rate() {
                 "--nocapture",
             ],
             &[(CHILD_ENV, "orchestrator")],
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .unwrap();
         assert_output_success("ping calibration namespace", &output);
@@ -55,7 +55,22 @@ fn calibrate_ping_rate() {
         return;
     }
     run_command("ip", &["link", "set", "lo", "up"]);
-    for (loss, flood) in [("0%", false), ("100%", false), ("0%", true), ("100%", true)] {
+    let cases = [
+        ("0%", "1", "0.005"),
+        ("100%", "1", "0.005"),
+        ("0%", "2", "0.005"),
+        ("100%", "2", "0.005"),
+    ]
+    .into_iter()
+    .chain((0..3).flat_map(|_| {
+        [
+            ("0%", "3", "0.005"),
+            ("100%", "3", "0.005"),
+            ("0%", "3", "0.02"),
+            ("100%", "3", "0.02"),
+        ]
+    }));
+    for (loss, preload, interval) in cases {
         run_command(
             "tc",
             &[
@@ -66,16 +81,14 @@ fn calibrate_ping_rate() {
             "-q",
             "-n",
             "-i",
-            "0.005",
+            interval,
             "-s",
             "1000",
             "-w",
             "2",
             "127.0.0.1",
         ];
-        if flood {
-            arguments.insert(0, "-f");
-        }
+        arguments.splice(0..0, ["-l", preload]);
         let output = command_output(
             "ping",
             &arguments,
@@ -84,10 +97,21 @@ fn calibrate_ping_rate() {
         )
         .unwrap();
         eprintln!(
-            "loss={loss} flood={flood} exit={} {}",
+            "loss={loss} preload={preload} interval={interval} exit={} {}",
             output.status,
             String::from_utf8_lossy(&output.stdout)
         );
+        if preload == "3" {
+            let (sent, received) =
+                resource_workload::ping_counts(&String::from_utf8_lossy(&output.stdout))
+                    .expect("calibration summary");
+            let nominal = if interval == "0.005" { 400 } else { 100 };
+            assert!(
+                (nominal * 98 / 100..=nominal + 3).contains(&sent),
+                "offered rate mismatch: {sent}/{nominal}"
+            );
+            assert_eq!(received, if loss == "0%" { sent } else { 0 });
+        }
     }
 }
 

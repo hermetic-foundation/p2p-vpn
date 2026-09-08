@@ -4,7 +4,7 @@
 
 Phase 3 is active. No acceptance measurements have been collected.
 Subject selection, sampling, CLI smoke, and timed workload preflight are implemented.
-The numeric protocol below is frozen as version 1; acceptance orchestration,
+The numeric protocol below is frozen as version 2; acceptance orchestration,
 artifact manifests, aggregation, and comparison runs are still outstanding.
 
 See the [workstream plan](kademlia-resource-plan.md).
@@ -60,11 +60,15 @@ profiles, with three independent paired repetitions: eight cells, 24 pairs,
 | Failure and recovery | Fixed link/infrastructure faults and address changes; automatic recovery or explicit censoring |
 | Pressure and release | Identical bounded offered load and underlay restriction; measured pressure, release, drain, and post-release footprint |
 
-### Frozen Protocol v1
+### Frozen Protocol v2
 
 These timings are selected before acceptance observations. Any necessary protocol
 change must be documented and versioned; do not mix versions in a paired cell.
 Smoke results are excluded from the acceptance dataset.
+
+Version 2 retains version 1's topology, rates, payloads, durations, and ordering.
+It adds a three-packet preload and offered-count validation after preflight
+exposed reply-dependent underdriving. Version 1 preflight data remains excluded.
 
 | Common Setting | Value |
 | --- | --- |
@@ -87,6 +91,9 @@ Smoke results are excluded from the acceptance dataset.
 | Pressure/release | 60 seconds at 200 echo requests/second, 1,000-byte payload, A to B; remove shaping and stop load; drain 100 seconds; observe post-release idle for 180 seconds |
 
 - Traffic caps: 9,000 requests for sustained traffic; 12,000 for pressure. Record actual sent and received counts, not theoretical offered work.
+- Use `ping -l 3 -c COUNT` with the fixed interval; the runner stops traffic at the stage deadline. Do not add ping's `-w`, which changes count-limit behavior.
+- Require 98% to 100% of the nominal request count. Outside that range, report workload-fidelity failure and exclude efficiency deltas, even if final connectivity works.
+- The three-packet preload allows small bursts; timing precision is not hard real-time. Report actual offered work and account for up to 2% rate deviation in comparisons.
 - Pressure shaping: direct A egress, `netem delay 50ms rate 64kbit limit 16`. Preserve default packet transport and queue configuration.
 - Capture `tc -s -j qdisc` before, during, and after pressure; record actual shaping activity and path changes rather than assuming offered load reached the bottleneck.
 - Recovery addressing: move direct underlay `10.253.0.1/2` to `10.253.1.1/2`; keep overlay identity and configuration unchanged.
@@ -268,9 +275,38 @@ nix develop -c cargo test --locked --test tun_namespace \
   resource_cli::calibrate_ping_rate -- --ignored --exact --nocapture
 ```
 
-The generator must deliver the intended offered rate independently of reply loss
-before acceptance comparisons begin. Keep the failed-fidelity preflight; do not
-silently reinterpret its requested traffic rate as its actual rate.
+The upstream [ping implementation](https://github.com/iputils/iputils/blob/20250605/ping/ping_common.c#L297)
+uses a bounded send-token budget and minimum short waits when requests remain in
+flight. Version 2 raises the preload to three and uses an external stop deadline;
+the endpoint binaries and VPN protocol are unchanged.
+
+Three repeated calibrations per rate/loss combination passed the predeclared
+calibration bounds: 98% of the nominal count through nominal plus initial preload.
+At 200 requests/second, two-second counts were 403 with replies and 395 without.
+At 50 requests/second they were 100 with replies and 100-101 without.
+
+The actual workload uses a hard request cap, unlike the two-second calibration.
+Its stricter upper bound is 100% of the nominal count. The full-pressure rerun
+below passed with the unchanged optimized current subject and fixed identities.
+
+### Version 2 Pressure Preflight
+
+| Item | Observed Result |
+| --- | --- |
+| Artifacts | `/tmp/p2p-vpn-resource-cli-smoke.a9c7fa8dce491cff` |
+| Harness SHA-256 | `139f3c240ed9295cdc727feec228e0f5a50c4cfebed99b0f979d1c9b44f88594` |
+| Subject/profile | Optimized current `3b503ad2`, public primary DHT |
+| Offered work | 11,809 requests, within the frozen 11,760-12,000 gate |
+| Received replies | 405 under deliberate shaping; loss remains part of the result |
+| Shaping evidence | 16-packet queue during pressure; 10,283 shaping drops before release |
+| Release | Both application queues empty in post-release idle |
+| Final delivery | Five of five requests succeeded in each direction |
+| Observations | 234 endpoint samples; no skipped slots; one retained startup control-socket absence |
+| Duration | 567.99 seconds including enclosing setup/teardown |
+
+This validates the revised generator in this preflight, not all workload/profile
+combinations or the acceptance matrix. Actual offered-rate deviation was about
+1.6%; preserve counts and the declared tolerance rather than claiming exact pacing.
 
 ### Verification Scope
 
@@ -278,7 +314,7 @@ silently reinterpret its requested traffic rate as its actual rate.
 cargo test --offline --locked --test resource_measurement -- --test-threads=2
 ```
 
-Fifteen sampler/analysis/protocol tests passed with cached Nix Rust tooling. Coverage includes inode
+Sixteen sampler/analysis/protocol tests passed with cached Nix Rust tooling. Coverage includes inode
 attribution, unowned TCP rows, malformed/missing fields, unit validation, process
 replacement, CPU overflow/reset, and a live process listener.
 
@@ -289,7 +325,7 @@ Analysis tests cover CPU normalization, missing samples and serialized fields,
 counter resets, process replacement, sampling gaps, failed/censored outcomes,
 and zero-baseline comparisons.
 
-The namespace target passed 39 non-ignored tests. Full-duration public/current
+The namespace target passed 40 non-ignored tests. Full-duration public/current
 pressure preflight and isolated ping calibration were run separately. Other timed
 workload/profile combinations have not yet received end-to-end verification.
 

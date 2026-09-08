@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 pub const SAMPLE_SECONDS: u64 = 5;
 pub const WATCHDOG_SECONDS: u64 = 2400;
 pub const ENDPOINT_LOG_BYTES: u64 = 8 * 1024 * 1024;
@@ -64,10 +64,18 @@ pub struct Stage {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Traffic {
+    pub preload: u32,
     pub requests_per_second: u32,
     pub payload_bytes: u32,
     pub maximum_requests: u32,
     pub seconds: u32,
+}
+
+impl Traffic {
+    pub fn offered_count_valid(self, sent: u64) -> bool {
+        (u64::from(self.maximum_requests) * 98 / 100..=u64::from(self.maximum_requests))
+            .contains(&sent)
+    }
 }
 
 pub fn matrix() -> Vec<Pair> {
@@ -146,12 +154,14 @@ impl Workload {
     pub fn traffic(self) -> Option<Traffic> {
         match self {
             Self::Traffic => Some(Traffic {
+                preload: 3,
                 requests_per_second: 50,
                 payload_bytes: 512,
                 maximum_requests: 9000,
                 seconds: 180,
             }),
             Self::Pressure => Some(Traffic {
+                preload: 3,
                 requests_per_second: 200,
                 payload_bytes: 1000,
                 maximum_requests: 12000,
@@ -278,9 +288,10 @@ mod tests {
 
     #[test]
     fn offered_work_and_storage_are_finite() {
-        assert_eq!(VERSION, 1);
+        assert_eq!(VERSION, 2);
         for workload in [Workload::Traffic, Workload::Pressure] {
             let traffic = workload.traffic().unwrap();
+            assert_eq!(traffic.preload, 3);
             assert_eq!(
                 traffic.requests_per_second * traffic.seconds,
                 traffic.maximum_requests
@@ -294,5 +305,16 @@ mod tests {
             matrix().len() as u64 * 2 * RUN_ALLOWANCE_BYTES,
             3 * 1024 * 1024 * 1024
         );
+    }
+
+    #[test]
+    fn offered_rate_gate_rejects_underdriving_and_excess_packets() {
+        let traffic = Workload::Pressure.traffic().unwrap();
+        assert!(!traffic.offered_count_valid(5956));
+        assert!(!traffic.offered_count_valid(11759));
+        assert!(traffic.offered_count_valid(11760));
+        assert!(traffic.offered_count_valid(12000));
+        assert!(!traffic.offered_count_valid(12001));
+        assert!(!traffic.offered_count_valid(u64::MAX));
     }
 }
