@@ -84,19 +84,42 @@ The existing Phase 2 sampler is unchanged.
 
 ## Initial Verification
 
+### Interval Analysis
+
+Implementation: [resource analysis](../../tests/support/resource_analysis.rs).
+
+| Condition | Analysis Behavior |
+| --- | --- |
+| Valid CPU interval | User/system tick delta divided by recorded clock rate and actual elapsed time |
+| CPU normalization | One fully occupied logical CPU is 100%; multiple threads may exceed 100% |
+| Missing observation or counter | Explicit unavailable result; never substituted with zero |
+| PID/start-time change or decreasing counter | Reject interval rather than joining different process lifetimes |
+| Nonfinite, reversed, or excessive sample interval | Reject invalid timing or report a sampling gap |
+| Failed/censored subject | Retain outcome and reason; do not calculate paired efficiency deltas |
+| Zero baseline | Absolute delta remains available; relative percentage is undefined |
+
+The caller must supply matching workload/metric windows and a frozen maximum
+sampling gap. Interval checks alone do not establish workload equivalence.
+Run-level aggregation and the external orchestrator remain to be implemented.
+
+### Checks
+
 ```sh
 cargo test --offline --locked --test resource_measurement -- --test-threads=2
 ```
 
-Four sampler tests passed with cached Nix Rust tooling. Coverage includes inode
+Eleven sampler/analysis tests passed with cached Nix Rust tooling. Coverage includes inode
 attribution, unowned TCP rows, malformed/missing fields, unit validation, process
 replacement, CPU overflow/reset, and a live process listener.
 The live check also verifies duplicate socket descriptors do not create extra
 socket-inode or TCP-connection counts.
+Analysis tests cover CPU normalization, missing samples and serialized fields,
+counter resets, process replacement, sampling gaps, failed/censored outcomes,
+and zero-baseline comparisons.
 
 Required Clippy groups, formatting, whitespace, and cached Nix test-source
 integration passed. The full workspace and namespace acceptance suites were not
-rerun for this independent sampler-only checkpoint.
+rerun for these independent measurement-tooling checkpoints.
 
 This is tooling validation, not baseline/current acceptance or a performance
 result. No daemon implementation or Phase 2 acceptance fixture was changed.
