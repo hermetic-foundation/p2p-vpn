@@ -103,7 +103,31 @@ These runs are preflight evidence, not acceptance matrix repetitions.
 - Baseline observation SHA-256: `a6dec060dcc3e8e8f79984c0b7239467a4a0d7d05d2eb4601c3fbb2bbee3bb32`.
 - Validation passed 26 measurement and 41 namespace unit tests, required Clippy groups, formatting, and cached Nix source parity.
 - Runtime and vendor sources are unchanged. Full workspace and Android builds were not repeated for this measurement-only integration.
-- Pressure preflight, version-3 matrix collection, counter aggregation, and comparative reporting remain outstanding.
+- Version-3 matrix collection, counter aggregation, and comparative reporting remain outstanding.
+
+### Version-3 Pressure Preflight
+
+Both pinned subjects passed the public-profile pressure/release workload with the
+same harness and identities as the traffic preflight. Current ran first; no builds
+or other task workloads ran during either observation. These are not matrix runs.
+
+| Measurement | Current | Baseline |
+| --- | --- | --- |
+| Total duration | 568.11 seconds | 567.98 seconds |
+| Offered / received during pressure | 12,000 / 333 | 12,000 / 403 |
+| Skipped / duplicate / invalid | 0 / 0 / 0 | 0 / 0 / 0 |
+| Maximum send lateness | 2.22 ms | 3.29 ms |
+| Endpoint window temporal coverage | Above 99.9% | Above 99.9% |
+| Invalid process intervals | 0 | 0 |
+| Final connectivity | Passed both directions | Passed both directions |
+| Artifact directory suffix | `2f0fc4f037fffe9a` | `53634e5added458d` |
+
+- Both endpoint config files are byte-identical across subjects, including the isolated infrastructure override.
+- Qdisc captures confirm 64 kbit/s shaping, 50 ms delay, a 16-packet queue, drops under load, and removal after load.
+- Netem reported different seeds; no randomized loss or delay jitter was configured. Transport scheduling remains nondeterministic.
+- Different reply counts are retained, not characterized as an efficiency improvement. Repeated comparisons must account for delivered work.
+- Artifacts use `/tmp/p2p-vpn-resource-cli-smoke.<suffix>`; compact provenance is in [the preflight record](kademlia-resource-pressure-preflight.json).
+- Both process summaries passed `resource_summarize_observations`. No code changes or additional builds were needed.
 
 ### Matrix Controller Preflight
 

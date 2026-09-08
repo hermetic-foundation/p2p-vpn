@@ -1,0 +1,47 @@
+{
+  "protocol_version": 3,
+  "acceptance_measurement": false,
+  "profile": "public",
+  "workload": "pressure",
+  "integration_revision": "92ca4bc3bf66",
+  "harness_sha256": "2e1e871b27cacbe9c86b95e10ef54c817a86ef1499a4f092fd9ba3109b33fe92",
+  "subject_build_manifest": "kademlia-resource-builds.json",
+  "subject_order": ["current", "baseline"],
+  "config_sha256": {
+    "a": "d3fc3d48fb4c3acf0214241a2bd733d083efcdab8b10301a73154ce72909ca5c",
+    "b": "c2f437b88bf7162c0c1ec47ccf33087225df10acbccddf4bb4dc85ccc20b8231"
+  },
+  "runs": [
+    {
+      "subject": "current",
+      "outcome": "completed",
+      "artifact_dir": "/tmp/p2p-vpn-resource-cli-smoke.2f0fc4f037fffe9a",
+      "observations_sha256": "9e360850ea859a9aa3cb58147cce0e238ff80647073425ba49e891d6d276a663",
+      "test_elapsed_seconds": 568.11,
+      "sent": 12000,
+      "received": 333,
+      "skipped_slots": 0,
+      "duplicate_replies": 0,
+      "invalid_replies": 0,
+      "maximum_lateness_seconds": 0.002221622
+    },
+    {
+      "subject": "baseline",
+      "outcome": "completed",
+      "artifact_dir": "/tmp/p2p-vpn-resource-cli-smoke.53634e5added458d",
+      "observations_sha256": "b6abddc81808ae3d121ae60ff8f753eeb8ff175ba04f29f7604e59c5630ca3f3",
+      "test_elapsed_seconds": 567.98,
+      "sent": 12000,
+      "received": 403,
+      "skipped_slots": 0,
+      "duplicate_replies": 0,
+      "invalid_replies": 0,
+      "maximum_lateness_seconds": 0.003288439
+    }
+  ],
+  "limitations": [
+    "Preflight only: one pair, public profile, not acceptance repetitions",
+    "No resource efficiency claim; delivered packet counts differ",
+    "Raw observations and process summaries retained locally"
+  ]
+}
