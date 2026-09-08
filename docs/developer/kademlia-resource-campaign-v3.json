@@ -1,0 +1,43 @@
+{
+  "status": "partial",
+  "protocol_version": 3,
+  "expected_runs": 48,
+  "recorded_runs": 2,
+  "completed_runs": 2,
+  "failed_runs": 0,
+  "root": "/tmp/p2p-vpn-phase3-v3-acceptance-20260908",
+  "harness_revision": "92ca4bc3bf66",
+  "harness_sha256": "2e1e871b27cacbe9c86b95e10ef54c817a86ef1499a4f092fd9ba3109b33fe92",
+  "controller_sha256": "d29f990494d47eea9cbdbe759a65e1aef07287c89e5371a0566ee55ea13fd387",
+  "matrix_manifest_sha256": "21bb2b50dcfdfc7ea8f9186befa58ae23b299488f2cc5d60d1413cdcea0b2f7e",
+  "pairs": [
+    {
+      "repetition": 1,
+      "cell": 0,
+      "profile": "public",
+      "workload": "idle",
+      "configuration_bytes_equal": true,
+      "runs": [
+        {
+          "subject": "baseline",
+          "status": "completed",
+          "elapsed_seconds": 529.620416234,
+          "artifact_dir": "/tmp/p2p-vpn-resource-cli-smoke.d236faa4c2f74d01",
+          "observations_sha256": "1034f7da0ab62b9eb96caf499e00cc42e4e3a4e13ddc089e8c7663dcffb6306a"
+        },
+        {
+          "subject": "current",
+          "status": "completed",
+          "elapsed_seconds": 529.579096276,
+          "artifact_dir": "/tmp/p2p-vpn-resource-cli-smoke.dfd6d64b28b7f6d5",
+          "observations_sha256": "ff43d62c3dc510ba21fa8044a1c0620fcf42c9cc7c14ace5fb7ec69110846c43"
+        }
+      ]
+    }
+  ],
+  "limitations": [
+    "Only the first public-idle pair is recorded; all other pairs remain",
+    "Run completion does not establish metric comparability or efficiency",
+    "Process and counter aggregation remains outstanding"
+  ]
+}

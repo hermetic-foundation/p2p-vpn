@@ -6,10 +6,36 @@ Phase 3 is active. Four version-2 runs are recorded: two completed and two faile
 Subject selection, sampling, CLI smoke, and timed workload preflight are implemented.
 The numeric protocol below is version 3. The replacement generator is integrated
 and passed paired traffic VPN preflight. Version-2 artifacts remain archived separately.
-Aggregation and version-3 acceptance collection remain outstanding.
+Version-3 acceptance has started: its first public-idle pair completed.
+Aggregation and the remaining 23 acceptance pairs are outstanding.
 
 See the [workstream plan](kademlia-resource-plan.md).
 Phases 1 and 2 remain complete; this phase does not establish production readiness.
+
+### Version-3 Campaign
+
+- [Campaign index](kademlia-resource-campaign-v3.json): 2 of 48 runs recorded, both completed. No comparative efficiency conclusion yet.
+- Root: `/tmp/p2p-vpn-phase3-v3-acceptance-20260908`. The controller paused cleanly after repetition 1, cell 0.
+- Baseline/current durations were 529.62/529.58 seconds. Paired endpoint configurations match byte for byte.
+- Source integration: `92ca4bc3bf66`; no implementation edits or builds occurred between pressure preflight and campaign launch.
+- The campaign contains pinned copies of both subjects, the harness, the controller, the full 24-pair plan, and per-pair identities.
+- Use the pinned controller for resume. Do not rebuild or replace campaign binaries; do not combine these results with version 2.
+
+Resume the remaining matrix without a pair limit:
+
+```bash
+ROOT=/tmp/p2p-vpn-phase3-v3-acceptance-20260908
+sudo env \
+  P2P_VPN_MATRIX_ROOT="$ROOT" \
+  P2P_VPN_MATRIX_MODE=full \
+  P2P_VPN_MATRIX_RESUME=1 \
+  P2P_VPN_MATRIX_BUILDS="$ROOT/builds.json" \
+  P2P_VPN_MATRIX_HARNESS="$ROOT/harness" \
+  "$ROOT/controller" --ignored --exact resource_matrix_campaign --nocapture
+```
+
+- Root access permits accounting for older root-owned task artifacts; all measured networking remains isolated in namespaces.
+- The controller checks the storage budget before every new subject run and retains failed/censored outcomes.
 
 ### First Acceptance Pair
 
@@ -397,7 +423,7 @@ Implementation: [resource analysis](../../tests/support/resource_analysis.rs).
 
 The caller must supply matching workload/metric windows and a frozen maximum
 sampling gap. Interval checks alone do not establish workload equivalence.
-Acceptance matrix execution and run-level aggregation remain to be implemented.
+Acceptance matrix execution is implemented; run-level aggregation remains outstanding.
 
 ### CLI Harness Smoke
 
