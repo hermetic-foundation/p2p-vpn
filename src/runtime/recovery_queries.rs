@@ -449,4 +449,175 @@ mod tests {
             "abandoned state still expires"
         );
     }
+
+    #[test]
+    fn targeted_recovery_expiry_and_capped_backoff_span_twenty_four_hours() {
+        assert_eq!(QUERY_TIMEOUT, Duration::from_secs(60));
+        assert_eq!(BACKOFF_BASE, Duration::from_secs(30));
+        assert_eq!(BACKOFF_MAX, Duration::from_secs(3_600));
+        assert_eq!(STATE_TTL, Duration::from_secs(310));
+        assert_eq!(MAX_CONCURRENT, 1);
+        // Independent schedule: each failure takes 60s, then 30/60/120/240/
+        // 480/960/1920/3600s cooldown. Subsequent cooldowns stay at 3600s.
+        const STARTS: [u64; 30] = [
+            0, 90, 210, 390, 690, 1_230, 2_250, 4_230, 7_890, 11_550, 15_210, 18_870, 22_530,
+            26_190, 29_850, 33_510, 37_170, 40_830, 44_490, 48_150, 51_810, 55_470, 59_130, 62_790,
+            66_450, 70_110, 73_770, 77_430, 81_090, 84_750,
+        ];
+        let start = Instant::now();
+        let peer = PeerId::random();
+        let other = PeerId::random();
+        let local = PeerId::random();
+        let mut kad = kad::Behaviour::new(local, kad::store::MemoryStore::new(local));
+        let mut owner = RecoveryQueries::default();
+        let mut pending = None;
+        let mut admitted = 0_u8;
+        let mut expired_count = 0;
+
+        for elapsed in 0..=86_400 {
+            let now = start + Duration::from_secs(elapsed);
+            let expected_expiry = STARTS.iter().any(|started| elapsed == started + 60);
+            let expired = owner.expire(now);
+            assert_eq!(expired.len(), usize::from(expected_expiry), "t={elapsed}");
+            if expected_expiry {
+                let query = pending.take().expect("scheduled pending query");
+                assert_eq!(expired, vec![query]);
+                assert!(kad.cancel_query(&query));
+                expired_count += 1;
+                assert!(owner.expire(now).is_empty());
+            }
+            let expected_start = STARTS.contains(&elapsed);
+            assert_eq!(owner.should_query(peer, now), expected_start, "t={elapsed}");
+            if expected_start {
+                let query = kad.get_closest_peers(peer);
+                owner.record(peer, [query], now);
+                assert!(pending.replace(query).is_none());
+                admitted += 1;
+            }
+            // A different peer polls through the 310s idle TTL during every
+            // long cooldown. It must not erase the failing peer's history.
+            assert_eq!(
+                owner.should_query(other, now),
+                pending.is_none(),
+                "t={elapsed}"
+            );
+            assert_eq!(owner.state(&peer).unwrap().attempt_count, admitted);
+            assert_eq!(owner.state(&other).unwrap().attempt_count, 0);
+            let snapshot = owner.snapshot(now);
+            assert_eq!(snapshot.peers_retained, 2);
+            assert_eq!(snapshot.queries, usize::from(pending.is_some()));
+            assert!(snapshot.oldest_pending_age_millis < 60_000);
+            assert_eq!(snapshot.cooldown_peers, usize::from(pending.is_none()));
+            assert_eq!(kad.query_pool_usage().retained, snapshot.queries);
+        }
+        assert_eq!(admitted, 30);
+        assert_eq!(expired_count, 30);
+        assert_eq!(
+            owner.snapshot(start + Duration::from_secs(86_400)).queries,
+            0
+        );
+
+        // The final timeout is t=84810; its retry is t=88410. Idle expiry is
+        // relative to that retry, not to the last query at t=84750.
+        let retry = start + Duration::from_secs(88_410);
+        assert!(!owner.should_query(peer, retry - Duration::from_nanos(1)));
+        assert!(owner.should_query(peer, retry));
+        assert_eq!(owner.state(&peer).unwrap().attempt_count, 30);
+        let idle_expiry = start + Duration::from_secs(88_720);
+        assert!(owner.should_query(other, idle_expiry - Duration::from_nanos(1)));
+        assert_eq!(owner.state(&peer).unwrap().attempt_count, 30);
+        assert!(owner.should_query(other, idle_expiry));
+        assert!(owner.state(&peer).is_none());
+        assert_eq!(owner.snapshot(idle_expiry).peers_retained, 1);
+    }
+
+    #[test]
+    fn targeted_recovery_quiet_cancellation_and_capacity_release_span_twenty_four_hours() {
+        assert_eq!(CONNECTED_RETRY, Duration::from_secs(10));
+        let start = Instant::now();
+        let peer = PeerId::random();
+        let other = PeerId::random();
+        let local = PeerId::random();
+        let mut kad = kad::Behaviour::new(local, kad::store::MemoryStore::new(local));
+        let mut owner = RecoveryQueries::default();
+        let mut cancelled_count = 0;
+        let mut expired_count = 0;
+
+        for hour in 0..24 {
+            let hour_start = start + Duration::from_secs(hour * 3_600);
+            let at = |seconds| hour_start + Duration::from_secs(seconds);
+            // Quiet cancellation retires ownership, but is not a successful
+            // connection and must not reset the 30/60/120s failure ladder.
+            for (began, cancelled, retry, attempts) in
+                [(0, 59, 89, 1), (89, 90, 150, 2), (150, 151, 271, 3)]
+            {
+                assert!(owner.should_query(peer, at(began)));
+                let query = kad.get_closest_peers(peer);
+                owner.record(peer, [query], at(began));
+                assert!(!owner.should_query(other, at(began)));
+                assert_eq!(owner.cancel(at(cancelled)), vec![query]);
+                assert!(kad.cancel_query(&query));
+                cancelled_count += 1;
+                let cancelled_state = owner.snapshot(at(cancelled));
+                owner.finished(query, at(cancelled) + Duration::from_nanos(1));
+                assert_eq!(owner.snapshot(at(cancelled)), cancelled_state);
+                for elapsed in cancelled..retry {
+                    assert!(owner.cancel(at(elapsed)).is_empty());
+                    assert!(!owner.should_query(peer, at(elapsed)));
+                    assert_eq!(owner.state(&peer).unwrap().attempt_count, attempts);
+                    assert_eq!(owner.snapshot(at(elapsed)).queries, 0);
+                }
+                assert!(owner.should_query(peer, at(retry)));
+            }
+
+            owner.connected(peer, at(300));
+            assert_eq!(owner.state(&peer).unwrap().attempt_count, 0);
+            assert!(!owner.should_query(peer, at(310) - Duration::from_nanos(1)));
+            assert!(owner.should_query(peer, at(310)));
+            // The connected reset does not bypass the single global slot.
+            assert!(owner.should_query(other, at(310)));
+            let held = kad.get_closest_peers(other);
+            owner.record(other, [held], at(310));
+            assert!(!owner.should_query(peer, at(310)));
+            assert!(owner.expire(at(370) - Duration::from_nanos(1)).is_empty());
+            assert_eq!(owner.expire(at(370)), vec![held]);
+            assert!(kad.cancel_query(&held));
+            expired_count += 1;
+            assert!(owner.should_query(peer, at(370)));
+            let resumed = kad.get_closest_peers(peer);
+            owner.record(peer, [resumed], at(370));
+            assert_eq!(owner.state(&peer).unwrap().attempt_count, 1);
+            owner.finished(held, at(371));
+            assert_eq!(owner.query_ids(), vec![resumed]);
+            assert!(owner.expire(at(430) - Duration::from_nanos(1)).is_empty());
+            assert_eq!(owner.expire(at(430)), vec![resumed]);
+            assert!(kad.cancel_query(&resumed));
+            expired_count += 1;
+            assert!(!owner.should_query(peer, at(460) - Duration::from_nanos(1)));
+            assert!(owner.should_query(peer, at(460)));
+            owner.connected(peer, at(460));
+
+            // A genuinely quiet period submits no new query. An unrelated
+            // admission check still performs ordinary idle-state pruning.
+            for elapsed in 460..3_600 {
+                assert!(owner.cancel(at(elapsed)).is_empty());
+                assert!(owner.should_query(other, at(elapsed)));
+                assert_eq!(owner.snapshot(at(elapsed)).queries, 0);
+                assert!(owner.snapshot(at(elapsed)).peers_retained <= 2);
+                if elapsed == 779 {
+                    assert_eq!(owner.state(&peer).unwrap().attempt_count, 0);
+                } else if elapsed == 780 {
+                    assert!(owner.state(&peer).is_none());
+                }
+            }
+            assert_eq!(kad.query_pool_usage().retained, 0);
+        }
+        assert_eq!(cancelled_count, 72);
+        assert_eq!(expired_count, 48);
+        let end = start + Duration::from_secs(86_400);
+        assert!(owner.cancel(end).is_empty());
+        assert!(owner.expire(end).is_empty());
+        assert!(owner.should_query(peer, end));
+        assert_eq!(owner.state(&peer).unwrap().attempt_count, 0);
+    }
 }

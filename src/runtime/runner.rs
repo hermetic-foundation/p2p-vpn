@@ -151,10 +151,16 @@ use super::recovery_queries::{
     QUERY_TIMEOUT as RECOVERY_DISCOVERY_QUERY_TIMEOUT,
 };
 
+mod control_connection_retention;
+use control_connection_retention::should_retain_control_connection;
 mod recovery_snapshot;
 use recovery_snapshot::ApplicationRecoverySnapshot;
 mod packet_endpoint_selection;
 use packet_endpoint_selection::packet_capabilities_for_lan_connection;
+#[cfg(test)]
+mod kademlia_contention_tests;
+#[cfg(test)]
+mod settling_timeline_tests;
 
 const TUN_READ_CHANNEL: usize = 1024;
 const REDIAL_INTERVAL: Duration = Duration::from_secs(10);
@@ -1438,6 +1444,7 @@ async fn run_node_until_with_membership_state<Shutdown>(
 where
     Shutdown: Future<Output = ShutdownReason> + Send,
 {
+    packet_plane.set_session_ttl(packet_plane_session_ttl);
     let mut tun_runtime = startup_tun_runtime(&forwarder, installed_tun)?;
     let (reader, mut writer) = packet_io.split();
     let metrics = Arc::new(RuntimeMetrics::default());
@@ -1932,6 +1939,16 @@ where
                 }
             }
             _ = timers.redial.tick() => {
+                node.swarm.behaviour_mut().connection_retention.retain_connections(|peer, connection| {
+                    should_retain_control_connection(
+                        peer,
+                        connection,
+                        &forwarder,
+                        &peer_capabilities,
+                        &paths,
+                        &active_connections,
+                    )
+                });
                 let public_discovery_quiet = public_discovery_suppressed(
                     public_discovery_holdoff_until,
                     &forwarder,
@@ -2457,6 +2474,7 @@ where
                     RuntimeControlRequest::Status { .. } | RuntimeControlRequest::State { .. }
                 );
                 let control_context = RuntimeControlContext {
+                    packet_plane_retiring_sessions: packet_plane.retiring_session_count(),
                     kademlia: diagnostics.then(|| super::kademlia_resources::KademliaResources::capture(node.swarm.behaviour())),
                     application_recovery: diagnostics.then(|| ApplicationRecoverySnapshot::capture(
                         &kademlia_maintenance,
@@ -5036,6 +5054,7 @@ fn handle_runtime_network_change(
 }
 
 struct RuntimeControlContext<'a> {
+    packet_plane_retiring_sessions: usize,
     kademlia: Option<super::kademlia_resources::KademliaResources>,
     application_recovery: Option<ApplicationRecoverySnapshot>,
     forwarder: &'a Forwarder,
@@ -5077,6 +5096,10 @@ fn handle_runtime_control_request(
             if let Some(kademlia) = &context.kademlia {
                 kademlia.extend_lines(&mut lines);
             }
+            lines.push(format!(
+                "packet_plane_retiring_sessions {}",
+                context.packet_plane_retiring_sessions
+            ));
             if let Some(recovery) = &context.application_recovery {
                 recovery.extend_lines(&mut lines);
             }
@@ -5106,6 +5129,10 @@ fn handle_runtime_control_request(
             if let Some(kademlia) = &context.kademlia {
                 kademlia.extend_lines(&mut lines);
             }
+            lines.push(format!(
+                "packet_plane_retiring_sessions {}",
+                context.packet_plane_retiring_sessions
+            ));
             if let Some(recovery) = &context.application_recovery {
                 recovery.extend_lines(&mut lines);
             }
@@ -17439,13 +17466,15 @@ fn packet_plane_negotiation_backend(
     let remote_udp_endpoint = first_packet_plane_endpoint(remote_capabilities);
     if local_capabilities.supports_owned_udp_packet_plane
         && remote_capabilities.supports_owned_udp_packet_plane
-        && packet_plane_session_needs_negotiation(
+        && (packet_plane_session_needs_negotiation(
             paths,
             peer,
             PathKind::DirectUdpDatagram,
             packet_plane.session_endpoint_for(peer),
             remote_udp_endpoint,
-        )
+        ) || (packet_plane.renewal_due_for_peer(peer, Instant::now())
+            && packet_plane_accept_backend(local_capabilities, remote_capabilities)
+                == Some(PacketDatagramBackend::OwnedUdp)))
         && local_udp_endpoint.is_some()
         && remote_udp_endpoint.is_some()
     {
@@ -17719,20 +17748,24 @@ async fn accept_packet_plane_hello(
     }
     let session = context
         .packet_plane
-        .establish_session(
+        .establish_session_overlapping(
             PacketPlaneSessionRole::Responder,
             &secret,
             &verified_accept,
             &hello,
         )
         .map_err(PacketPlaneNegotiationError::Session)?;
-    record_packet_plane_path_established(
-        context.paths,
-        context.metrics,
-        remote_overlay,
-        backend,
-        session.mtu,
-    );
+    if !context.packet_plane.has_retiring_session(remote_overlay)
+        || !has_healthy_path_kind(context.paths, remote_overlay, PathKind::DirectUdpDatagram)
+    {
+        record_packet_plane_path_established(
+            context.paths,
+            context.metrics,
+            remote_overlay,
+            backend,
+            session.mtu,
+        );
+    }
     context
         .path_probe_tracker
         .clear_path(remote_overlay, packet_datagram_backend_path_kind(backend));
@@ -17820,20 +17853,24 @@ fn complete_packet_plane_hello(
         .ok_or(PacketPlaneNegotiationError::NoPendingHello)?;
     let session = context
         .packet_plane
-        .establish_session(
+        .establish_session_overlapping(
             PacketPlaneSessionRole::Initiator,
             &pending.secret,
             &pending.hello,
             &accept,
         )
         .map_err(PacketPlaneNegotiationError::Session)?;
-    record_packet_plane_path_established(
-        context.paths,
-        context.metrics,
-        remote_overlay,
-        pending.backend,
-        session.mtu,
-    );
+    if !context.packet_plane.has_retiring_session(remote_overlay)
+        || !has_healthy_path_kind(context.paths, remote_overlay, PathKind::DirectUdpDatagram)
+    {
+        record_packet_plane_path_established(
+            context.paths,
+            context.metrics,
+            remote_overlay,
+            pending.backend,
+            session.mtu,
+        );
+    }
     context.path_probe_tracker.clear_path(
         remote_overlay,
         packet_datagram_backend_path_kind(pending.backend),
@@ -18142,6 +18179,9 @@ struct PacketPlaneExpiryContext<'a> {
 }
 
 fn expire_packet_plane_sessions(context: &mut PacketPlaneExpiryContext<'_>) {
+    for peer in context.packet_plane.renewal_due_peers(Instant::now()) {
+        retry_packet_plane_negotiation(context, peer);
+    }
     let expired = context.packet_plane.expire_sessions(context.session_ttl);
     for session in expired {
         handle_expired_packet_plane_session(context, &session, PacketDatagramBackend::OwnedUdp);
@@ -26593,6 +26633,7 @@ mod tests {
         let reason = handle_runtime_control_request(
             RuntimeControlRequest::Shutdown { respond_to },
             &RuntimeControlContext {
+                packet_plane_retiring_sessions: 0,
                 kademlia: None,
                 application_recovery: None,
                 forwarder: &forwarder,
@@ -26652,6 +26693,7 @@ mod tests {
             let mut expected_application_lines = Vec::new();
             application_recovery.extend_lines(&mut expected_application_lines);
             let context = RuntimeControlContext {
+                packet_plane_retiring_sessions: 1,
                 kademlia: Some(
                     super::super::kademlia_resources::KademliaResources::capture(
                         node.swarm.behaviour(),
@@ -26685,6 +26727,7 @@ mod tests {
                 };
                 assert_eq!(handle_runtime_control_request(request, &context), None);
                 let lines = response.try_recv().unwrap();
+                assert!(lines.contains(&"packet_plane_retiring_sessions 1".to_owned()));
                 assert!(lines.iter().any(|line| !line.starts_with("kad_")));
                 let application_lines = lines
                     .iter()
@@ -26856,6 +26899,7 @@ mod tests {
         let reason = handle_runtime_control_request(
             RuntimeControlRequest::NetworkPeers { respond_to },
             &RuntimeControlContext {
+                packet_plane_retiring_sessions: 0,
                 kademlia: None,
                 application_recovery: None,
                 forwarder: &forwarder,
@@ -27029,6 +27073,7 @@ mod tests {
         let reason = handle_runtime_control_request(
             RuntimeControlRequest::PeerSnapshot { respond_to },
             &RuntimeControlContext {
+                packet_plane_retiring_sessions: 0,
                 kademlia: None,
                 application_recovery: None,
                 forwarder: &forwarder,
@@ -41695,6 +41740,113 @@ mod tests {
                 .primary_listener()
                 .expect("initiator")
         );
+
+        // A replacement Accept can be in flight while the old packet path remains usable.
+        let (secret, hello, verified_hello) = signed_packet_plane_handshake(
+            PacketPlaneHandshakeKind::Hello,
+            &initiator_identity,
+            &initiator_capabilities,
+            PacketDatagramBackend::OwnedUdp,
+        )
+        .expect("renewal hello");
+        negotiator.insert(
+            responder_overlay,
+            secret,
+            verified_hello,
+            PacketDatagramBackend::OwnedUdp,
+        );
+        let encoded_accept = accept_packet_plane_hello(
+            &mut PacketPlaneAcceptContext {
+                active_connections: &HashMap::new(),
+                forwarder: &responder_forwarder,
+                peer_capabilities: &responder_peer_capabilities,
+                paths: &mut responder_paths,
+                metrics: &metrics,
+                packet_plane: &mut responder_packet_plane,
+                packet_plane_quic: None,
+                negotiator: &mut responder_negotiator,
+                identity: &responder_identity,
+                local_capabilities: &responder_capabilities,
+                path_probe_tracker: &mut responder_path_probe_tracker,
+            },
+            initiator_peer,
+            &hello.encode().expect("encoded renewal"),
+        )
+        .await
+        .expect("renewal accepted");
+        assert_eq!(
+            responder_paths.best_for(initiator_overlay).unwrap().kind,
+            PathKind::DirectUdpDatagram
+        );
+        let old_packet = Frame::packet(77, 1, vec![0x45; 20]).unwrap();
+        responder_packet_plane
+            .send_frame_to_peer(initiator_overlay, &old_packet)
+            .await
+            .unwrap();
+        assert_eq!(
+            tokio::time::timeout(
+                Duration::from_secs(1),
+                initiator_packet_plane.recv_frame_from_peer(responder_overlay)
+            )
+            .await
+            .unwrap()
+            .unwrap()
+            .frame,
+            old_packet
+        );
+        complete_packet_plane_hello(
+            &mut PacketPlaneCompleteContext {
+                forwarder: &initiator_forwarder,
+                peer_capabilities: &initiator_peer_capabilities,
+                packet_plane: &mut initiator_packet_plane,
+                packet_plane_quic: None,
+                negotiator: &mut negotiator,
+                paths: &mut initiator_paths,
+                metrics: &metrics,
+                network_name: "lab",
+                path_probe_tracker: &mut initiator_path_probe_tracker,
+            },
+            responder_peer,
+            &encoded_accept,
+        )
+        .expect("renewal complete");
+        assert_eq!(
+            initiator_paths.best_for(responder_overlay).unwrap().kind,
+            PathKind::DirectUdpDatagram
+        );
+        let new_packet = Frame::packet(77, 2, vec![0x45; 20]).unwrap();
+        initiator_packet_plane
+            .send_frame_to_peer(responder_overlay, &new_packet)
+            .await
+            .unwrap();
+        assert_eq!(
+            tokio::time::timeout(
+                Duration::from_secs(1),
+                responder_packet_plane.recv_frame_from_peer(initiator_overlay)
+            )
+            .await
+            .unwrap()
+            .unwrap()
+            .frame,
+            new_packet
+        );
+        responder_packet_plane
+            .send_frame_to_peer(initiator_overlay, &new_packet)
+            .await
+            .unwrap();
+        assert_eq!(
+            tokio::time::timeout(
+                Duration::from_secs(1),
+                initiator_packet_plane.recv_frame_from_peer(responder_overlay)
+            )
+            .await
+            .unwrap()
+            .unwrap()
+            .frame,
+            new_packet
+        );
+        assert_eq!(initiator_packet_plane.retiring_session_count(), 1);
+        assert_eq!(responder_packet_plane.retiring_session_count(), 1);
     }
 
     #[tokio::test]
@@ -41797,6 +41949,31 @@ mod tests {
             packet_plane_accept_backend(&local_capabilities, &matching_remote_capabilities),
             Some(PacketDatagramBackend::OwnedUdp)
         );
+        packet_plane
+            .establish_test_session_at(
+                PacketPlaneSessionRole::Initiator,
+                &local_secret,
+                &hello,
+                &accept,
+                Instant::now() - Duration::from_secs(540),
+            )
+            .expect("session due for renewal");
+        assert_eq!(
+            packet_plane_negotiation_backend(
+                &paths,
+                &local_capabilities,
+                &matching_remote_capabilities,
+                &packet_plane,
+                None,
+                remote_overlay,
+            ),
+            Some(PacketDatagramBackend::OwnedUdp)
+        );
+        assert!(has_healthy_path_kind(
+            &paths,
+            remote_overlay,
+            PathKind::DirectUdpDatagram
+        ));
     }
 
     #[tokio::test]
@@ -43172,6 +43349,161 @@ mod tests {
                 "app_packet_responder_oldest_pending_age_millis 0",
             ],
         );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn packet_plane_timer_renews_healthy_session_with_bounded_retries() {
+        for (authorized, direct, responder, sends) in [
+            (true, true, false, true),
+            (false, true, false, false),
+            (true, false, false, false),
+            (true, true, true, false),
+        ] {
+            let mut identities = [
+                NodeIdentity::generate_ed25519().unwrap(),
+                NodeIdentity::generate_ed25519().unwrap(),
+            ];
+            identities
+                .sort_by_key(|identity| identity.peer_id.parse::<PeerId>().unwrap().as_bytes());
+            let [local, remote] = identities;
+            let peer = remote.peer_id.parse::<Libp2pPeerId>().unwrap();
+            let overlay = PeerId::from_libp2p(peer);
+            let mut node = pairing_test_node(&local);
+            let mut config = config_with_peer(&local, peer);
+            if !authorized {
+                config.peers.clear();
+            }
+            let forwarder = Forwarder::from_config(&config).unwrap();
+            let mut packets = PacketPlaneRuntime::bind(vec!["127.0.0.1:0".parse().unwrap()])
+                .await
+                .unwrap();
+            let local_caps = packet_plane_test_capabilities(packets.primary_listener().unwrap());
+            let remote_caps = packet_plane_test_capabilities("127.0.0.1:51820".parse().unwrap());
+            let mut capabilities = PeerCapabilities::default();
+            capabilities.record(overlay, remote_caps.clone());
+            let mut paths = PathSet::new();
+            if direct {
+                paths.record_established(overlay, PathKind::DirectTcpStream);
+            }
+            paths.record_established(overlay, PathKind::DirectUdpDatagram);
+            let (secret, _, hello) = signed_packet_plane_handshake(
+                if responder {
+                    PacketPlaneHandshakeKind::Accept
+                } else {
+                    PacketPlaneHandshakeKind::Hello
+                },
+                &local,
+                &local_caps,
+                PacketDatagramBackend::OwnedUdp,
+            )
+            .unwrap();
+            let (_, _, accept) = signed_packet_plane_handshake(
+                if responder {
+                    PacketPlaneHandshakeKind::Hello
+                } else {
+                    PacketPlaneHandshakeKind::Accept
+                },
+                &remote,
+                &remote_caps,
+                PacketDatagramBackend::OwnedUdp,
+            )
+            .unwrap();
+            let role = if responder {
+                PacketPlaneSessionRole::Responder
+            } else {
+                PacketPlaneSessionRole::Initiator
+            };
+            packets
+                .establish_test_session_at(
+                    role,
+                    &secret,
+                    &hello,
+                    &accept,
+                    Instant::now() - Duration::from_secs(539),
+                )
+                .unwrap();
+            let original = packets.session_for(overlay).unwrap().snapshot();
+            let mut negotiator = PacketPlaneNegotiator::default();
+            let metrics = RuntimeMetrics::default();
+            let mut context = PacketPlaneExpiryContext {
+                active_connections: &HashMap::new(),
+                swarm: &mut node.swarm,
+                forwarder: &forwarder,
+                paths: &mut paths,
+                peer_capabilities: &capabilities,
+                packet_plane: &mut packets,
+                packet_plane_quic: None,
+                negotiator: &mut negotiator,
+                identity: &local,
+                local_capabilities: &local_caps,
+                metrics: &metrics,
+                session_ttl: Duration::from_secs(600),
+            };
+            expire_packet_plane_sessions(&mut context);
+            assert!(!context.negotiator.has_pending(overlay), "not due yet");
+            context
+                .packet_plane
+                .establish_test_session_at(
+                    role,
+                    &secret,
+                    &hello,
+                    &accept,
+                    Instant::now() - Duration::from_secs(540),
+                )
+                .unwrap();
+            expire_packet_plane_sessions(&mut context);
+            assert_eq!(context.negotiator.has_pending(overlay), sends);
+            expire_packet_plane_sessions(&mut context);
+            assert_eq!(
+                metrics
+                    .snapshot(crate::queue::QueueStats::default())
+                    .control_requests_sent,
+                u64::from(sends)
+            );
+            assert_eq!(
+                context
+                    .packet_plane
+                    .session_for(overlay)
+                    .unwrap()
+                    .snapshot(),
+                original
+            );
+            assert!(has_healthy_path_kind(
+                context.paths,
+                overlay,
+                PathKind::DirectUdpDatagram
+            ));
+            if sends {
+                let pending = context.negotiator.pending.get_mut(&overlay).unwrap();
+                let previous_request = pending.request_id.unwrap();
+                pending.created_at = Instant::now() - PACKET_PLANE_PENDING_HELLO_TIMEOUT;
+                expire_pending_packet_plane_hellos(&mut context, Instant::now());
+                assert_ne!(
+                    context.negotiator.pending[&overlay].request_id.unwrap(),
+                    previous_request
+                );
+                assert_eq!(
+                    metrics
+                        .snapshot(crate::queue::QueueStats::default())
+                        .control_requests_sent,
+                    2
+                );
+                assert_eq!(
+                    context
+                        .packet_plane
+                        .session_for(overlay)
+                        .unwrap()
+                        .snapshot(),
+                    original
+                );
+                assert!(has_healthy_path_kind(
+                    context.paths,
+                    overlay,
+                    PathKind::DirectUdpDatagram
+                ));
+            }
+        }
     }
 
     #[tokio::test]

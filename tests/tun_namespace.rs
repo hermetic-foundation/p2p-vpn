@@ -248,6 +248,7 @@ fn namespace_repro_artifacts_include_replay_commands_and_metadata() {
         recovery_soak::PROFILE_ENV
     )));
     assert!(metadata.contains("recovery_profile:"));
+    assert!(metadata.contains("recovery_soak:"));
     assert_eq!(
         namespace_replay_env_exports_from([(idle_sample::SAMPLE_ENV, Some("60".to_owned()))]),
         "export P2P_VPN_TUN_E2E_IDLE_SECONDS='60'\n"
@@ -303,13 +304,15 @@ fn namespace_repro_artifacts_include_replay_commands_and_metadata() {
 #[test]
 fn namespace_recovery_replay_exports_preserve_both_profiles() {
     for profile in ["public", "private"] {
-        let exports = namespace_replay_env_exports_from([(
-            recovery_soak::PROFILE_ENV,
-            Some(profile.to_owned()),
-        )]);
+        let exports = namespace_replay_env_exports_from([
+            (recovery_soak::PROFILE_ENV, Some(profile.to_owned())),
+            (recovery_soak::SOAK_ENV, Some("1".to_owned())),
+        ]);
         assert_eq!(
             exports,
-            format!("export P2P_VPN_TUN_E2E_RECOVERY_PROFILE='{profile}'\n")
+            format!(
+                "export P2P_VPN_TUN_E2E_RECOVERY_PROFILE='{profile}'\nexport P2P_VPN_TUN_E2E_RECOVERY_SOAK='1'\n"
+            )
         );
         let commands = namespace_repro_commands(
             &shell_quote(recovery_soak::TEST_NAME),
@@ -402,7 +405,7 @@ fn reexec_orchestrator(test_name: &str) {
         idle_sample::WARMUP + duration
     });
     let default_timeout = if test_name == recovery_soak::TEST_NAME {
-        recovery_soak::WATCHDOG
+        recovery_soak::requested_watchdog()
     } else if test_name == RELAY_PROMOTION_TEST_NAME {
         Duration::from_secs(150)
     } else if test_name == QUEUE_PRESSURE_TEST_NAME {
@@ -1859,6 +1862,12 @@ fn write_namespace_repro_artifacts(temp_dir: &Path, test_name: &str) -> io::Resu
         env::var(recovery_soak::PROFILE_ENV).unwrap_or_else(|_| "public".to_owned())
     )
     .expect("write metadata line");
+    writeln!(
+        metadata,
+        "recovery_soak: {}",
+        env::var(recovery_soak::SOAK_ENV).unwrap_or_else(|_| "0".to_owned())
+    )
+    .expect("write metadata line");
     metadata.push_str(&command_metadata("git", &["rev-parse", "HEAD"]));
     metadata.push_str(&command_metadata("git", &["status", "--short"]));
     metadata.push_str(&command_metadata("uname", &["-a"]));
@@ -1899,6 +1908,7 @@ fn namespace_replay_env_exports() -> String {
             idle_sample::SAMPLE_ENV,
             queue_pressure::ROUNDS_ENV,
             recovery_soak::PROFILE_ENV,
+            recovery_soak::SOAK_ENV,
         ]
         .into_iter()
         .map(|name| (name, env::var(name).ok())),

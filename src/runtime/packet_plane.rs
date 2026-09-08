@@ -667,6 +667,16 @@ pub struct PacketPlaneRuntime {
     session_endpoints: HashMap<SocketAddr, Vec<PeerId>>,
     recv_buffer: Vec<u8>,
     max_replay_windows_per_session: usize,
+    session_ttl: Duration,
+    session_lifetimes: HashMap<PeerId, Duration>,
+    retiring_sessions: HashMap<PeerId, RetiringPacketPlaneSession>,
+}
+
+#[derive(Debug)]
+struct RetiringPacketPlaneSession {
+    session: PacketPlaneSession,
+    lifetime: Duration,
+    use_for_tx: bool,
 }
 
 #[derive(Debug)]
@@ -698,6 +708,11 @@ impl Default for PacketPlaneRuntime {
             recv_buffer: vec![0; PACKET_PLANE_MAX_UDP_DATAGRAM_LEN],
             max_replay_windows_per_session:
                 crate::config::default_packet_plane_replay_windows_per_session(),
+            session_ttl: Duration::from_secs(
+                crate::config::default_packet_plane_session_ttl_seconds(),
+            ),
+            session_lifetimes: HashMap::new(),
+            retiring_sessions: HashMap::new(),
         }
     }
 }
@@ -1064,10 +1079,8 @@ impl PacketPlaneRuntime {
         Ok(Self {
             sockets,
             listeners,
-            sessions: HashMap::new(),
-            session_endpoints: HashMap::new(),
-            recv_buffer: vec![0; PACKET_PLANE_MAX_UDP_DATAGRAM_LEN],
             max_replay_windows_per_session: max_replay_windows_per_session.max(1),
+            ..Self::default()
         })
     }
 
@@ -1135,6 +1148,66 @@ impl PacketPlaneRuntime {
         self.establish_session_at(role, local_secret, local, remote, Instant::now())
     }
 
+    /// Changes renewal timing without extending any already established key lifetime.
+    pub(crate) fn set_session_ttl(&mut self, ttl: Duration) {
+        self.session_ttl = ttl;
+        for lifetime in self.session_lifetimes.values_mut() {
+            *lifetime = (*lifetime).min(ttl);
+        }
+        for retiring in self.retiring_sessions.values_mut() {
+            retiring.lifetime = retiring.lifetime.min(ttl);
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn session_ttl(&self) -> Duration {
+        self.session_ttl
+    }
+
+    pub(crate) fn renewal_due_peers(&self, now: Instant) -> Vec<PeerId> {
+        let mut peers = self
+            .sessions
+            .keys()
+            .copied()
+            .filter(|peer| self.renewal_due_for_peer(*peer, now))
+            .collect::<Vec<_>>();
+        peers.sort_by_key(ToString::to_string);
+        peers
+    }
+
+    pub(crate) fn renewal_due_for_peer(&self, peer: PeerId, now: Instant) -> bool {
+        let Some(session) = self.sessions.get(&peer) else {
+            return false;
+        };
+        let ttl = self.session_lifetimes[&peer].min(self.session_ttl);
+        let lead = (ttl / 4).min(Duration::from_secs(60));
+        let age = now.saturating_duration_since(session.established_at);
+        session.role == PacketPlaneSessionRole::Initiator && age >= ttl - lead && age < ttl
+    }
+
+    pub(crate) fn has_retiring_session(&self, peer: PeerId) -> bool {
+        self.retiring_sessions.get(&peer).is_some_and(|retiring| {
+            self.sessions.get(&peer).is_some_and(|current| {
+                current.endpoint == retiring.session.endpoint
+                    && retiring.session.established_at.elapsed() < retiring.lifetime
+            })
+        })
+    }
+
+    pub(crate) fn retiring_session_count(&self) -> usize {
+        self.retiring_sessions.len()
+    }
+
+    pub(crate) fn establish_session_overlapping(
+        &mut self,
+        role: PacketPlaneSessionRole,
+        local_secret: &PacketPlaneEphemeralSecret,
+        local: &VerifiedPacketPlaneHandshake,
+        remote: &VerifiedPacketPlaneHandshake,
+    ) -> Result<PacketPlaneSessionSnapshot, PacketPlaneSessionError> {
+        self.install_session(role, local_secret, local, remote, Instant::now(), true)
+    }
+
     fn establish_session_at(
         &mut self,
         role: PacketPlaneSessionRole,
@@ -1142,6 +1215,19 @@ impl PacketPlaneRuntime {
         local: &VerifiedPacketPlaneHandshake,
         remote: &VerifiedPacketPlaneHandshake,
         established_at: Instant,
+    ) -> Result<PacketPlaneSessionSnapshot, PacketPlaneSessionError> {
+        self.install_session(role, local_secret, local, remote, established_at, false)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn install_session(
+        &mut self,
+        role: PacketPlaneSessionRole,
+        local_secret: &PacketPlaneEphemeralSecret,
+        local: &VerifiedPacketPlaneHandshake,
+        remote: &VerifiedPacketPlaneHandshake,
+        established_at: Instant,
+        overlapping: bool,
     ) -> Result<PacketPlaneSessionSnapshot, PacketPlaneSessionError> {
         let keys = PacketPlaneSessionKeys::derive(role, local_secret, local, remote)?;
         let session = PacketPlaneSession {
@@ -1161,7 +1247,38 @@ impl PacketPlaneRuntime {
             self.remove_endpoint_mapping(remote.peer, previous.endpoint);
         }
         self.insert_endpoint_mapping(remote.endpoint, remote.peer);
-        self.sessions.insert(remote.peer, session);
+        let previous = self.sessions.insert(remote.peer, session);
+        let lifetime = self.session_lifetimes.insert(remote.peer, self.session_ttl);
+        let retiring = self.retiring_sessions.remove(&remote.peer);
+        if overlapping
+            && role == PacketPlaneSessionRole::Responder
+            && let Some(retiring) = retiring.filter(|retiring| {
+                retiring.use_for_tx
+                    && retiring.session.endpoint == remote.endpoint
+                    && established_at.saturating_duration_since(retiring.session.established_at)
+                        < retiring.lifetime
+            })
+        {
+            // A lost Accept can cause another renewal before the initiator knows the new key.
+            self.retiring_sessions.insert(remote.peer, retiring);
+            return Ok(snapshot);
+        }
+        if overlapping && let (Some(session), Some(lifetime)) = (previous, lifetime) {
+            let lifetime = lifetime.min(self.session_ttl);
+            if session.endpoint == remote.endpoint
+                && established_at.saturating_duration_since(session.established_at) < lifetime
+            {
+                // Move the original session so its replay windows and age survive renewal.
+                self.retiring_sessions.insert(
+                    remote.peer,
+                    RetiringPacketPlaneSession {
+                        session,
+                        lifetime,
+                        use_for_tx: role == PacketPlaneSessionRole::Responder,
+                    },
+                );
+            }
+        }
         Ok(snapshot)
     }
 
@@ -1205,6 +1322,8 @@ impl PacketPlaneRuntime {
             .map(|(_, session)| session.snapshot())
             .collect::<Vec<_>>();
         self.session_endpoints.clear();
+        self.session_lifetimes.clear();
+        self.retiring_sessions.clear();
         removed.sort_by_key(|session| session.peer.to_string());
         removed
     }
@@ -1214,6 +1333,8 @@ impl PacketPlaneRuntime {
     }
 
     pub(crate) fn forget_peer(&mut self, peer: PeerId) -> bool {
+        self.session_lifetimes.remove(&peer);
+        self.retiring_sessions.remove(&peer);
         let Some(session) = self.sessions.remove(&peer) else {
             return false;
         };
@@ -1226,17 +1347,24 @@ impl PacketPlaneRuntime {
         now: Instant,
         max_age: Duration,
     ) -> Vec<PacketPlaneSessionSnapshot> {
+        self.retiring_sessions.retain(|_, retiring| {
+            retiring.lifetime = retiring.lifetime.min(max_age);
+            now.saturating_duration_since(retiring.session.established_at) < retiring.lifetime
+        });
         let expired_peers = self
             .sessions
             .iter()
             .filter_map(|(peer, session)| {
-                (now.saturating_duration_since(session.established_at) >= max_age).then_some(*peer)
+                let lifetime = self.session_lifetimes[peer].min(max_age);
+                (now.saturating_duration_since(session.established_at) >= lifetime).then_some(*peer)
             })
             .collect::<Vec<_>>();
         let mut expired = expired_peers
             .into_iter()
             .filter_map(|peer| {
                 let session = self.sessions.remove(&peer)?;
+                self.session_lifetimes.remove(&peer);
+                self.retiring_sessions.remove(&peer);
                 self.remove_endpoint_mapping(peer, session.endpoint);
                 Some(session)
             })
@@ -1290,6 +1418,15 @@ impl PacketPlaneRuntime {
             .sessions
             .get(&peer)
             .ok_or(PacketPlaneIoError::NoSession { peer })?;
+        let session = self
+            .retiring_sessions
+            .get(&peer)
+            .filter(|retiring| {
+                retiring.use_for_tx
+                    && retiring.session.endpoint == session.endpoint
+                    && retiring.session.established_at.elapsed() < retiring.lifetime
+            })
+            .map_or(session, |retiring| &retiring.session);
         let payload_len = frame.payload.len();
         if payload_len > usize::from(session.mtu) {
             return Err(PacketPlaneIoError::Datagram(
@@ -1366,20 +1503,13 @@ impl PacketPlaneRuntime {
                 actual: remote_addr,
             });
         }
-        let session = self
-            .sessions
-            .get_mut(&peer)
-            .ok_or(PacketPlaneIoError::NoSession { peer })?;
-        let frame = session
-            .keys
-            .open
-            .open_frame(&self.recv_buffer[..len], usize::from(session.mtu))?;
-        session.accept_datagram(&frame)?;
+        let local_addr = socket.local_addr()?;
+        let frame = self.open_session_datagram(peer, len)?;
         Ok(PacketPlaneReceivedFrame {
             frame,
             peer: Some(peer),
             remote_addr,
-            local_addr: socket.local_addr()?,
+            local_addr,
         })
     }
 
@@ -1403,6 +1533,7 @@ impl PacketPlaneRuntime {
                 index: listener_index,
             })?;
         let (len, remote_addr) = socket.recv_from(&mut self.recv_buffer).await?;
+        let local_addr = socket.local_addr()?;
         let Some(peers) = self.session_endpoints.get(&remote_addr) else {
             return Err(PacketPlaneIoError::UnknownEndpoint {
                 actual: remote_addr,
@@ -1411,26 +1542,27 @@ impl PacketPlaneRuntime {
         let peers = peers.clone();
         let mut first_datagram_error = None;
         for peer in peers {
-            let Some(session) = self.sessions.get_mut(&peer) else {
+            if !self.sessions.contains_key(&peer) {
                 continue;
-            };
-            let frame = match session
-                .keys
-                .open
-                .open_frame(&self.recv_buffer[..len], usize::from(session.mtu))
-            {
+            }
+            let frame = match self.open_session_datagram(peer, len) {
                 Ok(frame) => frame,
+                Err(
+                    error @ (PacketPlaneDatagramError::ReplayedDatagram { .. }
+                    | PacketPlaneDatagramError::DatagramOutsideReplayWindow { .. }),
+                ) => {
+                    return Err(error.into());
+                }
                 Err(error) => {
                     first_datagram_error.get_or_insert(error);
                     continue;
                 }
             };
-            session.accept_datagram(&frame)?;
             return Ok(PacketPlaneReceivedFrame {
                 frame,
                 peer: Some(peer),
                 remote_addr,
-                local_addr: socket.local_addr()?,
+                local_addr,
             });
         }
         if let Some(error) = first_datagram_error {
@@ -1439,6 +1571,42 @@ impl PacketPlaneRuntime {
         Err(PacketPlaneIoError::UnknownEndpoint {
             actual: remote_addr,
         })
+    }
+
+    fn open_session_datagram(
+        &mut self,
+        peer: PeerId,
+        len: usize,
+    ) -> Result<Frame, PacketPlaneDatagramError> {
+        let session = self.sessions.get_mut(&peer).expect("registered session");
+        match session
+            .keys
+            .open
+            .open_frame(&self.recv_buffer[..len], usize::from(session.mtu))
+        {
+            Ok(frame) => {
+                session.accept_datagram(&frame)?;
+                if let Some(retiring) = self.retiring_sessions.get_mut(&peer) {
+                    retiring.use_for_tx = false;
+                }
+                Ok(frame)
+            }
+            Err(error) => {
+                let Some(retiring) = self.retiring_sessions.get_mut(&peer).filter(|retiring| {
+                    retiring.session.endpoint == session.endpoint
+                        && retiring.session.established_at.elapsed() < retiring.lifetime
+                }) else {
+                    return Err(error);
+                };
+                let frame = retiring
+                    .session
+                    .keys
+                    .open
+                    .open_frame(&self.recv_buffer[..len], usize::from(retiring.session.mtu))?;
+                retiring.session.accept_datagram(&frame)?;
+                Ok(frame)
+            }
+        }
     }
 }
 
@@ -2617,6 +2785,589 @@ mod tests {
         assert_eq!(runtime.session_count(), 0);
         assert!(!runtime.has_session(accept.peer));
         assert!(runtime.session_endpoints.is_empty());
+    }
+
+    #[test]
+    fn udp_renewal_due_respects_threshold_cap_role_and_lifetime_bound() {
+        let (secret, responder_secret, hello, accept) = verified_session_pair();
+        let now = Instant::now();
+        let mut runtime = PacketPlaneRuntime::disabled();
+        assert_eq!(runtime.session_ttl(), Duration::from_secs(600));
+        for (ttl, threshold) in [(80, 60), (600, 540)] {
+            runtime.set_session_ttl(Duration::from_secs(ttl));
+            runtime
+                .establish_session_at(
+                    PacketPlaneSessionRole::Initiator,
+                    &secret,
+                    &hello,
+                    &accept,
+                    now,
+                )
+                .unwrap();
+            assert!(
+                runtime
+                    .renewal_due_peers(
+                        now + Duration::from_secs(threshold) - Duration::from_nanos(1)
+                    )
+                    .is_empty()
+            );
+            assert_eq!(
+                runtime.renewal_due_peers(now + Duration::from_secs(threshold)),
+                vec![accept.peer]
+            );
+            assert!(
+                runtime.renewal_due_for_peer(accept.peer, now + Duration::from_secs(threshold))
+            );
+            assert!(
+                !runtime.renewal_due_for_peer(hello.peer, now + Duration::from_secs(threshold))
+            );
+            assert!(
+                runtime
+                    .renewal_due_peers(now + Duration::from_secs(ttl))
+                    .is_empty()
+            );
+        }
+        runtime.set_session_ttl(Duration::from_secs(80));
+        runtime.set_session_ttl(Duration::from_secs(600));
+        assert_eq!(
+            runtime.renewal_due_peers(now + Duration::from_secs(60)),
+            vec![accept.peer]
+        );
+        assert!(
+            runtime
+                .renewal_due_peers(now + Duration::from_secs(80))
+                .is_empty()
+        );
+        assert_eq!(
+            runtime
+                .expire_sessions_at(now + Duration::from_secs(80), Duration::from_secs(600))
+                .len(),
+            1,
+            "raising the configured TTL must not extend an existing session"
+        );
+        runtime.forget_all_sessions();
+        runtime
+            .establish_session_at(
+                PacketPlaneSessionRole::Responder,
+                &responder_secret,
+                &accept,
+                &hello,
+                now,
+            )
+            .unwrap();
+        assert!(
+            runtime
+                .renewal_due_peers(now + Duration::from_secs(540))
+                .is_empty()
+        );
+        runtime.set_session_ttl(Duration::ZERO);
+        assert!(runtime.renewal_due_peers(now).is_empty());
+    }
+
+    #[test]
+    fn udp_overlap_is_bounded_and_replacement_forgetting_and_expiry_clean_up() {
+        let (secret, _, hello, mut accept) = verified_session_pair();
+        let mut runtime = PacketPlaneRuntime::disabled();
+        for _ in 0..4 {
+            runtime
+                .establish_session_overlapping(
+                    PacketPlaneSessionRole::Initiator,
+                    &secret,
+                    &hello,
+                    &accept,
+                )
+                .unwrap();
+        }
+        assert_eq!(runtime.session_count(), 1);
+        assert_eq!(runtime.retiring_session_count(), 1);
+        assert!(runtime.has_retiring_session(accept.peer));
+        assert!(!runtime.has_retiring_session(hello.peer));
+        assert_eq!(
+            runtime.session_endpoints[&accept.endpoint],
+            vec![accept.peer]
+        );
+        runtime
+            .establish_session(PacketPlaneSessionRole::Initiator, &secret, &hello, &accept)
+            .unwrap();
+        assert_eq!(runtime.retiring_session_count(), 0);
+        for cleanup in 0..4 {
+            runtime
+                .establish_session_overlapping(
+                    PacketPlaneSessionRole::Initiator,
+                    &secret,
+                    &hello,
+                    &accept,
+                )
+                .unwrap();
+            runtime
+                .establish_session_overlapping(
+                    PacketPlaneSessionRole::Initiator,
+                    &secret,
+                    &hello,
+                    &accept,
+                )
+                .unwrap();
+            assert_eq!(runtime.retiring_session_count(), 1);
+            match cleanup {
+                0 => {
+                    assert!(runtime.forget_peer(accept.peer));
+                }
+                1 => {
+                    runtime.forget_all_sessions();
+                }
+                2 => {
+                    runtime.expire_sessions_at(Instant::now(), Duration::ZERO);
+                }
+                _ => {
+                    let old_endpoint = accept.endpoint;
+                    accept.endpoint.set_port(51821);
+                    runtime
+                        .establish_session_overlapping(
+                            PacketPlaneSessionRole::Initiator,
+                            &secret,
+                            &hello,
+                            &accept,
+                        )
+                        .unwrap();
+                    assert!(!runtime.session_endpoints.contains_key(&old_endpoint));
+                }
+            }
+            assert_eq!(runtime.retiring_session_count(), 0);
+            assert!(!runtime.has_retiring_session(accept.peer));
+        }
+    }
+
+    #[tokio::test]
+    async fn udp_overlap_preserves_in_flight_replay_and_responder_tx_until_new_rx() {
+        let mut sender = PacketPlaneRuntime::bind(vec!["127.0.0.1:0".parse().unwrap()])
+            .await
+            .unwrap();
+        let mut receiver = PacketPlaneRuntime::bind(vec!["127.0.0.1:0".parse().unwrap()])
+            .await
+            .unwrap();
+        let (initiator_secret, responder_secret, hello, accept) =
+            verified_session_pair_with_endpoints(
+                sender.primary_listener().unwrap(),
+                receiver.primary_listener().unwrap(),
+                1280,
+            );
+        sender
+            .establish_session(
+                PacketPlaneSessionRole::Initiator,
+                &initiator_secret,
+                &hello,
+                &accept,
+            )
+            .unwrap();
+        receiver
+            .establish_session(
+                PacketPlaneSessionRole::Responder,
+                &responder_secret,
+                &accept,
+                &hello,
+            )
+            .unwrap();
+        let old_keys = sender.sessions[&accept.peer].keys.clone();
+        let first = Frame::packet(77, 1, vec![0x45; 20]).unwrap();
+        sender
+            .send_frame_to_peer(accept.peer, &first)
+            .await
+            .unwrap();
+        timeout(
+            Duration::from_secs(1),
+            receiver.recv_frame_from_peer(hello.peer),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let in_flight = Frame::packet(77, 2, vec![0x45; 20]).unwrap();
+        sender
+            .send_frame_to_peer(accept.peer, &in_flight)
+            .await
+            .unwrap();
+        let mut new_hello = hello.clone();
+        let mut new_accept = accept.clone();
+        new_hello.nonce += 1;
+        new_accept.nonce += 1;
+        receiver
+            .establish_session_overlapping(
+                PacketPlaneSessionRole::Responder,
+                &responder_secret,
+                &new_accept,
+                &new_hello,
+            )
+            .unwrap();
+        let original_established_at = receiver.retiring_sessions[&hello.peer]
+            .session
+            .established_at;
+        let original_lifetime = receiver.retiring_sessions[&hello.peer].lifetime;
+        // Lost Accepts leave the initiator on the original key through multiple retries.
+        for _ in 0..3 {
+            new_hello.nonce += 1;
+            new_accept.nonce += 1;
+            receiver
+                .establish_session_overlapping(
+                    PacketPlaneSessionRole::Responder,
+                    &responder_secret,
+                    &new_accept,
+                    &new_hello,
+                )
+                .unwrap();
+            assert_eq!(receiver.retiring_session_count(), 1);
+            assert!(receiver.has_retiring_session(hello.peer));
+            assert_eq!(
+                receiver.retiring_sessions[&hello.peer]
+                    .session
+                    .established_at,
+                original_established_at
+            );
+            assert_eq!(
+                receiver.retiring_sessions[&hello.peer].lifetime,
+                original_lifetime
+            );
+            assert_eq!(
+                receiver.session_endpoints[&hello.endpoint],
+                vec![hello.peer]
+            );
+        }
+        assert_eq!(
+            timeout(Duration::from_secs(1), receiver.recv_frame_from_session())
+                .await
+                .unwrap()
+                .unwrap()
+                .frame,
+            in_flight
+        );
+        for replay in [&first, &in_flight] {
+            sender
+                .send_frame_to_peer(accept.peer, replay)
+                .await
+                .unwrap();
+            assert!(matches!(
+                timeout(
+                    Duration::from_secs(1),
+                    receiver.recv_frame_from_peer(hello.peer)
+                )
+                .await
+                .unwrap(),
+                Err(PacketPlaneIoError::Datagram(
+                    PacketPlaneDatagramError::ReplayedDatagram { .. }
+                ))
+            ));
+        }
+        // The initiator has not accepted the renewal yet and can only open old-key TX.
+        receiver
+            .send_frame_to_peer(hello.peer, &first)
+            .await
+            .unwrap();
+        assert_eq!(
+            timeout(
+                Duration::from_secs(1),
+                sender.recv_frame_from_peer(accept.peer)
+            )
+            .await
+            .unwrap()
+            .unwrap()
+            .frame,
+            first
+        );
+        sender
+            .establish_session_overlapping(
+                PacketPlaneSessionRole::Initiator,
+                &initiator_secret,
+                &new_hello,
+                &new_accept,
+            )
+            .unwrap();
+        let current = Frame::packet(77, 3, vec![0x45; 20]).unwrap();
+        sender
+            .send_frame_to_peer(accept.peer, &current)
+            .await
+            .unwrap();
+        assert_eq!(
+            timeout(Duration::from_secs(1), receiver.recv_frame_from_session())
+                .await
+                .unwrap()
+                .unwrap()
+                .frame,
+            current
+        );
+        assert!(!receiver.retiring_sessions[&hello.peer].use_for_tx);
+        // A current-key duplicate must not be accepted through the old replay window.
+        sender
+            .send_frame_to_peer(accept.peer, &current)
+            .await
+            .unwrap();
+        assert!(matches!(
+            timeout(Duration::from_secs(1), receiver.recv_frame_from_session())
+                .await
+                .unwrap(),
+            Err(PacketPlaneIoError::Datagram(
+                PacketPlaneDatagramError::ReplayedDatagram { .. }
+            ))
+        ));
+        receiver
+            .send_frame_to_peer(hello.peer, &current)
+            .await
+            .unwrap();
+        let new_open = sender.sessions[&accept.peer].keys.open.clone();
+        assert_eq!(
+            timeout(Duration::from_secs(1), sender.recv_frame(&new_open, 1280))
+                .await
+                .unwrap()
+                .unwrap()
+                .frame,
+            current
+        );
+        // Old RX remains available after switching TX, with its original replay state.
+        let late = Frame::packet(77, 4, vec![0x45; 20]).unwrap();
+        sender
+            .send_frame_to(accept.endpoint, &old_keys.seal, &late)
+            .await
+            .unwrap();
+        assert_eq!(
+            timeout(Duration::from_secs(1), receiver.recv_frame_from_session())
+                .await
+                .unwrap()
+                .unwrap()
+                .frame,
+            late
+        );
+    }
+
+    #[tokio::test]
+    async fn udp_overlap_old_key_expires_at_original_ttl_without_maintenance() {
+        let sender = PacketPlaneRuntime::bind(vec!["127.0.0.1:0".parse().unwrap()])
+            .await
+            .unwrap();
+        let mut receiver = PacketPlaneRuntime::bind(vec!["127.0.0.1:0".parse().unwrap()])
+            .await
+            .unwrap();
+        let (initiator_secret, responder_secret, hello, mut accept) =
+            verified_session_pair_with_endpoints(
+                sender.primary_listener().unwrap(),
+                receiver.primary_listener().unwrap(),
+                1280,
+            );
+        let ttl = Duration::from_secs(80);
+        receiver.set_session_ttl(ttl);
+        let established_at = Instant::now() - Duration::from_secs(60);
+        receiver
+            .establish_session_at(
+                PacketPlaneSessionRole::Responder,
+                &responder_secret,
+                &accept,
+                &hello,
+                established_at,
+            )
+            .unwrap();
+        let old_keys = PacketPlaneSessionKeys::derive(
+            PacketPlaneSessionRole::Initiator,
+            &initiator_secret,
+            &hello,
+            &accept,
+        )
+        .unwrap();
+        receiver.set_session_ttl(Duration::from_secs(600));
+        accept.nonce += 1;
+        receiver
+            .establish_session_overlapping(
+                PacketPlaneSessionRole::Responder,
+                &responder_secret,
+                &accept,
+                &hello,
+            )
+            .unwrap();
+        let retiring = &receiver.retiring_sessions[&hello.peer];
+        assert_eq!(retiring.session.established_at, established_at);
+        assert_eq!(retiring.lifetime, ttl);
+        let frame = Frame::packet(77, 1, vec![0x45; 20]).unwrap();
+        sender
+            .send_frame_to(accept.endpoint, &old_keys.seal, &frame)
+            .await
+            .unwrap();
+        timeout(Duration::from_secs(1), receiver.recv_frame_from_session())
+            .await
+            .unwrap()
+            .unwrap();
+        // Move the original establishment to the strict boundary, without sleeping or maintenance.
+        receiver
+            .retiring_sessions
+            .get_mut(&hello.peer)
+            .unwrap()
+            .session
+            .established_at = Instant::now() - ttl;
+        assert!(!receiver.has_retiring_session(hello.peer));
+        sender
+            .send_frame_to(accept.endpoint, &old_keys.seal, &frame)
+            .await
+            .unwrap();
+        assert!(matches!(
+            timeout(Duration::from_secs(1), receiver.recv_frame_from_session())
+                .await
+                .unwrap(),
+            Err(PacketPlaneIoError::Datagram(
+                PacketPlaneDatagramError::Decrypt
+            ))
+        ));
+        receiver
+            .send_frame_to_peer(hello.peer, &frame)
+            .await
+            .unwrap();
+        let new_keys = PacketPlaneSessionKeys::derive(
+            PacketPlaneSessionRole::Initiator,
+            &initiator_secret,
+            &hello,
+            &accept,
+        )
+        .unwrap();
+        timeout(
+            Duration::from_secs(1),
+            sender.recv_frame(&new_keys.open, 1280),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(receiver.retiring_session_count(), 1);
+        assert!(
+            receiver
+                .expire_sessions(Duration::from_secs(600))
+                .is_empty()
+        );
+        assert_eq!(receiver.retiring_session_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn udp_overlap_current_replay_cannot_fall_back_to_matching_old_key() {
+        let sender = PacketPlaneRuntime::bind(vec!["127.0.0.1:0".parse().unwrap()])
+            .await
+            .unwrap();
+        let mut receiver = PacketPlaneRuntime::bind(vec!["127.0.0.1:0".parse().unwrap()])
+            .await
+            .unwrap();
+        let (secret, responder_secret, hello, accept) = verified_session_pair_with_endpoints(
+            sender.primary_listener().unwrap(),
+            receiver.primary_listener().unwrap(),
+            1280,
+        );
+        receiver
+            .establish_session(
+                PacketPlaneSessionRole::Responder,
+                &responder_secret,
+                &accept,
+                &hello,
+            )
+            .unwrap();
+        receiver
+            .establish_session_overlapping(
+                PacketPlaneSessionRole::Responder,
+                &responder_secret,
+                &accept,
+                &hello,
+            )
+            .unwrap();
+        let keys = PacketPlaneSessionKeys::derive(
+            PacketPlaneSessionRole::Initiator,
+            &secret,
+            &hello,
+            &accept,
+        )
+        .unwrap();
+        let frame = Frame::packet(77, 1, vec![0x45; 20]).unwrap();
+        receiver
+            .sessions
+            .get_mut(&hello.peer)
+            .unwrap()
+            .accept_datagram(&frame)
+            .unwrap();
+        for from_peer in [true, false] {
+            sender
+                .send_frame_to(accept.endpoint, &keys.seal, &frame)
+                .await
+                .unwrap();
+            let result = if from_peer {
+                timeout(
+                    Duration::from_secs(1),
+                    receiver.recv_frame_from_peer(hello.peer),
+                )
+                .await
+                .unwrap()
+            } else {
+                timeout(Duration::from_secs(1), receiver.recv_frame_from_session())
+                    .await
+                    .unwrap()
+            };
+            assert!(matches!(
+                result,
+                Err(PacketPlaneIoError::Datagram(
+                    PacketPlaneDatagramError::ReplayedDatagram { .. }
+                ))
+            ));
+            assert!(receiver.retiring_sessions[&hello.peer].use_for_tx);
+            assert!(
+                receiver.retiring_sessions[&hello.peer]
+                    .session
+                    .replay_windows
+                    .is_empty()
+            );
+        }
+    }
+
+    #[test]
+    fn udp_overlap_does_not_retire_expired_keys_or_mutate_on_invalid_handshake() {
+        let (secret, _, hello, mut accept) = verified_session_pair();
+        let mut runtime = PacketPlaneRuntime::disabled();
+        let ttl = Duration::from_secs(80);
+        runtime.set_session_ttl(ttl);
+        runtime
+            .establish_session_at(
+                PacketPlaneSessionRole::Initiator,
+                &secret,
+                &hello,
+                &accept,
+                Instant::now() - ttl,
+            )
+            .unwrap();
+        runtime
+            .establish_session_overlapping(
+                PacketPlaneSessionRole::Initiator,
+                &secret,
+                &hello,
+                &accept,
+            )
+            .unwrap();
+        assert_eq!(runtime.retiring_session_count(), 0);
+        runtime
+            .establish_session_overlapping(
+                PacketPlaneSessionRole::Initiator,
+                &secret,
+                &hello,
+                &accept,
+            )
+            .unwrap();
+        let snapshot = runtime.snapshot();
+        let original = runtime.retiring_sessions[&accept.peer]
+            .session
+            .established_at;
+        accept.ephemeral_public_key = [0; PACKET_PLANE_EPHEMERAL_PUBLIC_KEY_LEN];
+        assert!(
+            runtime
+                .establish_session_overlapping(
+                    PacketPlaneSessionRole::Initiator,
+                    &secret,
+                    &hello,
+                    &accept,
+                )
+                .is_err()
+        );
+        assert_eq!(runtime.snapshot(), snapshot);
+        assert_eq!(runtime.retiring_session_count(), 1);
+        assert_eq!(
+            runtime.retiring_sessions[&accept.peer]
+                .session
+                .established_at,
+            original
+        );
     }
 
     #[test]

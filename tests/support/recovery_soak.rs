@@ -2,8 +2,12 @@ use super::*;
 use p2p_vpn::runtime::control_socket::query_status;
 use serde_json::{Value, json};
 
+#[path = "recovery_settling.rs"]
+mod settling;
+
 pub const TEST_NAME: &str = "tun_namespace_automatic_discovery_recovers_after_link_changes";
 pub(super) const PROFILE_ENV: &str = "P2P_VPN_TUN_E2E_RECOVERY_PROFILE";
+pub(super) const SOAK_ENV: &str = "P2P_VPN_TUN_E2E_RECOVERY_SOAK";
 const PRIVATE_PROTOCOL: &str = "/p2p-vpn/settling-e2e/kad/1";
 const INITIAL_LAN: Duration = Duration::from_secs(120);
 const RELAY_RECOVERY: Duration = Duration::from_secs(960);
@@ -11,6 +15,28 @@ const DIRECT_RECOVERY: Duration = Duration::from_secs(375);
 const HEALTHY_DWELL: Duration = Duration::from_secs(30);
 const SAMPLE_INTERVAL: Duration = Duration::from_secs(5);
 pub const WATCHDOG: Duration = Duration::from_secs(1_650);
+const SOAK_MINIMUM: Duration = Duration::from_secs(1_800);
+const FINAL_HEALTHY: Duration = Duration::from_secs(600);
+const SETTLING_GRACE: Duration = Duration::from_secs(100);
+const INFRASTRUCTURE_OUTAGE: Duration = Duration::from_secs(130);
+const SOAK_CYCLES: usize = 5;
+const SOAK_WATCHDOG: Duration = Duration::from_secs(8_060);
+
+fn soak_requested() -> bool {
+    match env::var(SOAK_ENV).as_deref() {
+        Err(env::VarError::NotPresent) | Ok("0") => false,
+        Ok("1") => true,
+        other => panic!("invalid {SOAK_ENV}: {other:?}"),
+    }
+}
+
+pub fn requested_watchdog() -> Duration {
+    if soak_requested() {
+        SOAK_WATCHDOG
+    } else {
+        WATCHDOG
+    }
+}
 
 fn private_profile() -> bool {
     match env::var(PROFILE_ENV).as_deref() {
@@ -68,8 +94,8 @@ pub fn run_node() {
         .enable_all()
         .build()
         .unwrap();
-    if role == "relay" {
-        runtime.block_on(run_infrastructure(local, &temp));
+    if matches!(role.as_str(), "relay" | "backup") {
+        runtime.block_on(run_infrastructure(local, &temp, &role));
     } else {
         let config = read_child_config(&temp, &role);
         let tun = TunRuntimeConfig::from_config(&config).unwrap();
@@ -88,10 +114,11 @@ pub fn run_node() {
     }
 }
 
-async fn run_infrastructure(identity: NodeIdentity, temp: &Path) {
+async fn run_infrastructure(identity: NodeIdentity, temp: &Path, role: &str) {
     let mut config = relay_config(&identity);
     config.network.name = "settling-e2e".to_owned();
-    config.network.listen_addresses = vec!["/ip4/11.251.0.254/tcp/42200".to_owned()];
+    let suffix = if role == "relay" { 254 } else { 253 };
+    config.network.listen_addresses = vec![format!("/ip4/11.251.0.{suffix}/tcp/42200")];
     config.network.external_addresses = config.network.listen_addresses.clone();
     config.network.discovery = DiscoveryConfig {
         mdns: false,
@@ -127,7 +154,7 @@ async fn run_infrastructure(identity: NodeIdentity, temp: &Path) {
         kad.set_mode(Some(libp2p::kad::Mode::Server));
     }
     wait_for_listen_address(&mut node).await;
-    fs::write(temp.join("ready-relay"), b"ready").unwrap();
+    fs::write(temp.join(format!("ready-{role}")), b"ready").unwrap();
     while let Some(event) = node.swarm.next().await {
         if let SwarmEvent::Behaviour(BehaviourEvent::Identify(identify::Event::Received {
             peer_id,
@@ -157,6 +184,7 @@ struct Observer<'a> {
     process_starts: [Value; 2],
     configurations: [Vec<u8>; 2],
     samples: File,
+    infrastructure: Vec<(u32, &'a str, Value)>,
 }
 
 impl Observer<'_> {
@@ -174,7 +202,7 @@ impl Observer<'_> {
                 "configuration changed"
             );
             let socket = node_control_socket(self.temp, role);
-            let state = self
+            let mut state = self
                 .runtime
                 .block_on(query_state(&socket, Duration::from_secs(2)))
                 .unwrap();
@@ -184,20 +212,24 @@ impl Observer<'_> {
                 state_metric_count(&state, "kad_pairing_present"),
                 Some(usize::from(private_profile()))
             );
-            if !private_profile() {
-                for (metric, maximum) in [
-                    ("app_maintenance_queries", 1),
-                    ("app_address_publication_queries", 1),
-                    ("app_recovery_queries", 1),
-                    ("app_recovery_query_peers_retained", 256),
-                    ("app_recovery_dial_targets_retained", 8_192),
-                ] {
-                    assert!(
-                        state_metric_count(&state, metric).expect(metric) <= maximum,
-                        "owner count {metric} exceeded {maximum} at {stage} {role}"
-                    );
-                }
+            for (metric, maximum) in [
+                ("app_maintenance_queries", 1),
+                ("app_address_publication_queries", 1),
+                ("app_recovery_queries", 1),
+                ("app_recovery_query_peers_retained", 256),
+                ("app_recovery_dial_targets_retained", 8_192),
+                ("packet_plane_retiring_sessions", 1),
+            ] {
+                assert!(
+                    state_metric_count(&state, metric).expect(metric) <= maximum,
+                    "owner count {metric} exceeded {maximum} at {stage} {role}"
+                );
             }
+            assert!(
+                state_metric_count(&state, "packet_plane_retiring_sessions").unwrap()
+                    <= state_metric_count(&state, "packet_plane_sessions").unwrap(),
+                "retiring session without a current owner at {stage} {role}"
+            );
             for (metric, maximum) in [
                 ("app_maintenance_oldest_pending_age_millis", 100_000),
                 ("app_address_publication_oldest_pending_age_millis", 100_000),
@@ -209,7 +241,17 @@ impl Observer<'_> {
                     "stale owner {metric} at {stage} {role}"
                 );
             }
-            for log_role in ["a", "b", "relay"] {
+            for (infra_pid, infra_role, start) in &self.infrastructure {
+                assert_eq!(
+                    idle_sample::process_observation(infra_role, *infra_pid, self.started)["start_ticks"],
+                    *start,
+                    "infrastructure restarted"
+                );
+            }
+            for log_role in ["a", "b"]
+                .into_iter()
+                .chain(self.infrastructure.iter().map(|(_, role, _)| *role))
+            {
                 assert!(
                     fs::metadata(self.temp.join(format!("node-{log_role}.log")))
                         .unwrap()
@@ -217,6 +259,18 @@ impl Observer<'_> {
                         < 32 * 1024 * 1024,
                     "node log reached its hard limit"
                 );
+            }
+            let status = self
+                .runtime
+                .block_on(query_status(&socket, Duration::from_secs(2)))
+                .unwrap();
+            for metric in settling::QUIET_COUNTERS {
+                if state_metric_count(&state, metric).is_none() {
+                    state.push(format!(
+                        "{metric} {}",
+                        state_metric_count(&status, metric).expect(metric)
+                    ));
+                }
             }
             let record = json!({"stage": stage, "elapsed_seconds": self.started.elapsed().as_secs_f64(), "role": role, "process": process, "state": state});
             serde_json::to_writer(&mut self.samples, &record).unwrap();
@@ -235,7 +289,7 @@ impl Observer<'_> {
         })
     }
 
-    fn packet_gate(&self, expected_path: &str) {
+    fn packet_gate(&self, expected_path: &str) -> bool {
         let before: [Vec<String>; 2] = std::array::from_fn(|index| {
             self.runtime
                 .block_on(query_status(
@@ -244,6 +298,7 @@ impl Observer<'_> {
                 ))
                 .unwrap()
         });
+        let mut delivered = true;
         for (pid, role, _, destination) in &self.nodes {
             let output = ns_command_output(
                 *pid,
@@ -268,13 +323,16 @@ impl Observer<'_> {
                 &output.stdout,
             )
             .unwrap();
-            assert_output_success("overlay ping", &output);
             assert!(
-                complete_ping(&String::from_utf8_lossy(&output.stdout)),
-                "{role}: expected exactly 5/5 replies"
+                matches!(output.status.code(), Some(0 | 1)),
+                "{role}: ping command failed: {}",
+                String::from_utf8_lossy(&output.stderr)
             );
+            delivered &=
+                output.status.success() && complete_ping(&String::from_utf8_lossy(&output.stdout));
         }
-        for (index, (_, role, _, _)) in self.nodes.iter().enumerate() {
+        let mut path_unchanged = true;
+        for (index, (_, role, peer, _)) in self.nodes.iter().enumerate() {
             let after = self
                 .runtime
                 .block_on(query_status(
@@ -288,30 +346,49 @@ impl Observer<'_> {
                     .checked_sub(state_metric_count(&before[index], name).expect(name))
                     .expect("counter regressed")
             };
-            assert!(
-                delta("inbound_accepted_packets") >= 5,
-                "missing accepted TUN traffic"
-            );
+            let accepted = delta("inbound_accepted_packets");
+            if delivered {
+                assert!(accepted >= 5, "missing accepted TUN traffic");
+            }
             if expected_path == "circuit_relay" {
-                assert!(
-                    delta("outbound_relay_stream_fallback_packets") >= 5,
-                    "relay path did not carry test traffic"
-                );
+                let relayed = delta("outbound_relay_stream_fallback_packets");
+                if delivered {
+                    assert!(relayed >= 5, "relay path did not carry test traffic");
+                }
+            }
+            if expected_path == "direct_udp_datagram" {
+                // The legacy QUIC counter also counts owned UDP packet-plane sends.
+                let datagrams = delta("outbound_quic_datagram_packets");
+                let streams = delta("outbound_stream_fallback_packets");
+                path_unchanged &= direct_udp_traffic(datagrams, streams);
+                let state = self
+                    .runtime
+                    .block_on(query_state(
+                        &node_control_socket(self.temp, role),
+                        Duration::from_secs(2),
+                    ))
+                    .unwrap();
+                path_unchanged &= peer_path(&state, peer, expected_path);
             }
         }
+        delivered && path_unchanged
     }
 
     fn wait_path(&mut self, stage: &str, path: &str, budget: Duration) {
+        self.wait_path_via(stage, path, budget, None);
+    }
+
+    fn wait_path_via(&mut self, stage: &str, path: &str, budget: Duration, relay: Option<&str>) {
         let deadline = Instant::now() + budget;
         loop {
             let states = self.states(stage);
             let ready = states
                 .iter()
                 .zip(&self.nodes)
-                .all(|(state, (_, _, peer, _))| peer_path(state, peer, path));
-            if ready {
-                self.packet_gate(path);
-            }
+                .all(|(state, (_, _, peer, _))| peer_path_via(state, peer, path, relay));
+            // A stale selected path can survive until its probe timeout. Packet loss
+            // during recovery is not success, but still has the original deadline.
+            let ready = ready && self.packet_gate(path);
             assert!(
                 Instant::now() < deadline,
                 "{stage}: autonomous {path} recovery including packet gate exceeded {} seconds",
@@ -329,7 +406,16 @@ impl Observer<'_> {
     }
 
     fn dwell(&mut self, stage: &str, path: &str) {
-        let deadline = Instant::now() + HEALTHY_DWELL;
+        self.dwell_until(stage, path, Instant::now() + HEALTHY_DWELL, None);
+    }
+
+    fn dwell_until(
+        &mut self,
+        stage: &str,
+        path: &str,
+        deadline: Instant,
+        mut baseline: Option<&mut settling::Baseline>,
+    ) {
         while Instant::now() < deadline {
             let states = self.states(stage);
             assert!(
@@ -339,13 +425,35 @@ impl Observer<'_> {
                     .all(|(state, (_, _, peer, _))| peer_path(state, peer, path)),
                 "{stage}: healthy path regressed"
             );
-            self.packet_gate(path);
+            if let Some(baseline) = baseline.as_deref_mut() {
+                for (index, state) in states.iter().enumerate() {
+                    baseline
+                        .validate(index, state, self.started.elapsed())
+                        .unwrap_or_else(|error| panic!("{stage} {}: {error}", self.nodes[index].1));
+                }
+            }
+            assert!(
+                self.packet_gate(path),
+                "{stage}: packet gate failed delivery or selected-path recheck"
+            );
+            thread::sleep(SAMPLE_INTERVAL.min(deadline.saturating_duration_since(Instant::now())));
+        }
+    }
+
+    fn unavailable(&mut self) {
+        let deadline = Instant::now() + INFRASTRUCTURE_OUTAGE;
+        while Instant::now() < deadline {
+            self.states("cycle-4-all-infrastructure-unavailable");
             thread::sleep(SAMPLE_INTERVAL.min(deadline.saturating_duration_since(Instant::now())));
         }
     }
 }
 
 fn peer_path(state: &[String], transport: &str, path: &str) -> bool {
+    peer_path_via(state, transport, path, None)
+}
+
+fn peer_path_via(state: &[String], transport: &str, path: &str, relay: Option<&str>) -> bool {
     state
         .iter()
         .filter(|line| line.starts_with("peer state: "))
@@ -359,6 +467,7 @@ fn peer_path(state: &[String], transport: &str, path: &str) -> bool {
             field("transport") == Some(transport)
                 && field("validated") == Some("true")
                 && field("selected_path") == Some(path)
+                && relay.is_none_or(|relay| field("selected_path_relay_peer") == Some(relay))
         })
 }
 
@@ -367,6 +476,10 @@ fn complete_ping(output: &str) -> bool {
         let fields = line.split_whitespace().collect::<Vec<_>>();
         fields.get(..6) == Some(&["5", "packets", "transmitted,", "5", "received,", "0%"][..])
     })
+}
+
+fn direct_udp_traffic(datagrams: usize, streams: usize) -> bool {
+    datagrams >= 5 && streams == 0
 }
 
 fn underlay_ping(pid: u32, destination: &str, succeeds: bool) {
@@ -389,19 +502,32 @@ pub fn run_orchestrator() {
         "fixture deadlines cannot be scaled"
     );
     let private = private_profile();
+    let soak = soak_requested();
     let hash = idle_sample::fingerprint().expect("test binary fingerprint");
     let local = NodeIdentity::generate_ed25519().unwrap();
     let remote = NodeIdentity::generate_ed25519().unwrap();
     let infra = NodeIdentity::generate_ed25519().unwrap();
+    let backup_identity = soak.then(|| NodeIdentity::generate_ed25519().unwrap());
     let temp = init_namespace_temp_dir(
         &env::temp_dir().join(format!("p2p-vpn-{TEST_NAME}")),
         TEST_NAME,
     );
     eprintln!("automatic recovery artifacts: {}", temp.display());
-    let configurations = [
+    let mut configurations = [
         minimal_config(&local, &remote, &infra, private),
         minimal_config(&remote, &local, &infra, private),
     ];
+    if let Some(backup) = &backup_identity {
+        for config in &mut configurations {
+            config["network"]["bootstrap_peers"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({
+                    "id": backup.peer_id,
+                    "address": format!("/ip4/11.251.0.253/tcp/42200/p2p/{}", backup.peer_id),
+                }));
+        }
+    }
     let configs: [Config; 2] = configurations
         .clone()
         .map(|value| serde_json::from_value(value).unwrap());
@@ -440,10 +566,27 @@ pub fn run_orchestrator() {
         &temp,
         &temp.join("start-relay"),
     );
-    for node in [&node_a, &node_b, &relay] {
+    let backup = backup_identity.as_ref().map(|identity| {
+        spawn_node(
+            TEST_NAME,
+            "backup",
+            identity,
+            None,
+            None,
+            &temp,
+            &temp.join("start-backup"),
+        )
+    });
+    for node in [&node_a, &node_b, &relay]
+        .into_iter()
+        .chain(backup.as_ref())
+    {
         wait_for_child_namespace(node.id());
     }
     configure_network_move_underlay_with_prefix(relay.id(), node_a.id(), node_b.id(), "11.251.0");
+    if let Some(backup) = &backup {
+        attach_veth_to_bridge(backup.id(), "bkup", "11.251.0.253/24", "br-mv");
+    }
     // No router or IPv6 link-local detour may bypass the isolated bridge ports.
     run_command(
         "sysctl",
@@ -458,7 +601,10 @@ pub fn run_orchestrator() {
         (node_a.id(), "veth-a"),
         (node_b.id(), "veth-b"),
         (relay.id(), "veth-mv"),
-    ] {
+    ]
+    .into_iter()
+    .chain(backup.as_ref().map(|backup| (backup.id(), "veth-bkup")))
+    {
         ns_command(
             pid,
             "sysctl",
@@ -476,11 +622,22 @@ pub fn run_orchestrator() {
     underlay_ping(node_b.id(), "11.251.0.254", true);
     underlay_ping(node_a.id(), "10.253.0.2", true);
     underlay_ping(node_b.id(), "10.253.0.1", true);
+    if backup.is_some() {
+        underlay_ping(node_a.id(), "11.251.0.253", true);
+        underlay_ping(node_b.id(), "11.251.0.253", true);
+        run_command("ip", &["link", "set", "veth-bkup-host", "down"]);
+    }
     run_command("ip", &["link", "set", "veth-mv-host", "down"]);
-    for role in ["relay", "a", "b"] {
+    for role in ["relay", "a", "b"]
+        .into_iter()
+        .chain(backup.as_ref().map(|_| "backup"))
+    {
         fs::write(temp.join(format!("start-{role}")), b"start").unwrap();
     }
     wait_for_file_with_timeout(&temp.join("ready-relay"), Duration::from_secs(10));
+    if backup.is_some() {
+        wait_for_file_with_timeout(&temp.join("ready-backup"), Duration::from_secs(10));
+    }
     for role in ["a", "b"] {
         wait_for_daemon_running(&temp, role);
     }
@@ -521,11 +678,23 @@ pub fn run_orchestrator() {
             fs::read(child_config_path(&temp, "b")).unwrap(),
         ],
         samples: File::create(temp.join("recovery-samples.jsonl")).unwrap(),
+        infrastructure: [(relay.id(), "relay")]
+            .into_iter()
+            .chain(backup.as_ref().map(|backup| (backup.id(), "backup")))
+            .map(|(pid, role)| {
+                (
+                    pid,
+                    role,
+                    idle_sample::process_observation(role, pid, started)["start_ticks"].clone(),
+                )
+            })
+            .collect(),
     };
     let mut summary = json!({"schema_version": 1, "test": TEST_NAME, "profile": if private {"private"} else {"public"},
         "binary_sha256": hash,
-        "acceptance_soak": false, "cycles_required": 1, "cycles_completed": 0, "outcome": "running",
-        "deadlines_seconds": {"initial_lan": INITIAL_LAN.as_secs(), "relay_recovery": RELAY_RECOVERY.as_secs(), "direct_recovery": DIRECT_RECOVERY.as_secs(), "healthy_dwell": HEALTHY_DWELL.as_secs(), "watchdog": WATCHDOG.as_secs()}});
+        "acceptance_soak": soak, "cycles_required": if soak { SOAK_CYCLES } else { 1 }, "cycles_completed": 0, "outcome": "running",
+        "deadlines_seconds": {"initial_lan": INITIAL_LAN.as_secs(), "relay_recovery": RELAY_RECOVERY.as_secs(), "direct_recovery": DIRECT_RECOVERY.as_secs(), "healthy_dwell": HEALTHY_DWELL.as_secs(), "watchdog": requested_watchdog().as_secs(), "primary_pool_drain": settling::PRIMARY_POOL_DRAIN_BUDGET.as_secs(),
+            "soak_minimum": SOAK_MINIMUM.as_secs(), "final_healthy_minimum": FINAL_HEALTHY.as_secs(), "settling_grace": SETTLING_GRACE.as_secs(), "infrastructure_outage": INFRASTRUCTURE_OUTAGE.as_secs()}});
     fs::write(
         temp.join("recovery-summary.json"),
         serde_json::to_vec_pretty(&summary).unwrap(),
@@ -534,20 +703,86 @@ pub fn run_orchestrator() {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         observer.wait_path("initial-lan", "direct_udp_datagram", INITIAL_LAN);
         observer.dwell("initial-lan-healthy", "direct_udp_datagram");
-        set_network_move_direct_link(node_a.id(), node_b.id(), false);
-        run_command("ip", &["link", "set", "veth-mv-host", "up"]);
-        underlay_ping(node_a.id(), "10.253.0.2", false);
-        underlay_ping(node_b.id(), "10.253.0.1", false);
-        underlay_ping(node_a.id(), "11.251.0.2", false);
-        underlay_ping(node_b.id(), "11.251.0.1", false);
-        observer.wait_path("lan-to-relay", "circuit_relay", RELAY_RECOVERY);
-        observer.dwell("relay-healthy", "circuit_relay");
-        set_network_move_direct_link(node_a.id(), node_b.id(), true);
-        underlay_ping(node_a.id(), "10.253.0.2", true);
-        underlay_ping(node_b.id(), "10.253.0.1", true);
-        observer.wait_path("relay-to-lan", "direct_udp_datagram", DIRECT_RECOVERY);
-        observer.dwell("returned-lan-healthy", "direct_udp_datagram");
-        summary["cycles_completed"] = json!(1);
+        let mut subnet = 253;
+        for cycle in 1..=if soak { SOAK_CYCLES } else { 1 } {
+            set_network_move_direct_link(node_a.id(), node_b.id(), false);
+            if matches!(cycle, 2 | 5) {
+                let next = if cycle == 2 { 254 } else { 253 };
+                change_lan_addresses(node_a.id(), node_b.id(), subnet, next);
+                subnet = next;
+            }
+            if cycle == 1 {
+                run_command("ip", &["link", "set", "veth-mv-host", "up"]);
+            }
+            if cycle == 3 {
+                run_command("ip", &["link", "set", "veth-mv-host", "down"]);
+                run_command("ip", &["link", "set", "veth-bkup-host", "up"]);
+            }
+            if cycle == 4 {
+                run_command("ip", &["link", "set", "veth-bkup-host", "down"]);
+                underlay_ping(node_a.id(), "11.251.0.253", false);
+                underlay_ping(node_b.id(), "11.251.0.254", false);
+                observer.unavailable();
+                run_command("ip", &["link", "set", "veth-bkup-host", "up"]);
+            }
+            underlay_ping(node_a.id(), &format!("10.{subnet}.0.2"), false);
+            underlay_ping(node_b.id(), &format!("10.{subnet}.0.1"), false);
+            underlay_ping(node_a.id(), "11.251.0.2", false);
+            underlay_ping(node_b.id(), "11.251.0.1", false);
+            let relay_identity = if cycle >= 3 {
+                backup_identity.as_ref().unwrap()
+            } else {
+                &infra
+            };
+            let relay_overlay =
+                p2p_vpn::PeerId::from_libp2p(relay_identity.peer_id.parse().unwrap()).to_string();
+            observer.wait_path_via(
+                &format!("cycle-{cycle}-lan-to-relay"),
+                "circuit_relay",
+                RELAY_RECOVERY,
+                Some(&relay_overlay),
+            );
+            observer.dwell(&format!("cycle-{cycle}-relay-healthy"), "circuit_relay");
+            set_network_move_direct_link(node_a.id(), node_b.id(), true);
+            underlay_ping(node_a.id(), &format!("10.{subnet}.0.2"), true);
+            underlay_ping(node_b.id(), &format!("10.{subnet}.0.1"), true);
+            observer.wait_path(
+                &format!("cycle-{cycle}-relay-to-lan"),
+                "direct_udp_datagram",
+                DIRECT_RECOVERY,
+            );
+            observer.dwell(
+                &format!("cycle-{cycle}-returned-lan-healthy"),
+                "direct_udp_datagram",
+            );
+            summary["cycles_completed"] = json!(cycle);
+            fs::write(
+                temp.join("recovery-summary.json"),
+                serde_json::to_vec_pretty(&summary).unwrap(),
+            )
+            .unwrap();
+        }
+        if soak {
+            observer.dwell_until(
+                "final-settling-grace",
+                "direct_udp_datagram",
+                Instant::now() + SETTLING_GRACE,
+                None,
+            );
+            let baseline_states = observer.states("healthy-baseline");
+            let healthy_started = Instant::now();
+            let mut baseline = settling::Baseline::new(baseline_states, started.elapsed());
+            let deadline = (healthy_started + FINAL_HEALTHY).max(started + SOAK_MINIMUM);
+            observer.dwell_until(
+                "final-healthy",
+                "direct_udp_datagram",
+                deadline,
+                Some(&mut baseline),
+            );
+            summary["continuous_healthy_seconds"] = json!(healthy_started.elapsed().as_secs_f64());
+            assert!(started.elapsed() >= SOAK_MINIMUM);
+            assert!(healthy_started.elapsed() >= FINAL_HEALTHY);
+        }
     }));
     // Capture while the daemons are alive, including a failure before path convergence.
     capture_daemon_snapshots(&temp, &["a", "b"]);
@@ -559,12 +794,39 @@ pub fn run_orchestrator() {
     )
     .unwrap();
     drop(observer);
-    drop((node_a, node_b, relay));
+    drop((node_a, node_b, relay, backup));
     if let Err(error) = result {
         std::panic::resume_unwind(error);
     }
     if !keep_temp_artifacts() {
         fs::remove_dir_all(temp).unwrap();
+    }
+}
+
+fn change_lan_addresses(a: u32, b: u32, old: u8, new: u8) {
+    for (pid, interface, suffix) in [(a, "veth-dir-a", 1), (b, "veth-dir-b", 2)] {
+        ns_command(
+            pid,
+            "ip",
+            &[
+                "addr",
+                "del",
+                &format!("10.{old}.0.{suffix}/24"),
+                "dev",
+                interface,
+            ],
+        );
+        ns_command(
+            pid,
+            "ip",
+            &[
+                "addr",
+                "add",
+                &format!("10.{new}.0.{suffix}/24"),
+                "dev",
+                interface,
+            ],
+        );
     }
 }
 
@@ -633,6 +895,15 @@ fn recovery_minimal_configs_retain_default_policies() {
 }
 
 #[test]
+fn recovery_direct_udp_gate_requires_datagrams_without_stream_fallback() {
+    assert!(direct_udp_traffic(5, 0));
+    assert!(direct_udp_traffic(10, 0));
+    assert!(!direct_udp_traffic(4, 0));
+    assert!(!direct_udp_traffic(0, 5));
+    assert!(!direct_udp_traffic(5, 1));
+}
+
+#[test]
 fn recovery_packet_and_peer_gates_reject_partial_or_unrelated_success() {
     assert!(complete_ping(
         "5 packets transmitted, 5 received, 0% packet loss, time 801ms"
@@ -655,4 +926,40 @@ fn recovery_packet_and_peer_gates_reject_partial_or_unrelated_success() {
         "remote",
         "circuit_relay"
     ));
+    let via = vec![format!("{} selected_path_relay_peer replacement", state[0])];
+    assert!(peer_path_via(
+        &via,
+        "remote",
+        "circuit_relay",
+        Some("replacement")
+    ));
+    assert!(!peer_path_via(
+        &via,
+        "remote",
+        "circuit_relay",
+        Some("stale")
+    ));
+    assert!(!peer_path_via(
+        &state,
+        "remote",
+        "circuit_relay",
+        Some("replacement")
+    ));
+}
+
+#[test]
+fn recovery_soak_budget_preserves_all_stage_deadlines() {
+    let stage_total = INITIAL_LAN
+        + HEALTHY_DWELL
+        + (RELAY_RECOVERY + DIRECT_RECOVERY + HEALTHY_DWELL * 2) * SOAK_CYCLES as u32
+        + INFRASTRUCTURE_OUTAGE
+        + SETTLING_GRACE
+        + FINAL_HEALTHY
+        + Duration::from_secs(105);
+    assert_eq!(SOAK_WATCHDOG, stage_total);
+    assert_eq!(SOAK_MINIMUM, Duration::from_secs(1_800));
+    assert_eq!(FINAL_HEALTHY, Duration::from_secs(600));
+    for suffix in ["mv", "a", "b", "bkup"] {
+        assert!(format!("veth-{suffix}-host").len() <= 15);
+    }
 }

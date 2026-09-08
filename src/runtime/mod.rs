@@ -1,5 +1,6 @@
 mod address_retention;
 pub mod bootstrap_check;
+mod connection_retention;
 pub mod control;
 pub mod control_socket;
 pub mod dns;

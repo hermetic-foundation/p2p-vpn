@@ -32,6 +32,17 @@ The daemon retains at most 32 identified public routing peers per instance.
 Unknown peers have 30 seconds to identify or present membership. Invalid
 overlay capability attempts are disconnected and quarantined with backoff.
 
+### Healthy Control Connections
+
+For authorized VPN peers, the daemon retains healthy, validated control
+connections in a shared preference order: direct QUIC, direct TCP, then relay.
+This keeps control traffic available when packets use a separate UDP connection.
+
+- Public routing peers keep their existing idle timeout.
+- Loss of authorization, validation, or path health releases retention.
+- No extra configuration or periodic wire messages are needed for retention.
+- Existing connection limits still apply: eight established connections per peer by default. Direct-connection deduplication remains active.
+
 ### Returning To LAN
 
 After a direct LAN connection returns, packet negotiation prefers endpoints on
@@ -41,6 +52,17 @@ not override that peer-specific preference merely because it is public-looking.
 - Existing discovery and dial cooldowns can delay promotion.
 - Without a healthy direct LAN connection or mutually advertised endpoints, existing endpoint selection remains in effect.
 - Endpoint signatures, peer authorization, and packet-path health checks remain required.
+
+### UDP Session Renewal
+
+UDP keys renew automatically before their configured expiry. With both peers
+running the renewal implementation, a healthy same-endpoint path stays usable
+while the replacement handshake completes. No additional configuration is needed.
+
+- Previous keys remain valid only until their original expiry.
+- Failed renewal still permits normal stream fallback after expiry.
+- Network changes and unconfirmed paths still require packet-path health checks.
+- `packet_plane_retiring_sessions` in Status/State counts previous sessions awaiting cleanup, at most one per current peer session.
 
 ## Public DHT Resource Policy
 
@@ -422,6 +444,10 @@ sudo p2p-vpn daemon-state --socket /run/p2p-vpn/control.sock | rg '^app_'
 Times are floored milliseconds. Zero remaining delay means due or absent;
 check the associated count or scheduled flag. A retained cooldown is not an
 active attempt. These snapshots observe state without starting recovery work.
+
+`app_public_discovery_suppressed` means the failure-backoff timer is active.
+It does not report healthy-peer quiet mode. Zero is normal after backoff expires,
+even when healthy peers prevent new public discovery.
 
 ## More References
 

@@ -46,6 +46,7 @@ const KADEMLIA_QUERY_ADDRESS_BYTES: usize = 256 * 1024;
 
 #[derive(NetworkBehaviour)]
 pub struct Behaviour {
+    pub(crate) connection_retention: super::connection_retention::Behaviour,
     pub connection_limits: connection_limits::Behaviour,
     pub blocked_peers: allow_block_list::Behaviour<allow_block_list::BlockedPeers>,
     pub identify: identify::Behaviour,
@@ -192,6 +193,7 @@ pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
                 };
 
                 Ok(Behaviour {
+                    connection_retention: super::connection_retention::Behaviour::default(),
                     connection_limits: connection_limits::Behaviour::new(
                         resources.to_connection_limits(),
                     ),
