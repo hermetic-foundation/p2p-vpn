@@ -2,9 +2,9 @@
 
 ## Status and Scope
 
-Active bounded review, opened against `d0e38487` on 2026-09-09.
-This checklist is not a completion report. Earlier results retain their original
-source revisions and platform limits; no new device run is claimed here.
+Bounded review completed against production `518929b3` on 2026-09-09, opened
+against `d0e38487`. Final requirement evidence and reuse boundaries appear below.
+Earlier results retain their source revisions; no physical-device run is claimed.
 
 | Boundary | Required Outcome |
 | --- | --- |
@@ -31,8 +31,56 @@ reopen them only if this audit produces new causal evidence.
 - [x] Reconcile process death, always-on, reboot and app replacement on reviewed source.
 - [x] Run bounded cached-emulator lifecycle and applicable underlay scenarios.
 - [x] Record historical failure dispositions and precise missing attribution evidence.
-- [ ] Run affected checks, inspect final diff, publish each atomic commit to `main`.
-- [ ] Audit every requirement before marking this review complete.
+- [x] Run affected checks, inspect final diff, publish each atomic commit to `main`.
+- [x] Audit every requirement before marking this review complete.
+
+## Final Requirement Audit
+
+| Goal Requirement | Verified Evidence | Boundary |
+| --- | --- | --- |
+| 1. Reconcile reports | Existing-evidence map, AL1-AL4, historical dispositions and linked review index | Original failures remain visible; completed core workstreams are not reopened |
+| 2. Inventory owners | UI/service ownership trace plus native/TUN table; source rechecked through `518929b3` | Covers intent, generations, jobs, callbacks, storage, JNI, descriptors, notifications and timers |
+| 3. Verify event order and recovery | Final combined instrumentation passes every opt-in; 68-check multi-network run verifies disabled-set persistence and restoration | Controlled orderings plus real framework/JNI; not arbitrary scheduler or permanent native deadlock proof |
+| 4. Reproduce and fix minimally | AL1-AL4 each retain failing assertions before correction and successful subsequent operations | Two Java production files changed; no identity, configuration, profile, CLI or protocol migration |
+| 5. Validate affected layers | 131 JVM tests, lint, both APKs, final JNI instrumentation; native provenance and unchanged-source unit evidence below | Debug API 35 x86_64; physical/API 37 and release certification remain separate |
+| 6. Reconcile historical failures | Original cellular/update artifacts reinspected; attribution ledger names missing packet and OS observations | Later passes do not explain earlier missing replies |
+| 7. Publish structured review | Ownership tables, findings, commands, artifact hashes, limits and remaining-refactor index | Sustained resources and final cross-platform acceptance are not declared complete |
+| 8. Publish atomic commits | AL1 `ab45d355`, AL2 `481bc16a`, AL3 `7c8a5b6a`, AL4 `518929b3` on `main@origin` | Final documentation publication is verified separately from runtime evidence |
+
+### Final Evidence Reuse
+
+- Final combined log: `/tmp/p2p-vpn-lifecycle-failed-bind-positive.log`.
+  All options pass; final `passed=true`, instrumentation result `-1`.
+- Final build: `/tmp/p2p-vpn-lifecycle-failed-bind-fixed-build.log`.
+  JVM XML reports total 131 tests, zero failures/errors/skips; lint and APK assembly pass.
+- Native unit reuse: `/tmp/p2p-vpn-ps4-workspace.log`, Android crate 70/70.
+  Assertions cover lease retirement, fresh queues, stale generations, route changes and TUN pressure.
+- `jj diff --from d0e38487 --to 518929b3 --stat src crates Cargo.toml Cargo.lock`
+  reports zero changes. No shared-Rust-change gate is triggered by this Java-only review.
+- Offline native rebuild and staged JNI remain byte-identical, as recorded below.
+  Real JNI startup, stop, replacement and recovery run in the final instrumentation.
+- Repository search found no Lean/Lake model. Lint and diff inspection cover Java
+  static/style checks; no separate Java formatter is configured in the Android build.
+
+The 68-check scenario uses `d6b6b1b0`, not the final APK. A source diff to
+`518929b3` contains only AL3 and AL4: the missing-local-permission timer and
+activity-binding cleanup. Final instrumentation exercises both changed paths.
+
+Normal API 35 cannot enter the API 37 missing-permission branch. Successful
+activity binding retains the same callbacks and service ownership; its cleanup,
+recreation and replacement are rerun with AL4. Unchanged multi-network behavior
+therefore reuses the earlier run without relabelling its artifact as final.
+
+### Remaining Separate Work
+
+| Workstream | Evidence Still Needed |
+| --- | --- |
+| Sustained resources | Comparable idle/load CPU, retained heap, connection counts and battery attribution |
+| Final platform acceptance | Physical ARM64/API 37 permission behavior, release packaging and affected NixOS/Android acceptance matrix |
+| Historical packet attribution | Correlated per-network packet stages/deltas if the old update or isolation symptom recurs |
+
+The lifecycle review is complete within these explicit platform and cooperative
+shutdown limits. This is not production certification or proof of zero packet loss.
 
 ## Initial Source Map
 
@@ -63,7 +111,7 @@ Entries locate ownership boundaries; they do not assert complete verification.
 | Superseded stop | [A1](android-event-ownership-review.md#a1-superseded-stop) | Three stop paths and two admission orderings; synthesized callback delivery |
 | Health polling | [A2](android-event-ownership-review.md#a2-lost-health-timer) | Recurring JNI reads and one autonomous recovery at `4b90f3bc`; not retry exhaustion |
 | Deferred connect | [A3](android-event-ownership-review.md#a3-deferred-connect-intent) | Injected join success/failure; encrypted storage and JNI startup are real |
-| Multi-network lifecycle | [68-check pass](android-multi-network-review.md#latest-attempt) at `deedd041` | Emulator process death, update, reboot, underlay and isolation; not current-source certification |
+| Multi-network lifecycle | Historical [68-check pass](android-multi-network-review.md) at `deedd041` | Superseded for this audit by the `d6b6b1b0` run and final-source reuse analysis |
 | Native network generations | `supervisor.rs` reactivation and lease tests | Inspect assertions and rerun affected scope before claiming final-source coverage |
 | Formal models | No Lean/Lake files found by repository file search | No applicable existing Lean model identified; not a formal correctness claim |
 
@@ -264,7 +312,7 @@ Each activity start now creates a distinct connection owner. Registration state
 is separate from connected state; stop retires the owner before releasing its
 listener and binding. Old connect, disconnect and snapshot callbacks are ignored.
 
-### Verified and Pending
+### Verification Boundaries
 
 | Check | Evidence / Limit |
 | --- | --- |
@@ -316,7 +364,7 @@ This does not prove rotation, process recreation, permission dialogs or battery 
 | Instrumentation APK | `6b6a5d3f02d209a2b9d826d2881c50cbe517834bad09363a99afe7f8051d059d` |
 
 JNI is the same artifact identified in AL1 and verified against current source
-below. Broader multi-network reconciliation remains required.
+below. The subsequent multi-network run and final audit complete reconciliation.
 
 ## AL3: Local Permission Recovery
 
@@ -376,7 +424,7 @@ policy or packaging configuration changed.
 
 ## AL4: Failed Binding Cleanup
 
-Status: reproduced and fixed after `ca2d2989`; both failure paths and subsequent
+Status: reproduced and fixed at `518929b3`; both failure paths and subsequent
 framework rebinding pass on the API 35 emulator.
 
 Previously, `MainActivity.onStart` assigned `bindingRegistered` from the Boolean returned by
@@ -480,7 +528,7 @@ validated underlays and aggregate counters still do not locate packet loss or de
 
 Production `d6b6b1b0` passed all 68 checks on API 35 x86_64, from
 2026-09-09T10:47:40Z to 10:55:19Z (459 seconds). The APK, native library and
-rebuilt Linux fixture use current source; no runtime intervention was performed.
+rebuilt Linux fixture use that revision; no runtime intervention was performed.
 
 | Lifecycle Stage | Result |
 | --- | --- |
@@ -554,5 +602,5 @@ The command selects the cached Nix launcher and ADB through the documented
 | Timing observations | No concurrent builds, manual repair or relaxed deadlines |
 | Cleanup | Bounded logs and watchdogs; terminate owned emulator/fixture processes |
 
-No physical device was used. The AL1 run above does not close the remaining
-inventory, permission, multi-network, underlay and historical-attribution gates.
+No physical device was used. Completion relies on the full requirement audit,
+not AL1 alone; individual runs retain their documented source and platform limits.

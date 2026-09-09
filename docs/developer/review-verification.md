@@ -182,14 +182,14 @@ Logs use `/tmp/p2p-vpn-review-startup-snapshot-*`.
 | Recovery ownership | [Bounded timer/event review complete](recovery-event-ownership-review.md): stale dial, timer, listener and task ownership verified. Do not reopen it solely to complete broader lifecycle/platform acceptance. |
 | Probe response ownership | [Wrong-peer probe consumption](path-probe-ownership-review.md) is corrected; current recovery review retains token/window guards and verifies timer integration. Broader pairing/platform acceptance remains separate. |
 | Session lifecycle | [Pairing/session review complete](pairing-session-lifecycle-review.md), including membership-sync integration. Android service lifecycle and final platform evidence remain separate. |
-| Android lifecycle ownership | [Bounded lifecycle audit active](android-lifecycle-audit.md). Earlier event-ownership fixes retain JVM/emulator coverage; final-source inventory, cancellation boundaries and broader lifecycle reconciliation remain open. |
+| Android lifecycle ownership | [Bounded lifecycle audit complete](android-lifecycle-audit.md) at `518929b3`: AL1-AL4 fixed, 131 JVM tests and final combined JNI instrumentation pass. Multi-network evidence and platform limits are explicitly reconciled. |
 | Pairing orchestration | [Bounded review complete](pairing-session-lifecycle-review.md): admission, terminal owners, retries, persistence and file commit ordering. Final platform acceptance remains separate. |
 | Address resources | [Kademlia workstream complete](kademlia-workstream-acceptance.md): aggregate owners, sustained recovery, measurements with exclusions and RM-1 fix. Heap attribution and broader lifecycle review remain separate; do not reopen completed enforcement. |
 | Resource comparison | Debug and release signed-ledger samples cover 256 records; timer refresh reuses valid evaluations. Isolate retained allocations and establish daemon/sustained-load impact. |
-| Platform validation | All exported VM scenarios have review results at the revisions listed above; Android passes all 68 multi-network checks at `deedd041`. Generated-Nix system activation now passes on both LAN guests. Consumer-flake, remote-deployment, and reboot coverage remain distinct; revalidate affected scenarios after further runtime changes. |
+| Platform validation | All exported VM scenarios have review results at the revisions listed above; Android passes all 68 multi-network checks at `d6b6b1b0`, with final-source reuse audited at `518929b3`. Generated-Nix system activation passes on both LAN guests. Consumer-flake, remote-deployment, release and physical-device coverage remain distinct. |
 | Android underlay failure | Latest transition passes with independent OS underlay diagnostics. Earlier failure attribution remains unresolved; a pass alone does not establish its cause. |
 | Private bootstrap admission | [Delayed changed-port restart](private-discovery-restart-review.md) failed before the Identify classification fix and passed twice afterward. Routing clients no longer expire merely because they advertise pairing support. The Android multi-network scenario also passes with the fix. |
-| Android update traffic | Latest replacement traffic passes with ping timing and reply sequences retained. Preserve earlier 4/5 evidence and investigate attribution alongside remaining transport ownership work. |
+| Android update traffic | Latest replacement traffic passes with ping timing and reply sequences retained. The lifecycle audit preserves earlier 4/5 evidence and the missing correlated packet observations; a later pass does not establish causality. |
 | Packet stream ownership | [Stream regressions](packet-stream-ownership-review.md) include 1,500 TCP/QUIC cycles each. [TCP pressure recovery](queue-pressure-review.md#recovery-boundary-correction) now waits for queued and in-flight work to drain, then passes three cycles; historical failures remain recorded. Broader pressure, byte-limit, heap and platform evidence remains open. |
 | Packaging/tooling | Resolve or explicitly account for unverified exported checks without uncontrolled source builds. |
 | Documentation | Reconcile architecture and user workflows with final behavior and evidence. |
@@ -203,6 +203,6 @@ A missing result cannot support a completion claim for the broader review.
 | Workstream | Scope Retained |
 | --- | --- |
 | Kademlia resources | Complete with documented limits; retain original measurement exclusions |
-| Lifecycle review | Recovery timer/event and [pairing/session reviews](pairing-session-lifecycle-review.md) complete; Android service lifecycle reconciliation remains |
+| Lifecycle review | Recovery timer/event, [pairing/session](pairing-session-lifecycle-review.md) and [Android lifecycle](android-lifecycle-audit.md) reviews complete within documented limits |
 | Resource measurement | Establish baseline and sustained CPU/memory evidence |
 | Final acceptance | Reconcile affected NixOS/Android scenarios and documentation on final code |

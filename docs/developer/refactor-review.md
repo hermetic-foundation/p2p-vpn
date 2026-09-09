@@ -12,7 +12,9 @@ sections below retain historical failures and their subsequent fixes.
 The [Kademlia workstream](kademlia-workstream-acceptance.md) is complete through
 RM-1 at `ceb6e4e2`. The bounded
 [recovery timer and event ownership review](recovery-event-ownership-review.md)
-is also complete; broader lifecycle, resource attribution and platform acceptance remain separate.
+is also complete. The [pairing/session](pairing-session-lifecycle-review.md) and
+[Android lifecycle](android-lifecycle-audit.md) reviews are complete within their
+documented limits. Sustained resource attribution and final platform acceptance remain.
 
 ## Completion Criteria
 

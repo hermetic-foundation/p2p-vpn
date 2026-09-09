@@ -8,6 +8,10 @@ The initial source review preceded regression work. A2 is now reproduced and
 fixed with JVM and native-failure emulator coverage. A1 and A3 are fixed with
 emulator instrumentation. Broader platform and resource gates remain open.
 
+The [bounded Android lifecycle audit](android-lifecycle-audit.md) completes
+current-source reconciliation at `518929b3`, including reruns of A1-A3 and
+additional cancellation, binding and permission-recovery fixes AL1-AL4.
+
 Successful workflow tests do not exercise every event ordering. Unresolved cases
 remain open even when the [network workflow](android-network-workflow-review.md) or
 [multi-network scenario](android-multi-network-review.md) passes.
