@@ -53,8 +53,8 @@ security or membership policy.
 
 - [x] Identify existing completed fixes and explicit historical limitations.
 - [x] Record ownership entry points and the chosen cancellation policy.
-- [ ] Trace invitation/code creation, authentication and admission on both roles.
-- [ ] Trace Hello/Submit/Poll success, rejection, wrong-type reply and transport failure.
+- [x] Trace invitation/code creation, authentication and admission on both roles.
+- [x] Trace Hello/Submit/Poll success, rejection, wrong-type reply and transport failure.
 - [ ] Verify stale IDs, duplicate replies, cancellation and replacement isolation.
 - [ ] Trace expiry, retry deadlines, disconnect, provider removal and query retirement.
 - [x] Trace Prepared, runtime commit, completion, Applied checkpoint and acknowledgement.
@@ -553,3 +553,135 @@ The only executable change is inside an existing unit test. PS-4's workspace,
 namespace and Android-native evidence is retained for unchanged production
 behavior; those expensive checks were not repeated for this test-only extension.
 This checkpoint is ready for publication; the overall lifecycle goal remains active.
+
+The persistence inventory and test extension were published as `88542fca`;
+`main@origin` matched and the working copy was clean afterward.
+
+## Standalone V2 Ownership Inventory
+
+Source trace at `88542fca`: [bootstrap client](../../src/runtime/pairing_bootstrap.rs)
+and its sole production caller in the
+[Android native bridge](../../crates/p2p-vpn-android/src/lib.rs).
+This completes the standalone-client trace, not the daemon dispatch checklist.
+
+### Lifetime and Admission
+
+| Boundary | Owner / Contract |
+| --- | --- |
+| Join lifetime | `join_by_code_v2` owns swarm, request map, candidate state, tick and deadline locally |
+| Option validation | Reject unbounded timeout, network-name lists and candidate hints before constructing the swarm |
+| Network identity | TCP uses Noise; QUIC uses the existing identity-backed libp2p transport |
+| Candidate discovery | LAN hints and provider results nominate candidates, not authorized overlay members |
+| Challenge admission | Open the PAKE challenge against the expected peer; keep authenticated inviter selection sticky |
+| Submit | Build and authenticate a signed request only after opening the challenge |
+| Acceptance | Verify the signed response against the offer, local identity and time before returning artifacts |
+| Configuration commit | The bootstrap client does not persist a profile; the platform enrollment layer owns that step |
+
+### Terminal Events and Retries
+
+| Request / Event | Outcome |
+| --- | --- |
+| Hello challenge from another candidate while selected | Release that candidate; do not replace the selected inviter |
+| Invalid Hello challenge or wrong response type | Release candidate with existing backoff |
+| Hello rejection | Candidate-local release for every reason; PS-2 prevents unauthenticated global rejection |
+| Submit / Poll pending | Retain offer, peer, ticket and expiry; schedule one poll after backoff |
+| Submit / Poll acceptance | Return only verified enrollment artifacts |
+| Submit / Poll Busy or RateLimited | Clear selected approval and release candidate for bounded rediscovery |
+| Other selected rejection / wrong response type | Terminate this join; no profile is returned |
+| Hello transport failure | Remove request owner and release candidate |
+| Submit transport failure | Remove owner, clear selection and release candidate |
+| Poll transport failure | Remove owner, clear in-flight flag and retain approval for a delayed retry |
+| Unknown / already removed response ID | Ignore without touching a current request |
+| Approval expiry or overall deadline | Return an error and drop the local client state |
+
+Transport peer attribution comes from the libp2p connection handler, not a peer
+field in the response payload. Pinned request-response 0.29.0 associates outbound
+response ownership with peer and connection before emitting its terminal event.
+This trace does not assert robustness against arbitrary fabricated library events.
+
+### Bounds and Cancellation
+
+| Owner | Bound / Cleanup |
+| --- | --- |
+| Candidates | Maximum candidate count and LAN addresses per peer |
+| Hello requests | Per-peer and total attempts, one in-flight attempt per candidate, pending-Hello cap |
+| Poll requests | Single selected approval and in-flight poll; approval expiry and overall timeout |
+| Public lookup | One owned lookup at a time, attempt limit and interval; terminal progress removes its query ID |
+| Unsupported-peer evidence | Recorded only for retained public-provider candidates |
+| Native join lease | Reject concurrent profile joins; release the global slot only for its matching operation ID |
+| Native cancellation | Cancellation branch drops the join future; profile construction follows only a successful result |
+
+The native cancellation flag is checked before startup and polled at 100 ms.
+Simultaneously ready acceptance and cancellation use `tokio::select!`; this trace
+does not claim cancellation retroactively removes a returned or committed profile.
+Android UI/service policy and physical socket-reclamation timing remain separate.
+
+### Retained Evidence
+
+All 12 bootstrap tests passed in `/tmp/p2p-vpn-ps4-workspace.log`, including
+sticky selection, option/candidate/address bounds, capacity recovery, selected
+rejection, PS-2 candidate isolation and authenticated loopback completion.
+
+Production source is unchanged since that run. This is a source/evidence audit,
+not a new WAN experiment or a new cancellation-on-device test. No additional
+production defect was reproduced in this standalone-client pass.
+
+## Daemon Admission and Dispatch Inventory
+
+Source trace at `88542fca`; use the runtime/session links above. The daemon
+initiates V1 code pairing and responds to V1 and V2; standalone V2 initiation
+has the separate owner described above. Cryptographic primitives are reused,
+not redesigned or claimed formally verified by this orchestration review.
+
+### Admission
+
+| Stage | Required Checks / Owner |
+| --- | --- |
+| Open / join | Validate operation ID and expiry; matching repeated ID preserves its original options/deadline, conflicting reuse fails |
+| New operation | Require idle state; enrollment/receipt IDs cannot be reused; generate fresh code and versioned locators |
+| Inbound Hello, both versions | Admitted connection, peer/global rate limits, active locator, remaining expiry and handshake capacity |
+| Challenge | Existing version-specific PAKE helper binds transport peer; store inbound session by peer plus rendezvous token |
+| New Submit | Require capacity and matching inbound session; verify code authentication, signed request, network, identity, grant and hostname constraints |
+| Repeated Submit | Match peer and authenticated request-derived approval ID to the retained ticket; return its current outcome |
+| Approval | Match operation and approval IDs, prepare validated enrollment and follow the durable commit boundary above |
+| Poll, both versions | Match peer and opaque ticket; return pending/accepted/rejected outcome according to retained state and expiry |
+| File pairing | Require FileBearer mode and unused token; PS-4 commits local membership before acceptance |
+
+### Outbound V1 Dispatch
+
+| Terminal Event / Response | Owner Action |
+| --- | --- |
+| Response on retired connection | PS-1 removes only matching peer/request ownership, releases retry state and discards payload |
+| Unknown response ID | Ignore; no current operation mutation |
+| Challenge | Authenticate, select matching active join, construct the exact signed request and checkpoint it |
+| Invalid challenge | Release the matching attempt with backoff |
+| Pending Submit / Poll | Retain validated offer/transcript/ticket for polling; persistence errors follow the prior inventory |
+| Accepted Submit / Poll | Release the finished request before preparation, so local failure does not strand retry ownership |
+| Hello rejection | Release candidate, regardless of reason |
+| Submit Busy / RateLimited | Release submission for delayed retry |
+| Submit Unavailable | Abandon submission and resume discovery |
+| Other Submit rejection | Fail the matching join |
+| Poll rejection | Release poll; Busy/RateLimited retry, other reasons fail the matching join |
+| Wrong-phase reply | Release owner; fail Submit/Poll, but only release Hello |
+| Transport failure | Remove request ID; invoke role-specific Hello/Submit/Poll failure handling |
+| Inbound failure / ResponseSent | Record failure diagnostics where applicable; no enrollment or completion solely from transport notification |
+
+V2 daemon responses have no outbound join owner and are logged as unexpected.
+They cannot complete a daemon join. Request-side approval and polling reuse the
+same session owner and persistence checks as V1.
+
+### Isolation and Evidence
+
+`set_pending_submission` matches active operation ID, selected peer, exact
+request, offer and transcript. Inbound tickets match peer plus approval ID or
+ticket. PS-3 cleanup removes only its operation's transient owners, preserving
+the opposite role's newer operation.
+
+PS-1's real-loopback stale-reply test, its Submit/Poll dispatch matrix, PS-3's
+repeated cancellation tests and namespace approval workflow, and PS-4's file
+acceptance tests retain their documented scopes and passing results.
+
+The PS-4 workspace log also confirms both PAKE versions' authenticated-request
+and wrong-code tests, transport-identity mismatch rejection, transcript binding,
+ticket restart coverage and replay-token rejection. This source-only audit does
+not add new deployment, protocol compatibility or cryptographic proof claims.
