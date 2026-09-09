@@ -204,5 +204,5 @@ A missing result cannot support a completion claim for the broader review.
 | --- | --- |
 | Kademlia resources | Complete with documented limits; retain original measurement exclusions |
 | Lifecycle review | Recovery timer/event, [pairing/session](pairing-session-lifecycle-review.md) and [Android lifecycle](android-lifecycle-audit.md) reviews complete within documented limits |
-| Resource measurement | Establish baseline and sustained CPU/memory evidence |
+| Resource measurement | [Sustained resource review active](sustained-resource-review.md): baseline, sustained CPU/memory, allocation attribution and Android background-work evidence |
 | Final acceptance | Reconcile affected NixOS/Android scenarios and documentation on final code |
