@@ -359,6 +359,65 @@ close unavailable-peer, sustained-load or retained-allocation work.
 
 ## Safety and Budgets
 
+### Unavailable Peer Protocol
+
+S2 uses `tun_namespace_measures_unavailable_peer_resources`, a separate opt-in
+direct-UDP fixture. Freeze these controls before its first sustained capture.
+The short harness smoke test does not count as a sustained repetition.
+
+| Setting | Frozen Value |
+| --- | --- |
+| Topology | Existing two-node isolated direct UDP fixture; static overlay peer bindings; no public infrastructure |
+| Preparation | Initial overlay traffic, then 30 seconds connected warmup |
+| Transition | Node B `veth-b` down; require failed one-second underlay ping |
+| Outage observation | 300 seconds after negative ping; OS 1 second, runtime status and diagnostics 5 seconds |
+| Restoration | Node B `veth-b` up; same addresses, identities and daemon processes |
+| Recovery | Common 60-second deadline, one-packet checks both directions per round, one-second pause between rounds |
+| Final traffic | Five packets each direction; all replies required, including B to A's routed prefix |
+| Repetitions | Two fresh runs using the same saved executable; record hash |
+| Deadlines | Default namespace watchdog 510 seconds; external watchdog 540 seconds; no timeout scaling |
+| Data budget | Outage plus recovery JSON combined below 8 MiB; combined node diagnostics below 2 MiB |
+
+`daemon_before` precedes the link transition; periodic/OS samples start after it.
+Boundary deltas therefore include transition time. `transition_seconds` preserves
+that distinction. No payload is offered during the measured outage.
+
+Retain `idle-sample.json` even when subsequent recovery fails. Recovery evidence
+is in `unavailable-recovery.json`; compare final PID/start identities against
+the outage samples. Do not restart a daemon or manually repair runtime paths.
+
+This measures local link loss with a known endpoint, not discovery of a new WAN
+address. It does not close public-path migration or multi-network isolation.
+
+#### Harness Validation
+
+| Gate | Result |
+| --- | --- |
+| Namespace unit tests | 47 passed; 23 opt-in tests ignored |
+| Required Clippy groups | Correctness, suspicious and perf pass; advisory warnings remain |
+| Formatting | Cached rustfmt check passes |
+| Final outage smoke | Pass, 66.06 seconds total; ten-second observation only |
+| Smoke recovery | 0.3024 seconds after link restoration; 5/5 packets each direction |
+| Smoke process identity | Stable PID/start identity through outage and recovery |
+| Smoke final path | Both nodes select `direct_udp_datagram` |
+| Smoke observations | 22 OS rows and four runtime snapshots; runtime series complete |
+| Smoke report / node logs | 232193 combined JSON bytes; 225350 combined diagnostic bytes |
+| Connected-idle regression | Same final executable passes, 81.64 seconds; 22 OS rows and four complete runtime snapshots |
+| Teardown | Both final smoke tests exit zero; no matching fixture process remains |
+| Production changes | None; test harness, shared test helpers and developer docs only |
+
+Final fixture SHA-256:
+`466f9c5612253f689651771b02c68bb397d4994adcc566cc439ad938b4bd3804`.
+The two declared 300-second S2 captures remain outstanding.
+
+- Final smoke artifacts: `/tmp/p2p-vpn-tun_namespace_measures_unavailable_peer_resources-1.cf63a9f794fa498f/`.
+- Validation logs: `/tmp/p2p-vpn-sustained-unavailable-final-{tests,clippy,smoke}.log`.
+- Connected smoke: `/tmp/p2p-vpn-sustained-unavailable-connected-smoke.log`; report suffix `1.0de2f593ff99346b` under the connected-idle artifact prefix.
+- Earlier smoke retained in `1.0f4c43171f24e683`, with executable hash `7454336fc3fa3f2c572ac3086d1cf4108b3c7058dce8d03d3bd6bf40ff0e9ddb`.
+- No builds overlapped either smoke capture; no physical device was contacted.
+
+### Shared Limits
+
 | Resource | Limit |
 | --- | --- |
 | All `/tmp/p2p-vpn-*` | Below 10 GiB; check before each build/provisioning phase |

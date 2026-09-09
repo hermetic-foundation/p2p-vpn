@@ -48,6 +48,7 @@ normal fixture runs retain their one-second interval.
 | --- | --- |
 | `binary_sha256` | Identity of the integration-test executable running both nodes. |
 | `clock_ticks_per_second` | Conversion factor for process CPU ticks. |
+| `workload`, `transition_seconds` | Capture scenario and pre-sampling transition duration; absent in historical reports. |
 | `samples` | Per-process CPU, RSS in KiB, threads, total/socket FDs, capture duration and TCP states. |
 | `runtime_samples` | Independent five-second status snapshots; metric values, scheduled/actual times, query duration and explicit errors. |
 | `runtime_samples_complete` | All scheduled snapshots arrived without errors; `null` when explicitly disabled. Incomplete enabled reports are retained before the test fails. |
@@ -81,10 +82,28 @@ When saving test executables for cross-revision runs, also preserve the matching
 `p2p-vpn` CLI at its compiled `CARGO_BIN_EXE_p2p-vpn` path. The harness invokes it
 for control queries; package cleanup can remove it even when the test binary survives.
 
-The fixture emits runtime metrics every second. Preserve that logging interval
-and account for host load when comparing samples.
+Preserve the selected fixture logging interval and account for host load when
+comparing samples.
 
 Recorded results: [controlled idle comparison](idle-resource-comparison.md).
+
+### Unavailable Peer Capture
+
+Use `tun_namespace_measures_unavailable_peer_resources` instead of the connected
+idle test name, with the same explicit duration and retained-artifact settings.
+The [frozen S2 protocol](sustained-resource-review.md#unavailable-peer-protocol)
+defines timing, budgets and recovery assertions.
+
+- After warmup, node B's isolated `veth-b` link is brought down.
+- A failed underlay ping is required before the sampling window begins.
+- `idle-sample.json` is written before restoring the underlay link.
+- Recovery must succeed in both directions within 60 seconds, without restart.
+- Fresh five-packet checks require all five replies in each direction.
+- `unavailable-recovery.json` records attempts, final pings and post-recovery state.
+
+The new fixture adds 90 seconds to its default outer budget for link operations,
+fixed-deadline recovery and final traffic checks. It does not enlarge the
+60-second recovery deadline or modify production timers.
 
 ## Rust Formatting
 

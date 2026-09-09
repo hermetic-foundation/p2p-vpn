@@ -51,6 +51,8 @@ mod recovery_soak;
 mod resource_cli;
 #[path = "support/tcp_collision.rs"]
 mod tcp_collision;
+#[path = "support/unavailable_peer.rs"]
+mod unavailable_peer;
 const KEEP_TEMP_ENV: &str = "P2P_VPN_TUN_E2E_KEEP_TEMP";
 const ORCHESTRATOR_TIMEOUT_ENV: &str = "P2P_VPN_TUN_E2E_ORCHESTRATOR_TIMEOUT_SECONDS";
 const WAIT_TIMEOUT_SCALE_ENV: &str = "P2P_VPN_TUN_E2E_WAIT_SCALE";
@@ -69,6 +71,16 @@ const NETWORK_MOVE_TEST_NAME: &str = "tun_namespace_recovers_relay_and_direct_af
 const DHT_TEST_NAME: &str = "tun_namespace_ping_crosses_dht_discovered_overlay";
 const NETWORK_NAME: &str = "tun-e2e";
 const NODE_A_LOCAL_ROUTE_ADDRESS: Ipv4Addr = Ipv4Addr::new(10, 41, 0, 9);
+
+#[test]
+#[ignore = "bounded unavailable-peer resource capture; requires namespaces and idle sampling"]
+fn tun_namespace_measures_unavailable_peer_resources() {
+    match env::var(CHILD_ENV).as_deref() {
+        Ok("orchestrator") => run_direct_orchestrator(unavailable_peer::TEST_NAME),
+        Ok("node") => run_node_child(),
+        _ => reexec_orchestrator(unavailable_peer::TEST_NAME),
+    }
+}
 
 #[test]
 #[ignore = "isolated TCP simultaneous-dial diagnostic; requires namespaces and netem"]
@@ -441,10 +453,16 @@ outbound_quic_datagram_packets 1\n";
 
 fn reexec_orchestrator(test_name: &str) {
     let current_exe = env::current_exe().expect("current test binary");
+    if test_name == unavailable_peer::TEST_NAME {
+        assert!(
+            idle_sample::requested_duration().is_some(),
+            "unavailable-peer measurement requires an explicit idle duration"
+        );
+    }
     let idle_extra = idle_sample::requested_duration().map_or(Duration::ZERO, |duration| {
-        assert_eq!(
-            test_name, DIRECT_TEST_NAME,
-            "idle sampling requires the direct UDP fixture"
+        assert!(
+            [DIRECT_TEST_NAME, unavailable_peer::TEST_NAME].contains(&test_name),
+            "idle sampling requires a direct UDP resource fixture"
         );
         assert!(
             keep_temp_artifacts(),
@@ -452,7 +470,9 @@ fn reexec_orchestrator(test_name: &str) {
         );
         idle_sample::WARMUP + duration
     });
-    let default_timeout = if test_name == tcp_collision::TEST_NAME {
+    let default_timeout = if test_name == unavailable_peer::TEST_NAME {
+        Duration::from_secs(90) + unavailable_peer::WATCHDOG_EXTRA
+    } else if test_name == tcp_collision::TEST_NAME {
         Duration::from_secs(30)
     } else if test_name == recovery_soak::TEST_NAME {
         recovery_soak::requested_watchdog()
@@ -564,7 +584,11 @@ fn run_direct_orchestrator(test_name: &str) {
         wait_for_packet_plane_datagrams(&temp_dir);
     }
 
-    idle_sample::capture(&temp_dir, &[("a", node_a.id()), ("b", node_b.id())]);
+    if test_name == unavailable_peer::TEST_NAME {
+        unavailable_peer::capture(&temp_dir, node_a.id(), node_b.id(), address_b);
+    } else {
+        idle_sample::capture(&temp_dir, &[("a", node_a.id()), ("b", node_b.id())]);
+    }
     stop_child(&mut node_a);
     stop_child(&mut node_b);
     assert_ping_success(

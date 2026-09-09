@@ -472,7 +472,7 @@ fn peer_path_via(state: &[String], transport: &str, path: &str, relay: Option<&s
         })
 }
 
-fn complete_ping(output: &str) -> bool {
+pub(super) fn complete_ping(output: &str) -> bool {
     output.lines().any(|line| {
         let fields = line.split_whitespace().collect::<Vec<_>>();
         fields.get(..6) == Some(&["5", "packets", "transmitted,", "5", "received,", "0%"][..])

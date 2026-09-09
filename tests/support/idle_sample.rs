@@ -104,7 +104,7 @@ pub fn process_observation(role: &str, pid: u32, started: Instant) -> serde_json
         .expect("serializable process observation")
 }
 
-fn daemon_views(temp: &Path, roles: &[(&str, u32)]) -> serde_json::Value {
+pub(super) fn daemon_views(temp: &Path, roles: &[(&str, u32)]) -> serde_json::Value {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -124,6 +124,15 @@ fn daemon_views(temp: &Path, roles: &[(&str, u32)]) -> serde_json::Value {
 }
 
 pub fn capture(temp: &Path, roles: &[(&str, u32)]) {
+    capture_with_transition(temp, roles, "connected_idle", || {});
+}
+
+pub(super) fn capture_with_transition(
+    temp: &Path,
+    roles: &[(&str, u32)],
+    workload: &str,
+    transition: impl FnOnce(),
+) {
     let Some(duration) = requested_duration() else {
         return;
     };
@@ -148,6 +157,9 @@ pub fn capture(temp: &Path, roles: &[(&str, u32)]) {
     assert!(ticks > 0);
     thread::sleep(WARMUP);
     let before = daemon_views(temp, roles);
+    let transition_started = Instant::now();
+    transition();
+    let transition_seconds = transition_started.elapsed().as_secs_f64();
     let load_before = fs::read_to_string("/proc/loadavg").expect("host load before sample");
     let started = Instant::now();
     let collector_before = process_sample::capture(std::process::id(), started)
@@ -187,6 +199,7 @@ pub fn capture(temp: &Path, roles: &[(&str, u32)]) {
         .then(|| super::idle_counters::complete(&counters, roles.len(), duration));
     let report = serde_json::json!({
         "schema_version": 1, "binary_sha256": hash, "binary": env::current_exe().unwrap(),
+        "workload": workload, "transition_seconds": transition_seconds,
         "build_profile": "cargo integration test", "topology": "two isolated namespaces; direct UDP; no Internet route",
         "fixture_metrics_interval_seconds": METRICS_INTERVAL.as_secs(),
         "available_parallelism": thread::available_parallelism().unwrap().get(),
