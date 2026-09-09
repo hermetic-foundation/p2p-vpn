@@ -2,9 +2,9 @@
 
 ## Status
 
-Active; baseline `cbe400b1`. This bounded workstream follows the completed
+Complete within the scope and exclusions below; baseline `cbe400b1`. This workstream follows the completed
 [recovery ownership review](recovery-event-ownership-review.md).
-The checklist below is review scope, not a claim of verified completion.
+Final production correction: `94f896b5`; additional persistence coverage: `88542fca`.
 
 ## Existing Evidence
 
@@ -19,7 +19,8 @@ The checklist below is review scope, not a claim of verified completion.
 
 Historical reports contain intermediate open findings later closed by their final
 sections. Their earlier failures remain evidence, not automatically new defects.
-New focused runtime evidence is recorded below; whole-workstream gates remain pending.
+Intermediate checkpoints below preserve chronology; the final requirement audit
+records the current disposition and the explicit evidence-reuse boundaries.
 
 ## Policy Boundary
 
@@ -55,14 +56,14 @@ security or membership policy.
 - [x] Record ownership entry points and the chosen cancellation policy.
 - [x] Trace invitation/code creation, authentication and admission on both roles.
 - [x] Trace Hello/Submit/Poll success, rejection, wrong-type reply and transport failure.
-- [ ] Verify stale IDs, duplicate replies, cancellation and replacement isolation.
-- [ ] Trace expiry, retry deadlines, disconnect, provider removal and query retirement.
+- [x] Verify stale IDs, duplicate replies, cancellation and replacement isolation.
+- [x] Trace expiry, retry deadlines, disconnect, provider removal and query retirement.
 - [x] Trace Prepared, runtime commit, completion, Applied checkpoint and acknowledgement.
 - [x] Trace shutdown/reload, persistence failure and idempotent cleanup/recovery.
-- [ ] Reconcile membership-sync integration and file-pairing session boundaries.
-- [ ] Reproduce confirmed gaps, fix narrowly and verify recovery after failure.
-- [ ] Run affected integration and shared-runtime verification gates.
-- [ ] Publish final evidence, update remaining work and verify all commits on `main`.
+- [x] Reconcile membership-sync integration and file-pairing session boundaries.
+- [x] Reproduce confirmed gaps, fix narrowly and verify recovery after failure.
+- [x] Run affected integration and shared-runtime verification gates.
+- [x] Publish final evidence and update remaining work; final publication is checked against `main@origin`.
 
 ## Verification Plan
 
@@ -87,7 +88,7 @@ security or membership policy.
 
 ## Findings
 
-### Additional Traces Requiring Coverage Reconciliation
+### Initial Traces Requiring Coverage Reconciliation
 
 | Boundary | Current Source Trace | Remaining Check |
 | --- | --- | --- |
@@ -98,7 +99,8 @@ security or membership policy.
 | Restored requests | Submit/Poll restore clears in-flight flags and starts recovery at resume time | Retain existing exact-request/transcript validation and restart tests |
 | State file | Private temporary file, file sync, rename and parent sync; bounded load and envelope validation | Trace caller behavior when save reports an error after rename |
 
-These are source observations, not newly reproduced defects or completed gates.
+These were initial source observations, not newly reproduced defects. Their
+dispositions are recorded in the subsequent ownership inventories and final audit.
 
 ### PS-1: Retired-Connection Reply Ownership
 
@@ -685,3 +687,105 @@ The PS-4 workspace log also confirms both PAKE versions' authenticated-request
 and wrong-code tests, transport-identity mismatch rejection, transcript binding,
 ticket restart coverage and replay-token rejection. This source-only audit does
 not add new deployment, protocol compatibility or cryptographic proof claims.
+
+## Expiry and Integration Closeout
+
+Admission/dispatch inventory was published as `0bab6668`; remote publication and
+a clean working copy were verified. The following source-only closeout retains
+the unchanged-production verification boundaries documented above.
+
+### Expiry and Discovery
+
+| Owner | Terminal / Replacement Behavior |
+| --- | --- |
+| Session expiry | Prune LAN candidates, retained tickets, replay tokens and expired handshakes; deactivate unfinished expired operations |
+| Prepared expiry | Retain durable recovery ownership; explicit cancellation enters the existing abort path |
+| Open provider, V1 / V2 | Completion/expiry/cancellation returns both applicable removal actions; adapters call the corresponding Kademlia owner |
+| Provider result | Only the matching active operation/query may update advertised state or retry deadlines |
+| Join lookup | Keep operation/query ownership after terminal state until the driver cancels the underlying query |
+| Replacement join | Wait for predecessor lookup retirement; old provider results cannot increment its counters |
+| Submit / Poll failure | Match operation and peer, release in-flight state, retain request/ticket and set bounded backoff |
+| Recovery discovery | Poll transport failure starts a new LAN-first grace period before public lookup; success clears recovery need |
+| Query capacity | Failed admission does not invent ownership or spend the provider attempt budget |
+| Pairing-only mDNS | Reconcile against active invitation state; do not leave the auxiliary responder enabled after invitation termination |
+
+The inspected `join_lookup_owner_survives_terminal_operations_and_replacement`
+test covers 64 cancel/expire/fail/complete cycles, real query cancellation and
+replacement eligibility. Poll-recovery and provider-expiry tests cover their
+own transitions; these are not public-network timing measurements.
+
+Their passing results, driver retirement/capacity tests and controlled Kademlia
+provider-removal tests are retained in `/tmp/p2p-vpn-ps4-workspace.log`.
+No new causal defect required reopening the completed Kademlia workstream.
+
+### Membership Boundary
+
+| Boundary | Source / Existing Evidence |
+| --- | --- |
+| Pairing probe | `allows_pairing_probe` grants temporary connection grace, not forwarding authority |
+| Probe expiry | Runtime preserves established members/infrastructure and active pairing probes; otherwise expires unauthorized connections |
+| Successful enrollment | Validated commit changes forwarder membership and authorization revisions |
+| Runtime reconciliation | Before the next event, retire unauthorized sync owners and reconcile packet/recovery caches from committed authority |
+| Membership page | Match request/peer and current sync authority before continuation; validate snapshot and signed records before merge |
+| Late sync response | Retired owner cannot restart paging or merge a stale response |
+| Membership policy | Existing signed-record merge/revocation rules remain authoritative; pairing cancellation is not remote revocation |
+
+The [membership-sync report](membership-sync-review.md) remains closed.
+PS-4 workspace results confirm wrong-type/stale response retirement, remote
+revocation, expiry, static-peer removal and tampered-snapshot tests. File-pairing
+commit ordering has separate negative/positive evidence under PS-4.
+
+### CLI and Codec Boundary
+
+| Workflow | Observed Contract |
+| --- | --- |
+| Daemon CLI join | Create an operation by RPC; optional wait polls its status with a deadline |
+| Stop waiting | Does not issue cancellation; explicit cancel addresses the daemon-owned operation ID |
+| Artifact export | Retrieves completed artifacts; acknowledgement is a separate transcript-bound RPC |
+| Live file accept | Own a temporary node and current request ID; retry transport failure after 250 ms until timeout |
+| File import | Verify the signed offer/response before rendering configuration; JSON/Nix output behavior is unchanged |
+| Output failure | Does not retroactively revoke remote membership or roll back a network-wide transaction |
+| Code reads | Check the 64 KiB frame bound before payload allocation; 10-second request timeout and configured stream cap |
+| File reads | Check the bounded length-prefixed frame before allocation; same request timeout and stream-cap mechanism |
+
+Sources: [CLI](../../src/main.rs), [code codec](../../src/runtime/pairing_code.rs)
+and [file codec](../../src/runtime/pairing.rs). The workspace run includes codec
+round trips/oversize rejection and CLI live acceptance, bootstrap discovery,
+relay discovery and timeout diagnostics; PS-4 adds namespace traffic checks.
+
+## Final Requirement Audit
+
+| Goal Requirement | Evidence / Disposition |
+| --- | --- |
+| 1. Reconcile existing work | Initial scope commit `32bc0eae`, retained-evidence table, updated verification map; historical limitations remain explicit |
+| 2. Inventory transitions | Admission, standalone, daemon, persistence, expiry, CLI and membership tables cover both roles and the commit boundary |
+| 3. Stale/duplicate ownership | PS-1 and PS-3 regressions plus inspected query-owner, ticket, retry and restart tests; recovery is checked, not suppression alone |
+| 4. Reproduce and correct | Four source-backed defects with retained failing-before and passing-after evidence; no schema, policy or config redesign |
+| 5. Verify | PS-4 workspace: 1,484 passed, 36 opt-in exclusions; selected namespace tests, Clippy, format, cached Nix parity and Android-native build |
+| 5. Later test-only delta | All 63 session tests, Clippy and source parity pass; unchanged production gates explicitly reused |
+| 5. Formal models | No applicable Lean model found; executable regressions are not formal proof |
+| 6. Publish documentation | Ownership maps, commands/provenance, outcomes and exclusions recorded here; broader work remains in the verification map |
+| 7. Publish changes | Atomic Conventional Commits pushed to `main`; final documentation publication and clean worktree verified before goal completion |
+
+### Resolved Defects
+
+| Finding | Published Correction |
+| --- | --- |
+| Retired-connection response strands retry | `578f6dc8` |
+| Unauthenticated V2 candidate rejection terminates join | `8b5f9b89` |
+| Old opposite-role cancellation removes current owners | `18eb5705` |
+| File acceptance precedes local commit / partial authorization | `94f896b5` |
+
+Additional coverage `88542fca` verifies abort compaction when a save reports an
+error after replacement. The source-only inventories add no new runtime behavior.
+
+### Remaining Outside This Goal
+
+- Android service/UI lifecycle and final physical-device cancellation behavior.
+- Sustained heap/resource attribution and broader production readiness.
+- Final NixOS/Android/remote-deployment acceptance on the eventual release revision.
+- Full default Nix package closure, APK and ARM64 checks beyond the cached gates used here.
+
+These exclusions do not reopen the completed pairing/session boundary or erase
+historical failures. No deployment, private-flake change or public-WAN campaign
+was performed for this workstream. Raw evidence was retained below the 10 GiB cap.

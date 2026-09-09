@@ -24,14 +24,15 @@ The [recovery event ownership review](recovery-event-ownership-review.md) is com
 epoch/dial admission, timer catch-up and listener ownership fixes are verified.
 
 The [pairing and session lifecycle review](pairing-session-lifecycle-review.md)
-is now active. Its bounded checklist preserves completed cancellation and
-membership-sync fixes while auditing remaining orchestration transitions.
+is complete within its documented boundary. Four ownership/commit-order defects
+are corrected, and admission, retries, cancellation, persistence and integration
+are reconciled. Android lifecycle and final platform certification remain separate.
 
 ## Current Evidence
 
 | Area | Evidence | Limitation |
 | --- | --- | --- |
-| Workspace | Latest [recovery review](recovery-event-ownership-review.md#final-verification): 1,475 passed, 36 opt-in exclusions. Earlier [durable cancellation evidence](pairing-cancellation-plan.md#final-verification) remains retained. | Native Linux toolchain; not an Android device run. |
+| Workspace | [Pairing lifecycle audit](pairing-session-lifecycle-review.md#final-requirement-audit): 1,484 passed, 36 opt-in exclusions; later test-only extension passes all 63 session tests. | Native Linux; unchanged-production evidence reuse is explicit, not Android device certification. |
 | Namespace integration | Recovery review: all 12 compatibility cases and delayed/renumbered recovery in both public/private profiles passed. Earlier all-12 evidence remains in `/tmp/p2p-vpn-review-queue-pressure-namespace-suite.log`. | Controlled topology; not public NAT or final all-platform acceptance. Historical pressure/isolation limits remain in their linked reports. |
 | Static analysis | Required correctness, suspicious, and performance Clippy groups pass. | Existing non-fatal style warnings remain. |
 | Formatting | Changed Rust files pass rustfmt; whitespace checks pass. | Not proof of the complete flake `fmt` target. |
@@ -180,9 +181,9 @@ Logs use `/tmp/p2p-vpn-review-startup-snapshot-*`.
 | --- | --- |
 | Recovery ownership | [Bounded timer/event review complete](recovery-event-ownership-review.md): stale dial, timer, listener and task ownership verified. Do not reopen it solely to complete broader lifecycle/platform acceptance. |
 | Probe response ownership | [Wrong-peer probe consumption](path-probe-ownership-review.md) is corrected; current recovery review retains token/window guards and verifies timer integration. Broader pairing/platform acceptance remains separate. |
-| Session lifecycle | [Membership-sync review](membership-sync-review.md) cases are fixed. Reconcile broader session-lifecycle review and final platform evidence. |
+| Session lifecycle | [Pairing/session review complete](pairing-session-lifecycle-review.md), including membership-sync integration. Android service lifecycle and final platform evidence remain separate. |
 | Android lifecycle ownership | [Three event-ownership findings](android-event-ownership-review.md) have JVM/emulator coverage, including recurring JNI health polling and automatic native-failure recovery at `4b90f3bc`. Reconcile broader lifecycle evidence on final code. |
-| Pairing orchestration | Goal 1 closes the identified Prepared mutation defect; broader lifecycle/platform acceptance remains separate. |
+| Pairing orchestration | [Bounded review complete](pairing-session-lifecycle-review.md): admission, terminal owners, retries, persistence and file commit ordering. Final platform acceptance remains separate. |
 | Address resources | [Kademlia workstream complete](kademlia-workstream-acceptance.md): aggregate owners, sustained recovery, measurements with exclusions and RM-1 fix. Heap attribution and broader lifecycle review remain separate; do not reopen completed enforcement. |
 | Resource comparison | Debug and release signed-ledger samples cover 256 records; timer refresh reuses valid evaluations. Isolate retained allocations and establish daemon/sustained-load impact. |
 | Platform validation | All exported VM scenarios have review results at the revisions listed above; Android passes all 68 multi-network checks at `deedd041`. Generated-Nix system activation now passes on both LAN guests. Consumer-flake, remote-deployment, and reboot coverage remain distinct; revalidate affected scenarios after further runtime changes. |
@@ -202,6 +203,6 @@ A missing result cannot support a completion claim for the broader review.
 | Workstream | Scope Retained |
 | --- | --- |
 | Kademlia resources | Complete with documented limits; retain original measurement exclusions |
-| Lifecycle review | [Recovery timer/event review complete](recovery-event-ownership-review.md); reconcile remaining pairing and Android lifecycle work separately |
+| Lifecycle review | Recovery timer/event and [pairing/session reviews](pairing-session-lifecycle-review.md) complete; Android service lifecycle reconciliation remains |
 | Resource measurement | Establish baseline and sustained CPU/memory evidence |
 | Final acceptance | Reconcile affected NixOS/Android scenarios and documentation on final code |
