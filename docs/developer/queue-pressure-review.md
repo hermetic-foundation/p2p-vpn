@@ -142,6 +142,8 @@ original packet limits and logging settings; they are not matched baselines.
 | `received_packets` | Generator reply count; transmitted requests alone are not delivered work |
 | `work` | TUN read/write packet and byte counters, inbound accepted packets, outbound sent packets and direct-TCP fallback packets |
 | Replay | Saved commands retain the selected limit profile and round count |
+| `P2P_VPN_TUN_E2E_PRESSURE_INITIATOR=a` / `b` | Optional preferred-initiator ordering for fresh test identities; unset retains random ordering |
+| Path observations | Healthy TCP count, unsupported-peer count, blocked-path events and per-peer state lines |
 
 Invalid profiles and malformed ping summaries are rejected. Admission tests use
 the real queue: packet mode admits four 1028-byte packets; byte mode admits three;

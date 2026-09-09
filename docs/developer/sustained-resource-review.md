@@ -468,7 +468,8 @@ developer documentation changed; no production runtime was modified.
 
 Both smoke tests pass, retain the same daemon identities and leave no matching
 fixture processes. Replay scripts preserve the limit profile and round count.
-No builds overlapped either smoke. Four five-round captures remain outstanding.
+No builds overlapped either smoke. The subsequent campaign stopped on a
+round-two byte-profile failure; see [pressure investigation](sustained-pressure-results.md).
 
 - Executable SHA-256: `ab3f2fe482dfb48d2915074b04c81a4e037b9a6c02f94e590af07292f68de666`.
 - Packet artifact suffix: `1.35cc20df7fd8c5a8`; byte suffix: `1.3e33a24e9bf968d6`.

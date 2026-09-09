@@ -455,6 +455,7 @@ fn reexec_orchestrator(test_name: &str) {
     let current_exe = env::current_exe().expect("current test binary");
     if test_name == QUEUE_PRESSURE_TEST_NAME {
         queue_pressure::requested_limits();
+        queue_pressure::requested_initiator();
     }
     if test_name == unavailable_peer::TEST_NAME {
         assert!(
@@ -513,6 +514,15 @@ fn reexec_orchestrator(test_name: &str) {
 fn run_direct_orchestrator(test_name: &str) {
     let identity_a = NodeIdentity::generate_ed25519().expect("node A identity");
     let identity_b = NodeIdentity::generate_ed25519().expect("node B identity");
+    let (identity_a, identity_b) = if test_name == QUEUE_PRESSURE_TEST_NAME {
+        queue_pressure::order_identities(
+            identity_a,
+            identity_b,
+            queue_pressure::requested_initiator(),
+        )
+    } else {
+        (identity_a, identity_b)
+    };
     let temp_dir = env::temp_dir().join(format!("p2p-vpn-{test_name}-{}", std::process::id()));
     let temp_dir = init_namespace_temp_dir(&temp_dir, test_name);
     let start_a = temp_dir.join("start-a");
@@ -2070,6 +2080,7 @@ fn namespace_replay_env_exports() -> String {
             idle_sample::RUNTIME_SAMPLING_ENV,
             queue_pressure::ROUNDS_ENV,
             queue_pressure::LIMIT_ENV,
+            queue_pressure::INITIATOR_ENV,
             recovery_soak::PROFILE_ENV,
             recovery_soak::SOAK_ENV,
             recovery_soak::COLLISION_ENV,

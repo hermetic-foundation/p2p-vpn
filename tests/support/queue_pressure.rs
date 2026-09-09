@@ -15,6 +15,7 @@ use super::{
 
 pub const ROUNDS_ENV: &str = "P2P_VPN_TUN_E2E_PRESSURE_ROUNDS";
 pub const LIMIT_ENV: &str = "P2P_VPN_TUN_E2E_PRESSURE_LIMIT";
+pub const INITIATOR_ENV: &str = "P2P_VPN_TUN_E2E_PRESSURE_INITIATOR";
 pub const METRICS_INTERVAL: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -47,6 +48,41 @@ pub fn requested_limits() -> Limits {
         Err(error) => panic!("invalid {LIMIT_ENV}: {error}"),
     };
     parse_limits(value.as_deref()).expect("pressure limit must be packets or bytes")
+}
+
+fn parse_initiator(value: Option<&str>) -> Option<Option<bool>> {
+    match value {
+        None => Some(None),
+        Some("a") => Some(Some(true)),
+        Some("b") => Some(Some(false)),
+        _ => None,
+    }
+}
+
+pub fn requested_initiator() -> Option<bool> {
+    let value = match env::var(INITIATOR_ENV) {
+        Ok(value) => Some(value),
+        Err(env::VarError::NotPresent) => None,
+        Err(error) => panic!("invalid {INITIATOR_ENV}: {error}"),
+    };
+    parse_initiator(value.as_deref()).expect("pressure initiator must be a or b")
+}
+
+pub fn order_identities(
+    a: p2p_vpn::identity::NodeIdentity,
+    b: p2p_vpn::identity::NodeIdentity,
+    preferred_a: Option<bool>,
+) -> (
+    p2p_vpn::identity::NodeIdentity,
+    p2p_vpn::identity::NodeIdentity,
+) {
+    let local = a.peer_id.parse::<libp2p::PeerId>().unwrap().to_bytes();
+    let remote = b.peer_id.parse::<libp2p::PeerId>().unwrap().to_bytes();
+    if preferred_a.is_some_and(|preferred| preferred != (local < remote)) {
+        (b, a)
+    } else {
+        (a, b)
+    }
 }
 
 fn ping_counts(output: &str) -> Option<(usize, usize)> {
@@ -106,6 +142,7 @@ pub fn capture(temp: &Path, pid_a: u32, pid_b: u32, destination: Ipv4Addr) {
                 "schema_version": 1, "requested_rounds": rounds, "completed_rounds": series.len(),
                 "complete": round == rounds, "rounds": series,
                 "queue_limit_profile": requested_limits().name,
+                "preferred_initiator_override": requested_initiator().map(|a| if a { "a" } else { "b" }),
             }))
             .unwrap(),
         )
@@ -173,6 +210,10 @@ fn capture_round(
                 "stream_in_flight": state_metric_count(&state, "packet_stream_fallback_in_flight").expect("stream owners"),
                 "outbound_failures": state_metric_count(&lines, "outbound_failures").expect("outbound failures"),
                 "inbound_dropped_packets": state_metric_count(&lines, "inbound_dropped_packets").expect("inbound drops"),
+                "healthy_tcp_paths": state_metric_count(&lines, "path_healthy_direct_tcp_stream_paths").expect("healthy TCP paths"),
+                "peers_without_supported_path": state_metric_count(&lines, "path_peers_without_supported_path").expect("unsupported paths"),
+                "blocked_no_path_events": state_metric_count(&lines, "outbound_queue_blocked_no_supported_path_events").expect("blocked path events"),
+                "path_states": state.iter().filter(|line| line.starts_with("peer state:")).collect::<Vec<_>>(),
                 "work": work,
             }));
         }
@@ -347,6 +388,27 @@ fn capture_round(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn initiator_override_preserves_default_and_orders_actual_peer_ids() {
+        assert_eq!(parse_initiator(None), Some(None));
+        assert_eq!(parse_initiator(Some("a")), Some(Some(true)));
+        assert_eq!(parse_initiator(Some("b")), Some(Some(false)));
+        assert_eq!(parse_initiator(Some("random")), None);
+        let first = p2p_vpn::identity::NodeIdentity::generate_ed25519().unwrap();
+        let second = p2p_vpn::identity::NodeIdentity::generate_ed25519().unwrap();
+        let (a, b) = order_identities(first.clone(), second.clone(), None);
+        assert_eq!(a.peer_id, first.peer_id);
+        assert_eq!(b.peer_id, second.peer_id);
+        for preferred_a in [false, true] {
+            let (a, b) = order_identities(first.clone(), second.clone(), Some(preferred_a));
+            assert_eq!(
+                a.peer_id.parse::<libp2p::PeerId>().unwrap().to_bytes()
+                    < b.peer_id.parse::<libp2p::PeerId>().unwrap().to_bytes(),
+                preferred_a
+            );
+        }
+    }
 
     #[test]
     fn profiles_preserve_default_and_separately_bind_packet_or_byte_capacity() {
