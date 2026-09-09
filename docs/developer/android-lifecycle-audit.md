@@ -27,6 +27,7 @@ reopen them only if this audit produces new causal evidence.
 - [x] Test profile-join cancellation, late completion and subsequent successful local commit (AL1).
 - [x] Verify multi-network enablement, persistence and native generation isolation.
 - [x] Audit native shutdown, TUN descriptors, callback retirement and timer bounds.
+- [ ] Verify failed binding and exception cleanup (AL4).
 - [x] Reconcile process death, always-on, reboot and app replacement on reviewed source.
 - [x] Run bounded cached-emulator lifecycle and applicable underlay scenarios.
 - [x] Record historical failure dispositions and precise missing attribution evidence.
@@ -372,6 +373,23 @@ threshold. The 68-check run below is reused for unchanged API 35 behavior.
 The changed handler has its own failing/passing real-service instrumentation
 and automatic recovery evidence. No Rust, profile format, protocol, membership
 policy or packaging configuration changed.
+
+## AL4: Failed Binding Cleanup
+
+Status: source-backed contract gap identified during final audit; regression
+reproduction and correction remain open. Do not close the review with this gap.
+
+`MainActivity.onStart` assigns `bindingRegistered` from the Boolean returned by
+`bindService`. A false return therefore prevents `onStop` from releasing the
+connection's tracking resources; a thrown security exception also lacks cleanup.
+
+[Android's binding contract](https://developer.android.com/reference/kotlin/android/content/ContextWrapper)
+requires releasing the connection after a false return or `SecurityException`.
+The existing pending-stop tests cover successful registration, not these outcomes.
+
+Required evidence: reproduce failed admission, preserve cleanup ownership, and
+verify a later successful binding. Keep registration-attempt ownership distinct
+from whether the service is connected; cover the exception cleanup path as well.
 
 ## Current Native Provenance
 
