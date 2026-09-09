@@ -54,6 +54,9 @@ public final class ServiceLifecycleInstrumentation extends Instrumentation {
             require("true".equals(arguments.getString("isolated_emulator")), "explicit emulator opt-in required");
             require("ranchu".equals(Build.HARDWARE) || "goldfish".equals(Build.HARDWARE), "emulator required");
             require(!new ProfileStore(getTargetContext()).exists(), "test requires an empty profile store");
+            if ("true".equals(arguments.getString("activity_binding"))) {
+                exerciseActivityBinding();
+            }
             exerciseReplacement();
             result.putString("stream", "OK: occupied-worker service replacement and native cleanup passed\n");
             result.putBoolean("passed", true);
@@ -65,6 +68,73 @@ public final class ServiceLifecycleInstrumentation extends Instrumentation {
             status.putString("stack", Log.getStackTraceString(error));
             sendStatus(-2, status);
             finish(Activity.RESULT_CANCELED, result);
+        }
+    }
+
+    private void exerciseActivityBinding() throws Exception {
+        MainActivity activity = (MainActivity) startActivitySync(
+                new Intent(getTargetContext(), MainActivity.class)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK));
+        try {
+            awaitActivityBound(activity);
+            for (int cycle = 0; cycle < 3; cycle++) {
+                AtomicReference<ServiceConnection> retired = new AtomicReference<>();
+                onMain(() -> {
+                    activity.onStop();
+                    activity.onStart();
+                    retired.set((ServiceConnection) activityField(activity, "serviceConnection"));
+                    require((boolean) activityField(activity, "bindingRegistered"),
+                            "framework did not register pending binding");
+                    require(!(boolean) activityField(activity, "bound"),
+                            "test did not hold connection delivery");
+                    activity.onStop();
+                    require(!(boolean) activityField(activity, "bindingRegistered"),
+                            "stop retained pending registration");
+                    require(activityField(activity, "serviceConnection") == null,
+                            "stop retained callback owner");
+                });
+                waitForIdleSync();
+                onMain(() -> {
+                    require(!(boolean) activityField(activity, "bound"),
+                            "stopped activity reattached after framework delivery");
+                    activity.onStart();
+                });
+                awaitActivityBound(activity);
+                onMain(() -> {
+                    P2pVpnService.LocalBinder current =
+                            (P2pVpnService.LocalBinder) activityField(activity, "binder");
+                    retired.get().onServiceConnected(null, current);
+                    retired.get().onServiceDisconnected(null);
+                    require(activityField(activity, "binder") == current
+                                    && (boolean) activityField(activity, "bound"),
+                            "retired callback disrupted real replacement binding");
+                });
+            }
+        } finally {
+            onMain(() -> {
+                activity.onStop();
+                activity.finish();
+            });
+            waitForIdleSync();
+        }
+        sendStatus(2, message("activity_binding", "passed: three pending-stop and framework-rebind cycles"));
+    }
+
+    private void awaitActivityBound(MainActivity activity) {
+        await(() -> {
+            AtomicReference<Boolean> bound = new AtomicReference<>(false);
+            onMain(() -> bound.set((boolean) activityField(activity, "bound")));
+            return bound.get();
+        }, 10, "activity framework binding");
+    }
+
+    private static Object activityField(MainActivity activity, String name) {
+        try {
+            Field field = MainActivity.class.getDeclaredField(name);
+            field.setAccessible(true);
+            return field.get(activity);
+        } catch (ReflectiveOperationException error) {
+            throw new AssertionError(error);
         }
     }
 

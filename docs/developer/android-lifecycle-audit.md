@@ -135,8 +135,9 @@ that directory. Temporary storage began at 7.84 GiB; emulator state reached 1.1 
 
 ## AL2: Activity Binding Ownership
 
-Priority: P2. JVM callback ordering reproduced and corrected.
-Android framework registration and activity-recreation validation remain open.
+Priority: P2. JVM callback ordering reproduced and corrected at `481bc16a`.
+API 35 x86_64 pending-stop and framework-rebind instrumentation now passes.
+Full activity recreation and permission outcome validation remain open.
 
 | Previous Ordering | Consequence |
 | --- | --- |
@@ -159,7 +160,7 @@ listener and binding. Old connect, disconnect and snapshot callbacks are ignored
 | Recovery | Current connection accepts a reconnect after disconnect |
 | Listener cleanup | No listener remains after stop; one remains during replacement |
 | Offline checks | Full JVM suite, lint, app and instrumentation assembly passed |
-| Platform gate | Pending real activity stop-before-connect and subsequent framework rebind |
+| Platform gate | Three pending-stop and real framework-rebind cycles pass; details below |
 
 The JVM uses Android stubs. Tests explicitly set registration admission for
 controlled callbacks; they do not prove Android unbind delivery or process
@@ -169,6 +170,39 @@ recreation. No native runtime or physical device is involved in these tests.
 - Focused positive: `/tmp/p2p-vpn-lifecycle-binding-after.log`.
 - Full checks: `/tmp/p2p-vpn-lifecycle-binding-verified.log`.
 - Tools and offline Gradle command match AL1, without instrumentation execution.
+
+### Framework Binding Run
+
+`ServiceLifecycleInstrumentation` launches the real activity and waits for its
+framework binding. On the main thread, it invokes stop/start/stop while connection
+delivery is held, then requires registration and callback ownership to be cleared.
+
+| Stage, Repeated Three Times | Required Result |
+| --- | --- |
+| Bind then stop before delivery | Registered but not connected before stop; retired immediately afterward |
+| Drain main callbacks | Stopped activity remains disconnected |
+| Start again | Real framework callback installs the replacement binder |
+| Inject retired connect/disconnect | Replacement binder remains connected |
+| Final activity teardown | Stop, finish and main-queue drain complete |
+| Combined service run | AL1, deferred joins, stale stops, health recovery and occupied-worker replacement pass |
+
+The lifecycle methods are invoked by instrumentation to control ordering, not by
+an OS backgrounding event. Binding and rebinding use Android's real service APIs.
+This does not prove rotation, process recreation, permission dialogs or battery use.
+
+- Source: production `481bc16a`, plus this instrumentation case.
+- Run: `/tmp/p2p-vpn-lifecycle-binding-platform.log`; `activity_binding=passed`, `passed=true`, result code `-1`.
+- Build: `/tmp/p2p-vpn-lifecycle-binding-platform-build.log`; offline JVM tests, lint and both APKs pass.
+- Use AL1's instrumentation command with the additional `-e activity_binding true` argument.
+- Emulator stopped, private state removed, logs retained; no physical device involved.
+
+| Artifact | SHA-256 |
+| --- | --- |
+| App APK | `1f2e8a985f64a933e462545e73c4e1cffee463a1cbc4aa7e7ff76d63c26326d0` |
+| Instrumentation APK | `6b6a5d3f02d209a2b9d826d2881c50cbe517834bad09363a99afe7f8051d059d` |
+
+JNI is the same cached artifact identified in AL1. Current-source native and
+broader multi-network reconciliation are still required by this review.
 
 ## Historical Attribution Ledger
 
