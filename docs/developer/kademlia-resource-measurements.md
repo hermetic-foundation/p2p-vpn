@@ -114,12 +114,30 @@ sudo env \
 ```
 
 - Output must be new. It contains the catalog, all run outcomes, packet counts, stage outcomes, control windows and existing process summaries.
-- This is per-run analysis, not paired efficiency claims. Current-only metrics must not be compared against missing baseline fields.
+- Schema version 2 includes per-run analysis and paired comparisons. Current-only metrics are excluded from paired deltas, not compared against missing baseline fields.
 - Full-dataset execution passed in 50.31 seconds: 48 runs, four censored outcomes retained, and six explicitly partial endpoint control windows.
 - Partial control windows end at their last captured process timestamp. Their deltas describe only that interval; they cannot stand in for full stages.
 - Three truncated runs retain an explicit unavailable process-summary reason. Complete process windows are not synthesized across missing boundaries.
 - Immutable hashes/outcomes are checked exactly. Floating-point derived summaries are recomputed from raw input instead of compared as identity metadata.
-- Reproduction determinism, paired outcome/workload gating and repetition statistics remain to be verified before analysis-goal completion.
+- Paired outcome/workload gating and repetition statistics are implemented. Publication and interpretation of final analysis remain outstanding.
+
+#### Paired Comparison Rules
+
+| Gate | Requirement |
+| --- | --- |
+| Outcomes | Both runs completed; censored/failed pairs retain absolutes but receive no efficiency delta |
+| Windows | Same stage, role and metric; partial windows excluded |
+| Counter/CPU validity | Existing interval, missing-value and coverage rules |
+| Process gauges | At least three samples, 95% coverage, no invalid intervals or missing gauge captures |
+| Traffic useful work | Equal offered count, received count and payload size; no post-hoc tolerance |
+| Metric semantics | Common catalog counters and external process metrics only |
+| Replication | Median/range uses actual eligible pairs; zero baselines have no percentage delta |
+
+- The initial paired pass completed all 24 pairs in 54.74 seconds, without running subjects again.
+- A second full audit/aggregation pass completed in 54.38 seconds and produced byte-identical JSON. Measurement tests (42 passed), required Clippy groups and cached Nix source checks passed.
+- All six pressure pairs have unequal delivered work; their absolute observations remain available, but efficiency deltas are withheld.
+- All three private recovery pairs and the third public recovery pair are censored. Public recovery comparisons therefore have at most two eligible repetitions.
+- Most idle/traffic metrics have three eligible repetitions. Some startup windows are invalid; inspect each metric's actual eligibility count.
 
 #### Collection Auditor
 

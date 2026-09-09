@@ -10,6 +10,8 @@ mod resource_counters;
 mod resource_dataset;
 #[path = "support/resource_metrics.rs"]
 mod resource_metrics;
+#[path = "support/resource_pairs.rs"]
+mod resource_pairs;
 
 #[test]
 #[ignore = "aggregates audited campaign using P2P_VPN_ANALYSIS_ROOT and new P2P_VPN_ANALYSIS_OUTPUT"]

@@ -159,7 +159,8 @@ pub fn run() -> Result<()> {
             runs.push(json!({"repetition":pair["repetition"],"cell":pair["cell"],"profile":pair["profile"],"workload":pair["workload"],"subject":run["subject"],"status":run["status"],"reason":run["reason"],"observations_sha256":hash,"useful_work":run["integrity"]["traffic"],"stage_outcomes":run["integrity"]["stages_ended"],"measurements":summarize(&data)?}));
         }
     }
-    let value = json!({"schema_version":1,"scope":"per-run measurements; not paired comparisons","catalog":resource_metrics::catalog(),"runs":runs});
+    let mut value = json!({"schema_version":2,"scope":"per-run measurements and gated paired comparisons","catalog":resource_metrics::catalog(),"runs":runs});
+    value["paired"] = super::resource_pairs::summarize(&value)?;
     let output = env::var("P2P_VPN_ANALYSIS_OUTPUT").map_err(|e| e.to_string())?;
     let file = fs::OpenOptions::new()
         .write(true)
