@@ -101,14 +101,35 @@ deadline was changed.
 - First log: `/tmp/p2p-vpn-allocation-s6-8-1-cached.log`.
 - Executable SHA-256: `509996713072b3089f29565260f22337d452528c22c2d7623a0c9312d4b89805`.
 - RSS after drop rose from 23032 to 23036 KiB despite zero retained Rust-byte deltas.
-- [Raw samples and hashes](allocation-review-samples.json) preserve six of twelve planned captures.
+- [Raw samples and hashes](allocation-review-samples.json) preserve all twelve planned captures.
 - All four eight-record captures passed: 40 cycles, zero post-drop live byte/block deltas.
 - Eight-record cached refreshes allocated zero; three forced refreshes made 3171 allocations per cycle.
 - The first 128-record cached capture passed in 23.19 seconds: ten zero-retention cycles, zero refresh allocations.
 - Its post-drop RSS rose from 23984 to 24036 KiB, then settled; this is not retained Rust requested bytes.
 - The first 128-record forced capture passed in 155.04 seconds: ten zero-retention byte/block cycles.
 - Three forced refreshes made 47535 allocations per cycle; post-drop RSS rose 24 KiB before settling.
-- Six remaining captures and packet allocation attribution are pending.
+- All ledger captures passed; packet and whole-runtime allocation attribution remain open.
+
+### Completed Ledger Matrix
+
+Source: `cf76590e2ac405651d817f95f879eab5694f70de`. All twelve captures used
+the executable hash above, without overlapping builds. Each size has two cached
+and two forced captures, totaling 120 construct/refresh/drop cycles.
+
+| Records | Cached Refresh Allocations | Forced Refresh Allocations | Post-Drop Live Bytes / Blocks | RSS Growth Range |
+| --- | --- | --- | --- | --- |
+| 8 | 0 | 3171 | 0 / 0 in every cycle | 4-12 KiB |
+| 128 | 0 | 47535 | 0 / 0 in every cycle | 24-56 KiB |
+| 256 | 0 | 94833 | 0 / 0 in every cycle | 0-564 KiB |
+
+Refresh counts cover three calls per cycle. RSS growth compares the first and
+last post-drop readings within each capture, not different process baselines.
+Both 256-record forced captures passed in 310.76 and 314.76 seconds.
+
+No retained forwarder-owned Rust allocation was observed in this workload.
+Growing RSS with zero requested-byte retention is not evidence of retained
+ledger objects; allocator arenas, native memory and whole-daemon attribution
+remain outside this result. No production fix is justified by these samples.
 
 ### Validation After Dependency Packaging Correction
 

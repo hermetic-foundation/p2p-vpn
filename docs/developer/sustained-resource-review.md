@@ -16,6 +16,7 @@ No physical device or deployed host is authorized for this work.
 - [ ] Measure matched sustained traffic (S3).
 - [x] Measure repeated packet/byte pressure and recovery (S4); allocation attribution remains open.
 - [ ] Attribute retained allocations, including signed-ledger refreshes.
+- [x] Complete the twelve-capture signed-ledger allocation matrix; packet/runtime attribution remains open.
 - [ ] Measure lifecycle churn and multi-network isolation.
 - [ ] Measure Android background CPU/wakeup proxies on a cached emulator.
 - [ ] Reproduce and correct defects; validate before/after behavior.
@@ -67,8 +68,9 @@ fixture manifest before its first capture. Select supported controls from source
 and configured limits, not observed results. Record actual delivered work.
 
 S6's allocator instrumentation, calibration, modes and capture order are
-specified in [Allocation Review](allocation-review.md). Six of twelve captures
-are preserved; the 128-record repeats and all 256-record captures remain open.
+specified in [Allocation Review](allocation-review.md). All twelve captures
+passed with zero requested-byte/block retention after each of 120 teardowns.
+This closes the ledger diagnostic, not whole-runtime allocation attribution.
 
 ### Observations
 

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "complete": false,
+  "complete": true,
   "planned_captures": 12,
   "executable_sha256": "509996713072b3089f29565260f22337d452528c22c2d7623a0c9312d4b89805",
   "captures": [
@@ -3027,6 +3027,3031 @@
         "refreshes_per_cycle": 3,
         "schema_version": 1
       }
+    },
+    {
+      "log": "/tmp/p2p-vpn-allocation-s6-128-3-forced.log",
+      "log_sha256": "3d83753a858ccf0243a742351e529747beb88d8ebe1ad0f21646c2247f7691e4",
+      "sample": {
+        "allocator": "stats_alloc 0.1.10 wrapping System",
+        "cycles": [
+          {
+            "build_us": 2182169,
+            "construct": {
+              "allocations": 9386,
+              "bytes_allocated": 3069194,
+              "bytes_deallocated": 2746244,
+              "bytes_reallocated": 352128,
+              "deallocations": 7452,
+              "live_blocks_delta": 1934,
+              "live_bytes_delta": 322950,
+              "reallocations": 1556
+            },
+            "cycle": 1,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 322950,
+              "bytes_reallocated": 0,
+              "deallocations": 1934,
+              "live_blocks_delta": -1934,
+              "live_bytes_delta": -322950,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 47535,
+              "bytes_allocated": 12162708,
+              "bytes_deallocated": 12162708,
+              "bytes_reallocated": 2045160,
+              "deallocations": 47535,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 8532
+            },
+            "refresh_us": 13123766,
+            "rss_after_kib": 24128,
+            "rss_before_kib": 17800,
+            "rss_peak_kib": 24128,
+            "whole_cycle": {
+              "allocations": 56921,
+              "bytes_allocated": 15231902,
+              "bytes_deallocated": 15231902,
+              "bytes_reallocated": 2397288,
+              "deallocations": 56921,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 10088
+            }
+          },
+          {
+            "build_us": 2189352,
+            "construct": {
+              "allocations": 9386,
+              "bytes_allocated": 3069194,
+              "bytes_deallocated": 2746244,
+              "bytes_reallocated": 352128,
+              "deallocations": 7452,
+              "live_blocks_delta": 1934,
+              "live_bytes_delta": 322950,
+              "reallocations": 1556
+            },
+            "cycle": 2,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 322950,
+              "bytes_reallocated": 0,
+              "deallocations": 1934,
+              "live_blocks_delta": -1934,
+              "live_bytes_delta": -322950,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 47535,
+              "bytes_allocated": 12162708,
+              "bytes_deallocated": 12162708,
+              "bytes_reallocated": 2045160,
+              "deallocations": 47535,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 8532
+            },
+            "refresh_us": 13147447,
+            "rss_after_kib": 24132,
+            "rss_before_kib": 24128,
+            "rss_peak_kib": 24132,
+            "whole_cycle": {
+              "allocations": 56921,
+              "bytes_allocated": 15231902,
+              "bytes_deallocated": 15231902,
+              "bytes_reallocated": 2397288,
+              "deallocations": 56921,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 10088
+            }
+          },
+          {
+            "build_us": 2195876,
+            "construct": {
+              "allocations": 9386,
+              "bytes_allocated": 3069194,
+              "bytes_deallocated": 2746244,
+              "bytes_reallocated": 352128,
+              "deallocations": 7452,
+              "live_blocks_delta": 1934,
+              "live_bytes_delta": 322950,
+              "reallocations": 1556
+            },
+            "cycle": 3,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 322950,
+              "bytes_reallocated": 0,
+              "deallocations": 1934,
+              "live_blocks_delta": -1934,
+              "live_bytes_delta": -322950,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 47535,
+              "bytes_allocated": 12162708,
+              "bytes_deallocated": 12162708,
+              "bytes_reallocated": 2045160,
+              "deallocations": 47535,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 8532
+            },
+            "refresh_us": 13166321,
+            "rss_after_kib": 23864,
+            "rss_before_kib": 24132,
+            "rss_peak_kib": 23864,
+            "whole_cycle": {
+              "allocations": 56921,
+              "bytes_allocated": 15231902,
+              "bytes_deallocated": 15231902,
+              "bytes_reallocated": 2397288,
+              "deallocations": 56921,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 10088
+            }
+          },
+          {
+            "build_us": 2201572,
+            "construct": {
+              "allocations": 9386,
+              "bytes_allocated": 3069194,
+              "bytes_deallocated": 2746244,
+              "bytes_reallocated": 352128,
+              "deallocations": 7452,
+              "live_blocks_delta": 1934,
+              "live_bytes_delta": 322950,
+              "reallocations": 1556
+            },
+            "cycle": 4,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 322950,
+              "bytes_reallocated": 0,
+              "deallocations": 1934,
+              "live_blocks_delta": -1934,
+              "live_bytes_delta": -322950,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 47535,
+              "bytes_allocated": 12162708,
+              "bytes_deallocated": 12162708,
+              "bytes_reallocated": 2045160,
+              "deallocations": 47535,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 8532
+            },
+            "refresh_us": 13176243,
+            "rss_after_kib": 24132,
+            "rss_before_kib": 23864,
+            "rss_peak_kib": 24132,
+            "whole_cycle": {
+              "allocations": 56921,
+              "bytes_allocated": 15231902,
+              "bytes_deallocated": 15231902,
+              "bytes_reallocated": 2397288,
+              "deallocations": 56921,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 10088
+            }
+          },
+          {
+            "build_us": 2200010,
+            "construct": {
+              "allocations": 9386,
+              "bytes_allocated": 3069194,
+              "bytes_deallocated": 2746244,
+              "bytes_reallocated": 352128,
+              "deallocations": 7452,
+              "live_blocks_delta": 1934,
+              "live_bytes_delta": 322950,
+              "reallocations": 1556
+            },
+            "cycle": 5,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 322950,
+              "bytes_reallocated": 0,
+              "deallocations": 1934,
+              "live_blocks_delta": -1934,
+              "live_bytes_delta": -322950,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 47535,
+              "bytes_allocated": 12162708,
+              "bytes_deallocated": 12162708,
+              "bytes_reallocated": 2045160,
+              "deallocations": 47535,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 8532
+            },
+            "refresh_us": 13138329,
+            "rss_after_kib": 24132,
+            "rss_before_kib": 24132,
+            "rss_peak_kib": 24132,
+            "whole_cycle": {
+              "allocations": 56921,
+              "bytes_allocated": 15231902,
+              "bytes_deallocated": 15231902,
+              "bytes_reallocated": 2397288,
+              "deallocations": 56921,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 10088
+            }
+          },
+          {
+            "build_us": 2195357,
+            "construct": {
+              "allocations": 9386,
+              "bytes_allocated": 3069194,
+              "bytes_deallocated": 2746244,
+              "bytes_reallocated": 352128,
+              "deallocations": 7452,
+              "live_blocks_delta": 1934,
+              "live_bytes_delta": 322950,
+              "reallocations": 1556
+            },
+            "cycle": 6,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 322950,
+              "bytes_reallocated": 0,
+              "deallocations": 1934,
+              "live_blocks_delta": -1934,
+              "live_bytes_delta": -322950,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 47535,
+              "bytes_allocated": 12162708,
+              "bytes_deallocated": 12162708,
+              "bytes_reallocated": 2045160,
+              "deallocations": 47535,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 8532
+            },
+            "refresh_us": 13166259,
+            "rss_after_kib": 24132,
+            "rss_before_kib": 24132,
+            "rss_peak_kib": 24132,
+            "whole_cycle": {
+              "allocations": 56921,
+              "bytes_allocated": 15231902,
+              "bytes_deallocated": 15231902,
+              "bytes_reallocated": 2397288,
+              "deallocations": 56921,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 10088
+            }
+          },
+          {
+            "build_us": 2199291,
+            "construct": {
+              "allocations": 9386,
+              "bytes_allocated": 3069194,
+              "bytes_deallocated": 2746244,
+              "bytes_reallocated": 352128,
+              "deallocations": 7452,
+              "live_blocks_delta": 1934,
+              "live_bytes_delta": 322950,
+              "reallocations": 1556
+            },
+            "cycle": 7,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 322950,
+              "bytes_reallocated": 0,
+              "deallocations": 1934,
+              "live_blocks_delta": -1934,
+              "live_bytes_delta": -322950,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 47535,
+              "bytes_allocated": 12162708,
+              "bytes_deallocated": 12162708,
+              "bytes_reallocated": 2045160,
+              "deallocations": 47535,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 8532
+            },
+            "refresh_us": 13160911,
+            "rss_after_kib": 24132,
+            "rss_before_kib": 24132,
+            "rss_peak_kib": 24132,
+            "whole_cycle": {
+              "allocations": 56921,
+              "bytes_allocated": 15231902,
+              "bytes_deallocated": 15231902,
+              "bytes_reallocated": 2397288,
+              "deallocations": 56921,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 10088
+            }
+          },
+          {
+            "build_us": 2199225,
+            "construct": {
+              "allocations": 9386,
+              "bytes_allocated": 3069194,
+              "bytes_deallocated": 2746244,
+              "bytes_reallocated": 352128,
+              "deallocations": 7452,
+              "live_blocks_delta": 1934,
+              "live_bytes_delta": 322950,
+              "reallocations": 1556
+            },
+            "cycle": 8,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 322950,
+              "bytes_reallocated": 0,
+              "deallocations": 1934,
+              "live_blocks_delta": -1934,
+              "live_bytes_delta": -322950,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 47535,
+              "bytes_allocated": 12162708,
+              "bytes_deallocated": 12162708,
+              "bytes_reallocated": 2045160,
+              "deallocations": 47535,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 8532
+            },
+            "refresh_us": 13165757,
+            "rss_after_kib": 24132,
+            "rss_before_kib": 24132,
+            "rss_peak_kib": 24132,
+            "whole_cycle": {
+              "allocations": 56921,
+              "bytes_allocated": 15231902,
+              "bytes_deallocated": 15231902,
+              "bytes_reallocated": 2397288,
+              "deallocations": 56921,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 10088
+            }
+          },
+          {
+            "build_us": 2196639,
+            "construct": {
+              "allocations": 9386,
+              "bytes_allocated": 3069194,
+              "bytes_deallocated": 2746244,
+              "bytes_reallocated": 352128,
+              "deallocations": 7452,
+              "live_blocks_delta": 1934,
+              "live_bytes_delta": 322950,
+              "reallocations": 1556
+            },
+            "cycle": 9,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 322950,
+              "bytes_reallocated": 0,
+              "deallocations": 1934,
+              "live_blocks_delta": -1934,
+              "live_bytes_delta": -322950,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 47535,
+              "bytes_allocated": 12162708,
+              "bytes_deallocated": 12162708,
+              "bytes_reallocated": 2045160,
+              "deallocations": 47535,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 8532
+            },
+            "refresh_us": 13165581,
+            "rss_after_kib": 24184,
+            "rss_before_kib": 24132,
+            "rss_peak_kib": 24184,
+            "whole_cycle": {
+              "allocations": 56921,
+              "bytes_allocated": 15231902,
+              "bytes_deallocated": 15231902,
+              "bytes_reallocated": 2397288,
+              "deallocations": 56921,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 10088
+            }
+          },
+          {
+            "build_us": 2193620,
+            "construct": {
+              "allocations": 9386,
+              "bytes_allocated": 3069194,
+              "bytes_deallocated": 2746244,
+              "bytes_reallocated": 352128,
+              "deallocations": 7452,
+              "live_blocks_delta": 1934,
+              "live_bytes_delta": 322950,
+              "reallocations": 1556
+            },
+            "cycle": 10,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 322950,
+              "bytes_reallocated": 0,
+              "deallocations": 1934,
+              "live_blocks_delta": -1934,
+              "live_bytes_delta": -322950,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 47535,
+              "bytes_allocated": 12162708,
+              "bytes_deallocated": 12162708,
+              "bytes_reallocated": 2045160,
+              "deallocations": 47535,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 8532
+            },
+            "refresh_us": 13171819,
+            "rss_after_kib": 24184,
+            "rss_before_kib": 24184,
+            "rss_peak_kib": 24184,
+            "whole_cycle": {
+              "allocations": 56921,
+              "bytes_allocated": 15231902,
+              "bytes_deallocated": 15231902,
+              "bytes_reallocated": 2397288,
+              "deallocations": 56921,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 10088
+            }
+          }
+        ],
+        "ledger_sha256_base64": "vlaZGs8r5R3pjZEZkDUwj5ClJP09ur08l0//HbyVP8E=",
+        "mode": "forced",
+        "records": 128,
+        "refreshes_per_cycle": 3,
+        "schema_version": 1
+      }
+    },
+    {
+      "log": "/tmp/p2p-vpn-allocation-s6-128-4-cached.log",
+      "log_sha256": "b8baef902c50fd4b2b95444ddc770b77033c6bae58b78d8bd150bfaebdddc60c",
+      "sample": {
+        "allocator": "stats_alloc 0.1.10 wrapping System",
+        "cycles": [
+          {
+            "build_us": 2187780,
+            "construct": {
+              "allocations": 9386,
+              "bytes_allocated": 3069194,
+              "bytes_deallocated": 2746244,
+              "bytes_reallocated": 352128,
+              "deallocations": 7452,
+              "live_blocks_delta": 1934,
+              "live_bytes_delta": 322950,
+              "reallocations": 1556
+            },
+            "cycle": 1,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 322950,
+              "bytes_reallocated": 0,
+              "deallocations": 1934,
+              "live_blocks_delta": -1934,
+              "live_bytes_delta": -322950,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 0
+            },
+            "refresh_us": 7,
+            "rss_after_kib": 23528,
+            "rss_before_kib": 17920,
+            "rss_peak_kib": 23528,
+            "whole_cycle": {
+              "allocations": 9386,
+              "bytes_allocated": 3069194,
+              "bytes_deallocated": 3069194,
+              "bytes_reallocated": 352128,
+              "deallocations": 9386,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 1556
+            }
+          },
+          {
+            "build_us": 2186778,
+            "construct": {
+              "allocations": 9386,
+              "bytes_allocated": 3069194,
+              "bytes_deallocated": 2746244,
+              "bytes_reallocated": 352128,
+              "deallocations": 7452,
+              "live_blocks_delta": 1934,
+              "live_bytes_delta": 322950,
+              "reallocations": 1556
+            },
+            "cycle": 2,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 322950,
+              "bytes_reallocated": 0,
+              "deallocations": 1934,
+              "live_blocks_delta": -1934,
+              "live_bytes_delta": -322950,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 0
+            },
+            "refresh_us": 2,
+            "rss_after_kib": 23532,
+            "rss_before_kib": 23528,
+            "rss_peak_kib": 23532,
+            "whole_cycle": {
+              "allocations": 9386,
+              "bytes_allocated": 3069194,
+              "bytes_deallocated": 3069194,
+              "bytes_reallocated": 352128,
+              "deallocations": 9386,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 1556
+            }
+          },
+          {
+            "build_us": 2188980,
+            "construct": {
+              "allocations": 9386,
+              "bytes_allocated": 3069194,
+              "bytes_deallocated": 2746244,
+              "bytes_reallocated": 352128,
+              "deallocations": 7452,
+              "live_blocks_delta": 1934,
+              "live_bytes_delta": 322950,
+              "reallocations": 1556
+            },
+            "cycle": 3,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 322950,
+              "bytes_reallocated": 0,
+              "deallocations": 1934,
+              "live_blocks_delta": -1934,
+              "live_bytes_delta": -322950,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 0
+            },
+            "refresh_us": 2,
+            "rss_after_kib": 23564,
+            "rss_before_kib": 23532,
+            "rss_peak_kib": 23564,
+            "whole_cycle": {
+              "allocations": 9386,
+              "bytes_allocated": 3069194,
+              "bytes_deallocated": 3069194,
+              "bytes_reallocated": 352128,
+              "deallocations": 9386,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 1556
+            }
+          },
+          {
+            "build_us": 2188126,
+            "construct": {
+              "allocations": 9386,
+              "bytes_allocated": 3069194,
+              "bytes_deallocated": 2746244,
+              "bytes_reallocated": 352128,
+              "deallocations": 7452,
+              "live_blocks_delta": 1934,
+              "live_bytes_delta": 322950,
+              "reallocations": 1556
+            },
+            "cycle": 4,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 322950,
+              "bytes_reallocated": 0,
+              "deallocations": 1934,
+              "live_blocks_delta": -1934,
+              "live_bytes_delta": -322950,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 0
+            },
+            "refresh_us": 2,
+            "rss_after_kib": 23564,
+            "rss_before_kib": 23564,
+            "rss_peak_kib": 23564,
+            "whole_cycle": {
+              "allocations": 9386,
+              "bytes_allocated": 3069194,
+              "bytes_deallocated": 3069194,
+              "bytes_reallocated": 352128,
+              "deallocations": 9386,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 1556
+            }
+          },
+          {
+            "build_us": 2194463,
+            "construct": {
+              "allocations": 9386,
+              "bytes_allocated": 3069194,
+              "bytes_deallocated": 2746244,
+              "bytes_reallocated": 352128,
+              "deallocations": 7452,
+              "live_blocks_delta": 1934,
+              "live_bytes_delta": 322950,
+              "reallocations": 1556
+            },
+            "cycle": 5,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 322950,
+              "bytes_reallocated": 0,
+              "deallocations": 1934,
+              "live_blocks_delta": -1934,
+              "live_bytes_delta": -322950,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 0
+            },
+            "refresh_us": 1,
+            "rss_after_kib": 23564,
+            "rss_before_kib": 23564,
+            "rss_peak_kib": 23564,
+            "whole_cycle": {
+              "allocations": 9386,
+              "bytes_allocated": 3069194,
+              "bytes_deallocated": 3069194,
+              "bytes_reallocated": 352128,
+              "deallocations": 9386,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 1556
+            }
+          },
+          {
+            "build_us": 2196174,
+            "construct": {
+              "allocations": 9386,
+              "bytes_allocated": 3069194,
+              "bytes_deallocated": 2746244,
+              "bytes_reallocated": 352128,
+              "deallocations": 7452,
+              "live_blocks_delta": 1934,
+              "live_bytes_delta": 322950,
+              "reallocations": 1556
+            },
+            "cycle": 6,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 322950,
+              "bytes_reallocated": 0,
+              "deallocations": 1934,
+              "live_blocks_delta": -1934,
+              "live_bytes_delta": -322950,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 0
+            },
+            "refresh_us": 2,
+            "rss_after_kib": 23564,
+            "rss_before_kib": 23564,
+            "rss_peak_kib": 23564,
+            "whole_cycle": {
+              "allocations": 9386,
+              "bytes_allocated": 3069194,
+              "bytes_deallocated": 3069194,
+              "bytes_reallocated": 352128,
+              "deallocations": 9386,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 1556
+            }
+          },
+          {
+            "build_us": 2192140,
+            "construct": {
+              "allocations": 9386,
+              "bytes_allocated": 3069194,
+              "bytes_deallocated": 2746244,
+              "bytes_reallocated": 352128,
+              "deallocations": 7452,
+              "live_blocks_delta": 1934,
+              "live_bytes_delta": 322950,
+              "reallocations": 1556
+            },
+            "cycle": 7,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 322950,
+              "bytes_reallocated": 0,
+              "deallocations": 1934,
+              "live_blocks_delta": -1934,
+              "live_bytes_delta": -322950,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 0
+            },
+            "refresh_us": 2,
+            "rss_after_kib": 23564,
+            "rss_before_kib": 23564,
+            "rss_peak_kib": 23564,
+            "whole_cycle": {
+              "allocations": 9386,
+              "bytes_allocated": 3069194,
+              "bytes_deallocated": 3069194,
+              "bytes_reallocated": 352128,
+              "deallocations": 9386,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 1556
+            }
+          },
+          {
+            "build_us": 2192819,
+            "construct": {
+              "allocations": 9386,
+              "bytes_allocated": 3069194,
+              "bytes_deallocated": 2746244,
+              "bytes_reallocated": 352128,
+              "deallocations": 7452,
+              "live_blocks_delta": 1934,
+              "live_bytes_delta": 322950,
+              "reallocations": 1556
+            },
+            "cycle": 8,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 322950,
+              "bytes_reallocated": 0,
+              "deallocations": 1934,
+              "live_blocks_delta": -1934,
+              "live_bytes_delta": -322950,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 0
+            },
+            "refresh_us": 2,
+            "rss_after_kib": 23564,
+            "rss_before_kib": 23564,
+            "rss_peak_kib": 23564,
+            "whole_cycle": {
+              "allocations": 9386,
+              "bytes_allocated": 3069194,
+              "bytes_deallocated": 3069194,
+              "bytes_reallocated": 352128,
+              "deallocations": 9386,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 1556
+            }
+          },
+          {
+            "build_us": 2195080,
+            "construct": {
+              "allocations": 9386,
+              "bytes_allocated": 3069194,
+              "bytes_deallocated": 2746244,
+              "bytes_reallocated": 352128,
+              "deallocations": 7452,
+              "live_blocks_delta": 1934,
+              "live_bytes_delta": 322950,
+              "reallocations": 1556
+            },
+            "cycle": 9,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 322950,
+              "bytes_reallocated": 0,
+              "deallocations": 1934,
+              "live_blocks_delta": -1934,
+              "live_bytes_delta": -322950,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 0
+            },
+            "refresh_us": 2,
+            "rss_after_kib": 23564,
+            "rss_before_kib": 23564,
+            "rss_peak_kib": 23564,
+            "whole_cycle": {
+              "allocations": 9386,
+              "bytes_allocated": 3069194,
+              "bytes_deallocated": 3069194,
+              "bytes_reallocated": 352128,
+              "deallocations": 9386,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 1556
+            }
+          },
+          {
+            "build_us": 2201178,
+            "construct": {
+              "allocations": 9386,
+              "bytes_allocated": 3069194,
+              "bytes_deallocated": 2746244,
+              "bytes_reallocated": 352128,
+              "deallocations": 7452,
+              "live_blocks_delta": 1934,
+              "live_bytes_delta": 322950,
+              "reallocations": 1556
+            },
+            "cycle": 10,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 322950,
+              "bytes_reallocated": 0,
+              "deallocations": 1934,
+              "live_blocks_delta": -1934,
+              "live_bytes_delta": -322950,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 0
+            },
+            "refresh_us": 2,
+            "rss_after_kib": 23564,
+            "rss_before_kib": 23564,
+            "rss_peak_kib": 23564,
+            "whole_cycle": {
+              "allocations": 9386,
+              "bytes_allocated": 3069194,
+              "bytes_deallocated": 3069194,
+              "bytes_reallocated": 352128,
+              "deallocations": 9386,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 1556
+            }
+          }
+        ],
+        "ledger_sha256_base64": "vlaZGs8r5R3pjZEZkDUwj5ClJP09ur08l0//HbyVP8E=",
+        "mode": "cached",
+        "records": 128,
+        "refreshes_per_cycle": 3,
+        "schema_version": 1
+      }
+    },
+    {
+      "log": "/tmp/p2p-vpn-allocation-s6-256-1-cached.log",
+      "log_sha256": "952698e5667046dfef6fc4e615b54b0678d7a8a82ce39548af38e042b4ba233f",
+      "sample": {
+        "allocator": "stats_alloc 0.1.10 wrapping System",
+        "cycles": [
+          {
+            "build_us": 4395302,
+            "construct": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9062740,
+              "bytes_reallocated": 704384,
+              "deallocations": 14889,
+              "live_blocks_delta": 3854,
+              "live_bytes_delta": 645638,
+              "reallocations": 3095
+            },
+            "cycle": 1,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 645638,
+              "bytes_reallocated": 0,
+              "deallocations": 3854,
+              "live_blocks_delta": -3854,
+              "live_bytes_delta": -645638,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 0
+            },
+            "refresh_us": 9,
+            "rss_after_kib": 24720,
+            "rss_before_kib": 18488,
+            "rss_peak_kib": 24720,
+            "whole_cycle": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9708378,
+              "bytes_reallocated": 704384,
+              "deallocations": 18743,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 3095
+            }
+          },
+          {
+            "build_us": 4379890,
+            "construct": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9062740,
+              "bytes_reallocated": 704384,
+              "deallocations": 14889,
+              "live_blocks_delta": 3854,
+              "live_bytes_delta": 645638,
+              "reallocations": 3095
+            },
+            "cycle": 2,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 645638,
+              "bytes_reallocated": 0,
+              "deallocations": 3854,
+              "live_blocks_delta": -3854,
+              "live_bytes_delta": -645638,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 0
+            },
+            "refresh_us": 2,
+            "rss_after_kib": 24728,
+            "rss_before_kib": 24720,
+            "rss_peak_kib": 24728,
+            "whole_cycle": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9708378,
+              "bytes_reallocated": 704384,
+              "deallocations": 18743,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 3095
+            }
+          },
+          {
+            "build_us": 4386824,
+            "construct": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9062740,
+              "bytes_reallocated": 704384,
+              "deallocations": 14889,
+              "live_blocks_delta": 3854,
+              "live_bytes_delta": 645638,
+              "reallocations": 3095
+            },
+            "cycle": 3,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 645638,
+              "bytes_reallocated": 0,
+              "deallocations": 3854,
+              "live_blocks_delta": -3854,
+              "live_bytes_delta": -645638,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 0
+            },
+            "refresh_us": 2,
+            "rss_after_kib": 24404,
+            "rss_before_kib": 24728,
+            "rss_peak_kib": 24404,
+            "whole_cycle": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9708378,
+              "bytes_reallocated": 704384,
+              "deallocations": 18743,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 3095
+            }
+          },
+          {
+            "build_us": 4405968,
+            "construct": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9062740,
+              "bytes_reallocated": 704384,
+              "deallocations": 14889,
+              "live_blocks_delta": 3854,
+              "live_bytes_delta": 645638,
+              "reallocations": 3095
+            },
+            "cycle": 4,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 645638,
+              "bytes_reallocated": 0,
+              "deallocations": 3854,
+              "live_blocks_delta": -3854,
+              "live_bytes_delta": -645638,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 0
+            },
+            "refresh_us": 2,
+            "rss_after_kib": 24792,
+            "rss_before_kib": 24404,
+            "rss_peak_kib": 24792,
+            "whole_cycle": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9708378,
+              "bytes_reallocated": 704384,
+              "deallocations": 18743,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 3095
+            }
+          },
+          {
+            "build_us": 4405036,
+            "construct": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9062740,
+              "bytes_reallocated": 704384,
+              "deallocations": 14889,
+              "live_blocks_delta": 3854,
+              "live_bytes_delta": 645638,
+              "reallocations": 3095
+            },
+            "cycle": 5,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 645638,
+              "bytes_reallocated": 0,
+              "deallocations": 3854,
+              "live_blocks_delta": -3854,
+              "live_bytes_delta": -645638,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 0
+            },
+            "refresh_us": 2,
+            "rss_after_kib": 24792,
+            "rss_before_kib": 24792,
+            "rss_peak_kib": 24792,
+            "whole_cycle": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9708378,
+              "bytes_reallocated": 704384,
+              "deallocations": 18743,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 3095
+            }
+          },
+          {
+            "build_us": 4398175,
+            "construct": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9062740,
+              "bytes_reallocated": 704384,
+              "deallocations": 14889,
+              "live_blocks_delta": 3854,
+              "live_bytes_delta": 645638,
+              "reallocations": 3095
+            },
+            "cycle": 6,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 645638,
+              "bytes_reallocated": 0,
+              "deallocations": 3854,
+              "live_blocks_delta": -3854,
+              "live_bytes_delta": -645638,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 0
+            },
+            "refresh_us": 2,
+            "rss_after_kib": 24792,
+            "rss_before_kib": 24792,
+            "rss_peak_kib": 24792,
+            "whole_cycle": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9708378,
+              "bytes_reallocated": 704384,
+              "deallocations": 18743,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 3095
+            }
+          },
+          {
+            "build_us": 4391906,
+            "construct": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9062740,
+              "bytes_reallocated": 704384,
+              "deallocations": 14889,
+              "live_blocks_delta": 3854,
+              "live_bytes_delta": 645638,
+              "reallocations": 3095
+            },
+            "cycle": 7,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 645638,
+              "bytes_reallocated": 0,
+              "deallocations": 3854,
+              "live_blocks_delta": -3854,
+              "live_bytes_delta": -645638,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 0
+            },
+            "refresh_us": 2,
+            "rss_after_kib": 24792,
+            "rss_before_kib": 24792,
+            "rss_peak_kib": 24792,
+            "whole_cycle": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9708378,
+              "bytes_reallocated": 704384,
+              "deallocations": 18743,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 3095
+            }
+          },
+          {
+            "build_us": 4406314,
+            "construct": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9062740,
+              "bytes_reallocated": 704384,
+              "deallocations": 14889,
+              "live_blocks_delta": 3854,
+              "live_bytes_delta": 645638,
+              "reallocations": 3095
+            },
+            "cycle": 8,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 645638,
+              "bytes_reallocated": 0,
+              "deallocations": 3854,
+              "live_blocks_delta": -3854,
+              "live_bytes_delta": -645638,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 0
+            },
+            "refresh_us": 2,
+            "rss_after_kib": 24792,
+            "rss_before_kib": 24792,
+            "rss_peak_kib": 24792,
+            "whole_cycle": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9708378,
+              "bytes_reallocated": 704384,
+              "deallocations": 18743,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 3095
+            }
+          },
+          {
+            "build_us": 4400459,
+            "construct": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9062740,
+              "bytes_reallocated": 704384,
+              "deallocations": 14889,
+              "live_blocks_delta": 3854,
+              "live_bytes_delta": 645638,
+              "reallocations": 3095
+            },
+            "cycle": 9,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 645638,
+              "bytes_reallocated": 0,
+              "deallocations": 3854,
+              "live_blocks_delta": -3854,
+              "live_bytes_delta": -645638,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 0
+            },
+            "refresh_us": 2,
+            "rss_after_kib": 24792,
+            "rss_before_kib": 24792,
+            "rss_peak_kib": 24792,
+            "whole_cycle": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9708378,
+              "bytes_reallocated": 704384,
+              "deallocations": 18743,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 3095
+            }
+          },
+          {
+            "build_us": 4398032,
+            "construct": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9062740,
+              "bytes_reallocated": 704384,
+              "deallocations": 14889,
+              "live_blocks_delta": 3854,
+              "live_bytes_delta": 645638,
+              "reallocations": 3095
+            },
+            "cycle": 10,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 645638,
+              "bytes_reallocated": 0,
+              "deallocations": 3854,
+              "live_blocks_delta": -3854,
+              "live_bytes_delta": -645638,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 0
+            },
+            "refresh_us": 2,
+            "rss_after_kib": 24792,
+            "rss_before_kib": 24792,
+            "rss_peak_kib": 24792,
+            "whole_cycle": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9708378,
+              "bytes_reallocated": 704384,
+              "deallocations": 18743,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 3095
+            }
+          }
+        ],
+        "ledger_sha256_base64": "CGt/DjhUrbYz0kShyOQpGjm7vfK0sZeoUjQWWD54dE4=",
+        "mode": "cached",
+        "records": 256,
+        "refreshes_per_cycle": 3,
+        "schema_version": 1
+      }
+    },
+    {
+      "log": "/tmp/p2p-vpn-allocation-s6-256-2-forced.log",
+      "log_sha256": "5caf439f5122ed7e6f8d30790eb4529e51df4b2a78126b528d18d8bc7a8431f5",
+      "sample": {
+        "allocator": "stats_alloc 0.1.10 wrapping System",
+        "cycles": [
+          {
+            "build_us": 4373176,
+            "construct": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9062740,
+              "bytes_reallocated": 704384,
+              "deallocations": 14889,
+              "live_blocks_delta": 3854,
+              "live_bytes_delta": 645638,
+              "reallocations": 3095
+            },
+            "cycle": 1,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 645638,
+              "bytes_reallocated": 0,
+              "deallocations": 3854,
+              "live_blocks_delta": -3854,
+              "live_bytes_delta": -645638,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 94833,
+              "bytes_allocated": 35038260,
+              "bytes_deallocated": 35038260,
+              "bytes_reallocated": 4091112,
+              "deallocations": 94833,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 16995
+            },
+            "refresh_us": 26362764,
+            "rss_after_kib": 24740,
+            "rss_before_kib": 18036,
+            "rss_peak_kib": 24740,
+            "whole_cycle": {
+              "allocations": 113576,
+              "bytes_allocated": 44746638,
+              "bytes_deallocated": 44746638,
+              "bytes_reallocated": 4795496,
+              "deallocations": 113576,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 20090
+            }
+          },
+          {
+            "build_us": 4416507,
+            "construct": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9062740,
+              "bytes_reallocated": 704384,
+              "deallocations": 14889,
+              "live_blocks_delta": 3854,
+              "live_bytes_delta": 645638,
+              "reallocations": 3095
+            },
+            "cycle": 2,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 645638,
+              "bytes_reallocated": 0,
+              "deallocations": 3854,
+              "live_blocks_delta": -3854,
+              "live_bytes_delta": -645638,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 94833,
+              "bytes_allocated": 35038260,
+              "bytes_deallocated": 35038260,
+              "bytes_reallocated": 4091112,
+              "deallocations": 94833,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 16995
+            },
+            "refresh_us": 26419717,
+            "rss_after_kib": 25132,
+            "rss_before_kib": 24740,
+            "rss_peak_kib": 25132,
+            "whole_cycle": {
+              "allocations": 113576,
+              "bytes_allocated": 44746638,
+              "bytes_deallocated": 44746638,
+              "bytes_reallocated": 4795496,
+              "deallocations": 113576,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 20090
+            }
+          },
+          {
+            "build_us": 4405071,
+            "construct": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9062740,
+              "bytes_reallocated": 704384,
+              "deallocations": 14889,
+              "live_blocks_delta": 3854,
+              "live_bytes_delta": 645638,
+              "reallocations": 3095
+            },
+            "cycle": 3,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 645638,
+              "bytes_reallocated": 0,
+              "deallocations": 3854,
+              "live_blocks_delta": -3854,
+              "live_bytes_delta": -645638,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 94833,
+              "bytes_allocated": 35038260,
+              "bytes_deallocated": 35038260,
+              "bytes_reallocated": 4091112,
+              "deallocations": 94833,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 16995
+            },
+            "refresh_us": 26416867,
+            "rss_after_kib": 25176,
+            "rss_before_kib": 25132,
+            "rss_peak_kib": 25176,
+            "whole_cycle": {
+              "allocations": 113576,
+              "bytes_allocated": 44746638,
+              "bytes_deallocated": 44746638,
+              "bytes_reallocated": 4795496,
+              "deallocations": 113576,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 20090
+            }
+          },
+          {
+            "build_us": 4418699,
+            "construct": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9062740,
+              "bytes_reallocated": 704384,
+              "deallocations": 14889,
+              "live_blocks_delta": 3854,
+              "live_bytes_delta": 645638,
+              "reallocations": 3095
+            },
+            "cycle": 4,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 645638,
+              "bytes_reallocated": 0,
+              "deallocations": 3854,
+              "live_blocks_delta": -3854,
+              "live_bytes_delta": -645638,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 94833,
+              "bytes_allocated": 35038260,
+              "bytes_deallocated": 35038260,
+              "bytes_reallocated": 4091112,
+              "deallocations": 94833,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 16995
+            },
+            "refresh_us": 26484913,
+            "rss_after_kib": 25224,
+            "rss_before_kib": 25176,
+            "rss_peak_kib": 25224,
+            "whole_cycle": {
+              "allocations": 113576,
+              "bytes_allocated": 44746638,
+              "bytes_deallocated": 44746638,
+              "bytes_reallocated": 4795496,
+              "deallocations": 113576,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 20090
+            }
+          },
+          {
+            "build_us": 4438299,
+            "construct": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9062740,
+              "bytes_reallocated": 704384,
+              "deallocations": 14889,
+              "live_blocks_delta": 3854,
+              "live_bytes_delta": 645638,
+              "reallocations": 3095
+            },
+            "cycle": 5,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 645638,
+              "bytes_reallocated": 0,
+              "deallocations": 3854,
+              "live_blocks_delta": -3854,
+              "live_bytes_delta": -645638,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 94833,
+              "bytes_allocated": 35038260,
+              "bytes_deallocated": 35038260,
+              "bytes_reallocated": 4091112,
+              "deallocations": 94833,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 16995
+            },
+            "refresh_us": 26540928,
+            "rss_after_kib": 24784,
+            "rss_before_kib": 24812,
+            "rss_peak_kib": 24784,
+            "whole_cycle": {
+              "allocations": 113576,
+              "bytes_allocated": 44746638,
+              "bytes_deallocated": 44746638,
+              "bytes_reallocated": 4795496,
+              "deallocations": 113576,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 20090
+            }
+          },
+          {
+            "build_us": 4412948,
+            "construct": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9062740,
+              "bytes_reallocated": 704384,
+              "deallocations": 14889,
+              "live_blocks_delta": 3854,
+              "live_bytes_delta": 645638,
+              "reallocations": 3095
+            },
+            "cycle": 6,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 645638,
+              "bytes_reallocated": 0,
+              "deallocations": 3854,
+              "live_blocks_delta": -3854,
+              "live_bytes_delta": -645638,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 94833,
+              "bytes_allocated": 35038260,
+              "bytes_deallocated": 35038260,
+              "bytes_reallocated": 4091112,
+              "deallocations": 94833,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 16995
+            },
+            "refresh_us": 26373403,
+            "rss_after_kib": 24672,
+            "rss_before_kib": 24784,
+            "rss_peak_kib": 24784,
+            "whole_cycle": {
+              "allocations": 113576,
+              "bytes_allocated": 44746638,
+              "bytes_deallocated": 44746638,
+              "bytes_reallocated": 4795496,
+              "deallocations": 113576,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 20090
+            }
+          },
+          {
+            "build_us": 4402044,
+            "construct": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9062740,
+              "bytes_reallocated": 704384,
+              "deallocations": 14889,
+              "live_blocks_delta": 3854,
+              "live_bytes_delta": 645638,
+              "reallocations": 3095
+            },
+            "cycle": 7,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 645638,
+              "bytes_reallocated": 0,
+              "deallocations": 3854,
+              "live_blocks_delta": -3854,
+              "live_bytes_delta": -645638,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 94833,
+              "bytes_allocated": 35038260,
+              "bytes_deallocated": 35038260,
+              "bytes_reallocated": 4091112,
+              "deallocations": 94833,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 16995
+            },
+            "refresh_us": 26413441,
+            "rss_after_kib": 24672,
+            "rss_before_kib": 24672,
+            "rss_peak_kib": 24784,
+            "whole_cycle": {
+              "allocations": 113576,
+              "bytes_allocated": 44746638,
+              "bytes_deallocated": 44746638,
+              "bytes_reallocated": 4795496,
+              "deallocations": 113576,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 20090
+            }
+          },
+          {
+            "build_us": 4424330,
+            "construct": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9062740,
+              "bytes_reallocated": 704384,
+              "deallocations": 14889,
+              "live_blocks_delta": 3854,
+              "live_bytes_delta": 645638,
+              "reallocations": 3095
+            },
+            "cycle": 8,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 645638,
+              "bytes_reallocated": 0,
+              "deallocations": 3854,
+              "live_blocks_delta": -3854,
+              "live_bytes_delta": -645638,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 94833,
+              "bytes_allocated": 35038260,
+              "bytes_deallocated": 35038260,
+              "bytes_reallocated": 4091112,
+              "deallocations": 94833,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 16995
+            },
+            "refresh_us": 26420343,
+            "rss_after_kib": 24672,
+            "rss_before_kib": 24672,
+            "rss_peak_kib": 24784,
+            "whole_cycle": {
+              "allocations": 113576,
+              "bytes_allocated": 44746638,
+              "bytes_deallocated": 44746638,
+              "bytes_reallocated": 4795496,
+              "deallocations": 113576,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 20090
+            }
+          },
+          {
+            "build_us": 4424494,
+            "construct": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9062740,
+              "bytes_reallocated": 704384,
+              "deallocations": 14889,
+              "live_blocks_delta": 3854,
+              "live_bytes_delta": 645638,
+              "reallocations": 3095
+            },
+            "cycle": 9,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 645638,
+              "bytes_reallocated": 0,
+              "deallocations": 3854,
+              "live_blocks_delta": -3854,
+              "live_bytes_delta": -645638,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 94833,
+              "bytes_allocated": 35038260,
+              "bytes_deallocated": 35038260,
+              "bytes_reallocated": 4091112,
+              "deallocations": 94833,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 16995
+            },
+            "refresh_us": 26384795,
+            "rss_after_kib": 24764,
+            "rss_before_kib": 24672,
+            "rss_peak_kib": 24784,
+            "whole_cycle": {
+              "allocations": 113576,
+              "bytes_allocated": 44746638,
+              "bytes_deallocated": 44746638,
+              "bytes_reallocated": 4795496,
+              "deallocations": 113576,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 20090
+            }
+          },
+          {
+            "build_us": 4412053,
+            "construct": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9062740,
+              "bytes_reallocated": 704384,
+              "deallocations": 14889,
+              "live_blocks_delta": 3854,
+              "live_bytes_delta": 645638,
+              "reallocations": 3095
+            },
+            "cycle": 10,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 645638,
+              "bytes_reallocated": 0,
+              "deallocations": 3854,
+              "live_blocks_delta": -3854,
+              "live_bytes_delta": -645638,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 94833,
+              "bytes_allocated": 35038260,
+              "bytes_deallocated": 35038260,
+              "bytes_reallocated": 4091112,
+              "deallocations": 94833,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 16995
+            },
+            "refresh_us": 26413868,
+            "rss_after_kib": 24740,
+            "rss_before_kib": 24764,
+            "rss_peak_kib": 24784,
+            "whole_cycle": {
+              "allocations": 113576,
+              "bytes_allocated": 44746638,
+              "bytes_deallocated": 44746638,
+              "bytes_reallocated": 4795496,
+              "deallocations": 113576,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 20090
+            }
+          }
+        ],
+        "ledger_sha256_base64": "CGt/DjhUrbYz0kShyOQpGjm7vfK0sZeoUjQWWD54dE4=",
+        "mode": "forced",
+        "records": 256,
+        "refreshes_per_cycle": 3,
+        "schema_version": 1
+      }
+    },
+    {
+      "log": "/tmp/p2p-vpn-allocation-s6-256-3-forced.log",
+      "log_sha256": "44deafdb485fa7f473bfe43e6cff368e53c818dcb791216aa251362513dedccf",
+      "sample": {
+        "allocator": "stats_alloc 0.1.10 wrapping System",
+        "cycles": [
+          {
+            "build_us": 4405311,
+            "construct": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9062740,
+              "bytes_reallocated": 704384,
+              "deallocations": 14889,
+              "live_blocks_delta": 3854,
+              "live_bytes_delta": 645638,
+              "reallocations": 3095
+            },
+            "cycle": 1,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 645638,
+              "bytes_reallocated": 0,
+              "deallocations": 3854,
+              "live_blocks_delta": -3854,
+              "live_bytes_delta": -645638,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 94833,
+              "bytes_allocated": 35038260,
+              "bytes_deallocated": 35038260,
+              "bytes_reallocated": 4091112,
+              "deallocations": 94833,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 16995
+            },
+            "refresh_us": 26382307,
+            "rss_after_kib": 25224,
+            "rss_before_kib": 18276,
+            "rss_peak_kib": 25276,
+            "whole_cycle": {
+              "allocations": 113576,
+              "bytes_allocated": 44746638,
+              "bytes_deallocated": 44746638,
+              "bytes_reallocated": 4795496,
+              "deallocations": 113576,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 20090
+            }
+          },
+          {
+            "build_us": 4409399,
+            "construct": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9062740,
+              "bytes_reallocated": 704384,
+              "deallocations": 14889,
+              "live_blocks_delta": 3854,
+              "live_bytes_delta": 645638,
+              "reallocations": 3095
+            },
+            "cycle": 2,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 645638,
+              "bytes_reallocated": 0,
+              "deallocations": 3854,
+              "live_blocks_delta": -3854,
+              "live_bytes_delta": -645638,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 94833,
+              "bytes_allocated": 35038260,
+              "bytes_deallocated": 35038260,
+              "bytes_reallocated": 4091112,
+              "deallocations": 94833,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 16995
+            },
+            "refresh_us": 26390917,
+            "rss_after_kib": 25272,
+            "rss_before_kib": 25224,
+            "rss_peak_kib": 25404,
+            "whole_cycle": {
+              "allocations": 113576,
+              "bytes_allocated": 44746638,
+              "bytes_deallocated": 44746638,
+              "bytes_reallocated": 4795496,
+              "deallocations": 113576,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 20090
+            }
+          },
+          {
+            "build_us": 4426525,
+            "construct": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9062740,
+              "bytes_reallocated": 704384,
+              "deallocations": 14889,
+              "live_blocks_delta": 3854,
+              "live_bytes_delta": 645638,
+              "reallocations": 3095
+            },
+            "cycle": 3,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 645638,
+              "bytes_reallocated": 0,
+              "deallocations": 3854,
+              "live_blocks_delta": -3854,
+              "live_bytes_delta": -645638,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 94833,
+              "bytes_allocated": 35038260,
+              "bytes_deallocated": 35038260,
+              "bytes_reallocated": 4091112,
+              "deallocations": 94833,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 16995
+            },
+            "refresh_us": 26474750,
+            "rss_after_kib": 25684,
+            "rss_before_kib": 25272,
+            "rss_peak_kib": 25684,
+            "whole_cycle": {
+              "allocations": 113576,
+              "bytes_allocated": 44746638,
+              "bytes_deallocated": 44746638,
+              "bytes_reallocated": 4795496,
+              "deallocations": 113576,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 20090
+            }
+          },
+          {
+            "build_us": 4414661,
+            "construct": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9062740,
+              "bytes_reallocated": 704384,
+              "deallocations": 14889,
+              "live_blocks_delta": 3854,
+              "live_bytes_delta": 645638,
+              "reallocations": 3095
+            },
+            "cycle": 4,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 645638,
+              "bytes_reallocated": 0,
+              "deallocations": 3854,
+              "live_blocks_delta": -3854,
+              "live_bytes_delta": -645638,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 94833,
+              "bytes_allocated": 35038260,
+              "bytes_deallocated": 35038260,
+              "bytes_reallocated": 4091112,
+              "deallocations": 94833,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 16995
+            },
+            "refresh_us": 26412248,
+            "rss_after_kib": 25788,
+            "rss_before_kib": 25684,
+            "rss_peak_kib": 25788,
+            "whole_cycle": {
+              "allocations": 113576,
+              "bytes_allocated": 44746638,
+              "bytes_deallocated": 44746638,
+              "bytes_reallocated": 4795496,
+              "deallocations": 113576,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 20090
+            }
+          },
+          {
+            "build_us": 4414677,
+            "construct": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9062740,
+              "bytes_reallocated": 704384,
+              "deallocations": 14889,
+              "live_blocks_delta": 3854,
+              "live_bytes_delta": 645638,
+              "reallocations": 3095
+            },
+            "cycle": 5,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 645638,
+              "bytes_reallocated": 0,
+              "deallocations": 3854,
+              "live_blocks_delta": -3854,
+              "live_bytes_delta": -645638,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 94833,
+              "bytes_allocated": 35038260,
+              "bytes_deallocated": 35038260,
+              "bytes_reallocated": 4091112,
+              "deallocations": 94833,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 16995
+            },
+            "refresh_us": 26388015,
+            "rss_after_kib": 25788,
+            "rss_before_kib": 25788,
+            "rss_peak_kib": 25788,
+            "whole_cycle": {
+              "allocations": 113576,
+              "bytes_allocated": 44746638,
+              "bytes_deallocated": 44746638,
+              "bytes_reallocated": 4795496,
+              "deallocations": 113576,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 20090
+            }
+          },
+          {
+            "build_us": 4406746,
+            "construct": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9062740,
+              "bytes_reallocated": 704384,
+              "deallocations": 14889,
+              "live_blocks_delta": 3854,
+              "live_bytes_delta": 645638,
+              "reallocations": 3095
+            },
+            "cycle": 6,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 645638,
+              "bytes_reallocated": 0,
+              "deallocations": 3854,
+              "live_blocks_delta": -3854,
+              "live_bytes_delta": -645638,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 94833,
+              "bytes_allocated": 35038260,
+              "bytes_deallocated": 35038260,
+              "bytes_reallocated": 4091112,
+              "deallocations": 94833,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 16995
+            },
+            "refresh_us": 26404921,
+            "rss_after_kib": 25788,
+            "rss_before_kib": 25788,
+            "rss_peak_kib": 25788,
+            "whole_cycle": {
+              "allocations": 113576,
+              "bytes_allocated": 44746638,
+              "bytes_deallocated": 44746638,
+              "bytes_reallocated": 4795496,
+              "deallocations": 113576,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 20090
+            }
+          },
+          {
+            "build_us": 4411457,
+            "construct": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9062740,
+              "bytes_reallocated": 704384,
+              "deallocations": 14889,
+              "live_blocks_delta": 3854,
+              "live_bytes_delta": 645638,
+              "reallocations": 3095
+            },
+            "cycle": 7,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 645638,
+              "bytes_reallocated": 0,
+              "deallocations": 3854,
+              "live_blocks_delta": -3854,
+              "live_bytes_delta": -645638,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 94833,
+              "bytes_allocated": 35038260,
+              "bytes_deallocated": 35038260,
+              "bytes_reallocated": 4091112,
+              "deallocations": 94833,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 16995
+            },
+            "refresh_us": 26561933,
+            "rss_after_kib": 25384,
+            "rss_before_kib": 25788,
+            "rss_peak_kib": 25404,
+            "whole_cycle": {
+              "allocations": 113576,
+              "bytes_allocated": 44746638,
+              "bytes_deallocated": 44746638,
+              "bytes_reallocated": 4795496,
+              "deallocations": 113576,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 20090
+            }
+          },
+          {
+            "build_us": 4548029,
+            "construct": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9062740,
+              "bytes_reallocated": 704384,
+              "deallocations": 14889,
+              "live_blocks_delta": 3854,
+              "live_bytes_delta": 645638,
+              "reallocations": 3095
+            },
+            "cycle": 8,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 645638,
+              "bytes_reallocated": 0,
+              "deallocations": 3854,
+              "live_blocks_delta": -3854,
+              "live_bytes_delta": -645638,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 94833,
+              "bytes_allocated": 35038260,
+              "bytes_deallocated": 35038260,
+              "bytes_reallocated": 4091112,
+              "deallocations": 94833,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 16995
+            },
+            "refresh_us": 27645744,
+            "rss_after_kib": 25788,
+            "rss_before_kib": 25384,
+            "rss_peak_kib": 25788,
+            "whole_cycle": {
+              "allocations": 113576,
+              "bytes_allocated": 44746638,
+              "bytes_deallocated": 44746638,
+              "bytes_reallocated": 4795496,
+              "deallocations": 113576,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 20090
+            }
+          },
+          {
+            "build_us": 4611236,
+            "construct": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9062740,
+              "bytes_reallocated": 704384,
+              "deallocations": 14889,
+              "live_blocks_delta": 3854,
+              "live_bytes_delta": 645638,
+              "reallocations": 3095
+            },
+            "cycle": 9,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 645638,
+              "bytes_reallocated": 0,
+              "deallocations": 3854,
+              "live_blocks_delta": -3854,
+              "live_bytes_delta": -645638,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 94833,
+              "bytes_allocated": 35038260,
+              "bytes_deallocated": 35038260,
+              "bytes_reallocated": 4091112,
+              "deallocations": 94833,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 16995
+            },
+            "refresh_us": 27584721,
+            "rss_after_kib": 25788,
+            "rss_before_kib": 25788,
+            "rss_peak_kib": 25788,
+            "whole_cycle": {
+              "allocations": 113576,
+              "bytes_allocated": 44746638,
+              "bytes_deallocated": 44746638,
+              "bytes_reallocated": 4795496,
+              "deallocations": 113576,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 20090
+            }
+          },
+          {
+            "build_us": 4615782,
+            "construct": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9062740,
+              "bytes_reallocated": 704384,
+              "deallocations": 14889,
+              "live_blocks_delta": 3854,
+              "live_bytes_delta": 645638,
+              "reallocations": 3095
+            },
+            "cycle": 10,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 645638,
+              "bytes_reallocated": 0,
+              "deallocations": 3854,
+              "live_blocks_delta": -3854,
+              "live_bytes_delta": -645638,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 94833,
+              "bytes_allocated": 35038260,
+              "bytes_deallocated": 35038260,
+              "bytes_reallocated": 4091112,
+              "deallocations": 94833,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 16995
+            },
+            "refresh_us": 27450257,
+            "rss_after_kib": 25788,
+            "rss_before_kib": 25788,
+            "rss_peak_kib": 25788,
+            "whole_cycle": {
+              "allocations": 113576,
+              "bytes_allocated": 44746638,
+              "bytes_deallocated": 44746638,
+              "bytes_reallocated": 4795496,
+              "deallocations": 113576,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 20090
+            }
+          }
+        ],
+        "ledger_sha256_base64": "CGt/DjhUrbYz0kShyOQpGjm7vfK0sZeoUjQWWD54dE4=",
+        "mode": "forced",
+        "records": 256,
+        "refreshes_per_cycle": 3,
+        "schema_version": 1
+      }
+    },
+    {
+      "log": "/tmp/p2p-vpn-allocation-s6-256-4-cached.log",
+      "log_sha256": "d821be6e336f71d3e1547cf3d73d277e65d53bbb4e36b6b91947e74f70afaa9f",
+      "sample": {
+        "allocator": "stats_alloc 0.1.10 wrapping System",
+        "cycles": [
+          {
+            "build_us": 4614323,
+            "construct": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9062740,
+              "bytes_reallocated": 704384,
+              "deallocations": 14889,
+              "live_blocks_delta": 3854,
+              "live_bytes_delta": 645638,
+              "reallocations": 3095
+            },
+            "cycle": 1,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 645638,
+              "bytes_reallocated": 0,
+              "deallocations": 3854,
+              "live_blocks_delta": -3854,
+              "live_bytes_delta": -645638,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 0
+            },
+            "refresh_us": 10,
+            "rss_after_kib": 24396,
+            "rss_before_kib": 18224,
+            "rss_peak_kib": 24396,
+            "whole_cycle": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9708378,
+              "bytes_reallocated": 704384,
+              "deallocations": 18743,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 3095
+            }
+          },
+          {
+            "build_us": 4617078,
+            "construct": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9062740,
+              "bytes_reallocated": 704384,
+              "deallocations": 14889,
+              "live_blocks_delta": 3854,
+              "live_bytes_delta": 645638,
+              "reallocations": 3095
+            },
+            "cycle": 2,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 645638,
+              "bytes_reallocated": 0,
+              "deallocations": 3854,
+              "live_blocks_delta": -3854,
+              "live_bytes_delta": -645638,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 0
+            },
+            "refresh_us": 2,
+            "rss_after_kib": 24400,
+            "rss_before_kib": 24396,
+            "rss_peak_kib": 24400,
+            "whole_cycle": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9708378,
+              "bytes_reallocated": 704384,
+              "deallocations": 18743,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 3095
+            }
+          },
+          {
+            "build_us": 4560518,
+            "construct": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9062740,
+              "bytes_reallocated": 704384,
+              "deallocations": 14889,
+              "live_blocks_delta": 3854,
+              "live_bytes_delta": 645638,
+              "reallocations": 3095
+            },
+            "cycle": 3,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 645638,
+              "bytes_reallocated": 0,
+              "deallocations": 3854,
+              "live_blocks_delta": -3854,
+              "live_bytes_delta": -645638,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 0
+            },
+            "refresh_us": 2,
+            "rss_after_kib": 24468,
+            "rss_before_kib": 24400,
+            "rss_peak_kib": 24468,
+            "whole_cycle": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9708378,
+              "bytes_reallocated": 704384,
+              "deallocations": 18743,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 3095
+            }
+          },
+          {
+            "build_us": 4585878,
+            "construct": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9062740,
+              "bytes_reallocated": 704384,
+              "deallocations": 14889,
+              "live_blocks_delta": 3854,
+              "live_bytes_delta": 645638,
+              "reallocations": 3095
+            },
+            "cycle": 4,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 645638,
+              "bytes_reallocated": 0,
+              "deallocations": 3854,
+              "live_blocks_delta": -3854,
+              "live_bytes_delta": -645638,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 0
+            },
+            "refresh_us": 3,
+            "rss_after_kib": 24400,
+            "rss_before_kib": 24000,
+            "rss_peak_kib": 24400,
+            "whole_cycle": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9708378,
+              "bytes_reallocated": 704384,
+              "deallocations": 18743,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 3095
+            }
+          },
+          {
+            "build_us": 4638830,
+            "construct": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9062740,
+              "bytes_reallocated": 704384,
+              "deallocations": 14889,
+              "live_blocks_delta": 3854,
+              "live_bytes_delta": 645638,
+              "reallocations": 3095
+            },
+            "cycle": 5,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 645638,
+              "bytes_reallocated": 0,
+              "deallocations": 3854,
+              "live_blocks_delta": -3854,
+              "live_bytes_delta": -645638,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 0
+            },
+            "refresh_us": 2,
+            "rss_after_kib": 24400,
+            "rss_before_kib": 24400,
+            "rss_peak_kib": 24400,
+            "whole_cycle": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9708378,
+              "bytes_reallocated": 704384,
+              "deallocations": 18743,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 3095
+            }
+          },
+          {
+            "build_us": 4625806,
+            "construct": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9062740,
+              "bytes_reallocated": 704384,
+              "deallocations": 14889,
+              "live_blocks_delta": 3854,
+              "live_bytes_delta": 645638,
+              "reallocations": 3095
+            },
+            "cycle": 6,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 645638,
+              "bytes_reallocated": 0,
+              "deallocations": 3854,
+              "live_blocks_delta": -3854,
+              "live_bytes_delta": -645638,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 0
+            },
+            "refresh_us": 2,
+            "rss_after_kib": 24000,
+            "rss_before_kib": 24400,
+            "rss_peak_kib": 24016,
+            "whole_cycle": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9708378,
+              "bytes_reallocated": 704384,
+              "deallocations": 18743,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 3095
+            }
+          },
+          {
+            "build_us": 4617801,
+            "construct": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9062740,
+              "bytes_reallocated": 704384,
+              "deallocations": 14889,
+              "live_blocks_delta": 3854,
+              "live_bytes_delta": 645638,
+              "reallocations": 3095
+            },
+            "cycle": 7,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 645638,
+              "bytes_reallocated": 0,
+              "deallocations": 3854,
+              "live_blocks_delta": -3854,
+              "live_bytes_delta": -645638,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 0
+            },
+            "refresh_us": 6,
+            "rss_after_kib": 24400,
+            "rss_before_kib": 24000,
+            "rss_peak_kib": 24400,
+            "whole_cycle": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9708378,
+              "bytes_reallocated": 704384,
+              "deallocations": 18743,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 3095
+            }
+          },
+          {
+            "build_us": 4644458,
+            "construct": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9062740,
+              "bytes_reallocated": 704384,
+              "deallocations": 14889,
+              "live_blocks_delta": 3854,
+              "live_bytes_delta": 645638,
+              "reallocations": 3095
+            },
+            "cycle": 8,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 645638,
+              "bytes_reallocated": 0,
+              "deallocations": 3854,
+              "live_blocks_delta": -3854,
+              "live_bytes_delta": -645638,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 0
+            },
+            "refresh_us": 2,
+            "rss_after_kib": 24000,
+            "rss_before_kib": 24400,
+            "rss_peak_kib": 24032,
+            "whole_cycle": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9708378,
+              "bytes_reallocated": 704384,
+              "deallocations": 18743,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 3095
+            }
+          },
+          {
+            "build_us": 4608513,
+            "construct": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9062740,
+              "bytes_reallocated": 704384,
+              "deallocations": 14889,
+              "live_blocks_delta": 3854,
+              "live_bytes_delta": 645638,
+              "reallocations": 3095
+            },
+            "cycle": 9,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 645638,
+              "bytes_reallocated": 0,
+              "deallocations": 3854,
+              "live_blocks_delta": -3854,
+              "live_bytes_delta": -645638,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 0
+            },
+            "refresh_us": 2,
+            "rss_after_kib": 24400,
+            "rss_before_kib": 24000,
+            "rss_peak_kib": 24400,
+            "whole_cycle": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9708378,
+              "bytes_reallocated": 704384,
+              "deallocations": 18743,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 3095
+            }
+          },
+          {
+            "build_us": 4625176,
+            "construct": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9062740,
+              "bytes_reallocated": 704384,
+              "deallocations": 14889,
+              "live_blocks_delta": 3854,
+              "live_bytes_delta": 645638,
+              "reallocations": 3095
+            },
+            "cycle": 10,
+            "drop": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 645638,
+              "bytes_reallocated": 0,
+              "deallocations": 3854,
+              "live_blocks_delta": -3854,
+              "live_bytes_delta": -645638,
+              "reallocations": 0
+            },
+            "live_bytes_after_drop_from_initial": 0,
+            "refresh": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 0
+            },
+            "refresh_us": 3,
+            "rss_after_kib": 24404,
+            "rss_before_kib": 24400,
+            "rss_peak_kib": 24404,
+            "whole_cycle": {
+              "allocations": 18743,
+              "bytes_allocated": 9708378,
+              "bytes_deallocated": 9708378,
+              "bytes_reallocated": 704384,
+              "deallocations": 18743,
+              "live_blocks_delta": 0,
+              "live_bytes_delta": 0,
+              "reallocations": 3095
+            }
+          }
+        ],
+        "ledger_sha256_base64": "CGt/DjhUrbYz0kShyOQpGjm7vfK0sZeoUjQWWD54dE4=",
+        "mode": "cached",
+        "records": 256,
+        "refreshes_per_cycle": 3,
+        "schema_version": 1
+      }
     }
-  ]
+  ],
+  "source_revision": "cf76590e2ac405651d817f95f879eab5694f70de"
 }
