@@ -23,6 +23,10 @@ is complete with its recorded limits, including RM-1 at `ceb6e4e2`.
 The [recovery event ownership review](recovery-event-ownership-review.md) is complete:
 epoch/dial admission, timer catch-up and listener ownership fixes are verified.
 
+The [pairing and session lifecycle review](pairing-session-lifecycle-review.md)
+is now active. Its bounded checklist preserves completed cancellation and
+membership-sync fixes while auditing remaining orchestration transitions.
+
 ## Current Evidence
 
 | Area | Evidence | Limitation |
