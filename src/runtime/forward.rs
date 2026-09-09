@@ -341,6 +341,17 @@ impl Forwarder {
         records: &[SignedMembershipRecord],
         now_unix_seconds: u64,
     ) -> Result<MembershipRecordMergeStats, ForwardError> {
+        let trusted_issuers = self.live_membership_trust_anchors()?;
+        self.merge_membership_records_with_trusted_issuers(
+            records,
+            now_unix_seconds,
+            &trusted_issuers,
+        )
+    }
+
+    fn live_membership_trust_anchors(
+        &self,
+    ) -> Result<crate::membership::TrustedMembershipIssuers, ForwardError> {
         let mut trusted_issuers =
             membership_trust_anchors(&self.member_records, &self.config.network.name)?;
         let has_explicit_root_record = self
@@ -350,11 +361,46 @@ impl Forwarder {
         if trusted_issuers.is_empty() && !has_explicit_root_record {
             trusted_issuers.insert(self.config.local_peer()?);
         }
-        self.merge_membership_records_with_trusted_issuers(
+        Ok(trusted_issuers)
+    }
+
+    pub(crate) fn prepare_pairing_membership_merge(
+        &self,
+        records: &[SignedMembershipRecord],
+        now_unix_seconds: u64,
+    ) -> Result<(ForwarderUpdate, MembershipRecordMergeStats), ForwardError> {
+        let mut member_records = self.member_records.clone();
+        let stats = merge_membership_records_at(
+            &mut member_records,
             records,
+            &self.config.network.name,
             now_unix_seconds,
-            &trusted_issuers,
-        )
+            &self.live_membership_trust_anchors()?,
+            MAX_RETAINED_MEMBERSHIP_RECORDS,
+        )?;
+        let (authorization, effective_membership) =
+            ForwardingAuthorization::from_records(&self.config, &member_records, now_unix_seconds)?;
+        Ok((
+            ForwarderUpdate {
+                config: self.config.clone(),
+                membership_refresh_window: MembershipRefreshWindow::from_records(
+                    &member_records,
+                    now_unix_seconds,
+                ),
+                member_records,
+                authorization,
+                effective_membership,
+                mtu: self.mtu,
+            },
+            stats,
+        ))
+    }
+
+    pub(crate) fn commit_pairing_membership_merge(&mut self, update: ForwarderUpdate) {
+        let refresh_pending =
+            self.membership_effective_refresh_pending || self.authorization != update.authorization;
+        self.commit_reconfigure(update);
+        self.membership_effective_refresh_pending = refresh_pending;
     }
 
     pub(crate) fn restore_persisted_membership_records(

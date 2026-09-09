@@ -35,6 +35,7 @@ struct EventFixture {
     configured_listeners: HashSet<ListenerId>,
     retired_listeners: HashSet<ListenerId>,
     pairing: CodePairingSessions,
+    pairing_tokens: PairingReplayTokens,
 }
 
 impl EventFixture {
@@ -59,10 +60,21 @@ impl EventFixture {
             configured_listeners: HashSet::new(),
             retired_listeners: HashSet::new(),
             pairing: CodePairingSessions::new(),
+            pairing_tokens: PairingReplayTokens::default(),
         }
     }
 
     async fn dispatch(&mut self, event: SwarmEvent<BehaviourEvent>) {
+        self.dispatch_with_routes(event, &mut PreconfiguredTunRoutes)
+            .await
+            .unwrap();
+    }
+
+    async fn dispatch_with_routes(
+        &mut self,
+        event: SwarmEvent<BehaviourEvent>,
+        routes: &mut dyn TunRouteController,
+    ) -> Result<(), RunnerError> {
         let (_, mut writer) = PacketIo::new(UnusedPacketIo, UnusedPacketIo).split();
         handle_swarm_event(
             &mut self.node.swarm,
@@ -70,7 +82,7 @@ impl EventFixture {
                 forwarder: &mut self.forwarder,
                 membership: &mut self.membership,
                 tun_runtime: &mut self.tun,
-                route_controller: &mut PreconfiguredTunRoutes,
+                route_controller: routes,
                 infrastructure_peers: &mut InfrastructurePeers::default(),
                 routing_infrastructure_peers: &mut RoutingInfrastructurePeers::default(),
                 writer: &mut writer,
@@ -105,7 +117,7 @@ impl EventFixture {
                 path_probe_tracker: &mut PathProbeTracker::default(),
                 packet_plane_session_ttl: Duration::from_secs(60),
                 packet_plane_replay_windows_per_session: 1,
-                pairing_replay_tokens: &mut PairingReplayTokens::default(),
+                pairing_replay_tokens: &mut self.pairing_tokens,
                 code_pairing_sessions: &mut self.pairing,
                 pairing_state_store: None,
                 active_connections: &mut self.active_connections,
@@ -116,7 +128,6 @@ impl EventFixture {
             event,
         )
         .await
-        .unwrap();
     }
 
     fn start_auto_listener(&mut self, relay: Libp2pPeerId, address: &Multiaddr) -> ListenerId {
@@ -137,6 +148,147 @@ fn relay_address(relay: Libp2pPeerId) -> Multiaddr {
     format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}")
         .parse()
         .unwrap()
+}
+
+#[tokio::test]
+async fn file_pairing_response_waits_for_route_commit_and_retry_succeeds() {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let mut remote = membership_sync_test_node(NodeIdentity::generate_ed25519().unwrap());
+        let peer = *remote.swarm.local_peer_id();
+        let mut fixture = EventFixture::new(peer);
+        let mut config = fixture.forwarder.config().clone();
+        config.peers.clear();
+        fixture.forwarder = Forwarder::from_config(&config).unwrap();
+        fixture.membership = OverlayMembership::from_config(&config).unwrap();
+        fixture.tun = TunRuntimeConfig::from_config(&config).unwrap();
+        let unix = current_unix_seconds_lossy();
+        let offer = crate::pairing::export_pairing_offer_at(
+            &config, crate::pairing::PairingOfferOptions::default(), unix,
+        ).unwrap();
+        let request = crate::pairing::build_pairing_request_at(
+            &offer, PairingRequestOptions {
+                identity: remote.identity.clone(),
+                requested_vpn_ip: Some("10.42.0.2".to_owned()),
+                requested_routes: Vec::new(),
+            }, unix,
+        ).unwrap();
+        fixture.node.swarm.listen_on("/ip4/127.0.0.1/tcp/0".parse().unwrap()).unwrap();
+        let address = loop {
+            if let SwarmEvent::NewListenAddr { address, .. } = fixture.node.swarm.select_next_some().await {
+                break address;
+            }
+        };
+        remote.swarm.dial(address).unwrap();
+        loop {
+            tokio::select! {
+                event = fixture.node.swarm.select_next_some() => {
+                    if let SwarmEvent::ConnectionEstablished { connection_id, .. } = event {
+                        assert!(fixture.epochs.record_established(connection_id));
+                        break;
+                    }
+                }
+                _ = remote.swarm.select_next_some() => {}
+            }
+        }
+        struct Routes { fail: bool, calls: usize }
+        impl TunRouteController for Routes {
+            fn reconcile(&mut self, _: &TunRuntimeConfig, _: &TunRuntimeConfig,
+                _: &TunRouteUpdate) -> Result<(), RunnerError> {
+                self.calls += 1;
+                if self.fail { Err(io::Error::other("injected route failure").into()) }
+                else { Ok(()) }
+            }
+        }
+        let mut routes = Routes { fail: true, calls: 0 };
+        for fail in [true, false] {
+            routes.fail = fail;
+            let id = remote.swarm.behaviour_mut().pairing.send_request(
+                fixture.node.swarm.local_peer_id(), request.clone(),
+            );
+            let mut handled = false;
+            loop {
+                tokio::select! {
+                    event = fixture.node.swarm.select_next_some() => {
+                        if matches!(&event, SwarmEvent::Behaviour(BehaviourEvent::Pairing(
+                            request_response::Event::Message { message: Message::Request { .. }, .. }
+                        ))) {
+                            assert!(!handled);
+                            let result = fixture.dispatch_with_routes(event, &mut routes).await;
+                            assert_eq!(result.is_err(), fail);
+                            assert_eq!(fixture.forwarder.is_configured_transport_peer(peer), !fail);
+                            assert_eq!(fixture.pairing_tokens.file_bearer.contains(
+                                &request.payload.rendezvous_token), !fail);
+                            handled = true;
+                        }
+                    }
+                    event = remote.swarm.select_next_some() => {
+                        match event {
+                            SwarmEvent::Behaviour(BehaviourEvent::Pairing(request_response::Event::OutboundFailure {
+                                request_id, ..
+                            })) if request_id == id => {
+                                assert!(handled && fail);
+                                break;
+                            }
+                            SwarmEvent::Behaviour(BehaviourEvent::Pairing(request_response::Event::Message {
+                                message: Message::Response { request_id, response }, ..
+                            })) if request_id == id => {
+                                assert!(handled && !fail, "acceptance must not escape a failed commit");
+                                response.verify_for_offer_at(&offer, &remote.identity,
+                                    current_unix_seconds_lossy()).unwrap();
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(routes.calls, 2);
+        let offer = crate::pairing::export_pairing_offer_at(
+            &config, crate::pairing::PairingOfferOptions::default(), unix,
+        ).unwrap();
+        let request = crate::pairing::build_pairing_request_at(
+            &offer, PairingRequestOptions {
+                identity: remote.identity.clone(),
+                requested_vpn_ip: Some("10.42.0.2".to_owned()),
+                requested_routes: Vec::new(),
+            }, unix,
+        ).unwrap();
+        remote.swarm.behaviour_mut().pairing.send_request(
+            fixture.node.swarm.local_peer_id(), request.clone(),
+        );
+        let held = loop {
+            tokio::select! {
+                event = fixture.node.swarm.select_next_some() => {
+                    if matches!(&event, SwarmEvent::Behaviour(BehaviourEvent::Pairing(
+                        request_response::Event::Message { message: Message::Request { .. }, .. }
+                    ))) { break event; }
+                }
+                _ = remote.swarm.select_next_some() => {}
+            }
+        };
+        remote.swarm.disconnect_peer_id(*fixture.node.swarm.local_peer_id()).unwrap();
+        loop {
+            let SwarmEvent::Behaviour(BehaviourEvent::Pairing(request_response::Event::Message {
+                message: Message::Request { channel, .. }, ..
+            })) = &held else { unreachable!() };
+            if !channel.is_open() { break; }
+            tokio::select! {
+                _ = fixture.node.swarm.select_next_some() => {}
+                _ = remote.swarm.select_next_some() => {}
+            }
+        }
+        let before_records = fixture.forwarder.member_records().to_vec();
+        let before_membership = fixture.membership.clone();
+        let before_tun = fixture.tun.clone();
+        // Keep the admitted epoch to exercise the closed channel, not stale-event filtering.
+        fixture.dispatch_with_routes(held, &mut routes).await.unwrap();
+        assert_eq!(routes.calls, 2);
+        assert_eq!(fixture.forwarder.member_records(), before_records);
+        assert_eq!(fixture.membership, before_membership);
+        assert_eq!(fixture.tun, before_tun);
+        assert!(!fixture.pairing_tokens.file_bearer.contains(&request.payload.rendezvous_token));
+    }).await.expect("bounded file-pairing commit and retry");
 }
 
 #[tokio::test]

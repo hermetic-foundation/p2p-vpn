@@ -15291,7 +15291,23 @@ fn handle_pairing_request_event(
         current_unix_seconds_lossy(),
     ) {
         Ok(response) => {
+            if !channel.is_open() {
+                return Ok(());
+            }
             let response_for_membership = response.clone();
+            install_pairing_response_membership(
+                context.forwarder,
+                context.membership,
+                context.tun_runtime,
+                context.route_controller,
+                context.local_capabilities,
+                &response_for_membership,
+            )?;
+            context
+                .pairing_replay_tokens
+                .file_bearer
+                .insert(request.payload.rendezvous_token.clone());
+            context.metrics.record_pairing_request_accepted();
             if swarm
                 .behaviour_mut()
                 .pairing
@@ -15306,17 +15322,7 @@ fn handle_pairing_request_event(
                         ("joiner", &request.payload.joiner_peer),
                     ],
                 );
-                return Ok(());
             }
-
-            install_pairing_response_membership(
-                context.forwarder,
-                context.membership,
-                context.tun_runtime,
-                context.route_controller,
-                context.local_capabilities,
-                &response_for_membership,
-            )?;
             bootstrap_accepted_pairing_peer(
                 swarm,
                 context,
@@ -15330,11 +15336,6 @@ fn handle_pairing_request_event(
                 context.local_capabilities,
                 context.metrics,
             );
-            context
-                .pairing_replay_tokens
-                .file_bearer
-                .insert(request.payload.rendezvous_token.clone());
-            context.metrics.record_pairing_request_accepted();
             log_runtime_event(
                 LogLevel::Info,
                 "pairing_request_accepted",
@@ -15368,15 +15369,21 @@ fn install_pairing_response_membership(
     }
 
     let now_unix_seconds = current_unix_seconds_lossy();
-    let stats =
-        forwarder.merge_membership_records(&response.payload.member_records, now_unix_seconds)?;
+    let (update, stats) = forwarder
+        .prepare_pairing_membership_merge(&response.payload.member_records, now_unix_seconds)?;
     if stats.accepted == 0 && stats.removed_expired == 0 && stats.removed_untrusted == 0 {
         return Ok(());
     }
 
-    membership.replace_from_forwarder(forwarder)?;
+    let next_membership = OverlayMembership::from_forwarder_update(&update)?;
+    let next_tun =
+        TunRuntimeConfig::from_config_with_routes(update.config(), update.authorized_routes())?;
+    let route_update = next_tun.route_reconciliation_from(tun_runtime)?;
+    route_controller.reconcile(tun_runtime, &next_tun, &route_update)?;
+    forwarder.commit_pairing_membership_merge(update);
+    *membership = next_membership;
+    *tun_runtime = next_tun;
     *local_capabilities = refreshed_local_capabilities(local_capabilities, forwarder);
-    sync_live_tun_routes(forwarder, tun_runtime, route_controller)?;
     let accepted = stats.accepted.to_string();
     let ignored = stats.ignored_stale_or_equal.to_string();
     let removed_expired = stats.removed_expired.to_string();
@@ -23803,6 +23810,93 @@ mod tests {
             .unwrap();
             assert_eq!(commands, expected);
         }
+    }
+
+    #[test]
+    fn file_pairing_route_failure_keeps_membership_unpublished() {
+        let unix = current_unix_seconds_lossy();
+        let (config, inviter, joiner, _, _, _) = code_pairing_runtime_fixture_at(None, unix - 10);
+        let remote = joiner.peer_id.parse().unwrap();
+        let offer =
+            export_pairing_offer_at(&config, PairingOfferOptions::default(), unix - 10).unwrap();
+        let request = build_pairing_request_at(
+            &offer,
+            PairingRequestOptions {
+                identity: joiner,
+                requested_vpn_ip: Some("10.42.0.2".to_owned()),
+                requested_routes: Vec::new(),
+            },
+            unix - 9,
+        )
+        .unwrap();
+        let response = pairing_response_for_request_with_records(
+            &config,
+            &config.network.member_records,
+            &HashMap::new(),
+            &inviter,
+            &mut HashSet::new(),
+            remote,
+            &request,
+            unix,
+        )
+        .unwrap();
+        let mut forwarder = Forwarder::from_config(&config).unwrap();
+        let mut membership = OverlayMembership::from_config(&config).unwrap();
+        let mut tun_runtime = TunRuntimeConfig::from_config(&config).unwrap();
+        let mut capabilities = ControlCapabilities::local("lab", None, 1280);
+        let before_membership = membership.clone();
+        let before_tun = tun_runtime.clone();
+        let before_capabilities = capabilities.clone();
+        let before_records = forwarder.member_records().to_vec();
+        struct FailingRoutes;
+        impl TunRouteController for FailingRoutes {
+            fn reconcile(
+                &mut self,
+                _: &TunRuntimeConfig,
+                _: &TunRuntimeConfig,
+                _: &TunRouteUpdate,
+            ) -> Result<(), RunnerError> {
+                Err(io::Error::other("injected file-pairing route failure").into())
+            }
+        }
+
+        let result = install_pairing_response_membership(
+            &mut forwarder,
+            &mut membership,
+            &mut tun_runtime,
+            &mut FailingRoutes,
+            &mut capabilities,
+            &response,
+        );
+        assert!(result.is_err());
+        assert!(
+            !forwarder.is_configured_transport_peer(remote),
+            "route failure must not publish the new peer's authorization"
+        );
+        assert_eq!(membership, before_membership);
+        assert_eq!(tun_runtime, before_tun);
+        assert_eq!(capabilities, before_capabilities);
+        assert_eq!(forwarder.member_records(), before_records);
+        assert_eq!(forwarder.config(), &config);
+
+        install_pairing_response_membership(
+            &mut forwarder,
+            &mut membership,
+            &mut tun_runtime,
+            &mut PreconfiguredTunRoutes,
+            &mut capabilities,
+            &response,
+        )
+        .unwrap();
+        assert!(forwarder.is_configured_transport_peer(remote));
+        assert!(membership.allows(remote));
+        assert_eq!(forwarder.config(), &config);
+        let mut expected = Forwarder::from_config(&config).unwrap();
+        expected
+            .merge_membership_records(&response.payload.member_records, unix)
+            .unwrap();
+        assert_eq!(forwarder.member_records(), expected.member_records());
+        assert_eq!(forwarder.authorized_routes(), expected.authorized_routes());
     }
 
     #[test]

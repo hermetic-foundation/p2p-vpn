@@ -341,3 +341,120 @@ native and source checks used the same cached commands and resource limits above
 PS-3 is ready for atomic publication. It does not change persistent schemas,
 wire protocols, membership policy or required configuration. The scoped native
 build is not a physical-device, ARM64, APK or full Nix package acceptance claim.
+
+PS-3 publication was verified at `18eb5705`; local and remote `main` matched.
+The working copy was clean before beginning PS-4.
+
+### PS-4: File-Pairing Partial Enrollment
+
+`file_pairing_route_failure_keeps_membership_unpublished` reproduces a local
+consistency defect: `install_pairing_response_membership` returns a route error,
+but the forwarder already authorizes the joining peer. A correction is under verification.
+
+| Evidence | Scope |
+| --- | --- |
+| `/tmp/p2p-vpn-ps4-file-route-negative.log` | One genuine assertion failure after successful compilation; no fixture or timeout error |
+| Fixture | Existing signed code-pairing response passed to the file-pairing installation helper; no transport exchange |
+| Injection | Route controller returns an error before applying any commands |
+| Observed failure | New transport peer remains authorized despite installation returning an error |
+| Storage | Privileged enumeration before compilation: 8,214,588 KiB, approximately 7.83 GiB |
+
+The test used the cached offline native command above, filtering to its exact
+test name with a 180-second outer watchdog. Compilation took 58.57 seconds;
+the test failed in 0.20 seconds. Production source is unchanged at this checkpoint.
+
+#### Correction Requirements
+
+- Stage logical membership before route reconciliation; publish only after success.
+- Preserve trust validation, record merging, retained limits and existing members.
+- Check response ordering with an actual file-pairing transport exchange.
+- Cover failed routes, successful retry and a closed response channel.
+- Do not roll back committed membership merely because response delivery fails.
+
+The existing enrollment transaction applies routes before publishing logical
+state. Reuse requires checking its config-application semantics: it appends
+signed records, while the file helper currently uses membership merging.
+Moving `send_response` alone does not repair the reproduced partial mutation.
+
+The negative log is not a claim that acceptance was observed remotely before
+commitment. The patch is not yet published to `main`.
+
+#### PS-4 Correction Under Verification
+
+| Change | Boundary |
+| --- | --- |
+| Staged merge | Reuses live trust anchors, the membership merger and its retained-record limit |
+| Logical publication | Build membership and TUN snapshots, reconcile routes, then commit authorization |
+| Config preservation | Keep the original configured records; do not substitute config append semantics for runtime merging |
+| Response ordering | Queue acceptance after local commitment; consume the bearer token at commitment |
+| Closed channel | Already closed channels do not install membership; a later send failure does not undo commitment |
+
+`/tmp/p2p-vpn-ps4-file-route-fixed.log` passes the strengthened helper regression
+in 0.40 seconds. It now builds a FileBearer request and response, verifies no
+logical publication on failure, then retries and compares against normal merging.
+
+The test does not establish daemon-level retry after a fatal route error. It
+invokes the helper again from unchanged logical state. Transport dispatch,
+closed-channel coverage and broader verification remain separate requirements.
+
+Pre-build storage was 8,214,596 KiB. No applicable Lean files or repository
+`AGENTS.md` were found. The first loopback-test build had a fixture peer-ID type
+error (`ps4-file-live.log`), not a product regression or transport result.
+
+`/tmp/p2p-vpn-ps4-file-live-verified.log` passes all four `file_pairing_` tests
+in 0.41 seconds, including real TCP loopback dispatch. The failed route attempt
+returns an outbound transport failure without acceptance or token consumption;
+the subsequent attempt returns a verified signed response after commitment.
+
+The fixture disables public discovery and retains replay tokens across dispatches.
+It retries the production dispatcher, not a complete daemon restart. Formatting
+passes; closed-channel and full patch verification remain pending.
+
+The offline locked workspace run passes: 1,484 passed, zero failed and 36
+opt-in exclusions (`/tmp/p2p-vpn-ps4-workspace.log`). Documentation links and
+paragraph lengths also pass. Required Clippy, Android-native compilation,
+cached Nix parity, selected namespace cases and publication remain pending.
+
+#### PS-4 Closed-Channel Verification
+
+The loopback regression also holds a real inbound request, disconnects its
+transport and waits until the response channel is closed. Dispatch retains the
+admitted epoch so the assertion exercises channel closure, not stale filtering.
+
+| Assertion | Result |
+| --- | --- |
+| Membership and TUN state | Unchanged after the closed request |
+| Route controller | No additional invocation |
+| Fresh bearer token | Not consumed |
+| Focused file tests | Four passed in 0.50 seconds; `/tmp/p2p-vpn-ps4-file-closed.log` |
+
+Only test code changed after the 1,484-test workspace run. Its production-code
+evidence remains applicable; the expanded loopback test was rebuilt separately.
+Pre-build storage was 8,214,820 KiB, approximately 7.83 GiB.
+
+#### PS-4 Patch Verification
+
+| Gate | Result | Log |
+| --- | --- | --- |
+| Required Clippy groups | Passed in 24.23 s; advisory warnings remain | `/tmp/p2p-vpn-ps4-clippy.log` |
+| Formatting | `cargo fmt --check` passed | Terminal result |
+| Android native | x86_64/API 26 passed in 37.77 s; four warnings | `/tmp/p2p-vpn-ps4-android.log` |
+| Source parity | Cached sandboxed check passed | `/tmp/p2p-vpn-ps4-nix.log` |
+| Direct file acceptance | Passed in 8.73 s | `/tmp/p2p-vpn-ps4-pair-direct.log` |
+| Relayed file acceptance | Passed in 17.70 s | `/tmp/p2p-vpn-ps4-pair-relay.log` |
+| Peerless code pairing | Passed in 13.44 s | `/tmp/p2p-vpn-ps4-code-pairing.log` |
+
+All three namespace cases used the PS-4 workspace binary and commands listed
+under PS-1, individually with retained artifacts and a 120-second outer watchdog.
+No build ran during these observations; production and namespace sources were
+unchanged after the workspace run.
+
+Source-parity output:
+`/nix/store/rdklrfgiyx1v1sc1y3ljaks18yhrjamb-p2p-vpn-rust-test-sources`.
+Privileged storage checks before Android and Nix were 8,215,140 and 8,215,088 KiB.
+These checks do not establish APK, ARM64, physical-device or full-package acceptance.
+
+PS-4 is ready for atomic publication. The new commit boundary is local runtime
+enrollment, not remote delivery acknowledgement or a new durable file-pairing
+transaction protocol. Fatal route-error restart recovery and the remaining
+whole-workstream transition audit are not established by the loopback fixture.
