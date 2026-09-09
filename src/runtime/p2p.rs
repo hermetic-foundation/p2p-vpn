@@ -14,7 +14,7 @@ use libp2p::{
     kad, mdns,
     multiaddr::Protocol,
     noise, ping, relay, request_response,
-    swarm::{NetworkBehaviour, behaviour::toggle::Toggle},
+    swarm::{ConnectionId, NetworkBehaviour, behaviour::toggle::Toggle, dial_opts::DialOpts},
     tcp, yamux,
 };
 
@@ -129,6 +129,13 @@ pub struct KademliaStartupStatus {
 }
 
 pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
+    build_node_with_dial_observer(config, |_| {})
+}
+
+pub(crate) fn build_node_with_dial_observer(
+    config: &HostConfig,
+    mut dial_started: impl FnMut(ConnectionId),
+) -> Result<P2pNode, P2pBuildError> {
     let keypair = decode_keypair(&config.identity.private_key)?;
     let local_peer_id = keypair.public().to_peer_id();
     let bootstrap_peer_addresses = config.bootstrap_peers.clone();
@@ -244,7 +251,8 @@ pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
         .build();
 
     let relay_reservations_started = config.relay_reservations.len();
-    let configured_relay_reservation_listeners = install_listeners_and_dials(&mut swarm, config)?;
+    let configured_relay_reservation_listeners =
+        install_listeners_and_dials(&mut swarm, config, &mut dial_started)?;
     seed_public_pairing_kademlia(&mut swarm)?;
     let autonat_servers_registered = register_autonat_servers(&mut swarm, config);
     let (kademlia_rendezvous_key, kademlia_membership_records_key, kademlia) =
@@ -354,6 +362,7 @@ fn autonat_server_addresses(config: &HostConfig) -> Vec<(PeerId, Multiaddr)> {
 fn install_listeners_and_dials(
     swarm: &mut Swarm<Behaviour>,
     config: &HostConfig,
+    dial_started: &mut impl FnMut(ConnectionId),
 ) -> Result<HashSet<ListenerId>, P2pBuildError> {
     for address in &config.listen_addresses {
         swarm.listen_on(address.clone())?;
@@ -377,7 +386,10 @@ fn install_listeners_and_dials(
                 .add_protected_address(peer, address.clone());
         }
         let dial_address = peer_dial_address(*peer, address.clone())?;
-        swarm.dial(dial_address)?;
+        let options: DialOpts = dial_address.into();
+        let connection_id = options.connection_id();
+        swarm.dial(options)?;
+        dial_started(connection_id);
     }
 
     for (peer, address) in &config.known_peers {
@@ -392,7 +404,10 @@ fn install_listeners_and_dials(
         }
 
         let dial_address = peer_dial_address(*peer, address.clone())?;
-        swarm.dial(dial_address)?;
+        let options: DialOpts = dial_address.into();
+        let connection_id = options.connection_id();
+        swarm.dial(options)?;
+        dial_started(connection_id);
     }
 
     Ok(configured_relay_reservation_listeners)
@@ -1079,6 +1094,60 @@ mod tests {
         });
 
         assert!(matches!(result, Err(P2pBuildError::Dial(_))));
+    }
+
+    #[tokio::test]
+    async fn startup_dial_registration_observes_only_admitted_attempts() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address: Multiaddr = format!(
+            "/ip4/127.0.0.1/tcp/{}",
+            listener.local_addr().unwrap().port()
+        )
+        .parse()
+        .unwrap();
+        for bootstrap in [true, false] {
+            for allowed in [false, true] {
+                let peer = Keypair::generate_ed25519().public().to_peer_id();
+                let target = vec![(peer, address.clone())];
+                let config = HostConfig {
+                    identity: NodeIdentity::generate_ed25519().unwrap(),
+                    network_name: "registration".to_owned(),
+                    membership_tag: None,
+                    mtu: 1280,
+                    max_concurrent_control_streams: 64,
+                    max_concurrent_packet_streams: 256,
+                    listen_addresses: Vec::new(),
+                    external_addresses: Vec::new(),
+                    bootstrap_peers: if bootstrap {
+                        target.clone()
+                    } else {
+                        Vec::new()
+                    },
+                    known_peers: if bootstrap { Vec::new() } else { target },
+                    relay_reservations: Vec::new(),
+                    relay_server: false,
+                    relay_resources: crate::config::RelayResourceConfig::default(),
+                    resources: crate::config::ResourceConfig {
+                        max_pending_outgoing_connections: u32::from(allowed),
+                        ..crate::config::ResourceConfig::default()
+                    },
+                    discovery: DiscoveryConfig {
+                        mdns: false,
+                        dcutr: false,
+                        autonat: false,
+                        ..DiscoveryConfig::default()
+                    },
+                };
+                let mut admitted = Vec::new();
+                let node = build_node_with_dial_observer(&config, |id| admitted.push(id));
+                assert_eq!(node.is_ok(), allowed);
+                assert_eq!(
+                    admitted.len(),
+                    usize::from(allowed),
+                    "startup admission was not registered correctly"
+                );
+            }
+        }
     }
 
     #[tokio::test]

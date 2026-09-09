@@ -13,6 +13,8 @@ use std::{
 use super::address_retention::{
     AddressRetention, Admission, canonical as canonical_discovered_address,
 };
+#[cfg(test)]
+use super::p2p::build_node;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use futures::StreamExt as _;
 use libp2p::{
@@ -96,7 +98,7 @@ use crate::{
         forward::{ForwardError, Forwarder, ForwarderUpdate, packet_destination, packet_source},
         membership_store::{MembershipStateStore, MembershipStateStoreError},
         p2p::{
-            Behaviour, BehaviourEvent, HostConfig, P2pBuildError, P2pNode, build_node,
+            Behaviour, BehaviourEvent, HostConfig, P2pBuildError, P2pNode,
             kademlia_pairing_code_key, kademlia_pairing_code_v2_key, public_pairing_kad_mut,
             public_pairing_uses_primary_kad,
         },
@@ -1054,23 +1056,27 @@ where
     } else {
         effective_bootstrap_peers.clone()
     };
-    let mut node = build_node(&HostConfig {
-        identity,
-        network_name: config.network.name.clone(),
-        membership_tag: config.membership_tag()?,
-        mtu: config.effective_packet_mtu(),
-        max_concurrent_control_streams: config.resources.control_stream_limit(),
-        max_concurrent_packet_streams: config.resources.packet_stream_limit(),
-        listen_addresses: config.listen_multiaddrs()?,
-        external_addresses: config.external_multiaddrs()?,
-        bootstrap_peers: startup_bootstrap_peers,
-        known_peers: config.peer_multiaddrs()?,
-        relay_reservations: config.relay_reservation_multiaddrs()?,
-        relay_server: config.network.relay.server,
-        relay_resources: config.network.relay.resources,
-        resources: config.resources,
-        discovery: config.network.discovery.clone(),
-    })?;
+    let mut connection_epochs = ConnectionEpochs::default();
+    let mut node = crate::runtime::p2p::build_node_with_dial_observer(
+        &HostConfig {
+            identity,
+            network_name: config.network.name.clone(),
+            membership_tag: config.membership_tag()?,
+            mtu: config.effective_packet_mtu(),
+            max_concurrent_control_streams: config.resources.control_stream_limit(),
+            max_concurrent_packet_streams: config.resources.packet_stream_limit(),
+            listen_addresses: config.listen_multiaddrs()?,
+            external_addresses: config.external_multiaddrs()?,
+            bootstrap_peers: startup_bootstrap_peers,
+            known_peers: config.peer_multiaddrs()?,
+            relay_reservations: config.relay_reservation_multiaddrs()?,
+            relay_server: config.network.relay.server,
+            relay_resources: config.network.relay.resources,
+            resources: config.resources,
+            discovery: config.network.discovery.clone(),
+        },
+        |connection_id| connection_epochs.record_started(connection_id),
+    )?;
     node.bootstrap_peer_addresses = effective_bootstrap_peers;
     node.packet_endpoint_candidates = config.packet_plane_endpoint_candidates()?;
     let packet_plane = PacketPlaneRuntime::bind_with_replay_window_limit(
@@ -1106,6 +1112,7 @@ where
 
     Box::pin(run_node_until_with_membership_state(
         node,
+        connection_epochs,
         forwarder,
         membership,
         previous_membership_tags,
@@ -1370,6 +1377,7 @@ where
 {
     Box::pin(run_node_until_with_membership_state(
         node,
+        ConnectionEpochs::default(),
         forwarder,
         membership,
         previous_membership_tags,
@@ -1417,6 +1425,7 @@ fn startup_tun_runtime(
 #[allow(clippy::too_many_arguments)]
 async fn run_node_until_with_membership_state<Shutdown>(
     mut node: P2pNode,
+    mut connection_epochs: ConnectionEpochs,
     mut forwarder: Forwarder,
     mut membership: OverlayMembership,
     previous_membership_tags: Vec<String>,
@@ -1609,7 +1618,6 @@ where
     });
     let mut active_connections: HashMap<(Libp2pPeerId, ConnectionId), ConnectedPoint> =
         HashMap::new();
-    let mut connection_epochs = ConnectionEpochs::default();
     let mut membership_probe_connections = MembershipProbeConnections::default();
     let mut kademlia_rendezvous_key = node.kademlia_rendezvous_key.clone();
     let mut kademlia_lookup_keys = kademlia_lookup_keys(
@@ -1780,6 +1788,7 @@ where
                     eprintln!("dropping outbound packet: {error:?}");
                 }
                 drain_runtime_outbound_queue(RuntimeOutboundDrain {
+                    connection_epochs: &mut connection_epochs,
                     node: &mut node,
                     forwarder: &forwarder,
                     queues: &mut queues,
@@ -1862,6 +1871,7 @@ where
                     &mut kademlia_membership_record_lookup_keys,
                 );
                 drain_runtime_outbound_queue(RuntimeOutboundDrain {
+                    connection_epochs: &mut connection_epochs,
                     node: &mut node,
                     forwarder: &forwarder,
                     queues: &mut queues,
@@ -1966,6 +1976,7 @@ where
                 attempt_auto_relay_reservations(&mut node.swarm, &mut auto_relay, &metrics);
                 handle_redial_tick(
                     &mut node,
+                    &mut connection_epochs,
                     &forwarder,
                     &mut kademlia_maintenance,
                     &mut queue_runtime.discovered_peer_addresses,
@@ -2173,6 +2184,7 @@ where
             _ = timers.path_probe.tick() => {
                 expire_unconfirmed_path_probes(
                     &mut node.swarm,
+                    &mut connection_epochs,
                     &forwarder,
                     &mut paths,
                     &node.configured_peer_addresses,
@@ -3706,6 +3718,7 @@ async fn send_packet_plane_path_probe(
 #[allow(clippy::too_many_arguments)]
 fn expire_unconfirmed_path_probes(
     swarm: &mut Swarm<Behaviour>,
+    connection_epochs: &mut ConnectionEpochs,
     forwarder: &Forwarder,
     paths: &mut PathSet,
     configured_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
@@ -3723,6 +3736,7 @@ fn expire_unconfirmed_path_probes(
         if let Some(peer) = forwarder.transport_peer_for_overlay(probe.peer) {
             redial_packet_plane_recovery_addresses(
                 swarm,
+                connection_epochs,
                 peer,
                 configured_peer_addresses,
                 relay_addresses,
@@ -4998,6 +5012,7 @@ fn handle_runtime_network_change(
     request_kademlia_address_publication(context.kademlia_maintenance, &context.node.discovery);
     handle_redial_tick(
         context.node,
+        context.connection_epochs,
         context.forwarder,
         context.kademlia_maintenance,
         context.discovered_peer_addresses,
@@ -6358,6 +6373,7 @@ fn local_packet_datagram_backend_from_snapshot(
 
 fn handle_redial_tick(
     node: &mut P2pNode,
+    connection_epochs: &mut ConnectionEpochs,
     forwarder: &Forwarder,
     kademlia_maintenance: &mut KademliaMaintenance,
     discovered_peer_addresses: &mut DiscoveredPeerAddresses,
@@ -6422,6 +6438,7 @@ fn handle_redial_tick(
     };
     redial_known_addresses(
         &mut node.swarm,
+        connection_epochs,
         forwarder,
         &bootstrap_addresses,
         &node.relay_peer_addresses,
@@ -6435,6 +6452,7 @@ fn handle_redial_tick(
     for relay in relay_readiness.ready_relays() {
         dial_relay_ready_configured_peers(
             &mut node.swarm,
+            connection_epochs,
             forwarder,
             relay_readiness,
             &node.relay_peer_addresses,
@@ -7561,6 +7579,7 @@ fn reconcile_runtime_kademlia_scope(
 
 fn redial_known_addresses(
     swarm: &mut Swarm<Behaviour>,
+    connection_epochs: &mut ConnectionEpochs,
     forwarder: &Forwarder,
     bootstrap_addresses: &[(Libp2pPeerId, Multiaddr)],
     relay_addresses: &[(Libp2pPeerId, Multiaddr)],
@@ -7610,9 +7629,13 @@ fn redial_known_addresses(
         } else {
             PeerCondition::DisconnectedAndNotDialing
         };
-        if let Err(error) =
-            dial_known_peer_addresses(swarm, peer, ready_addresses.iter().cloned(), condition)
-        {
+        if let Err(error) = dial_known_peer_addresses(
+            swarm,
+            connection_epochs,
+            peer,
+            ready_addresses.iter().cloned(),
+            condition,
+        ) {
             if matches!(error, DialError::DialPeerConditionFalse(_)) {
                 metrics.record_redial_skipped_connected();
                 continue;
@@ -7655,6 +7678,7 @@ fn group_peer_dial_targets(
 
 fn dial_known_peer_addresses(
     swarm: &mut Swarm<Behaviour>,
+    connection_epochs: &mut ConnectionEpochs,
     peer: Libp2pPeerId,
     addresses: impl IntoIterator<Item = Multiaddr>,
     condition: PeerCondition,
@@ -7675,7 +7699,7 @@ fn dial_known_peer_addresses(
     } else {
         options
     };
-    swarm.dial(options.build())
+    connection_epochs.dial(swarm, options.build())
 }
 
 fn ordinary_peer_dial_uses_fresh_port(
@@ -8210,6 +8234,7 @@ impl RoutingInfrastructurePeers {
 
 fn admit_discovered_relay_infrastructure_peer<'a>(
     swarm: &mut Swarm<Behaviour>,
+    connection_epochs: &mut ConnectionEpochs,
     forwarder: &Forwarder,
     infrastructure_peers: &mut InfrastructurePeers,
     auto_relay: &mut AutoRelayState,
@@ -8265,6 +8290,7 @@ fn admit_discovered_relay_infrastructure_peer<'a>(
     metrics.record_auto_relay_infrastructure_dial_attempt();
     if let Err(error) = dial_known_peer_addresses(
         swarm,
+        connection_epochs,
         peer,
         std::iter::once(address.clone()),
         PeerCondition::DisconnectedAndNotDialing,
@@ -8795,6 +8821,7 @@ impl RelayReadiness {
 
 fn dial_relay_ready_configured_peers(
     swarm: &mut Swarm<Behaviour>,
+    connection_epochs: &mut ConnectionEpochs,
     forwarder: &Forwarder,
     relay_readiness: &mut RelayReadiness,
     relay_addresses: &[(Libp2pPeerId, Multiaddr)],
@@ -8851,6 +8878,7 @@ fn dial_relay_ready_configured_peers(
         );
         if let Err(error) = dial_known_peer_addresses(
             swarm,
+            connection_epochs,
             peer,
             ready_addresses.iter().cloned(),
             PeerCondition::NotDialing,
@@ -8943,6 +8971,7 @@ fn sort_relay_addresses_by_local_reachability(
 #[allow(clippy::too_many_arguments)]
 fn redial_selected_addresses(
     swarm: &mut Swarm<Behaviour>,
+    connection_epochs: &mut ConnectionEpochs,
     selected_peers: &HashSet<Libp2pPeerId>,
     bootstrap_addresses: &[(Libp2pPeerId, Multiaddr)],
     relay_addresses: &[(Libp2pPeerId, Multiaddr)],
@@ -8983,6 +9012,7 @@ fn redial_selected_addresses(
         metrics.record_redial_attempt();
         if let Err(error) = dial_known_peer_addresses(
             swarm,
+            connection_epochs,
             peer,
             ready_addresses.iter().cloned(),
             PeerCondition::NotDialing,
@@ -9014,6 +9044,7 @@ fn redial_selected_addresses(
 
 fn redial_packet_plane_recovery_addresses(
     swarm: &mut Swarm<Behaviour>,
+    connection_epochs: &mut ConnectionEpochs,
     peer: Libp2pPeerId,
     configured_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
     relay_addresses: &[(Libp2pPeerId, Multiaddr)],
@@ -9040,6 +9071,7 @@ fn redial_packet_plane_recovery_addresses(
     metrics.record_packet_plane_path_recovery_dial_attempt();
     if let Err(error) = dial_known_peer_addresses(
         swarm,
+        connection_epochs,
         peer,
         ready_addresses.iter().cloned(),
         PeerCondition::NotDialing,
@@ -9957,6 +9989,7 @@ fn spawn_tun_reader(
 }
 
 struct RuntimeOutboundDrain<'a> {
+    connection_epochs: &'a mut ConnectionEpochs,
     node: &'a mut P2pNode,
     forwarder: &'a Forwarder,
     queues: &'a mut PeerQueues,
@@ -9971,6 +10004,7 @@ struct RuntimeOutboundDrain<'a> {
 
 async fn drain_runtime_outbound_queue(drain: RuntimeOutboundDrain<'_>) {
     let RuntimeOutboundDrain {
+        connection_epochs,
         node,
         forwarder,
         queues,
@@ -9983,6 +10017,7 @@ async fn drain_runtime_outbound_queue(drain: RuntimeOutboundDrain<'_>) {
         metrics,
     } = drain;
     let mut context = QueueDrainContext {
+        connection_epochs,
         paths,
         peer_capabilities,
         bootstrap_addresses: &node.bootstrap_peer_addresses,
@@ -10156,6 +10191,7 @@ async fn send_dequeued_packet_plane_datagram(
                 if demoted && let Some(peer) = forwarder.transport_peer_for_overlay(packet.peer()) {
                     redial_packet_plane_recovery_addresses(
                         swarm,
+                        context.connection_epochs,
                         peer,
                         context.configured_peer_addresses,
                         context.relay_addresses,
@@ -10257,6 +10293,7 @@ async fn send_dequeued_packet_plane_fallback(
                 {
                     redial_packet_plane_recovery_addresses(
                         swarm,
+                        context.connection_epochs,
                         peer,
                         context.configured_peer_addresses,
                         context.relay_addresses,
@@ -10409,6 +10446,7 @@ fn send_dequeued_pinned_stream(
 }
 
 struct QueueDrainContext<'a> {
+    connection_epochs: &'a mut ConnectionEpochs,
     paths: &'a mut PathSet,
     peer_capabilities: &'a PeerCapabilities,
     bootstrap_addresses: &'a [(Libp2pPeerId, Multiaddr)],
@@ -10702,6 +10740,7 @@ fn dial_blocked_queue_peers(
         .redial_candidates_at(Instant::now());
     redial_selected_addresses(
         swarm,
+        context.connection_epochs,
         &blocked_transport_peers,
         context.bootstrap_addresses,
         context.relay_addresses,
@@ -11428,6 +11467,18 @@ struct ConnectionEpochs {
 }
 
 impl ConnectionEpochs {
+    fn dial(
+        &mut self,
+        swarm: &mut Swarm<Behaviour>,
+        options: impl Into<DialOpts>,
+    ) -> Result<(), DialError> {
+        let options = options.into();
+        let connection_id = options.connection_id();
+        swarm.dial(options)?;
+        self.record_started(connection_id);
+        Ok(())
+    }
+
     fn record_started(&mut self, connection_id: ConnectionId) {
         self.connections.insert(connection_id, self.current);
         self.established.remove(&connection_id);
@@ -11435,11 +11486,9 @@ impl ConnectionEpochs {
     }
 
     fn record_established(&mut self, connection_id: ConnectionId) -> bool {
-        let is_current = *self
-            .connections
-            .entry(connection_id)
-            .or_insert(self.current)
-            == self.current;
+        // Public callers may hand over a node with unobserved startup dials.
+        // Runtime-owned starts are registered explicitly, so unknown IDs belong to epoch zero.
+        let is_current = *self.connections.entry(connection_id).or_insert(0) == self.current;
         if is_current {
             self.established.insert(connection_id);
         }
@@ -12055,7 +12104,9 @@ async fn handle_swarm_event(
                 .connection_epochs
                 .connections
                 .get(&connection_id)
-                .is_some_and(|epoch| *epoch != context.connection_epochs.current);
+                .copied()
+                .unwrap_or(0)
+                != context.connection_epochs.current;
             context.connection_epochs.remove(connection_id);
             if obsolete {
                 log_stale_connection_event("outgoing_connection_error", connection_id);
@@ -12276,6 +12327,7 @@ async fn handle_swarm_event(
                 }
                 dial_relay_ready_configured_peers(
                     swarm,
+                    context.connection_epochs,
                     context.forwarder,
                     context.relay_readiness,
                     context.relay_addresses,
@@ -12491,6 +12543,7 @@ fn redial_configured_peer_after_supported_path_loss(
         .redial_candidates_at(Instant::now());
     redial_selected_addresses(
         swarm,
+        context.connection_epochs,
         &selected_peers,
         &[],
         &[],
@@ -12542,6 +12595,7 @@ fn dial_ready_relays_for_configured_peer(
     for relay in context.relay_readiness.ready_relays() {
         dial_relay_ready_configured_peers(
             swarm,
+            context.connection_epochs,
             context.forwarder,
             context.relay_readiness,
             context.relay_addresses,
@@ -12687,6 +12741,7 @@ async fn handle_control_event(
             } else {
                 handle_control_response_event(
                     swarm,
+                    context.connection_epochs,
                     context.forwarder,
                     context.membership,
                     context.peer_capabilities,
@@ -12838,6 +12893,7 @@ fn handle_packet_event(
                     }
                     redial_packet_plane_recovery_addresses(
                         swarm,
+                        context.connection_epochs,
                         peer,
                         context.configured_peer_addresses,
                         context.relay_addresses,
@@ -12930,6 +12986,7 @@ fn handle_pinned_packet_stream_event(
                     }
                     redial_packet_plane_recovery_addresses(
                         swarm,
+                        context.connection_epochs,
                         peer,
                         context.configured_peer_addresses,
                         context.relay_addresses,
@@ -13544,6 +13601,7 @@ async fn handle_control_request(
                     );
                     learn_peer_direct_address_candidates_from_capabilities(
                         swarm,
+                        context.connection_epochs,
                         context.forwarder,
                         context.discovered_peer_addresses,
                         context.paths,
@@ -16372,6 +16430,7 @@ fn handle_service_response(
 #[allow(clippy::too_many_arguments)]
 fn handle_control_response_event(
     swarm: &mut Swarm<Behaviour>,
+    connection_epochs: &mut ConnectionEpochs,
     forwarder: &mut Forwarder,
     membership: &mut OverlayMembership,
     peer_capabilities: &mut PeerCapabilities,
@@ -16410,6 +16469,7 @@ fn handle_control_response_event(
                 record_peer_capabilities(forwarder, peer_capabilities, peer, capabilities.clone());
                 learn_peer_direct_address_candidates_from_capabilities(
                     swarm,
+                    connection_epochs,
                     forwarder,
                     discovered_peer_addresses,
                     paths,
@@ -19845,7 +19905,7 @@ struct BehaviourEventContext<'a> {
     identity: &'a NodeIdentity,
     code_pairing_sessions: &'a mut CodePairingSessions,
     membership_probe_connections: &'a mut MembershipProbeConnections,
-    connection_epochs: &'a ConnectionEpochs,
+    connection_epochs: &'a mut ConnectionEpochs,
     public_discovery_quiet: bool,
     kademlia_maintenance: &'a mut KademliaMaintenance,
 }
@@ -19873,6 +19933,7 @@ fn handle_behaviour_event(
                 );
                 learn_peer_address(
                     swarm,
+                    context.connection_epochs,
                     context.forwarder,
                     context.discovered_peer_addresses,
                     context.paths,
@@ -19885,6 +19946,7 @@ fn handle_behaviour_event(
                 if context.auto_relay.should_discover_candidates() {
                     admit_discovered_relay_infrastructure_peer(
                         swarm,
+                        context.connection_epochs,
                         context.forwarder,
                         context.infrastructure_peers,
                         context.auto_relay,
@@ -19989,6 +20051,7 @@ fn handle_behaviour_event(
             handle_kademlia_event(
                 swarm,
                 KademliaEventContext {
+                    connection_epochs: context.connection_epochs,
                     forwarder: context.forwarder,
                     membership: context.membership,
                     tun_runtime: context.tun_runtime,
@@ -20025,6 +20088,7 @@ fn handle_behaviour_event(
         }
         BehaviourEvent::Relay(event) => handle_relay_event(
             swarm,
+            context.connection_epochs,
             context.forwarder,
             context.relay_readiness,
             context.auto_relay,
@@ -20144,6 +20208,7 @@ fn handle_identify_received(
         } else {
             learn_peer_address(
                 swarm,
+                context.connection_epochs,
                 context.forwarder,
                 context.discovered_peer_addresses,
                 context.paths,
@@ -20415,6 +20480,7 @@ impl AutoNatReachability {
 }
 
 struct KademliaEventContext<'a> {
+    connection_epochs: &'a mut ConnectionEpochs,
     forwarder: &'a mut Forwarder,
     membership: &'a mut OverlayMembership,
     tun_runtime: &'a mut TunRuntimeConfig,
@@ -20477,7 +20543,13 @@ fn handle_kademlia_event(
                         }
                     }
                 } else {
-                    dial_kademlia_providers(swarm, context.forwarder, context.metrics, providers);
+                    dial_kademlia_providers(
+                        swarm,
+                        context.connection_epochs,
+                        context.forwarder,
+                        context.metrics,
+                        providers,
+                    );
                 }
             }
             match &result {
@@ -20543,6 +20615,7 @@ fn handle_kademlia_event(
             handle_kademlia_peer_address_record_result(swarm, &mut context, &result);
             handle_kademlia_closest_peer_result(
                 swarm,
+                context.connection_epochs,
                 context.forwarder,
                 context.infrastructure_peers,
                 context.auto_relay,
@@ -20583,6 +20656,7 @@ fn handle_kademlia_event(
                 );
                 admit_discovered_relay_infrastructure_peer(
                     swarm,
+                    context.connection_epochs,
                     context.forwarder,
                     context.infrastructure_peers,
                     context.auto_relay,
@@ -20773,6 +20847,7 @@ fn handle_kademlia_peer_address_record_result(
             for address in addresses {
                 learn_peer_address(
                     swarm,
+                    context.connection_epochs,
                     context.forwarder,
                     context.discovered_peer_addresses,
                     context.paths,
@@ -20856,6 +20931,7 @@ fn handle_kademlia_put_record_result(metrics: &RuntimeMetrics, result: &kad::Que
 
 fn handle_kademlia_closest_peer_result(
     swarm: &mut Swarm<Behaviour>,
+    connection_epochs: &mut ConnectionEpochs,
     forwarder: &Forwarder,
     infrastructure_peers: &mut InfrastructurePeers,
     auto_relay: &mut AutoRelayState,
@@ -20883,6 +20959,7 @@ fn handle_kademlia_closest_peer_result(
                 for address in &accepted_addresses {
                     learn_peer_address(
                         swarm,
+                        connection_epochs,
                         forwarder,
                         discovered_peer_addresses,
                         paths,
@@ -20897,6 +20974,7 @@ fn handle_kademlia_closest_peer_result(
             if !public_discovery_quiet || auto_relay.should_discover_candidates() {
                 admit_discovered_relay_infrastructure_peer(
                     swarm,
+                    connection_epochs,
                     forwarder,
                     infrastructure_peers,
                     auto_relay,
@@ -20912,6 +20990,7 @@ fn handle_kademlia_closest_peer_result(
 
 fn dial_kademlia_providers(
     swarm: &mut Swarm<Behaviour>,
+    connection_epochs: &mut ConnectionEpochs,
     forwarder: &Forwarder,
     metrics: &RuntimeMetrics,
     providers: &HashSet<Libp2pPeerId>,
@@ -20925,7 +21004,7 @@ fn dial_kademlia_providers(
             metrics.record_kademlia_provider_ignored();
             continue;
         }
-        dial_configured_peer(swarm, forwarder, metrics, *provider);
+        dial_configured_peer(swarm, connection_epochs, forwarder, metrics, *provider);
     }
 }
 
@@ -20982,6 +21061,7 @@ fn handle_relay_server_event(metrics: &RuntimeMetrics, event: &relay::Event) {
 
 fn handle_relay_event(
     swarm: &mut Swarm<Behaviour>,
+    connection_epochs: &mut ConnectionEpochs,
     forwarder: &Forwarder,
     relay_readiness: &mut RelayReadiness,
     auto_relay: &mut AutoRelayState,
@@ -21000,6 +21080,7 @@ fn handle_relay_event(
         relay_readiness.record_reservation_accepted(relay_peer_id);
         dial_relay_ready_configured_peers(
             swarm,
+            connection_epochs,
             forwarder,
             relay_readiness,
             relay_addresses,
@@ -21141,6 +21222,7 @@ fn retain_discovered_address(
 #[allow(clippy::too_many_arguments)]
 fn learn_peer_address(
     swarm: &mut Swarm<Behaviour>,
+    connection_epochs: &mut ConnectionEpochs,
     forwarder: &Forwarder,
     discovered_peer_addresses: &mut DiscoveredPeerAddresses,
     paths: &PathSet,
@@ -21261,6 +21343,7 @@ fn learn_peer_address(
     metrics.record_discovered_address_dial_attempt();
     if let Err(error) = dial_known_peer_addresses(
         swarm,
+        connection_epochs,
         peer,
         std::iter::once(address.clone()),
         PeerCondition::NotDialing,
@@ -21278,6 +21361,7 @@ fn learn_peer_address(
 #[allow(clippy::too_many_arguments)]
 fn learn_peer_direct_address_candidates_from_capabilities(
     swarm: &mut Swarm<Behaviour>,
+    connection_epochs: &mut ConnectionEpochs,
     forwarder: &Forwarder,
     discovered_peer_addresses: &mut DiscoveredPeerAddresses,
     paths: &PathSet,
@@ -21300,6 +21384,7 @@ fn learn_peer_direct_address_candidates_from_capabilities(
         }
         learn_peer_address(
             swarm,
+            connection_epochs,
             forwarder,
             discovered_peer_addresses,
             paths,
@@ -21314,6 +21399,7 @@ fn learn_peer_direct_address_candidates_from_capabilities(
 
 fn dial_configured_peer(
     swarm: &mut Swarm<Behaviour>,
+    connection_epochs: &mut ConnectionEpochs,
     forwarder: &Forwarder,
     metrics: &RuntimeMetrics,
     peer: Libp2pPeerId,
@@ -21326,7 +21412,7 @@ fn dial_configured_peer(
     }
 
     metrics.record_kademlia_provider_dial_attempt();
-    if let Err(error) = swarm.dial(peer) {
+    if let Err(error) = connection_epochs.dial(swarm, peer) {
         metrics.record_kademlia_provider_dial_failure();
         eprintln!("dial discovered provider {peer} failed: {error}");
     }
@@ -22212,6 +22298,7 @@ mod tests {
         let last_blocked_queue_redial = Box::leak(Box::new(None));
         let discovered_peer_addresses = Box::leak(Box::new(DiscoveredPeerAddresses::default()));
         QueueDrainContext {
+            connection_epochs: Box::leak(Box::new(ConnectionEpochs::default())),
             paths,
             peer_capabilities,
             bootstrap_addresses: &[],
@@ -29134,7 +29221,13 @@ mod tests {
         let metrics = RuntimeMetrics::default();
         let providers = HashSet::from([configured, unconfigured]);
 
-        dial_kademlia_providers(&mut node.swarm, &forwarder, &metrics, &providers);
+        dial_kademlia_providers(
+            &mut node.swarm,
+            &mut ConnectionEpochs::default(),
+            &forwarder,
+            &metrics,
+            &providers,
+        );
 
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
         assert_eq!(snapshot.kademlia_providers_found, 2);
@@ -29191,6 +29284,7 @@ mod tests {
 
         handle_kademlia_closest_peer_result(
             &mut node.swarm,
+            &mut ConnectionEpochs::default(),
             &forwarder,
             &mut infrastructure_peers,
             &mut auto_relay,
@@ -29254,6 +29348,7 @@ mod tests {
 
         handle_kademlia_closest_peer_result(
             &mut node.swarm,
+            &mut ConnectionEpochs::default(),
             &forwarder,
             &mut infrastructure_peers,
             &mut auto_relay,
@@ -29322,6 +29417,7 @@ mod tests {
 
         handle_kademlia_closest_peer_result(
             &mut node.swarm,
+            &mut ConnectionEpochs::default(),
             &forwarder,
             &mut infrastructure_peers,
             &mut auto_relay,
@@ -29479,6 +29575,7 @@ mod tests {
 
         learn_peer_address(
             &mut node.swarm,
+            &mut ConnectionEpochs::default(),
             &forwarder,
             &mut discovered,
             &mut paths,
@@ -29532,6 +29629,7 @@ mod tests {
 
         learn_peer_address(
             &mut node.swarm,
+            &mut ConnectionEpochs::default(),
             &forwarder,
             &mut discovered,
             &mut paths,
@@ -29584,6 +29682,7 @@ mod tests {
 
         learn_peer_address(
             &mut node.swarm,
+            &mut ConnectionEpochs::default(),
             &forwarder,
             &mut discovered,
             &mut paths,
@@ -32461,6 +32560,7 @@ mod tests {
 
         admit_discovered_relay_infrastructure_peer(
             &mut node.swarm,
+            &mut ConnectionEpochs::default(),
             &forwarder,
             &mut infrastructure_peers,
             &mut auto_relay,
@@ -32562,6 +32662,7 @@ mod tests {
 
         admit_discovered_relay_infrastructure_peer(
             &mut node.swarm,
+            &mut ConnectionEpochs::default(),
             &forwarder,
             &mut infrastructure_peers,
             &mut auto_relay,
@@ -32622,6 +32723,7 @@ mod tests {
 
         admit_discovered_relay_infrastructure_peer(
             &mut node.swarm,
+            &mut ConnectionEpochs::default(),
             &forwarder,
             &mut infrastructure_peers,
             &mut auto_relay,
@@ -32632,6 +32734,7 @@ mod tests {
         );
         admit_discovered_relay_infrastructure_peer(
             &mut node.swarm,
+            &mut ConnectionEpochs::default(),
             &forwarder,
             &mut infrastructure_peers,
             &mut auto_relay,
@@ -32688,6 +32791,7 @@ mod tests {
 
         admit_discovered_relay_infrastructure_peer(
             &mut node.swarm,
+            &mut ConnectionEpochs::default(),
             &forwarder,
             &mut infrastructure_peers,
             &mut auto_relay,
@@ -34137,6 +34241,7 @@ mod tests {
                     .expect("address");
                 learn_peer_address(
                     &mut node.swarm,
+                    &mut ConnectionEpochs::default(),
                     &forwarder,
                     &mut discovered,
                     &paths,
@@ -34227,6 +34332,7 @@ mod tests {
 
         learn_peer_address(
             &mut node.swarm,
+            &mut ConnectionEpochs::default(),
             &forwarder,
             &mut discovered,
             &paths,
@@ -34276,6 +34382,7 @@ mod tests {
 
         learn_peer_address(
             &mut node.swarm,
+            &mut ConnectionEpochs::default(),
             &forwarder,
             &mut discovered,
             &paths,
@@ -34326,6 +34433,7 @@ mod tests {
 
         learn_peer_address(
             &mut node.swarm,
+            &mut ConnectionEpochs::default(),
             &forwarder,
             &mut discovered,
             &paths,
@@ -34378,6 +34486,7 @@ mod tests {
 
         learn_peer_address(
             &mut node.swarm,
+            &mut ConnectionEpochs::default(),
             &forwarder,
             &mut discovered,
             &paths,
@@ -34491,7 +34600,7 @@ mod tests {
                 identity: &node.identity,
                 code_pairing_sessions: &mut CodePairingSessions::new(),
                 membership_probe_connections: &mut MembershipProbeConnections::default(),
-                connection_epochs: &ConnectionEpochs::default(),
+                connection_epochs: &mut ConnectionEpochs::default(),
                 public_discovery_quiet: false,
                 kademlia_maintenance: maintenance,
             },
@@ -35044,6 +35153,7 @@ mod tests {
                 maintenance.started_at = Some(Instant::now() - KADEMLIA_MAINTENANCE_QUERY_TIMEOUT);
                 handle_redial_tick(
                     &mut node,
+                    &mut ConnectionEpochs::default(),
                     &forwarder,
                     &mut maintenance,
                     &mut DiscoveredPeerAddresses::default(),
@@ -35205,7 +35315,7 @@ mod tests {
 
         epochs.record_started(current);
         assert!(epochs.record_established(current));
-        assert!(epochs.record_established(unobserved));
+        assert!(!epochs.record_established(unobserved));
         assert!(epochs.is_current(current));
         assert!(!epochs.is_current(stale));
 
@@ -35229,6 +35339,95 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn runtime_dial_registration_tracks_admission_and_rejects_old_success() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address: Multiaddr = format!(
+            "/ip4/127.0.0.1/tcp/{}",
+            listener.local_addr().unwrap().port()
+        )
+        .parse()
+        .unwrap();
+        let mut node = membership_sync_test_node(NodeIdentity::generate_ed25519().unwrap());
+        let peer = peer_id();
+        let mut epochs = ConnectionEpochs::default();
+        dial_known_peer_addresses(
+            &mut node.swarm,
+            &mut epochs,
+            peer,
+            [address.clone()],
+            PeerCondition::NotDialing,
+        )
+        .unwrap();
+        assert_eq!(
+            epochs.connections.len(),
+            1,
+            "application dial admission was not registered"
+        );
+        let old = *epochs.connections.keys().next().unwrap();
+        assert!(matches!(
+            dial_known_peer_addresses(
+                &mut node.swarm,
+                &mut epochs,
+                peer,
+                [address],
+                PeerCondition::NotDialing
+            ),
+            Err(DialError::DialPeerConditionFalse(_))
+        ));
+        assert_eq!(
+            epochs.connections.len(),
+            1,
+            "rejected dial retained an owner"
+        );
+        assert_eq!(epochs.advance(), 1);
+        assert!(
+            !epochs.record_established(old),
+            "old application dial acquired the new epoch"
+        );
+        epochs.remove(old);
+        assert!(epochs.connections.is_empty());
+        let provider = peer_id();
+        let provider_address: Multiaddr = format!(
+            "/ip4/127.0.0.1/tcp/{}",
+            listener.local_addr().unwrap().port()
+        )
+        .parse()
+        .unwrap();
+        node.swarm
+            .behaviour_mut()
+            .kad
+            .add_address(&provider, provider_address);
+        let config = config_with_peer(&node.identity, provider);
+        let forwarder = Forwarder::from_config(&config).unwrap();
+        dial_configured_peer(
+            &mut node.swarm,
+            &mut epochs,
+            &forwarder,
+            &RuntimeMetrics::default(),
+            provider,
+        );
+        assert_eq!(
+            epochs.connections.len(),
+            1,
+            "provider dial admission was not registered"
+        );
+        let fresh = *epochs.connections.keys().next().unwrap();
+        assert!(epochs.record_established(fresh));
+        assert!(epochs.is_usable(fresh));
+    }
+
+    #[test]
+    fn legacy_startup_connection_ids_belong_to_initial_epoch() {
+        let mut epochs = ConnectionEpochs::default();
+        assert!(epochs.record_established(ConnectionId::new_unchecked(1)));
+        epochs.advance();
+        assert!(!epochs.record_established(ConnectionId::new_unchecked(2)));
+        let current = ConnectionId::new_unchecked(3);
+        epochs.record_started(current);
+        assert!(epochs.record_established(current));
+    }
+
+    #[tokio::test]
     async fn obsolete_outgoing_failure_does_not_reapply_recovery_backoff() {
         struct UnusedPacketIo;
         impl crate::runtime::tun::PacketRead for UnusedPacketIo {
@@ -35241,7 +35440,7 @@ mod tests {
                 panic!("connection event must not write packets");
             }
         }
-        for attempt in ["old_epoch", "current_epoch", "unobserved"] {
+        for attempt in ["old_epoch", "current_epoch", "unobserved", "unobserved_old"] {
             let mut backoff = PublicDiscoveryBackoff::from_bootstrap_defaults(true);
             let peer = *backoff.bootstrap_peers.iter().next().unwrap();
             let identity = NodeIdentity::generate_ed25519().unwrap();
@@ -35254,10 +35453,12 @@ mod tests {
             let replacement = ConnectionId::new_unchecked(42);
             let mut epochs = ConnectionEpochs::default();
             epochs.record_started(stale);
-            epochs.advance();
+            if attempt != "unobserved" {
+                epochs.advance();
+            }
             match attempt {
                 "current_epoch" => epochs.record_started(stale),
-                "unobserved" => epochs.remove(stale),
+                "unobserved" | "unobserved_old" => epochs.remove(stale),
                 _ => {}
             }
             epochs.record_started(replacement);
@@ -35335,7 +35536,7 @@ mod tests {
             .unwrap();
             assert!(!epochs.connections.contains_key(&stale));
             assert!(epochs.is_usable(replacement));
-            if attempt != "old_epoch" {
+            if matches!(attempt, "current_epoch" | "unobserved") {
                 assert!(
                     backoff.suppressed_until.is_some(),
                     "current failure must retain backoff"

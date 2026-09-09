@@ -21,8 +21,8 @@ This initial inventory is not completed verification.
 | Boundary | Owners / Entry Points | Review Status |
 | --- | --- | --- |
 | Network transition | `handle_runtime_network_change`, `ConnectionEpochs::advance` | Reset sequence traced; stale terminal effects under review |
-| Dial start / establishment | `ConnectionEpochs`, `handle_swarm_event` | Existing old-epoch success rejection; direct-dial tracking needs inspection |
-| Outgoing failure | `PublicDiscoveryBackoff`, `DiscoveredPeerAddresses` | Old-epoch regression reproduced and guarded; application registration still open |
+| Dial start / establishment | `ConnectionEpochs`, `handle_swarm_event` | Application/startup registration corrected; admission regressions pass |
+| Outgoing failure | `PublicDiscoveryBackoff`, `DiscoveredPeerAddresses` | Old-epoch and late initial-epoch failures guarded; current failures retain backoff |
 | Connection close | `active_connections`, `record_path_closed`, capability/session invalidation | Source traced; replacement-preservation tests pending |
 | Periodic work | Runtime intervals, `handle_redial_tick`, `KademliaMaintenance` | Existing timeline coverage; reset/event interactions pending |
 | Relay reservations | `ConfiguredRelayReservationRetries`, `RelayReadiness`, `AutoRelayState`, listener sets | Old listener failure and replacement ownership review pending |
@@ -59,28 +59,42 @@ untracked failures could suppress legitimate current-network recovery.
 
 ## RE-2: Application Dial Registration
 
-Status: source-confirmed tracking gap; transport-event regression and correction pending.
+Status: admission regressions reproduced and corrected; workspace, static,
+native and isolated recovery checks passed. Timer and relay-listener review remain open.
 
 | Boundary | Inspected Behavior |
 | --- | --- |
 | Runner registration | `IncomingConnection` and `Dialing` events call `ConnectionEpochs::record_started` |
-| Application dialing | `dial_known_peer_addresses` and `dial_configured_peer` call `Swarm::dial` directly |
-| Startup dialing | `p2p::install_listeners_and_dials` starts bootstrap and configured-peer dials before runner epoch initialization |
+| Application dialing | Both dial helpers now register admitted `DialOpts::connection_id()` through `ConnectionEpochs::dial` |
+| Startup dialing | An internal constructor observer reports admitted IDs to the epoch owner before runtime handoff |
 | Pinned library | `libp2p-swarm 0.47.1` emits `SwarmEvent::Dialing` in its `ToSwarm::Dial` handler, not in `Swarm::dial` itself |
-| Unknown success | `record_established` assigns an unknown connection to the current epoch |
+| Unknown completion | Legacy externally constructed nodes assign unobserved startup IDs to epoch zero, never to a later network |
 
-Consequently, registering only observed `Dialing` events does not cover every
-application-started attempt. A fix must cover attempt admission as well as terminal
-effects, without dropping valid unobserved failures or creating unbounded tombstones.
+Registering only observed `Dialing` events missed application-started attempts.
+Successful admission now registers immediately; immediate rejection leaves no
+epoch entry. Terminal events retire the existing entry without tombstones.
 
-Next: register successful application dial admission with the existing epoch
-owner and test network-change completion plus immediate rejection cleanup.
-Thread the owner through existing runtime adapter contexts rather than adding
-global state, an unrelated behaviour or a second epoch registry.
+The same owner flows through queue draining, discovery, relay readiness and probe
+recovery adapters. Behaviour-initiated and inbound attempts still register through
+`Dialing` and `IncomingConnection`; no second registry or global state was added.
 
-Startup handoff must preserve existing public construction APIs. Inspect an
-additive tracked-construction path or initial-attempt handoff before changing
-`P2pNode`'s public fields; adding a required field breaks struct-literal consumers.
+Public `build_node`, `P2pNode` fields and runtime entry signatures are unchanged.
+Only the internal production construction path adds the observer. Initial-epoch
+unobserved failures keep normal backoff; late initial-epoch failures are ignored.
+
+| Regression | Evidence |
+| --- | --- |
+| `runtime_dial_registration_tracks_admission_and_rejects_old_success` | Real application admission and immediate rejection; old success rejected, fresh provider attempt usable |
+| `startup_dial_registration_observes_only_admitted_attempts` | Bootstrap/configured startup paths, both admitted and resource-limit rejection |
+| `legacy_startup_connection_ids_belong_to_initial_epoch` | Unobserved initial success allowed, late initial success rejected, explicit new attempt accepted |
+| `obsolete_outgoing_failure_does_not_reapply_recovery_backoff` | Extended with unobserved initial and late-initial failure cases |
+
+With admission registration disabled, both admission regressions failed at the
+missing-owner assertions (exit 101). Restoring registration made both pass.
+Logs: `/tmp/p2p-vpn-recovery-registration-{negative,fixed}.log`.
+
+Admission tests use real local swarms; completion ownership assertions are
+deterministic state/event checks, not a physical transport-race measurement.
 
 `disconnect_peer_id` aborts pending attempts as well as closing established
 connections, but the swarm also queues terminal events before returning them.
@@ -101,9 +115,13 @@ already-produced terminal event. Preserve both cancellation and event guards.
 requests its removal. A later `ListenerClosed` no longer sees that retired marker
 and processes its addresses through relay readiness.
 
-Review the error-then-close ordering against a replacement using the same relay
-base address. Automatic relay listeners have separate ID ownership; address-expiry
-events also need checking. No reproduced defect or fix is claimed yet.
+Pinned `libp2p-relay 0.21.1` emits `ListenerClosed` for reservation errors, not
+`ListenerError`. The initial error-then-close hypothesis is therefore not yet
+a demonstrated production relay path; an injected error alone would not prove it.
+
+Review ordinary close ordering against replacement listeners with the same relay
+base address, especially automatic listeners reset without a retired-ID marker.
+No reproduced listener defect or fix is claimed yet.
 
 ## Constraints and Remaining Work
 
@@ -151,3 +169,36 @@ full Nix package build. Run recovery only after all builds have finished.
 
 Full Nix packages, ARM64, APK/device acceptance and a new long soak are not
 claimed by this checkpoint. The overall goal remains active.
+
+## Dial-Registration Checkpoint
+
+| Verification | Result |
+| --- | --- |
+| Negative / fixed admission tests | Both fail with registration omitted; both pass with registration restored |
+| Workspace | 1,465 passed; 36 opt-in exclusions; includes all four failure-event cases |
+| Clippy / formatting | Required correctness, suspicious and performance groups passed; advisory warnings remain; formatting passed |
+| Android native | x86_64/API 26 compiled in 40.13 seconds; four target warnings |
+| Nix source parity | Cached-tool source and test-target assertions passed |
+| Public-profile delayed/renumbered recovery | Passed in 167.99 seconds including setup; direct LAN, circuit relay, direct UDP return, healthy dwell |
+
+Logs use `/tmp/p2p-vpn-recovery-registration-` with `negative.log`, `fixed.log`,
+`workspace.log`, `clippy-fixed.log`, `android.log`, `nix.log` and `public.log`.
+`clippy.log` preserves an intermediate test-import compilation failure.
+
+The final import cleanup only moves `build_node` behind `cfg(test)`; Clippy
+compiled all test targets afterward. Workspace and recovery behavior are unchanged
+by that import cleanup and the final whitespace edits.
+
+Recovery artifact:
+`/tmp/p2p-vpn-tun_namespace_automatic_discovery_recovers_after_link_changes.36ddea49ccd4b9ca`.
+Recorded test-binary SHA-256:
+`fc90d95ecdc5a13181b59e5d3b91273e16456fc3aacb99aa58f21b9f062947f8`.
+
+- Original direct-recovery deadline: 375 seconds; no extension.
+- One cycle; 161.245 seconds excluding setup; not a long acceptance soak.
+- Storage before native compilation: 7.820 GiB; raw evidence retained.
+- No builds during recovery observations, physical deployments or public-WAN claims.
+
+This checkpoint uses the commands and cached-tool boundaries above. It does not
+claim full Nix packages, ARM64, APK/device acceptance or formal proof coverage;
+the repository has no Lean project. The full timer/event goal remains active.
