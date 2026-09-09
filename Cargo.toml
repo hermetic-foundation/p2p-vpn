@@ -13,10 +13,14 @@ members = [
 ]
 default-members = ["."]
 resolver = "3"
-exclude = ["vendor/libp2p-kad-0.48.0"]
+exclude = ["vendor/libp2p-kad-0.48.0", "vendor/stats_alloc-0.1.10"]
+
+[features]
+allocation-review = []
 
 [patch.crates-io]
 libp2p-kad = { path = "vendor/libp2p-kad-0.48.0" }
+stats_alloc = { path = "vendor/stats_alloc-0.1.10" }
 
 [lints.rust]
 unsafe_code = "forbid"
@@ -58,6 +62,7 @@ tun = "0.8.14"
 log = "0.4.29"
 
 [dev-dependencies]
+stats_alloc = "=0.1.10"
 socket2 = { version = "0.6.5", features = ["all"] }
 futures-timer = "3.0.3"
 web-time = "1.1.0"

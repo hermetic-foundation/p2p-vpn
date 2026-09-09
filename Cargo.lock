@@ -2378,6 +2378,7 @@ dependencies = [
  "sha2 0.11.0",
  "socket2 0.6.5",
  "spake2",
+ "stats_alloc",
  "tokio",
  "tun",
  "web-time",
@@ -3194,6 +3195,10 @@ name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
+
+[[package]]
+name = "stats_alloc"
+version = "0.1.10"
 
 [[package]]
 name = "strsim"

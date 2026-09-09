@@ -66,6 +66,10 @@ Freeze packet size/rate, transition schedules and transport settings in each
 fixture manifest before its first capture. Select supported controls from source
 and configured limits, not observed results. Record actual delivered work.
 
+S6's allocator instrumentation, calibration, modes and capture order are
+specified in [Allocation Review](allocation-review.md). Its first eight-record
+capture is preliminary evidence, not completion of the twelve-capture matrix.
+
 ### Observations
 
 | Series | Required Evidence |

@@ -69,6 +69,7 @@ let
   rootLock = src + "/Cargo.lock";
   rootRustSource = src + "/src";
   kademliaSource = src + "/vendor/libp2p-kad-0.48.0";
+  allocationReviewSource = src + "/vendor/stats_alloc-0.1.10";
   androidCrate = src + "/crates/p2p-vpn-android";
   androidE2eFixtureCrate = src + "/crates/p2p-vpn-android-e2e-fixture";
   androidProjectPresent = builtins.pathExists androidProject;
@@ -77,6 +78,7 @@ let
     rootLock
     rootRustSource
     kademliaSource
+    allocationReviewSource
     androidCrate
     androidE2eFixtureCrate
   ];
@@ -102,6 +104,7 @@ let
       rootLock
       rootRustSource
       kademliaSource
+      allocationReviewSource
       androidCrate
       androidE2eFixtureCrate
     ];

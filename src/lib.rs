@@ -14,6 +14,9 @@ pub mod route;
 pub mod runtime;
 pub mod wire;
 
+#[cfg(all(test, feature = "allocation-review"))]
+mod allocation_review;
+
 use std::{fmt, str::FromStr};
 
 use sha2::{Digest, Sha256};

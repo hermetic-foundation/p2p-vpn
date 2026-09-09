@@ -1169,16 +1169,8 @@ mod tests {
     use super::*;
 
     #[cfg(target_os = "linux")]
-    #[test]
-    #[ignore = "opt-in fresh-process signed membership resource diagnostic"]
-    fn measure_forwarder_signed_membership_resources() {
+    fn signed_membership_resource_config(count: usize) -> Config {
         use base64::Engine as _;
-        use sha2::{Digest as _, Sha256};
-
-        let count = std::env::var("P2P_VPN_REVIEW_LEDGER_RECORDS")
-            .unwrap_or_else(|_| "128".to_owned())
-            .parse::<usize>()
-            .unwrap();
         assert!([8, 128, MAX_MEMBERSHIP_RECORDS].contains(&count));
         // Deterministic test identities only; never persisted or connected to a network.
         let identity = |index: u64| {
@@ -1225,6 +1217,21 @@ mod tests {
             }
         }
         assert_eq!(config.network.member_records.len(), count);
+        config
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "opt-in fresh-process signed membership resource diagnostic"]
+    fn measure_forwarder_signed_membership_resources() {
+        use base64::Engine as _;
+        use sha2::{Digest as _, Sha256};
+
+        let count = std::env::var("P2P_VPN_REVIEW_LEDGER_RECORDS")
+            .unwrap_or_else(|_| "128".to_owned())
+            .parse::<usize>()
+            .unwrap();
+        let config = signed_membership_resource_config(count);
         let fingerprint = base64::engine::general_purpose::STANDARD.encode(Sha256::digest(
             serde_json::to_vec(&config.network.member_records).unwrap(),
         ));
@@ -1263,6 +1270,103 @@ mod tests {
             "records": count, "ledger_sha256_base64": fingerprint, "refreshes": 3,
                 "fixture": fixture_memory, "constructed": constructed_memory,
                 "refreshed": memory(), "build_us": build_us, "refresh_us": refresh_us,
+            })
+        );
+    }
+
+    #[cfg(all(target_os = "linux", feature = "allocation-review"))]
+    #[test]
+    #[ignore = "allocation review: run alone in a fresh process with --test-threads=1"]
+    fn measure_forwarder_signed_membership_allocations() {
+        use crate::allocation_review::{delta, live_bytes, snapshot};
+        use base64::Engine as _;
+        use sha2::{Digest as _, Sha256};
+
+        let count = std::env::var("P2P_VPN_REVIEW_LEDGER_RECORDS")
+            .expect("explicit record count")
+            .parse()
+            .unwrap();
+        let mode = std::env::var("P2P_VPN_REVIEW_LEDGER_EVALUATION")
+            .expect("explicit cached or forced evaluation mode");
+        assert!(matches!(mode.as_str(), "cached" | "forced"));
+        let config = signed_membership_resource_config(count);
+        let fingerprint = base64::engine::general_purpose::STANDARD.encode(Sha256::digest(
+            serde_json::to_vec(&config.network.member_records).unwrap(),
+        ));
+        let memory = || {
+            let status = std::fs::read_to_string("/proc/self/status").unwrap();
+            let kib = |field: &str| {
+                status
+                    .lines()
+                    .find_map(|line| line.strip_prefix(field))
+                    .unwrap()
+                    .split_whitespace()
+                    .next()
+                    .unwrap()
+                    .parse::<u64>()
+                    .unwrap()
+            };
+            (kib("VmRSS:"), kib("VmHWM:"))
+        };
+        // Reserve all observer storage before measuring; serialize only after the final drop.
+        let mut cycles = Vec::with_capacity(10);
+        for cycle in 1..=10 {
+            let rss_before = memory();
+            let before = snapshot();
+            let started = Instant::now();
+            let mut forwarder = Forwarder::from_config(&config).unwrap();
+            let build_us = started.elapsed().as_micros();
+            let constructed = snapshot();
+            let evaluated_at = forwarder.membership_refresh_window.evaluated_at;
+            let started = Instant::now();
+            for offset in 1..=3 {
+                let now = evaluated_at + offset;
+                assert!(forwarder.membership_refresh_window.contains(now));
+                if mode == "forced" {
+                    forwarder.prune_membership_records(now).unwrap();
+                } else {
+                    forwarder.refresh_membership_records(now).unwrap();
+                }
+            }
+            let refresh_us = started.elapsed().as_micros();
+            let refreshed = snapshot();
+            assert_eq!(forwarder.configured_transport_peers().count(), count - 1);
+            assert_eq!(forwarder.member_records(), config.network.member_records);
+            assert_eq!(forwarder.membership_revision(), 0);
+            assert_eq!(forwarder.authorization_revision(), 0);
+            drop(forwarder);
+            let dropped = snapshot();
+            cycles.push((
+                cycle,
+                before,
+                constructed,
+                refreshed,
+                dropped,
+                build_us,
+                refresh_us,
+                rss_before,
+                memory(),
+            ));
+        }
+        let initial = cycles[0].1;
+        let rows: Vec<_> = cycles.into_iter().map(|(cycle, before, constructed, refreshed,
+            dropped, build_us, refresh_us, rss_before, rss_after)| serde_json::json!({
+                "cycle": cycle,
+                "construct": delta(before, constructed),
+                "refresh": delta(constructed, refreshed),
+                "drop": delta(refreshed, dropped),
+                "whole_cycle": delta(before, dropped),
+                "live_bytes_after_drop_from_initial": live_bytes(dropped) - live_bytes(initial),
+                "build_us": build_us, "refresh_us": refresh_us,
+                "rss_before_kib": rss_before.0, "rss_after_kib": rss_after.0,
+                "rss_peak_kib": rss_after.1,
+            })).collect();
+        eprintln!(
+            "forwarder_allocation_sample {}",
+            serde_json::json!({
+                "schema_version": 1, "records": count, "mode": mode,
+                "ledger_sha256_base64": fingerprint, "refreshes_per_cycle": 3,
+                "cycles": rows, "allocator": "stats_alloc 0.1.10 wrapping System",
             })
         );
     }
