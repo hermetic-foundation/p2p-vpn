@@ -21,12 +21,12 @@ reopen them only if this audit produces new causal evidence.
 ## Completion Checklist
 
 - [x] Locate existing reports and distinguish historical passes from open attribution.
-- [ ] Finish source ownership inventory, including failure and replacement paths.
-- [ ] Test rapid commands and stale callbacks within and across service scopes.
-- [ ] Test permission success, denial and activity recreation without stale activation.
+- [x] Finish source ownership inventory, including failure and replacement paths.
+- [x] Test rapid commands and stale callbacks within and across service scopes.
+- [x] Test permission success, denial and activity recreation without stale activation.
 - [x] Test profile-join cancellation, late completion and subsequent successful local commit (AL1).
 - [x] Verify multi-network enablement, persistence and native generation isolation.
-- [ ] Audit native shutdown, TUN descriptors, callback retirement and timer bounds.
+- [x] Audit native shutdown, TUN descriptors, callback retirement and timer bounds.
 - [x] Reconcile process death, always-on, reboot and app replacement on reviewed source.
 - [x] Run bounded cached-emulator lifecycle and applicable underlay scenarios.
 - [x] Record historical failure dispositions and precise missing attribution evidence.
@@ -128,7 +128,7 @@ service delivery. No production permission behavior changed.
 
 - Focused log: `/tmp/p2p-vpn-lifecycle-permission-unit.log`.
 - Full checks: `/tmp/p2p-vpn-lifecycle-permission-verified.log`.
-- Platform recreation and VPN denial are covered below; local-network permission outcomes remain open.
+- Platform recreation and VPN denial are covered below; local-network recovery is covered by AL3.
 
 `MainActivity` persists a pending enable network in instance state. Pending join
 code/hostname are not serialized there; rotation before local permission returns
@@ -316,6 +316,62 @@ This does not prove rotation, process recreation, permission dialogs or battery 
 
 JNI is the same artifact identified in AL1 and verified against current source
 below. Broader multi-network reconciliation remains required.
+
+## AL3: Local Permission Recovery
+
+Priority: P2. The always-on missing-permission handler stopped the runtime but
+scheduled no further permission check. Permission restoration alone therefore
+had no timer-driven path back to a connected runtime.
+
+The handler now calls the existing `scheduleBlockedModePoll` before returning
+in always-on mode. This retains the existing 30-second interval and scoped
+cancellation owner; manual mode still withdraws connection intent and stops.
+
+### Reproduction and Recovery
+
+The first JVM attempt hit Android's stubbed notification builder before the
+assertion. It was replaced with emulator instrumentation, not counted as defect
+evidence, and no JVM-stub workaround was added to production code.
+
+| API 35 Instrumentation | Result |
+| --- | --- |
+| Before correction | `always-on permission loss stranded recovery`; missing live timer reproduced |
+| Three loss events | Exactly one live timer; superseded timers cancelled; runtime remains stopped |
+| Ordinary timer fires | Exactly one replacement starts without an explicit connect/poll invocation |
+| State preservation | Peer identity, active network IDs and encrypted profile contents unchanged |
+| Health after recovery | Ordinary recurring health polling resumes |
+| Manual mode | Connection intent and polling withdrawn; explicit connection succeeds afterward |
+| Combined run | Activity binding, recreation, VPN denial, AL1, stale stops and native health recovery pass |
+
+The test injects permission loss and always-on mode at the real service handler.
+JNI stop/start, notifications and timer execution are real. API 35 treats local
+permission as granted, modelling restoration at the next ordinary poll.
+
+Actual API 37 permission revocation/grant delivery remains a final-platform
+certification limit, not evidence supplied by this injection. The pure
+`LocalNetworkPermissionTest` covers device/target enforcement thresholds.
+
+- Stub setup failure: `/tmp/p2p-vpn-lifecycle-local-permission-before.log`.
+- Emulator negative: `/tmp/p2p-vpn-lifecycle-local-permission-negative.log`.
+- Emulator positive: `/tmp/p2p-vpn-lifecycle-local-permission-positive.log`.
+- Full offline JVM, lint and APK checks: `/tmp/p2p-vpn-lifecycle-local-permission-fixed-build.log`.
+- Run AL1's instrumentation command with `-e local_permission true`; require its pass plus final result code `-1`.
+- Emulator stopped and private state removed; result logs retained.
+
+| Artifact | SHA-256 |
+| --- | --- |
+| Fixed app APK | `714a394dfe80a94a5b287fce380f76d2eff5fda0e3c32bee77280408180449c6` |
+| Instrumentation APK | `358dee3fecf698a43e568f936e1621eb92fe331b5beac3a5a7cbb73cf2dc7887` |
+
+### Multi-Network Evidence Reuse
+
+AL3 is a one-line production change in the missing-local-permission handler.
+The normal API 35 path cannot enter it: device API 35 is below the enforcement
+threshold. The 68-check run below is reused for unchanged API 35 behavior.
+
+The changed handler has its own failing/passing real-service instrumentation
+and automatic recovery evidence. No Rust, profile format, protocol, membership
+policy or packaging configuration changed.
 
 ## Current Native Provenance
 

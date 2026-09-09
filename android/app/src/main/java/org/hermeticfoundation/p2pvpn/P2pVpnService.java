@@ -734,6 +734,7 @@ public final class P2pVpnService extends VpnService {
         updateForegroundNotification();
         publishSnapshot();
         if (remainStarted) {
+            scheduleBlockedModePoll();
             return;
         }
         stopManualService();

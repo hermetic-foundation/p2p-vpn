@@ -256,6 +256,9 @@ public final class ServiceLifecycleInstrumentation extends Instrumentation {
             if ("true".equals(arguments.getString("health_poll"))) {
                 exerciseHealthPoll();
             }
+            if ("true".equals(arguments.getString("local_permission"))) {
+                exerciseLocalPermissionRecovery();
+            }
 
             old = currentScope;
             ScheduledFuture<?> occupied = old.schedule(() -> {
@@ -329,6 +332,62 @@ public final class ServiceLifecycleInstrumentation extends Instrumentation {
         Field worker = P2pVpnService.class.getDeclaredField("worker");
         worker.setAccessible(true);
         currentScope = (ServiceRuntimeWorker.Scope) worker.get(instance.get(null));
+    }
+
+    private void exerciseLocalPermissionRecovery() throws Exception {
+        P2pVpnService service = (P2pVpnService) serviceField(null, "debugInstance");
+        await(() -> onWorker(() -> Boolean.TRUE.equals(serviceField(service, "connected"))
+                && serviceField(service, "underlayRecoveryFuture") == null
+                && serviceField(service, "reconnectFuture") == null), 15, "permission-test readiness");
+        Object generation = onWorker(() -> serviceField(service, "runtimeGeneration"));
+        Object networks = onWorker(() -> serviceField(service, "activeNetworkIds"));
+        String peer = P2pVpnService.debugSnapshot().peerId;
+        String saved = new ProfileStore(getTargetContext()).load();
+        Field mode = P2pVpnService.class.getDeclaredField("vpnMode");
+        mode.setAccessible(true);
+        Method missing = P2pVpnService.class.getDeclaredMethod("stopForMissingLocalNetworkPermission");
+        missing.setAccessible(true);
+        Object originalMode = onWorker(() -> mode.get(service));
+        try {
+            ScheduledFuture<?> recovery = onWorker(() -> {
+                mode.set(service, VpnMode.resolve(35, false, true, false));
+                ScheduledFuture<?> previous = null;
+                // API 35 lacks this permission: inject loss at the real service handler.
+                for (int event = 0; event < 3; event++) {
+                    missing.invoke(service);
+                    ScheduledFuture<?> next = (ScheduledFuture<?>) serviceField(service, "statusFuture");
+                    require(next != null && !next.isDone(), "always-on permission loss stranded recovery");
+                    require(Boolean.TRUE.equals(serviceField(service, "desiredConnected")), "permission loss erased always-on intent");
+                    require(Boolean.FALSE.equals(serviceField(service, "connected")), "permission loss left runtime connected");
+                    if (previous != null) require(previous.isCancelled(), "duplicate loss retained an old poll");
+                    require(currentScope.pendingTaskCount() <= 2, "permission loss accumulated work");
+                    previous = next;
+                }
+                return previous;
+            });
+            // Let the production 30-second timer fire; no explicit reconnect or poll call.
+            recovery.get(40, TimeUnit.SECONDS);
+            awaitNativeRunning();
+            onWorker(() -> {
+                require(Long.valueOf(((Long) generation) + 1).equals(serviceField(service, "runtimeGeneration")),
+                        "permission recovery did not start exactly one replacement");
+                require(networks.equals(serviceField(service, "activeNetworkIds")), "permission recovery changed networks");
+                require(peer.equals(P2pVpnService.debugSnapshot().peerId), "permission recovery changed identity");
+                require(saved.equals(new ProfileStore(getTargetContext()).load()), "permission recovery changed stored profiles");
+                ScheduledFuture<?> poll = (ScheduledFuture<?>) serviceField(service, "statusFuture");
+                require(poll != null && !poll.isDone(), "permission recovery lost ordinary health polling");
+                mode.set(service, VpnMode.manual());
+                missing.invoke(service);
+                require(Boolean.FALSE.equals(serviceField(service, "desiredConnected")), "manual loss retained connection intent");
+                require(serviceField(service, "statusFuture") == null, "manual loss retained polling");
+                return null;
+            });
+            connect();
+            awaitNativeRunning();
+        } finally {
+            onWorker(() -> { mode.set(service, originalMode); return null; });
+        }
+        sendStatus(2, message("local_permission", "passed: one retry owner, automatic recovery, explicit manual recovery"));
     }
 
     private void exerciseHealthPoll() throws Exception {
