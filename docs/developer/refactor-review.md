@@ -9,6 +9,10 @@ See [current verification coverage](review-verification.md) for the latest
 evidence, exported check inventory, and outstanding acceptance work. Milestone
 sections below retain historical failures and their subsequent fixes.
 
+The [Kademlia workstream](kademlia-workstream-acceptance.md) is complete through
+RM-1 at `ceb6e4e2`. The next bounded workstream is
+[recovery timer and event ownership](recovery-event-ownership-review.md).
+
 ## Completion Criteria
 
 | Requirement | Required Evidence | Status |

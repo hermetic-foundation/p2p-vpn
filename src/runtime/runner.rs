@@ -12051,7 +12051,16 @@ async fn handle_swarm_event(
             connection_id,
             error,
         } => {
+            let obsolete = context
+                .connection_epochs
+                .connections
+                .get(&connection_id)
+                .is_some_and(|epoch| *epoch != context.connection_epochs.current);
             context.connection_epochs.remove(connection_id);
+            if obsolete {
+                log_stale_connection_event("outgoing_connection_error", connection_id);
+                return Ok(());
+            }
             if let Some(delay) = context.public_discovery_backoff.record_outgoing_error(
                 peer_id,
                 &error,
@@ -35217,6 +35226,133 @@ mod tests {
         assert_eq!(epochs.advance(), 1);
         assert!(!epochs.is_current(pending));
         assert!(!epochs.is_current(established));
+    }
+
+    #[tokio::test]
+    async fn obsolete_outgoing_failure_does_not_reapply_recovery_backoff() {
+        struct UnusedPacketIo;
+        impl crate::runtime::tun::PacketRead for UnusedPacketIo {
+            fn read_packet(&mut self, _: &mut [u8]) -> io::Result<usize> {
+                panic!("connection event must not read packets");
+            }
+        }
+        impl crate::runtime::tun::PacketWrite for UnusedPacketIo {
+            fn write_packet(&mut self, _: &[u8]) -> io::Result<usize> {
+                panic!("connection event must not write packets");
+            }
+        }
+        for attempt in ["old_epoch", "current_epoch", "unobserved"] {
+            let mut backoff = PublicDiscoveryBackoff::from_bootstrap_defaults(true);
+            let peer = *backoff.bootstrap_peers.iter().next().unwrap();
+            let identity = NodeIdentity::generate_ed25519().unwrap();
+            let config = config_with_peer(&identity, peer);
+            let mut forwarder = Forwarder::from_config(&config).unwrap();
+            let mut membership = OverlayMembership::from_config(&config).unwrap();
+            let mut tun_runtime = TunRuntimeConfig::from_config(&config).unwrap();
+            let mut node = membership_sync_test_node(identity);
+            let stale = ConnectionId::new_unchecked(41);
+            let replacement = ConnectionId::new_unchecked(42);
+            let mut epochs = ConnectionEpochs::default();
+            epochs.record_started(stale);
+            epochs.advance();
+            match attempt {
+                "current_epoch" => epochs.record_started(stale),
+                "unobserved" => epochs.remove(stale),
+                _ => {}
+            }
+            epochs.record_started(replacement);
+            assert!(epochs.record_established(replacement));
+            let address: Multiaddr = "/ip4/203.0.113.1/tcp/4001".parse().unwrap();
+            let mut discovered = DiscoveredPeerAddresses::default();
+            discovered.insert(peer, address.clone());
+            let now = Instant::now();
+            assert!(discovered.should_attempt_recovery_dial_at(peer, &address, now));
+            discovered.record_recovery_connection_at(peer, now);
+            let key = (peer, recovery_dial_target(peer, &address));
+            let retry_before = discovered.recovery_dial_attempts[&key].retry_after;
+            let mut paths = PathSet::new();
+            paths.record_established(PeerId::from_libp2p(peer), PathKind::DirectTcpStream);
+            let (_, mut writer) = PacketIo::new(UnusedPacketIo, UnusedPacketIo).split();
+            handle_swarm_event(
+                &mut node.swarm,
+                SwarmEventContext {
+                    forwarder: &mut forwarder,
+                    membership: &mut membership,
+                    tun_runtime: &mut tun_runtime,
+                    route_controller: &mut PreconfiguredTunRoutes,
+                    infrastructure_peers: &mut InfrastructurePeers::default(),
+                    routing_infrastructure_peers: &mut RoutingInfrastructurePeers::default(),
+                    writer: &mut writer,
+                    paths: &mut paths,
+                    peer_capabilities: &mut PeerCapabilities::default(),
+                    relay_readiness: &mut RelayReadiness::default(),
+                    auto_relay: &mut AutoRelayState::default(),
+                    public_discovery_backoff: &mut backoff,
+                    public_discovery_holdoff_active: false,
+                    relay_addresses: &[],
+                    configured_peer_addresses: &[],
+                    configured_relay_reservation_listeners: &mut HashSet::new(),
+                    retiring_configured_relay_reservation_listeners: &mut HashSet::new(),
+                    relay_server_enabled: false,
+                    discovered_peer_addresses: &mut discovered,
+                    packet_in_flight: &mut PacketInFlight::new(1),
+                    inbound_packet_rate_limiters: &mut PeerRateLimiters::new(1),
+                    pairing_request_rate_limiters: &mut PeerRateLimiters::new(1),
+                    membership_page_rate_limiters: &mut PeerRateLimiters::new(1),
+                    membership_record_syncs: &mut MembershipRecordSyncs::default(),
+                    pairing_handshake_rate_limiter: &mut GlobalRateLimiter::new(1, now),
+                    metrics: &RuntimeMetrics::default(),
+                    local_capabilities: &mut ControlCapabilities::local("lab", None, 1280),
+                    persistent_packet_endpoint_candidates: &[],
+                    persistent_packet_plane_quic_endpoint_candidates: &[],
+                    previous_membership_tags: &[],
+                    discovery: &node.discovery,
+                    identity: &node.identity,
+                    packet_plane: &mut PacketPlaneRuntime::disabled(),
+                    packet_plane_quic: None,
+                    packet_plane_negotiator: &mut PacketPlaneNegotiator::default(),
+                    path_probe_tracker: &mut PathProbeTracker::default(),
+                    packet_plane_session_ttl: Duration::from_secs(60),
+                    packet_plane_replay_windows_per_session: 1,
+                    pairing_replay_tokens: &mut PairingReplayTokens::default(),
+                    code_pairing_sessions: &mut CodePairingSessions::new(),
+                    pairing_state_store: None,
+                    active_connections: &mut HashMap::new(),
+                    connection_epochs: &mut epochs,
+                    membership_probe_connections: &mut MembershipProbeConnections::default(),
+                    kademlia_maintenance: &mut KademliaMaintenance::new(now),
+                },
+                SwarmEvent::OutgoingConnectionError {
+                    peer_id: Some(peer),
+                    connection_id: stale,
+                    error: DialError::Transport(vec![(
+                        address,
+                        TransportError::Other(io::Error::other("controlled old-network failure")),
+                    )]),
+                },
+            )
+            .await
+            .unwrap();
+            assert!(!epochs.connections.contains_key(&stale));
+            assert!(epochs.is_usable(replacement));
+            if attempt != "old_epoch" {
+                assert!(
+                    backoff.suppressed_until.is_some(),
+                    "current failure must retain backoff"
+                );
+                assert_eq!(discovered.recovery_dial_attempts[&key].failure_count, 1);
+                continue;
+            }
+            assert_eq!(
+                backoff.suppressed_until, None,
+                "obsolete failure suppressed new-network bootstrap"
+            );
+            assert_eq!(discovered.recovery_dial_attempts[&key].failure_count, 0);
+            assert_eq!(
+                discovered.recovery_dial_attempts[&key].retry_after,
+                retry_before
+            );
+        }
     }
 
     #[test]
