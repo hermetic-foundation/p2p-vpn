@@ -95,7 +95,10 @@ internal Kademlia measurement available on the baseline.
 - Query phases, RPC requests, application lookup calls and dial intents are distinct events. Do not sum them into a single request counter.
 - `tests/support/resource_counters.rs` extracts explicitly selected unsigned values from control-line arrays. Absent fields remain unavailable, distinct from zero.
 - The parser rejects duplicate selected fields, malformed numbers, overflow and oversized captures; unselected control payloads are never emitted.
-- Parser tests and existing measurement tests pass. Window aggregation, availability catalog, paired comparisons and full-dataset analysis remain outstanding.
+- Counter-window aggregation reuses process identity/timing validation and rejects missing values, counter resets and gaps over 7.5 seconds.
+- Full-window deltas/rates require at least three samples, 95% coverage, and no invalid interval. Partial valid deltas remain diagnostic only.
+- Rates use summed valid elapsed time, not the mean of per-interval rates. Missing counters remain distinct from genuine zero-event windows.
+- Tests cover parsing, valid rates, resets, missing captures, replacement, gaps and partial coverage. The availability catalog, dataset integration and paired comparisons remain outstanding.
 
 #### Collection Auditor
 
