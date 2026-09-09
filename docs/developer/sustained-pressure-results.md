@@ -149,6 +149,39 @@ timeline: its pre-ping path-health evidence is missing. Preserve that failure
 as unresolved retrospective attribution and restart the four-run campaign
 with the corrected readiness condition. Any new delivery failure remains actionable.
 
+## Corrected Campaign
+
+Fixture `82980db4` uses executable `b49b4f71429dd5f24e08ea43fb9ca48d1ac1de10e5be32af3898e54e750ba028`.
+The [portable summaries](sustained-pressure-samples.json) retain per-round work
+deltas, CPU windows, queue observations, process identities and source hashes.
+
+| Run | Profile | Result | Duration |
+| --- | --- | --- | ---: |
+| 1 | Packets | Five rounds passed | 189.82 s |
+| 2 | Bytes | Pending | - |
+| 3 | Bytes | Pending | - |
+| 4 | Packets | Pending | - |
+
+| Run 1 Round | Pressure Requests / Replies | Final RSS A / B, KiB |
+| --- | ---: | ---: |
+| 1 | 1975 / 10 | 36740 / 37148 |
+| 2 | 1973 / 15 | 36940 / 37228 |
+| 3 | 1974 / 10 | 37120 / 37124 |
+| 4 | 1974 / 11 | 37244 / 37236 |
+| 5 | 1972 / 10 | 37284 / 37164 |
+
+- Queue peaks reached four packets / 4112 bytes on both nodes in every round.
+- Every final queue and stream window was empty; recovery pings passed 5/5 both ways.
+- Final total descriptors were 13 per node throughout; process identities stayed unchanged.
+- Sampled-load CPU ranged from 7.90-9.14% of one core on A and 1.78-2.50% on B.
+- A's final three RSS checkpoints rise; the planned allocation-attribution investigation remains required.
+- JSON totaled 3419022 bytes and node logs 1332605 bytes, within their respective budgets.
+- Capture terminated without matching fixture processes; no builds overlapped observations.
+
+Artifact suffix: `1.e44e49d8c1aabbb5`; outer log:
+`/tmp/p2p-vpn-sustained-pressure-corrected-1-packets.log`.
+This first corrected capture does not complete S4 or resolve historical attribution.
+
 ## Diagnostic Validation
 
 | Check | Result |
