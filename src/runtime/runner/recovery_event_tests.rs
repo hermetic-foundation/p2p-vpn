@@ -797,6 +797,209 @@ async fn retired_configured_listener_marker_survives_error_until_terminal_close(
 }
 
 #[tokio::test]
+async fn capability_retry_targets_survivor_after_libp2p_removes_retired_connection() {
+    use libp2p::swarm::{FromSwarm, NetworkBehaviour, NotifyHandler, ToSwarm};
+    use std::task::{Context, Poll};
+    let peer = Libp2pPeerId::random();
+    let mut fixture = EventFixture::new(peer);
+    let old = ConnectionId::new_unchecked(101);
+    let current = ConnectionId::new_unchecked(102);
+    let address: Multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().unwrap();
+    let endpoint = ConnectedPoint::Dialer {
+        address: address.clone(),
+        role_override: libp2p::core::Endpoint::Dialer,
+        port_use: libp2p::core::transport::PortUse::New,
+    };
+    for id in [old, current] {
+        fixture.epochs.record_started(id);
+        assert!(fixture.epochs.record_established(id));
+        fixture
+            .active_connections
+            .insert((peer, id), endpoint.clone());
+        let _handler = fixture
+            .node
+            .swarm
+            .behaviour_mut()
+            .control
+            .handle_established_outbound_connection(
+                id,
+                peer,
+                &address,
+                libp2p::core::Endpoint::Dialer,
+                libp2p::core::transport::PortUse::New,
+            )
+            .unwrap();
+    }
+    let mut cx = Context::from_waker(futures::task::noop_waker_ref());
+    let mut old_request = None;
+    // The pinned behaviour distributes consecutive IDs across the two connections.
+    for _ in 0..2 {
+        let id = fixture.node.swarm.behaviour_mut().control.send_request(
+            &peer,
+            ControlRequest::Capabilities(ControlCapabilities::local("lab", None, 1280)),
+        );
+        let event = fixture.node.swarm.behaviour_mut().control.poll(&mut cx);
+        let Poll::Ready(ToSwarm::NotifyHandler {
+            handler: NotifyHandler::One(target),
+            ..
+        }) = event
+        else {
+            panic!("expected connection-targeted capability request");
+        };
+        if target == old {
+            old_request = Some(id);
+        }
+    }
+    let old_request = old_request.expect("one request selected the retiring connection");
+    fixture.epochs.mark_retiring(old);
+    // Swarm notifies its behaviour before exposing ConnectionClosed to the application.
+    fixture
+        .node
+        .swarm
+        .behaviour_mut()
+        .control
+        .on_swarm_event(FromSwarm::ConnectionClosed(
+            libp2p::swarm::behaviour::ConnectionClosed {
+                peer_id: peer,
+                connection_id: old,
+                endpoint: &endpoint,
+                cause: None,
+                remaining_established: 1,
+            },
+        ));
+    assert!(
+        !fixture
+            .node
+            .swarm
+            .behaviour()
+            .control
+            .is_pending_outbound(&peer, &old_request)
+    );
+    fixture
+        .dispatch(SwarmEvent::ConnectionClosed {
+            peer_id: peer,
+            connection_id: old,
+            endpoint,
+            num_established: 1,
+            cause: None,
+        })
+        .await;
+    let Poll::Ready(ToSwarm::GenerateEvent(request_response::Event::OutboundFailure {
+        request_id,
+        connection_id,
+        error: request_response::OutboundFailure::ConnectionClosed,
+        ..
+    })) = fixture.node.swarm.behaviour_mut().control.poll(&mut cx)
+    else {
+        panic!("retirement must fail the request on the removed connection");
+    };
+    assert_eq!(request_id, old_request);
+    assert_eq!(connection_id, old);
+    assert!(
+        matches!(fixture.node.swarm.behaviour_mut().control.poll(&mut cx),
+        Poll::Ready(ToSwarm::NotifyHandler { peer_id, handler: NotifyHandler::One(id), .. })
+        if peer_id == peer && id == current),
+        "retry must target the surviving connection"
+    );
+    assert!(
+        fixture
+            .node
+            .swarm
+            .behaviour_mut()
+            .control
+            .poll(&mut cx)
+            .is_pending()
+    );
+}
+
+#[tokio::test]
+async fn retired_connection_close_retries_unvalidated_capabilities_once() {
+    for scenario in [
+        "retry",
+        "validated",
+        "stale",
+        "not_retiring",
+        "no_replacement",
+        "replacement_retiring",
+        "unconfigured",
+    ] {
+        let peer = Libp2pPeerId::random();
+        let overlay = PeerId::from_libp2p(peer);
+        let mut fixture = EventFixture::new(if scenario == "unconfigured" {
+            Libp2pPeerId::random()
+        } else {
+            peer
+        });
+        let old = ConnectionId::new_unchecked(91);
+        let current = ConnectionId::new_unchecked(92);
+        let endpoint = ConnectedPoint::Dialer {
+            address: "/ip4/127.0.0.1/tcp/4001".parse().unwrap(),
+            role_override: libp2p::core::Endpoint::Dialer,
+            port_use: libp2p::core::transport::PortUse::New,
+        };
+        for id in [old, current] {
+            if id == current && scenario == "no_replacement" {
+                continue;
+            }
+            if id == current && scenario == "stale" {
+                fixture.epochs.advance();
+            }
+            fixture.epochs.record_started(id);
+            assert!(fixture.epochs.record_established(id));
+            fixture
+                .active_connections
+                .insert((peer, id), endpoint.clone());
+            fixture.paths.record_established_with_details(
+                overlay,
+                PathKind::DirectTcpStream,
+                None,
+                Some(1280),
+                PathOrigin::Identify,
+                PathConnectionRole::Dialer,
+                false,
+                Some(id),
+                Some(1),
+            );
+        }
+        if scenario != "not_retiring" {
+            fixture.epochs.mark_retiring(old);
+        }
+        if scenario == "replacement_retiring" {
+            fixture.epochs.mark_retiring(current);
+        }
+        if scenario == "validated" {
+            fixture
+                .capabilities
+                .record(overlay, ControlCapabilities::local("lab", None, 1280));
+        }
+        let close = || SwarmEvent::ConnectionClosed {
+            peer_id: peer,
+            connection_id: old,
+            endpoint: endpoint.clone(),
+            num_established: u32::from(scenario != "no_replacement"),
+            cause: None,
+        };
+        fixture.dispatch(close()).await;
+        let sent = fixture
+            .metrics
+            .snapshot(crate::queue::QueueStats::default())
+            .control_requests_sent;
+        assert_eq!(sent, u64::from(scenario == "retry"), "{scenario}");
+        assert!(!fixture.epochs.connections.contains_key(&old));
+        assert!(!fixture.active_connections.contains_key(&(peer, old)));
+        fixture.dispatch(close()).await;
+        assert_eq!(
+            fixture
+                .metrics
+                .snapshot(crate::queue::QueueStats::default())
+                .control_requests_sent,
+            sent,
+            "duplicate close must not retry again: {scenario}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn old_connection_close_preserves_replacement_until_last_connection_closes() {
     let peer = Libp2pPeerId::random();
     let overlay = PeerId::from_libp2p(peer);

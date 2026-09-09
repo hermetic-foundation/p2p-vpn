@@ -12010,6 +12010,8 @@ async fn handle_swarm_event(
             num_established,
             ..
         } => {
+            let retired_current_connection = context.connection_epochs.is_current(connection_id)
+                && context.connection_epochs.retiring.contains(&connection_id);
             context.connection_epochs.remove(connection_id);
             context.active_connections.remove(&(peer_id, connection_id));
             let membership_probe_closed = context
@@ -12065,6 +12067,35 @@ async fn handle_swarm_event(
                 peer_id,
                 num_established,
             );
+            // Requests may have selected the retiring connection before libp2p removed it.
+            // Retry once at removal, not from each failure or a recurring timer.
+            if retired_current_connection
+                && num_established > 0
+                && context.forwarder.is_configured_transport_peer(peer_id)
+                && !context
+                    .peer_capabilities
+                    .contains(PeerId::from_libp2p(peer_id))
+                && context
+                    .active_connections
+                    .keys()
+                    .any(|(peer, id)| *peer == peer_id && context.connection_epochs.is_usable(*id))
+            {
+                send_control_capabilities(
+                    swarm,
+                    context.forwarder,
+                    peer_id,
+                    context.local_capabilities,
+                    context.metrics,
+                );
+                log_runtime_event(
+                    LogLevel::Info,
+                    "control_capabilities_retried_after_retirement",
+                    &[
+                        ("peer", &peer_id.to_string()),
+                        ("closed_connection_id", &connection_id.to_string()),
+                    ],
+                );
+            }
             if num_established == 0 {
                 context.inbound_packet_rate_limiters.remove(peer_id);
                 context.pairing_request_rate_limiters.remove(peer_id);
