@@ -77,7 +77,7 @@ sudo env \
 
 1. Completed: counter aggregation and comparative analysis, including common/current-only fields, reset handling, useful-work comparability, paired variation and censoring.
 2. Completed: [final report and acceptance review](kademlia-resource-final-report.md), including regression/uncertainty decisions, limitations and original phase-3 requirements.
-3. [Phase-4 audit](kademlia-workstream-acceptance.md) complete; overall acceptance deferred for RM-1, distinct from phase-3 measurement completion.
+3. [Phase-4 audit](kademlia-workstream-acceptance.md) and scoped acceptance complete after RM-1, distinct from phase-3 measurement completion; frozen outcomes remain unchanged.
 
 Neither phase 3 nor production readiness is established by collection completion.
 

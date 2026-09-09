@@ -5,7 +5,8 @@
 **Phase 3: complete with explicit evidence limitations.** This accepts the
 measurement, analysis and reporting deliverables, not every subject's runtime
 behavior. The subsequent [phase-4 audit](kademlia-workstream-acceptance.md)
-defers overall acceptance for RM-1; production readiness remains open.
+closes scoped workstream acceptance after [RM-1](late-direct-recovery.md);
+production readiness remains open.
 
 The original protocol permits failures, censoring and unavailable metrics.
 All 24 prescribed pairs were executed and retained; acceptance does not require
@@ -99,7 +100,7 @@ later fix or replacement experiment.
 
 | ID / Priority | Evidence and Scope | Acceptance for Subsequent Work |
 | --- | --- | --- |
-| RM-1 / P1 | Late direct-path promotion in public recovery repetition 3 | Explain the delay from a reproducible diagnostic; regression-test any fix and preserve relay fallback and autonomous recovery |
+| RM-1 / P1 | Late direct-path promotion in public recovery repetition 3 | Resolved separately by [diagnostic and scoped fix](late-direct-recovery.md); frozen censoring and exclusions remain unchanged |
 | RM-2 / P1 | Three private-recovery observation-cap truncations | Design compact bounded capture and independently scheduled probes; any new version must fit its declared budget and retain original censored artifacts |
 | RM-3 / P2 | Pressure delivery differs despite equal offered load | Choose an explicitly declared useful-work comparison method; do not add a post-hoc tolerance to this dataset |
 | RM-4 / P2 | Private-traffic transports differ; metric naming is ambiguous | Separate backend identity in diagnostics and predeclare fixed-transport tests before attributing CPU changes to DHT controls |

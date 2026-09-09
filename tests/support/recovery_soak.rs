@@ -8,6 +8,7 @@ mod settling;
 pub const TEST_NAME: &str = "tun_namespace_automatic_discovery_recovers_after_link_changes";
 pub(super) const PROFILE_ENV: &str = "P2P_VPN_TUN_E2E_RECOVERY_PROFILE";
 pub(super) const SOAK_ENV: &str = "P2P_VPN_TUN_E2E_RECOVERY_SOAK";
+pub(super) const COLLISION_ENV: &str = "P2P_VPN_TUN_E2E_RECOVERY_COLLISION";
 const PRIVATE_PROTOCOL: &str = "/p2p-vpn/settling-e2e/kad/1";
 const INITIAL_LAN: Duration = Duration::from_secs(120);
 const RELAY_RECOVERY: Duration = Duration::from_secs(960);
@@ -503,6 +504,15 @@ pub fn run_orchestrator() {
     );
     let private = private_profile();
     let soak = soak_requested();
+    let collision = match env::var(COLLISION_ENV).as_deref() {
+        Err(env::VarError::NotPresent) | Ok("0") => false,
+        Ok("1") => true,
+        other => panic!("invalid {COLLISION_ENV}: {other:?}"),
+    };
+    assert!(
+        !collision || !soak,
+        "collision diagnostic is a single cycle"
+    );
     let hash = idle_sample::fingerprint().expect("test binary fingerprint");
     let local = NodeIdentity::generate_ed25519().unwrap();
     let remote = NodeIdentity::generate_ed25519().unwrap();
@@ -692,7 +702,7 @@ pub fn run_orchestrator() {
     };
     let mut summary = json!({"schema_version": 1, "test": TEST_NAME, "profile": if private {"private"} else {"public"},
         "binary_sha256": hash,
-        "acceptance_soak": soak, "cycles_required": if soak { SOAK_CYCLES } else { 1 }, "cycles_completed": 0, "outcome": "running",
+        "acceptance_soak": soak, "collision_diagnostic": collision, "cycles_required": if soak { SOAK_CYCLES } else { 1 }, "cycles_completed": 0, "outcome": "running",
         "deadlines_seconds": {"initial_lan": INITIAL_LAN.as_secs(), "relay_recovery": RELAY_RECOVERY.as_secs(), "direct_recovery": DIRECT_RECOVERY.as_secs(), "healthy_dwell": HEALTHY_DWELL.as_secs(), "watchdog": requested_watchdog().as_secs(), "primary_pool_drain": settling::PRIMARY_POOL_DRAIN_BUDGET.as_secs(),
             "soak_minimum": SOAK_MINIMUM.as_secs(), "final_healthy_minimum": FINAL_HEALTHY.as_secs(), "settling_grace": SETTLING_GRACE.as_secs(), "infrastructure_outage": INFRASTRUCTURE_OUTAGE.as_secs()}});
     fs::write(
@@ -743,6 +753,19 @@ pub fn run_orchestrator() {
                 Some(&relay_overlay),
             );
             observer.dwell(&format!("cycle-{cycle}-relay-healthy"), "circuit_relay");
+            if collision {
+                change_lan_addresses(node_a.id(), node_b.id(), subnet, 254);
+                subnet = 254;
+                for (pid, interface) in [(node_a.id(), "veth-dir-a"), (node_b.id(), "veth-dir-b")] {
+                    ns_command(
+                        pid,
+                        "tc",
+                        &[
+                            "qdisc", "add", "dev", interface, "root", "netem", "delay", "100ms",
+                        ],
+                    );
+                }
+            }
             set_network_move_direct_link(node_a.id(), node_b.id(), true);
             underlay_ping(node_a.id(), &format!("10.{subnet}.0.2"), true);
             underlay_ping(node_b.id(), &format!("10.{subnet}.0.1"), true);

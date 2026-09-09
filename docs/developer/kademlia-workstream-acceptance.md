@@ -2,13 +2,14 @@
 
 ## Disposition
 
-**Final audit complete; unconditional workstream acceptance deferred.**
-Phases 1-3 retain their documented completion and limitations. The late direct
-recovery recorded in phase 3 needs diagnosis before closing the overall recovery
-gate. No runtime defect or permanent loss of reachability is inferred from it alone.
+**Workstream accepted with the documented evidence limits.**
+Phases 1-3 retain their original results. [RM-1](late-direct-recovery.md) reproduces
+and fixes an ordinary LAN TCP dial collision, separates confirmation censoring
+from transport delay, and closes the remaining scoped recovery gate.
 
-This is an evidence audit at `692a5fef`, not a deployment, new measurement
-campaign, general reliability review or production-readiness certification.
+The original audit at `692a5fef` is supplemented by the RM-1 checks below.
+This is not a deployment, replacement measurement campaign, general reliability
+review or production-readiness certification.
 
 ## Requirements and Evidence
 
@@ -58,7 +59,7 @@ copies remain additional. Two DHTs have independent budgets, not one shared cap.
 | Kademlia overload preserves unrelated VPN packets | [Contention matrix](../../src/runtime/runner/kademlia_contention_tests.rs) saturates actual pools and drives transport | Satisfied for both DHT profiles over TCP and QUIC; resumed producers and final drain checked |
 | Minimal configuration and LAN-first discovery | [Production-entry fixture](../../tests/support/recovery_soak.rs), unavailable initial infrastructure, ID-only overlay peers | Limited to isolated namespaces; bootstrap overrides replace public Internet access |
 | Relay replacement, address changes and no management rescue | Five-cycle saved soaks; fixture checks process identity, configuration bytes, path and bidirectional packets | Satisfied for the recorded runs; not a physical-WAN claim |
-| Direct-path recovery consistently meets the frozen fixture budget | Phase-2 soaks pass; phase-3 public recovery repetition 3 is not confirmed within 375 seconds | Unresolved: RM-1; harness and runtime contributions are not isolated |
+| Reconcile late direct recovery with the frozen budget | Phase-3 censoring preserved; RM-1 reproduces the collision, fixes fresh on-link dialing and passes both delayed/renumbered recovery profiles within 375 seconds | Satisfied for the scoped defect; not a universal timing guarantee |
 | Quiet settling and session renewal | [Settling oracle](../../tests/support/recovery_settling.rs), final healthy windows, renewal regressions | Satisfied for recorded windows; no discovery-counter growth, bounded library work and query drain |
 | Authorization, identity and protocol compatibility | Unchanged membership/wire formats; endpoint tests reject stale, unrelated and relayed authority | Limited source/regression review, not a complete security certification |
 | Diagnostics reflect real owners | [Snapshots](../../src/runtime/kademlia_resources.rs), [resource tests](../../src/runtime/p2p/resource_tests.rs) | Satisfied; absent DHT differs from zero, retained differs from active, dial intent differs from socket |
@@ -102,30 +103,38 @@ outcomes and eligibility exclusions remain authoritative and unchanged.
 
 | Item | Final-Acceptance Decision | Reason / Next Acceptance Evidence |
 | --- | --- | --- |
-| RM-1: late direct promotion | Blocks unconditional recovery acceptance | Explain the observed delay and confirmation timing; reproduce any runtime defect, fix it with regression coverage, or demonstrate a measurement-induced cause |
-| RM-2: private observation caps / probe cadence | Separate measurement-tool follow-up; may support RM-1 | Three 16 MiB truncations and sampling gaps limit evidence, not proof of runtime failure; use bounded compact capture and independent probes in a new declared protocol |
+| RM-1: late direct promotion | Resolved; scoped recovery gate closed | [Causal diagnostic and fix](late-direct-recovery.md), negative regression, both production profiles and 12 compatibility gates passed; historical packet sequence remains inferred |
+| RM-2: private observation caps / probe cadence | Separate measurement-tool follow-up | Three 16 MiB truncations and sampling gaps limit evidence, not proof of runtime failure; use bounded compact capture and independent probes in a new declared protocol |
 | RM-3: unequal pressure delivery | Separate experiment-design follow-up | All six pressure pairs have unequal delivered work; no paired efficiency deltas or post-hoc tolerance |
 | RM-4: transport identity / causal comparison | Separate diagnostic and fixed-transport follow-up | Legacy datagram counters span backends; private TCP/datagram differences cannot isolate DHT cost |
 | RM-5: RSS / instrumentation overhead | Separate attribution follow-up | Selected RSS increases are real observations, but allocation causes and diagnostic overhead were not isolated; no promised RSS target is declared met |
 | RM-6: broader review / long-duration claims | This document completes the workstream audit only | Broader reliability, physical WAN, Android device acceptance and long-term leak claims still require their own evidence |
 
 Phase 3 permits explicit censoring; that is why its measurement goal is complete.
-Final recovery acceptance nevertheless needs reconciliation of the later failed
-confirmation with earlier passing soaks. This is not a new public-network SLA or
-a requirement to make every noisy observation into a successful comparison.
+RM-1 reconciles the later failed confirmation with earlier passing soaks without
+rewriting that outcome. This is not a new public-network SLA or a requirement to
+make every noisy observation into a successful comparison.
 
-### Recommended Next Goal
+### Remaining Follow-Ups
 
-**RM-1: diagnose late direct-path promotion.** Start with saved public repetition-3
-logs, stage observations and timer/endpoint decisions. Separate first packet
-success from the five-success confirmation oracle and its sequential probe cost.
+RM-2 through RM-5 improve measurement quality and attribution. RM-6 covers the
+broader review and long-duration/device claims. None is silently completed by
+the RM-1 fix, and no replacement campaign is started here.
 
-1. Produce an evidence-backed timeline identifying where the delay occurs; do not infer permanent failure from the censored outcome.
-2. If new diagnostics are necessary, predeclare one bounded isolated reproduction and preserve the original evidence and deadlines.
-3. Regression-test any runtime fix; preserve LAN-first discovery, authorization, relay fallback, minimal configuration and resource bounds.
-4. Reassess only the affected acceptance gate. Keep additional performance experiments and deployments in separate goals.
+### RM-1 Verification Addendum
 
-This is a proposed follow-up scope, not a newly started experiment or goal.
+| Check | Fresh Result / Reuse Boundary |
+| --- | --- |
+| Workspace / style | 1,461 passed, 36 opt-in exclusions; required Clippy groups, formatting and whitespace passed |
+| Collision evidence | Three bilateral failures with reused ports; all three fresh-port pairs authenticate; policy regression fails before the fix |
+| Production recovery | Public/private delayed, renumbered LANs pass with unchanged minimal configs and daemons; original public one-cycle check also passes |
+| Compatibility | 12 namespace gates passed, including QUIC, relay, discovery, pairing, pressure and network moves |
+| Packaging / native | Fresh cached Nix source parity and x86_64/API 26 Android-native build passed |
+| Sustained evidence | Prior five-cycle soaks retained for unchanged owners, renewal and scheduling; no new fixed-binary long-soak claim |
+
+Commands, provenance, logs, timelines and residual inference limits are in the
+[RM-1 report](late-direct-recovery.md). Later tables preserve the original audit's
+counts and reused evidence; this addendum records the changed-runtime checks.
 
 ## Packaging and Verification
 

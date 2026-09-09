@@ -7663,13 +7663,36 @@ fn dial_known_peer_addresses(
         .into_iter()
         .map(|address| peer_dial_address(peer, address))
         .collect::<Vec<_>>();
-    swarm.dial(
-        DialOpts::peer_id(peer)
-            .condition(condition)
-            .override_dial_concurrency_factor(NonZeroU8::MIN)
-            .addresses(addresses)
-            .build(),
-    )
+    let fresh_port = ordinary_peer_dial_uses_fresh_port(&addresses, &local_interface_networks(""));
+    let options = DialOpts::peer_id(peer)
+        .condition(condition)
+        .override_dial_concurrency_factor(NonZeroU8::MIN)
+        .addresses(addresses);
+    // Simultaneous LAN dials must not share the listener's TCP four-tuple.
+    // Off-link/mixed targets and libp2p's separate DCUtR dial path keep port reuse.
+    let options = if fresh_port {
+        options.allocate_new_port()
+    } else {
+        options
+    };
+    swarm.dial(options.build())
+}
+
+fn ordinary_peer_dial_uses_fresh_port(
+    addresses: &[Multiaddr],
+    networks: &[LocalInterfaceNetwork],
+) -> bool {
+    !addresses.is_empty()
+        && addresses.iter().all(|address| {
+            !address
+                .iter()
+                .any(|protocol| matches!(protocol, Protocol::P2pCircuit))
+                && address
+                    .iter()
+                    .any(|protocol| matches!(protocol, Protocol::Tcp(_)))
+                && first_ip_in_multiaddr(address)
+                    .is_some_and(|ip| networks.iter().any(|network| network.contains(ip)))
+        })
 }
 
 #[derive(Debug, Default)]
@@ -31702,6 +31725,52 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn ordinary_lan_tcp_dials_avoid_listener_port_collision() {
+        let networks = [
+            LocalInterfaceNetwork {
+                ip: "10.250.0.1".parse().unwrap(),
+                netmask: "255.255.255.0".parse().unwrap(),
+            },
+            LocalInterfaceNetwork {
+                ip: "fd12:3456::1".parse().unwrap(),
+                netmask: "ffff:ffff:ffff:ffff::".parse().unwrap(),
+            },
+        ];
+        let lan: Multiaddr = "/ip4/10.250.0.2/tcp/4001".parse().unwrap();
+        assert!(ordinary_peer_dial_uses_fresh_port(
+            std::slice::from_ref(&lan),
+            &networks
+        ));
+        assert!(ordinary_peer_dial_uses_fresh_port(
+            &["/ip6/fd12:3456::2/tcp/4001".parse().unwrap()],
+            &networks
+        ));
+        assert!(!ordinary_peer_dial_uses_fresh_port(&[], &networks));
+        assert!(!ordinary_peer_dial_uses_fresh_port(
+            std::slice::from_ref(&lan),
+            &[]
+        ));
+        for address in [
+            "/ip4/11.251.0.2/tcp/4001",
+            "/ip4/10.251.0.2/tcp/4001",
+            "/ip4/10.250.0.2/tcp/4001/p2p-circuit",
+            "/ip4/10.250.0.2/udp/4001/quic-v1",
+            "/dns4/example.invalid/tcp/4001",
+            "/ip6/fd12:9999::2/tcp/4001",
+        ] {
+            let address: Multiaddr = address.parse().unwrap();
+            assert!(!ordinary_peer_dial_uses_fresh_port(
+                std::slice::from_ref(&address),
+                &networks
+            ));
+            assert!(!ordinary_peer_dial_uses_fresh_port(
+                &[lan.clone(), address],
+                &networks
+            ));
+        }
     }
 
     #[test]

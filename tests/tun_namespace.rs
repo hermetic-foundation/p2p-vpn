@@ -71,6 +71,7 @@ const NODE_A_LOCAL_ROUTE_ADDRESS: Ipv4Addr = Ipv4Addr::new(10, 41, 0, 9);
 fn tun_namespace_tcp_simultaneous_dial_diagnostic() {
     match env::var(CHILD_ENV).as_deref() {
         Ok("orchestrator") => tcp_collision::run(),
+        Ok("node") => tcp_collision::run_node(),
         _ => reexec_orchestrator(tcp_collision::TEST_NAME),
     }
 }
@@ -359,6 +360,14 @@ fn namespace_recovery_replay_exports_preserve_both_profiles() {
         assert!(exports_index < commands.find("nix run .#tun-e2e").unwrap());
         assert!(exports_index < commands.find(&format!("env -u {CHILD_ENV}")).unwrap());
     }
+}
+
+#[test]
+fn namespace_collision_replay_exports_preserve_diagnostic() {
+    assert_eq!(
+        namespace_replay_env_exports_from([(recovery_soak::COLLISION_ENV, Some("1".to_owned()))]),
+        "export P2P_VPN_TUN_E2E_RECOVERY_COLLISION='1'\n"
+    );
 }
 
 #[test]
@@ -1949,6 +1958,7 @@ fn namespace_replay_env_exports() -> String {
             queue_pressure::ROUNDS_ENV,
             recovery_soak::PROFILE_ENV,
             recovery_soak::SOAK_ENV,
+            recovery_soak::COLLISION_ENV,
             "P2P_VPN_RESOURCE_SUBJECT",
             "P2P_VPN_RESOURCE_WORKLOAD",
             "P2P_VPN_RESOURCE_KEYS",
