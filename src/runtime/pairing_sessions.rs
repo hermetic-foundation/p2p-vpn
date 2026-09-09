@@ -6413,6 +6413,28 @@ mod tests {
             );
             assert!(failed.is_err());
             assert_eq!(sessions.encode_persisted("runners").unwrap(), before);
+            let mut replaced = Vec::new();
+            let failed_after_replace = sessions
+                .finish_enrollment_abort_with::<CodePairingSessionError>(
+                    operation,
+                    "runners",
+                    1_002,
+                    |bytes| {
+                        replaced = bytes.to_vec();
+                        Err(CodePairingSessionError::Conflict)
+                    },
+                );
+            assert!(failed_after_replace.is_err());
+            assert_eq!(sessions.encode_persisted("runners").unwrap(), before);
+            let reloaded_replacement =
+                CodePairingSessions::restore_persisted(&replaced, "runners", 1_002, now).unwrap();
+            assert!(reloaded_replacement.enrollment(operation).is_none());
+            assert!(reloaded_replacement.receipt(operation).is_none());
+            assert!(
+                reloaded_replacement
+                    .active_replay_tokens(1_002)
+                    .any(|token| token == enrollment.response.payload.rendezvous_token)
+            );
             let mut saved = Vec::new();
             sessions
                 .finish_enrollment_abort_with::<CodePairingSessionError>(
@@ -6426,6 +6448,10 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(saved, sessions.encode_persisted("runners").unwrap());
+            assert_eq!(
+                replaced, saved,
+                "retry must preserve the replacement snapshot"
+            );
             let mut restored =
                 CodePairingSessions::restore_persisted(&saved, "runners", 1_002, now).unwrap();
             assert!(restored.enrollment(operation).is_none());

@@ -57,8 +57,8 @@ security or membership policy.
 - [ ] Trace Hello/Submit/Poll success, rejection, wrong-type reply and transport failure.
 - [ ] Verify stale IDs, duplicate replies, cancellation and replacement isolation.
 - [ ] Trace expiry, retry deadlines, disconnect, provider removal and query retirement.
-- [ ] Trace Prepared, runtime commit, completion, Applied checkpoint and acknowledgement.
-- [ ] Trace shutdown/reload, persistence failure and idempotent cleanup/recovery.
+- [x] Trace Prepared, runtime commit, completion, Applied checkpoint and acknowledgement.
+- [x] Trace shutdown/reload, persistence failure and idempotent cleanup/recovery.
 - [ ] Reconcile membership-sync integration and file-pairing session boundaries.
 - [ ] Reproduce confirmed gaps, fix narrowly and verify recovery after failure.
 - [ ] Run affected integration and shared-runtime verification gates.
@@ -458,3 +458,98 @@ PS-4 is ready for atomic publication. The new commit boundary is local runtime
 enrollment, not remote delivery acknowledgement or a new durable file-pairing
 transaction protocol. Fatal route-error restart recovery and the remaining
 whole-workstream transition audit are not established by the loopback fixture.
+
+PS-4 was published as `94f896b5`; push completed, `main@origin` matched and the
+working copy was clean before continuing the lifecycle inventory.
+
+## Persistence and Restart Inventory
+
+Source trace at `94f896b5`; this section closes the two corresponding checklist
+items, not the remaining admission, request-dispatch and discovery audit.
+No production behavior change was needed for this inventory checkpoint.
+
+### Commit and Error Boundaries
+
+| Transition | Source Owner | Behavior on Save Failure |
+| --- | --- | --- |
+| Open / join RPC | `handle_pair_rpc_request` | Returns an error; in-memory operation can remain. Successful durable creation is not acknowledged |
+| Inbound approval V1 / V2 | Both code request handlers | Cancel the affected operation, attempt a fail-closed save, and return unavailable |
+| Outbound authenticated Submit | `handle_pairing_code_response` | Fails the join if its exact authenticated request cannot be checkpointed |
+| Remote pending ticket | Same response handler | Releases the poll owner for retry; retains the request/offer context |
+| Inviter approval / joiner acceptance | Runtime enrollment adapters | Record Prepared and cleanup ownership before routes; save failure prevents local commit |
+| Runtime commit | `commit_pairing_runtime_enrollment_with_route_update` | Routes precede logical publication; failure retains the durable Prepared entry |
+| Completion / Applied checkpoint | Both role finalizers | A failed final save is logged; the prior Prepared record permits restart reconciliation |
+| Cancel / reject | RPC adapter and abort cleanup | Stop discovery; require a saved abort before kernel cleanup and successful cleanup before acknowledgement |
+| Abort compaction | `finish_enrollment_abort_with` | Retain in-memory abort until save succeeds; replay protection replaces enrollment on disk |
+| Artifact acknowledgement | `acknowledge_enrollment` and RPC adapter | Receipt matching is idempotent; a failed save returns an error rather than durable acknowledgement |
+
+Relevant sources: [runtime adapter](../../src/runtime/runner.rs),
+[session owner](../../src/runtime/pairing_sessions.rs) and
+[state store](../../src/runtime/pairing_store.rs).
+
+### Shutdown and Restart
+
+| Boundary | Observed Contract |
+| --- | --- |
+| Shutdown signal / control request | Main loop logs metrics and returns; no additional pairing save |
+| Periodic checkpoint | Expiry, cleanup retry and discovery run before saving; failure is logged |
+| Startup | Load/validate sessions and reconcile enrollments before entering the event loop |
+| Restored Submit / Poll | Clear obsolete transport in-flight state; retain authenticated request or ticket for retry |
+| Prepared restart | Persist cleanup ownership before routes; finalize the matching role and mark Applied afterward |
+| Route failure during restart | Retain Prepared ownership and unchanged logical authorization; retry remains possible |
+| Incompatible Applied record | Reconciliation uses current declarative authority and compacts the historical enrollment |
+
+An unacknowledged failed mutation is not guaranteed to survive restart. Likewise,
+a save error after rename does not prove the old file remains: directory-sync
+failure is reported after the new bytes may already be readable.
+
+This is a checkpoint/reload contract, not a guarantee of a final shutdown flush,
+power-loss survival after a reported sync error, or physical-platform acceptance.
+
+### Reconciled Evidence
+
+| Existing Test | Verified Boundary |
+| --- | --- |
+| `pairing_state_reports_parent_sync_failure_after_replace` | Real atomic replacement remains readable when injected parent sync fails |
+| `pending_submission_retries_exact_request_after_disconnect_and_restart` | Same peer, request, offer and transcript resume after restore |
+| `prepared_inviter_enrollment_reconciles_after_expired_restart` | Failed partial routes/rollback retain Prepared; retry completes and repeated reconciliation is idempotent |
+| `prepared_joiner_enrollment_reconciles_after_expired_restart` | Same checks for the joining role, including restored Applied completion |
+| `abort_rpc_acknowledgement_requires_successful_cleanup` | Cancellation success requires completed cleanup |
+| `cancelled_pairing_restart_retries_cleanup_without_authorizing_peer` | Restart retries aborted cleanup without restoring authorization |
+
+These test bodies were inspected and their passing results confirmed in
+`/tmp/p2p-vpn-ps4-workspace.log`. Prior cancellation and transaction reports
+retain their fault-injection details; no completed case was reopened as a new bug.
+
+### Additional Replacement-Error Coverage
+
+`abort_compaction_persists_before_discard_and_retains_only_replay_protection`
+now also captures replacement bytes before returning a simulated save error.
+For both roles, memory retains the abort, while restoring those bytes yields no
+enrollment or completed receipt; a subsequent successful save is byte-identical.
+
+The existing replay-rejection assertions run against that same snapshot. This
+is a session callback simulation, combined with the separate real store test,
+not a daemon-wide filesystem fault or power-cut experiment.
+
+The focused test passed in `/tmp/p2p-vpn-lifecycle-compaction-sync.log`; production
+source is unchanged from PS-4. Pre-build storage was 8,215,864 KiB. Remaining
+checkpoint checks are the session suite, formatting, Clippy and source parity.
+
+### Inventory Checkpoint Verification
+
+| Gate | Result |
+| --- | --- |
+| Session suite | 63 passed; `/tmp/p2p-vpn-lifecycle-sessions.log` |
+| Required Clippy groups | Passed in 23.80 s; advisory warnings remain; `/tmp/p2p-vpn-lifecycle-compaction-clippy.log` |
+| Formatting and documentation | Formatting, local links and paragraph lengths passed |
+| Source parity | Cached sandboxed check passed; `/tmp/p2p-vpn-lifecycle-compaction-nix.log` |
+
+Source-parity output:
+`/nix/store/fdgaqxd2zrfyxjkajw7nxqaw9v23ay2c-p2p-vpn-rust-test-sources`.
+Pre-Nix task storage was 8,216,156 KiB, approximately 7.84 GiB.
+
+The only executable change is inside an existing unit test. PS-4's workspace,
+namespace and Android-native evidence is retained for unchanged production
+behavior; those expensive checks were not repeated for this test-only extension.
+This checkpoint is ready for publication; the overall lifecycle goal remains active.
