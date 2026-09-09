@@ -33,6 +33,8 @@ use p2p_vpn::{
 };
 
 const CHILD_ENV: &str = "P2P_VPN_TUN_E2E_MODE";
+#[path = "support/idle_counters.rs"]
+mod idle_counters;
 #[path = "support/idle_sample.rs"]
 mod idle_sample;
 #[path = "support/kademlia_resources.rs"]

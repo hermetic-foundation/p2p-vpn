@@ -49,6 +49,8 @@ normal fixture runs retain their one-second interval.
 | `binary_sha256` | Identity of the integration-test executable running both nodes. |
 | `clock_ticks_per_second` | Conversion factor for process CPU ticks. |
 | `samples` | Per-process CPU, RSS in KiB, threads, total/socket FDs, capture duration and TCP states. |
+| `runtime_samples` | Independent five-second status snapshots; metric values, scheduled/actual times, query duration and explicit errors. |
+| `runtime_samples_complete` | All scheduled snapshots arrived without errors; incomplete reports are retained before the test fails. |
 | `daemon_before`, `daemon_after` | Runtime counters and path state at interval boundaries. |
 | `host_load_before`, `host_load_after` | Host load context; not CPU attributed to the VPN. |
 
@@ -57,6 +59,8 @@ TCP state codes include `01` for established, `02` for SYN-sent, and `0A` for li
 `tcp_states` retains its historical namespace-wide meaning; `process_tcp_states`
 filters by process socket inodes. `total_fds` counts resolved descriptor links;
 concurrent disappearance is reported separately as `vanished_fds`.
+Runtime capture does not repeatedly request full routing state. It skips missed
+slots rather than bursting, preserves missing data and caps the report at 8 MiB.
 
 Compute one-core CPU percent as `100 * delta(cpu_ticks) / CLK_TCK / delta(elapsed_seconds)`.
 Compare identical fixture code, compiler/profile settings, warmup, and sample

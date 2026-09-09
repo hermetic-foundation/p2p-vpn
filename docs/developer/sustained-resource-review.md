@@ -193,6 +193,40 @@ and small RSS ranges do not establish long-term leak freedom.
 
 ### Workload Acceptance
 
+The idle collector now has a separate five-second runtime-status thread. OS
+sampling proceeds independently; every runtime observation includes its scheduled
+time, completion time, query duration, values and an explicit error when unavailable.
+
+| Capture Guard | Behavior |
+| --- | --- |
+| Status request | One-second timeout; no recurring full routing-state request |
+| Parser | At most 512 lines of 256 bytes; numeric counters and Boolean flags retained |
+| Invalid response | Duplicate keys, malformed values and oversized input recorded as failure, not zero |
+| Scheduling | Slow queries skip slots; no catch-up burst |
+| Completeness | Missing/error snapshots make the series incomplete; report is written before test failure |
+| Report | At most 8 MiB serialized output |
+
+The first live-socket smoke run passed with 22 OS observations and four runtime
+snapshots, each containing 332 metrics. Maximum query duration was 3.016 ms.
+This ten-second capture validates the tool, not a sustained workload.
+
+- Initial smoke: `/tmp/p2p-vpn-sustained-runtime-sampler-smoke.log`.
+- Initial artifact: `/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.c0418b05d9a85f6f/idle-sample.json`.
+- Final unit gate: `/tmp/p2p-vpn-sustained-runtime-sampler-complete-tests.log`, 45 passed, 22 opt-in tests ignored.
+- Required Clippy groups and cached rustfmt pass; advisory warnings retained.
+
+The final unit gate adds missing/error completeness checks. Counter queries add
+observer work; earlier OS-only captures are not interchangeable baselines for
+this collector. Sustained repetitions and collector-on/off controls remain required.
+
+Final live-socket smoke also passes in 56.41 seconds, including warmup and teardown.
+Its four 332-metric snapshots set `runtime_samples_complete=true`; no matching
+fixture process remains. No builds ran during either observation window.
+
+- Final smoke: `/tmp/p2p-vpn-sustained-runtime-sampler-final-smoke.log`.
+- Report: `/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.2d3c6ceafb56c4dc/idle-sample.json`.
+- Fixture SHA-256: `0b77b6c8e603a4b3fff775ad51a1cae56f6d45f3dfa8d7cea7a14007eb3d20f1`.
+
 | Dimension | Required Outcome / Trigger |
 | --- | --- |
 | Function | Existing traffic, admission, isolation and recovery assertions pass without rescue |

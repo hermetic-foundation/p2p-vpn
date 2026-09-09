@@ -135,15 +135,20 @@ pub fn capture(temp: &Path, roles: &[(&str, u32)]) {
     let load_before = fs::read_to_string("/proc/loadavg").expect("host load before sample");
     let started = Instant::now();
     let mut samples = Vec::new();
-    loop {
-        for (role, pid) in roles {
-            samples.push(sample(role, *pid, started).expect("live process sample"));
+    let counters = thread::scope(|scope| {
+        let counters =
+            scope.spawn(|| super::idle_counters::capture(temp, roles, started, duration));
+        loop {
+            for (role, pid) in roles {
+                samples.push(sample(role, *pid, started).expect("live process sample"));
+            }
+            if started.elapsed() >= duration {
+                break;
+            }
+            thread::sleep(Duration::from_secs(1).min(duration.saturating_sub(started.elapsed())));
         }
-        if started.elapsed() >= duration {
-            break;
-        }
-        thread::sleep(Duration::from_secs(1).min(duration.saturating_sub(started.elapsed())));
-    }
+        counters.join().expect("counter collector")
+    });
     for (role, _) in roles {
         let first = samples.iter().find(|row| row.role == *role).unwrap();
         let last = samples.iter().rfind(|row| row.role == *role).unwrap();
@@ -156,6 +161,7 @@ pub fn capture(temp: &Path, roles: &[(&str, u32)]) {
             "CPU accounting decreased"
         );
     }
+    let runtime_samples_complete = super::idle_counters::complete(&counters, roles.len(), duration);
     let report = serde_json::json!({
         "schema_version": 1, "binary_sha256": hash, "binary": env::current_exe().unwrap(),
         "build_profile": "cargo integration test", "topology": "two isolated namespaces; direct UDP; no Internet route",
@@ -165,15 +171,21 @@ pub fn capture(temp: &Path, roles: &[(&str, u32)]) {
         "host_load_before": load_before.trim(),
         "host_load_after": fs::read_to_string("/proc/loadavg").unwrap().trim(),
         "warmup_seconds": WARMUP.as_secs(), "requested_seconds": duration.as_secs(),
-        "clock_ticks_per_second": ticks, "samples": samples,
+        "clock_ticks_per_second": ticks, "samples": samples, "runtime_samples": counters,
+        "runtime_samples_complete": runtime_samples_complete,
         "daemon_before": before, "daemon_after": daemon_views(temp, roles),
     });
-    fs::write(
-        temp.join("idle-sample.json"),
-        serde_json::to_vec_pretty(&report).unwrap(),
-    )
-    .expect("idle report");
+    let bytes = serde_json::to_vec_pretty(&report).unwrap();
+    assert!(
+        bytes.len() <= 8 * 1024 * 1024,
+        "idle report exceeds 8 MiB budget"
+    );
+    fs::write(temp.join("idle-sample.json"), bytes).expect("idle report");
     eprintln!("idle sample: {}", temp.join("idle-sample.json").display());
+    assert!(
+        runtime_samples_complete,
+        "runtime counter series incomplete; report retained"
+    );
 }
 
 #[cfg(test)]
