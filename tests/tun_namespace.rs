@@ -1604,6 +1604,65 @@ fn run_code_pairing_orchestrator() {
     let socket_b = node_control_socket(&temp_dir, "b")
         .to_string_lossy()
         .into_owned();
+    let socket_a = node_control_socket(&temp_dir, "a")
+        .to_string_lossy()
+        .into_owned();
+    // Retain terminal opposite-role operations to exercise late cancellation via RPC.
+    let old_code = p2p_vpn::pairing_code::PairingCode::generate().to_string();
+    let old_join = pair_cli_json(
+        "old pair join",
+        &[
+            "pair",
+            "join",
+            &old_code,
+            "--socket",
+            &socket_b,
+            "--timeout-seconds",
+            "60",
+            "--no-wait",
+            "--format",
+            "json",
+        ],
+    );
+    let old_join_id = old_join["operation_id"].as_str().expect("old join ID");
+    pair_cli_json(
+        "cancel old join",
+        &[
+            "pair",
+            "cancel",
+            old_join_id,
+            "--socket",
+            &socket_b,
+            "--format",
+            "json",
+        ],
+    );
+    let old_open = pair_cli_json(
+        "old pair open",
+        &[
+            "pair",
+            "open",
+            "--socket",
+            &socket_a,
+            "--expires-in-seconds",
+            "120",
+            "--format",
+            "json",
+        ],
+    );
+    let old_open_id = old_open["operation_id"].as_str().expect("old open ID");
+    pair_cli_json(
+        "cancel old open",
+        &[
+            "pair",
+            "cancel",
+            old_open_id,
+            "--socket",
+            &socket_a,
+            "--format",
+            "json",
+        ],
+    );
     let open = pair_cli_json(
         "pair open",
         &[
@@ -1623,9 +1682,6 @@ fn run_code_pairing_orchestrator() {
         .expect("open operation")
         .to_owned();
 
-    let socket_a = node_control_socket(&temp_dir, "a")
-        .to_string_lossy()
-        .into_owned();
     let requested_vpn_ip = address_a.to_string();
     let join = pair_cli_json(
         "pair join",
@@ -1674,6 +1730,31 @@ fn run_code_pairing_orchestrator() {
         },
     );
     assert_eq!(joiner_status["artifacts_ready"], false);
+
+    pair_cli_json(
+        "repeat old join cancellation",
+        &[
+            "pair",
+            "cancel",
+            old_join_id,
+            "--socket",
+            &socket_b,
+            "--format",
+            "json",
+        ],
+    );
+    pair_cli_json(
+        "repeat old open cancellation",
+        &[
+            "pair",
+            "cancel",
+            old_open_id,
+            "--socket",
+            &socket_a,
+            "--format",
+            "json",
+        ],
+    );
 
     let approved = pair_cli_json(
         "pair approve",

@@ -274,6 +274,9 @@ during live test execution; no dependency or flake-lock changes were needed.
 PS-2 is ready for atomic publication after these checks. Completion of the
 workstream still requires the remaining transition audit and evidence checklist.
 
+PS-2 publication was verified at `8b5f9b89`; local and remote `main` matched and
+the working copy was clean before starting the next case.
+
 ### File-Pairing Ordering Follow-Up
 
 `handle_pairing_request_event` submits its response before installing membership;
@@ -281,13 +284,60 @@ durable code pairing has a different checkpoint sequence. Review actual transpor
 delivery and route-failure behavior before asserting consistency or a defect.
 The source order alone does not prove delivery before local commitment.
 
-### Cross-Role Cancellation Follow-Up
+### PS-3: Cross-Role Cancellation
 
 The owner retains separate inviter and joiner slots. `cancel` can revisit a
 terminal old slot while the opposite role has a newer operation, and
 `clear_transient_handshakes` currently clears shared request/session maps.
 
-Reproduce repeated old-role cancellation after starting the opposite role.
-Check pending approval, Hello/Submit/Poll ownership, retry and completion without
-weakening explicit cancellation of expired Prepared enrollment. No fix is made
-on this source observation alone.
+Both directions are reproduced in `/tmp/p2p-vpn-ps3-cross-role-negative.log`:
+re-cancelling the old join clears the new invite approval; re-cancelling the old
+invite clears the new join's outbound request while its retry flag stays in flight.
+
+| Correction | Scope |
+| --- | --- |
+| Transient cleanup | Retain requests, inbound sessions and pending approvals owned by other operation IDs |
+| Callers | Completion, Prepared recovery, inviter deactivation and joiner deactivation pass their operation ID |
+| Policy | Cancellation remains supported, including explicit abort of expired Prepared enrollment |
+| Resource behavior | Existing bounded maps and capacities remain; no new persistent state or config |
+
+The positive session run is `/tmp/p2p-vpn-ps3-sessions-fixed.log`. New owner tests
+verify repeated cancellation isolation, subsequent inviter completion, join retry
+backoff and cancellation of the current join. All 63 session tests pass.
+
+These use existing session fixtures, including synthetic offer/response material
+for the approval-owner case. They are not authenticated wire exchanges, daemon
+RPC persistence tests or restart evidence. Existing cryptographic and durable
+transaction regressions retain their separate scopes.
+
+#### PS-3 Runtime Verification
+
+The existing peerless namespace scenario now creates terminal opposite-role
+operations on both daemons. It repeats their cancellations while the current
+pairing awaits approval, then completes approval and the original traffic checks.
+
+| Gate | Result |
+| --- | --- |
+| Workspace | 1,482 passed; 36 opt-in exclusions; `/tmp/p2p-vpn-ps3-workspace.log` |
+| Expanded CLI/RPC scenario | Passed in 13.49 s; `/tmp/p2p-vpn-ps3-code-pairing.log` |
+| Required Clippy | Passed; advisory warnings remain; `/tmp/p2p-vpn-ps3-clippy.log` |
+| Formatting | `cargo fmt --check` passed |
+| Android native | x86_64/API 26 passed in 42.64 s; four target warnings; `/tmp/p2p-vpn-ps3-android.log` |
+| Source parity | Cached sandboxed check passed; `/tmp/p2p-vpn-ps3-nix.log` |
+
+The workspace run predates only the expansion of the opt-in namespace test.
+That final test source was rebuilt and executed separately, then covered by
+final Clippy. Production code is unchanged between those verification steps.
+
+Run `tun_namespace_code_pairing_crosses_peerless_overlay` individually with
+`--ignored --exact` and retained artifacts. The 120-second outer watchdog and
+existing internal deadlines were unchanged; no builds ran during observation.
+
+Source-parity output:
+`/nix/store/h1mnmsjaqna8pl9kxmqsrknkbbnf73ns-p2p-vpn-rust-test-sources`.
+Pre-build task storage was 8,213,900 KiB, approximately 7.83 GiB. The workspace,
+native and source checks used the same cached commands and resource limits above.
+
+PS-3 is ready for atomic publication. It does not change persistent schemas,
+wire protocols, membership policy or required configuration. The scoped native
+build is not a physical-device, ARM64, APK or full Nix package acceptance claim.

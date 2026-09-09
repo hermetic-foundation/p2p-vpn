@@ -949,7 +949,7 @@ impl CodePairingSessions {
         operation.provider_advertised = false;
         operation.v2_provider_query = None;
         operation.v2_provider_advertised = false;
-        self.clear_transient_handshakes();
+        self.clear_transient_handshakes(operation_id);
         Ok(PairingExpiryActions {
             stop_providing_locator,
             stop_providing_v2_locator,
@@ -998,7 +998,7 @@ impl CodePairingSessions {
         operation.pending_submission = None;
         operation.remote_approval = None;
         operation.completed = Some((offer, response));
-        self.clear_transient_handshakes();
+        self.clear_transient_handshakes(operation_id);
         Ok(())
     }
 
@@ -1156,7 +1156,7 @@ impl CodePairingSessions {
         operation.provider_advertised = false;
         operation.v2_provider_query = None;
         operation.v2_provider_advertised = false;
-        self.clear_transient_handshakes();
+        self.clear_transient_handshakes(&enrollment.operation_id);
         Ok(PairingExpiryActions {
             stop_providing_locator,
             stop_providing_v2_locator,
@@ -1247,7 +1247,7 @@ impl CodePairingSessions {
         operation.remote_approval = None;
         operation.completed = Some((offer.clone(), enrollment.response.clone()));
         operation.terminal = None;
-        self.clear_transient_handshakes();
+        self.clear_transient_handshakes(&enrollment.operation_id);
         Ok(())
     }
 
@@ -2846,6 +2846,7 @@ impl CodePairingSessions {
         let Some(operation) = self.open.as_mut() else {
             return PairingExpiryActions::default();
         };
+        let operation_id = operation.id.clone();
         operation.code.take();
         operation.terminal = Some(terminal);
         let stop_providing_locator = (operation.provider_advertised
@@ -2858,7 +2859,7 @@ impl CodePairingSessions {
         operation.provider_advertised = false;
         operation.v2_provider_query = None;
         operation.v2_provider_advertised = false;
-        self.clear_transient_handshakes();
+        self.clear_transient_handshakes(&operation_id);
         PairingExpiryActions {
             stop_providing_locator,
             stop_providing_v2_locator,
@@ -2875,20 +2876,36 @@ impl CodePairingSessions {
                 })
             });
         if let Some(operation) = &mut self.join {
+            let operation_id = operation.id.clone();
             operation.code.take();
             if !preserve_recovery {
                 operation.pending_submission = None;
                 operation.remote_approval = None;
             }
             operation.terminal = Some(terminal);
+            self.clear_transient_handshakes(&operation_id);
         }
-        self.clear_transient_handshakes();
     }
 
-    fn clear_transient_handshakes(&mut self) {
-        self.outbound_requests.clear();
-        self.inbound_sessions.clear();
-        self.pending_approval.take();
+    fn clear_transient_handshakes(&mut self, operation_id: &str) {
+        self.outbound_requests.retain(|_, request| {
+            let owner = match request {
+                OutboundCodeRequest::Hello(request) => &request.operation_id,
+                OutboundCodeRequest::Submit(request) | OutboundCodeRequest::Poll(request) => {
+                    &request.operation_id
+                }
+            };
+            owner != operation_id
+        });
+        self.inbound_sessions
+            .retain(|_, session| session.operation_id != operation_id);
+        if self
+            .pending_approval
+            .as_ref()
+            .is_some_and(|approval| approval.operation_id == operation_id)
+        {
+            self.pending_approval.take();
+        }
     }
 
     fn archive_inbound_ticket(
@@ -5903,6 +5920,121 @@ mod tests {
                 enrollment.offer.as_ref().expect("offer"),
                 &enrollment.response,
             ))
+        );
+    }
+
+    #[test]
+    fn repeated_old_join_cancel_preserves_new_open_approval() {
+        let mut sessions = CodePairingSessions::new();
+        let now = Instant::now();
+        let old = sessions
+            .join(
+                "runners",
+                PairingCode::generate(),
+                None,
+                vec![],
+                600,
+                1_000,
+                now,
+            )
+            .unwrap();
+        sessions.cancel(&old.operation_id).unwrap();
+        let current = sessions.open("runners", 600, 1_000, now).unwrap();
+        let inviter = peer(1);
+        let joiner = peer(2);
+        let approval = PendingApproval::new(
+            current.operation_id.clone(),
+            joiner,
+            current.expires_at_unix_seconds,
+            test_request(inviter, joiner),
+        )
+        .unwrap();
+        let approval_id = approval.approval_id.clone();
+        sessions.set_pending_approval(approval).unwrap();
+        for _ in 0..2 {
+            sessions.cancel(&old.operation_id).unwrap();
+            assert_eq!(
+                sessions
+                    .pending_approval
+                    .as_ref()
+                    .map(|a| a.approval_id.as_str()),
+                Some(approval_id.as_str()),
+                "old join cancellation cleared the new invite approval"
+            );
+        }
+        sessions
+            .complete_open(
+                &current.operation_id,
+                &approval_id,
+                test_response(inviter, joiner),
+            )
+            .unwrap();
+        assert!(sessions.open_completion(&current.operation_id).is_some());
+    }
+
+    #[test]
+    fn repeated_old_open_cancel_preserves_new_join_request() {
+        let mut sessions = CodePairingSessions::new();
+        let now = Instant::now();
+        let old = sessions.open("runners", 600, 1_000, now).unwrap();
+        sessions.cancel(&old.operation_id).unwrap();
+        let (code, inviter, offer, request, transcript) = signed_submission_fixture();
+        let current = sessions
+            .join("runners", code, None, vec![], 600, 1_000, now)
+            .unwrap();
+        sessions
+            .set_pending_submission(
+                &current.operation_id,
+                inviter,
+                request.clone(),
+                offer.clone(),
+                transcript.clone(),
+                now,
+            )
+            .unwrap();
+        assert!(sessions.due_pending_submission(now).is_some());
+        let request_id = crate::runtime::pairing_code::behaviour(1).send_request(
+            &inviter,
+            crate::runtime::pairing_code::PairingCodeRequest::Submit {
+                request: Box::new(request),
+            },
+        );
+        sessions
+            .insert_outbound_submit(
+                request_id,
+                OutboundPairing {
+                    operation_id: current.operation_id.clone(),
+                    peer: inviter,
+                    offer,
+                    transcript_sha256: transcript,
+                },
+            )
+            .unwrap();
+        for _ in 0..2 {
+            sessions.cancel(&old.operation_id).unwrap();
+            assert!(
+                sessions.outbound_requests.contains_key(&request_id),
+                "old invite cancellation cleared the new join request"
+            );
+            assert!(
+                sessions
+                    .due_pending_submission(now + Duration::from_secs(60))
+                    .is_none()
+            );
+        }
+        assert!(sessions.take_outbound_request(request_id).is_some());
+        sessions.release_pending_submission(&current.operation_id, inviter, now);
+        assert!(sessions.due_pending_submission(now).is_none());
+        assert!(
+            sessions
+                .due_pending_submission(now + Duration::from_secs(60))
+                .is_some()
+        );
+        sessions.cancel(&current.operation_id).unwrap();
+        assert!(
+            sessions
+                .due_pending_submission(now + Duration::from_secs(120))
+                .is_none()
         );
     }
 
