@@ -3,7 +3,7 @@
 ## Status
 
 Active bounded review opened at `00b1b58a` on 2026-09-09.
-This is a prospective measurement plan, not a results report.
+This contains the measurement plan and partial results, not a completion claim.
 No physical device or deployed host is authorized for this work.
 
 ## Checklist
@@ -11,7 +11,8 @@ No physical device or deployed host is authorized for this work.
 - [x] Locate prior measurements and identify reuse limits.
 - [x] Define capture windows, budgets and decision rules.
 - [ ] Audit collectors and freeze workload manifests before capture.
-- [ ] Measure connected idle, unavailable peers and collector overhead.
+- [x] Measure connected idle and periodic-collector overhead in the isolated debug fixture.
+- [ ] Measure unavailable peers and retain retry/backoff timelines.
 - [ ] Measure matched sustained traffic and pressure/recovery cycles.
 - [ ] Attribute retained allocations, including signed-ledger refreshes.
 - [ ] Measure lifecycle churn and multi-network isolation.
@@ -344,6 +345,10 @@ Neither used a physical device or concurrent review build.
 - Off report: `/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.521ad8940416b3ee/idle-sample.json`.
 - On report: `/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.f7f806fadb8f1b42/idle-sample.json`.
 - Outer logs: `/tmp/p2p-vpn-sustained-observer-{off,on}-smoke.log`.
+
+Sustained comparison results and raw-report fingerprints are recorded separately
+in [Observer overhead](sustained-observer-overhead.md). This comparison does not
+close unavailable-peer, sustained-load or retained-allocation work.
 
 1. Audit existing idle, process, queue-pressure and resource collectors.
 2. Inventory cached binaries and storage; build only missing affected targets.

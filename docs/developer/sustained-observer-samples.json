@@ -1,0 +1,472 @@
+[
+  {
+    "run": 1,
+    "raw_report": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.286d7186a6229c00/idle-sample.json",
+    "report_sha256": "1668180fd228926bfa755b91b704169b50b3ee074d99ed2994dbbc8867e8aec3",
+    "report_bytes": 363424,
+    "node_log_bytes": 1130194,
+    "binary_sha256": "4bdeffb4b9e6c2eed1130e0976fa995dd03eea606c35c322b41f31883f6c506e",
+    "clock_ticks_per_second": 100,
+    "host_load_before": "1.21 1.42 1.52 2/1608 184",
+    "host_load_after": "1.19 1.36 1.46 2/1608 184",
+    "runtime_sampling_enabled": false,
+    "runtime_samples_complete": null,
+    "os_count": 600,
+    "runtime_count": 0,
+    "collector": {
+      "cpu": 0.6166543155103295,
+      "rss": [
+        22764,
+        23856
+      ],
+      "identities": [
+        [
+          1,
+          83188046
+        ],
+        [
+          1,
+          83188046
+        ]
+      ]
+    },
+    "roles": [
+      {
+        "role": "a",
+        "count": 300,
+        "cpu": 0.15333464254335616,
+        "rss": [
+          37196,
+          37376
+        ],
+        "checkpoints": [
+          37196,
+          37200,
+          37200,
+          37200,
+          37200,
+          37376
+        ],
+        "identities": [
+          [
+            18,
+            83188072
+          ]
+        ],
+        "fds": [
+          21
+        ],
+        "sockets": [
+          14
+        ],
+        "threads": [
+          20
+        ]
+      },
+      {
+        "role": "b",
+        "count": 300,
+        "cpu": 0.15666801844533024,
+        "rss": [
+          36648,
+          36696
+        ],
+        "checkpoints": [
+          36648,
+          36660,
+          36660,
+          36660,
+          36660,
+          36696
+        ],
+        "identities": [
+          [
+            19,
+            83188072
+          ]
+        ],
+        "fds": [
+          19
+        ],
+        "sockets": [
+          12
+        ],
+        "threads": [
+          20
+        ]
+      }
+    ],
+    "counters": []
+  },
+  {
+    "run": 2,
+    "raw_report": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.30167d6fbfb6d652/idle-sample.json",
+    "report_sha256": "c7543d618d79e0bc003463c500fd25f21a86c3810e079ab317fd53092e32ff95",
+    "report_bytes": 2290903,
+    "node_log_bytes": 1129022,
+    "binary_sha256": "4bdeffb4b9e6c2eed1130e0976fa995dd03eea606c35c322b41f31883f6c506e",
+    "clock_ticks_per_second": 100,
+    "host_load_before": "1.73 1.49 1.50 2/1608 184",
+    "host_load_after": "3.10 1.90 1.62 3/1627 185",
+    "runtime_sampling_enabled": true,
+    "runtime_samples_complete": true,
+    "os_count": 600,
+    "runtime_count": 120,
+    "collector": {
+      "cpu": 0.6633172826183117,
+      "rss": [
+        23408,
+        30108
+      ],
+      "identities": [
+        [
+          1,
+          83224205
+        ],
+        [
+          1,
+          83224205
+        ]
+      ]
+    },
+    "roles": [
+      {
+        "role": "a",
+        "count": 300,
+        "cpu": 0.1733346686839763,
+        "rss": [
+          36580,
+          36668
+        ],
+        "checkpoints": [
+          36580,
+          36584,
+          36592,
+          36604,
+          36632,
+          36668
+        ],
+        "identities": [
+          [
+            18,
+            83224231
+          ]
+        ],
+        "fds": [
+          21
+        ],
+        "sockets": [
+          14
+        ],
+        "threads": [
+          20
+        ]
+      },
+      {
+        "role": "b",
+        "count": 300,
+        "cpu": 0.17000114095189073,
+        "rss": [
+          36516,
+          36592
+        ],
+        "checkpoints": [
+          36516,
+          36528,
+          36536,
+          36540,
+          36556,
+          36592
+        ],
+        "identities": [
+          [
+            19,
+            83224231
+          ]
+        ],
+        "fds": [
+          19
+        ],
+        "sockets": [
+          12
+        ],
+        "threads": [
+          20
+        ]
+      }
+    ],
+    "counters": [
+      {
+        "role": "a",
+        "probe_delta": 59,
+        "failure_delta": 0,
+        "redial_delta": 0,
+        "queue_bytes": [
+          0
+        ],
+        "queue_packets": [
+          0
+        ],
+        "pending": [
+          0
+        ],
+        "retiring": [
+          0
+        ]
+      },
+      {
+        "role": "b",
+        "probe_delta": 59,
+        "failure_delta": 0,
+        "redial_delta": 0,
+        "queue_bytes": [
+          0
+        ],
+        "queue_packets": [
+          0
+        ],
+        "pending": [
+          0
+        ],
+        "retiring": [
+          0
+        ]
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "raw_report": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.7e4fe54223e0717e/idle-sample.json",
+    "report_sha256": "aae6bf5ae87c9e5dde2d8090ee7b0318d6fd1cb1e51337c0a3adf56f86431097",
+    "report_bytes": 2290862,
+    "node_log_bytes": 1138850,
+    "binary_sha256": "4bdeffb4b9e6c2eed1130e0976fa995dd03eea606c35c322b41f31883f6c506e",
+    "clock_ticks_per_second": 100,
+    "host_load_before": "3.70 2.82 2.08 4/1612 184",
+    "host_load_after": "3.52 3.16 2.43 4/1619 185",
+    "runtime_sampling_enabled": true,
+    "runtime_samples_complete": true,
+    "os_count": 600,
+    "runtime_count": 120,
+    "collector": {
+      "cpu": 0.679985258225595,
+      "rss": [
+        22784,
+        29488
+      ],
+      "identities": [
+        [
+          1,
+          83283840
+        ],
+        [
+          1,
+          83283840
+        ]
+      ]
+    },
+    "roles": [
+      {
+        "role": "a",
+        "count": 300,
+        "cpu": 0.1733354095968701,
+        "rss": [
+          36956,
+          37060
+        ],
+        "checkpoints": [
+          36956,
+          36964,
+          36964,
+          36964,
+          36980,
+          37060
+        ],
+        "identities": [
+          [
+            18,
+            83283866
+          ]
+        ],
+        "fds": [
+          21
+        ],
+        "sockets": [
+          14
+        ],
+        "threads": [
+          20
+        ]
+      },
+      {
+        "role": "b",
+        "count": 300,
+        "cpu": 0.16000157315466743,
+        "rss": [
+          36700,
+          36784
+        ],
+        "checkpoints": [
+          36700,
+          36712,
+          36716,
+          36752,
+          36752,
+          36784
+        ],
+        "identities": [
+          [
+            19,
+            83283866
+          ]
+        ],
+        "fds": [
+          19
+        ],
+        "sockets": [
+          12
+        ],
+        "threads": [
+          20
+        ]
+      }
+    ],
+    "counters": [
+      {
+        "role": "a",
+        "probe_delta": 59,
+        "failure_delta": 0,
+        "redial_delta": 0,
+        "queue_bytes": [
+          0
+        ],
+        "queue_packets": [
+          0
+        ],
+        "pending": [
+          0
+        ],
+        "retiring": [
+          0
+        ]
+      },
+      {
+        "role": "b",
+        "probe_delta": 59,
+        "failure_delta": 0,
+        "redial_delta": 0,
+        "queue_bytes": [
+          0
+        ],
+        "queue_packets": [
+          0
+        ],
+        "pending": [
+          0
+        ],
+        "retiring": [
+          0
+        ]
+      }
+    ]
+  },
+  {
+    "run": 4,
+    "raw_report": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.a6aa162f4cd700ef/idle-sample.json",
+    "report_sha256": "22175df6db81e343c61920efe809882dcec6bf71713ad2d29e72e70c99e42710",
+    "report_bytes": 363394,
+    "node_log_bytes": 1218977,
+    "binary_sha256": "4bdeffb4b9e6c2eed1130e0976fa995dd03eea606c35c322b41f31883f6c506e",
+    "clock_ticks_per_second": 100,
+    "host_load_before": "3.70 3.32 2.55 4/1615 184",
+    "host_load_after": "2.83 3.08 2.68 4/1611 184",
+    "runtime_sampling_enabled": false,
+    "runtime_samples_complete": null,
+    "os_count": 600,
+    "runtime_count": 0,
+    "collector": {
+      "cpu": 0.6399833040217003,
+      "rss": [
+        22736,
+        23968
+      ],
+      "identities": [
+        [
+          1,
+          83319676
+        ],
+        [
+          1,
+          83319676
+        ]
+      ]
+    },
+    "roles": [
+      {
+        "role": "a",
+        "count": 300,
+        "cpu": 0.1466674332797403,
+        "rss": [
+          36676,
+          36688
+        ],
+        "checkpoints": [
+          36676,
+          36688,
+          36688,
+          36688,
+          36688,
+          36688
+        ],
+        "identities": [
+          [
+            18,
+            83319701
+          ]
+        ],
+        "fds": [
+          21
+        ],
+        "sockets": [
+          14
+        ],
+        "threads": [
+          20
+        ]
+      },
+      {
+        "role": "b",
+        "count": 300,
+        "cpu": 0.14333408230981368,
+        "rss": [
+          36844,
+          36992
+        ],
+        "checkpoints": [
+          36844,
+          36844,
+          36844,
+          36964,
+          36992,
+          36992
+        ],
+        "identities": [
+          [
+            19,
+            83319701
+          ]
+        ],
+        "fds": [
+          19
+        ],
+        "sockets": [
+          12
+        ],
+        "threads": [
+          20
+        ]
+      }
+    ],
+    "counters": []
+  }
+]
