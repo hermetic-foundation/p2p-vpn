@@ -1,0 +1,2272 @@
+{
+  "schema_version": 1,
+  "complete": true,
+  "planned_captures": 4,
+  "source_sha256": {
+    "src/allocation_review.rs": "51ae21a109ba5919998b4883e22ab9c040cf3235defeda43a6315b964eb4074d",
+    "src/allocation_review/queue.rs": "d4f49f537038e619d0a1deaf359791c55ed278a4d5b5c6ba9859da7b12e8788e"
+  },
+  "executable_sha256": "65fea175f92a655b23d0693f4bc44bfd5687c324426fb5269267b45ec618624a",
+  "captures": [
+    {
+      "log": "/tmp/p2p-vpn-queue-allocation-1-packets.log",
+      "log_sha256": "d067c46dafa3de0eadefed53e40c85759193adf3012d8e7b6e567cbe68e8493b",
+      "sample": {
+        "admitted_per_peer": 4,
+        "byte_limit": 8192,
+        "cycles": [
+          {
+            "cycle": 1,
+            "drain": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 16448,
+              "bytes_reallocated": 0,
+              "deallocations": 16,
+              "live_blocks_delta": -16,
+              "live_bytes_delta": -16448,
+              "reallocations": 0
+            },
+            "expire": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -4112,
+              "reallocations": 0
+            },
+            "fill_and_reject": {
+              "allocations": 27,
+              "bytes_allocated": 23964,
+              "bytes_deallocated": 4740,
+              "bytes_reallocated": 0,
+              "deallocations": 5,
+              "live_blocks_delta": 22,
+              "live_bytes_delta": 19224,
+              "reallocations": 0
+            },
+            "live_after_retirement_from_initial": 1368,
+            "refill_for_expiry": {
+              "allocations": 4,
+              "bytes_allocated": 4112,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 4,
+              "live_bytes_delta": 4112,
+              "reallocations": 0
+            },
+            "retire_peers": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 1408,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -1408,
+              "reallocations": 0
+            }
+          },
+          {
+            "cycle": 2,
+            "drain": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 16448,
+              "bytes_reallocated": 0,
+              "deallocations": 16,
+              "live_blocks_delta": -16,
+              "live_bytes_delta": -16448,
+              "reallocations": 0
+            },
+            "expire": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -4112,
+              "reallocations": 0
+            },
+            "fill_and_reject": {
+              "allocations": 24,
+              "bytes_allocated": 21968,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": 20,
+              "live_bytes_delta": 17856,
+              "reallocations": 0
+            },
+            "live_after_retirement_from_initial": 1368,
+            "refill_for_expiry": {
+              "allocations": 4,
+              "bytes_allocated": 4112,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 4,
+              "live_bytes_delta": 4112,
+              "reallocations": 0
+            },
+            "retire_peers": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 1408,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -1408,
+              "reallocations": 0
+            }
+          },
+          {
+            "cycle": 3,
+            "drain": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 16448,
+              "bytes_reallocated": 0,
+              "deallocations": 16,
+              "live_blocks_delta": -16,
+              "live_bytes_delta": -16448,
+              "reallocations": 0
+            },
+            "expire": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -4112,
+              "reallocations": 0
+            },
+            "fill_and_reject": {
+              "allocations": 24,
+              "bytes_allocated": 21968,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": 20,
+              "live_bytes_delta": 17856,
+              "reallocations": 0
+            },
+            "live_after_retirement_from_initial": 1368,
+            "refill_for_expiry": {
+              "allocations": 4,
+              "bytes_allocated": 4112,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 4,
+              "live_bytes_delta": 4112,
+              "reallocations": 0
+            },
+            "retire_peers": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 1408,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -1408,
+              "reallocations": 0
+            }
+          },
+          {
+            "cycle": 4,
+            "drain": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 16448,
+              "bytes_reallocated": 0,
+              "deallocations": 16,
+              "live_blocks_delta": -16,
+              "live_bytes_delta": -16448,
+              "reallocations": 0
+            },
+            "expire": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -4112,
+              "reallocations": 0
+            },
+            "fill_and_reject": {
+              "allocations": 24,
+              "bytes_allocated": 21968,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": 20,
+              "live_bytes_delta": 17856,
+              "reallocations": 0
+            },
+            "live_after_retirement_from_initial": 1368,
+            "refill_for_expiry": {
+              "allocations": 4,
+              "bytes_allocated": 4112,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 4,
+              "live_bytes_delta": 4112,
+              "reallocations": 0
+            },
+            "retire_peers": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 1408,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -1408,
+              "reallocations": 0
+            }
+          },
+          {
+            "cycle": 5,
+            "drain": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 16448,
+              "bytes_reallocated": 0,
+              "deallocations": 16,
+              "live_blocks_delta": -16,
+              "live_bytes_delta": -16448,
+              "reallocations": 0
+            },
+            "expire": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -4112,
+              "reallocations": 0
+            },
+            "fill_and_reject": {
+              "allocations": 24,
+              "bytes_allocated": 21968,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": 20,
+              "live_bytes_delta": 17856,
+              "reallocations": 0
+            },
+            "live_after_retirement_from_initial": 1368,
+            "refill_for_expiry": {
+              "allocations": 4,
+              "bytes_allocated": 4112,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 4,
+              "live_bytes_delta": 4112,
+              "reallocations": 0
+            },
+            "retire_peers": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 1408,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -1408,
+              "reallocations": 0
+            }
+          },
+          {
+            "cycle": 6,
+            "drain": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 16448,
+              "bytes_reallocated": 0,
+              "deallocations": 16,
+              "live_blocks_delta": -16,
+              "live_bytes_delta": -16448,
+              "reallocations": 0
+            },
+            "expire": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -4112,
+              "reallocations": 0
+            },
+            "fill_and_reject": {
+              "allocations": 24,
+              "bytes_allocated": 21968,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": 20,
+              "live_bytes_delta": 17856,
+              "reallocations": 0
+            },
+            "live_after_retirement_from_initial": 1368,
+            "refill_for_expiry": {
+              "allocations": 4,
+              "bytes_allocated": 4112,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 4,
+              "live_bytes_delta": 4112,
+              "reallocations": 0
+            },
+            "retire_peers": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 1408,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -1408,
+              "reallocations": 0
+            }
+          },
+          {
+            "cycle": 7,
+            "drain": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 16448,
+              "bytes_reallocated": 0,
+              "deallocations": 16,
+              "live_blocks_delta": -16,
+              "live_bytes_delta": -16448,
+              "reallocations": 0
+            },
+            "expire": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -4112,
+              "reallocations": 0
+            },
+            "fill_and_reject": {
+              "allocations": 24,
+              "bytes_allocated": 21968,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": 20,
+              "live_bytes_delta": 17856,
+              "reallocations": 0
+            },
+            "live_after_retirement_from_initial": 1368,
+            "refill_for_expiry": {
+              "allocations": 4,
+              "bytes_allocated": 4112,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 4,
+              "live_bytes_delta": 4112,
+              "reallocations": 0
+            },
+            "retire_peers": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 1408,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -1408,
+              "reallocations": 0
+            }
+          },
+          {
+            "cycle": 8,
+            "drain": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 16448,
+              "bytes_reallocated": 0,
+              "deallocations": 16,
+              "live_blocks_delta": -16,
+              "live_bytes_delta": -16448,
+              "reallocations": 0
+            },
+            "expire": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -4112,
+              "reallocations": 0
+            },
+            "fill_and_reject": {
+              "allocations": 24,
+              "bytes_allocated": 21968,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": 20,
+              "live_bytes_delta": 17856,
+              "reallocations": 0
+            },
+            "live_after_retirement_from_initial": 1368,
+            "refill_for_expiry": {
+              "allocations": 4,
+              "bytes_allocated": 4112,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 4,
+              "live_bytes_delta": 4112,
+              "reallocations": 0
+            },
+            "retire_peers": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 1408,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -1408,
+              "reallocations": 0
+            }
+          },
+          {
+            "cycle": 9,
+            "drain": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 16448,
+              "bytes_reallocated": 0,
+              "deallocations": 16,
+              "live_blocks_delta": -16,
+              "live_bytes_delta": -16448,
+              "reallocations": 0
+            },
+            "expire": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -4112,
+              "reallocations": 0
+            },
+            "fill_and_reject": {
+              "allocations": 24,
+              "bytes_allocated": 21968,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": 20,
+              "live_bytes_delta": 17856,
+              "reallocations": 0
+            },
+            "live_after_retirement_from_initial": 1368,
+            "refill_for_expiry": {
+              "allocations": 4,
+              "bytes_allocated": 4112,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 4,
+              "live_bytes_delta": 4112,
+              "reallocations": 0
+            },
+            "retire_peers": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 1408,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -1408,
+              "reallocations": 0
+            }
+          },
+          {
+            "cycle": 10,
+            "drain": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 16448,
+              "bytes_reallocated": 0,
+              "deallocations": 16,
+              "live_blocks_delta": -16,
+              "live_bytes_delta": -16448,
+              "reallocations": 0
+            },
+            "expire": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -4112,
+              "reallocations": 0
+            },
+            "fill_and_reject": {
+              "allocations": 24,
+              "bytes_allocated": 21968,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": 20,
+              "live_bytes_delta": 17856,
+              "reallocations": 0
+            },
+            "live_after_retirement_from_initial": 1368,
+            "refill_for_expiry": {
+              "allocations": 4,
+              "bytes_allocated": 4112,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 4,
+              "live_bytes_delta": 4112,
+              "reallocations": 0
+            },
+            "retire_peers": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 1408,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -1408,
+              "reallocations": 0
+            }
+          }
+        ],
+        "mode": "packets",
+        "packet_limit": 4,
+        "payload_bytes": 1028,
+        "peers": 4,
+        "schema_version": 1,
+        "whole_owner": {
+          "allocations": 283,
+          "bytes_allocated": 262796,
+          "bytes_deallocated": 262796,
+          "bytes_reallocated": 0,
+          "deallocations": 283,
+          "live_blocks_delta": 0,
+          "live_bytes_delta": 0,
+          "reallocations": 0
+        }
+      }
+    },
+    {
+      "log": "/tmp/p2p-vpn-queue-allocation-2-bytes.log",
+      "log_sha256": "c404d8b8c1ee4789ba421eb31aff0fbf7f413e56f8f4c317d5ad7e6f0744ff84",
+      "sample": {
+        "admitted_per_peer": 3,
+        "byte_limit": 4096,
+        "cycles": [
+          {
+            "cycle": 1,
+            "drain": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 12336,
+              "bytes_reallocated": 0,
+              "deallocations": 12,
+              "live_blocks_delta": -12,
+              "live_bytes_delta": -12336,
+              "reallocations": 0
+            },
+            "expire": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -4112,
+              "reallocations": 0
+            },
+            "fill_and_reject": {
+              "allocations": 23,
+              "bytes_allocated": 19852,
+              "bytes_deallocated": 4740,
+              "bytes_reallocated": 0,
+              "deallocations": 5,
+              "live_blocks_delta": 18,
+              "live_bytes_delta": 15112,
+              "reallocations": 0
+            },
+            "live_after_retirement_from_initial": 1368,
+            "refill_for_expiry": {
+              "allocations": 4,
+              "bytes_allocated": 4112,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 4,
+              "live_bytes_delta": 4112,
+              "reallocations": 0
+            },
+            "retire_peers": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 1408,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -1408,
+              "reallocations": 0
+            }
+          },
+          {
+            "cycle": 2,
+            "drain": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 12336,
+              "bytes_reallocated": 0,
+              "deallocations": 12,
+              "live_blocks_delta": -12,
+              "live_bytes_delta": -12336,
+              "reallocations": 0
+            },
+            "expire": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -4112,
+              "reallocations": 0
+            },
+            "fill_and_reject": {
+              "allocations": 20,
+              "bytes_allocated": 17856,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": 16,
+              "live_bytes_delta": 13744,
+              "reallocations": 0
+            },
+            "live_after_retirement_from_initial": 1368,
+            "refill_for_expiry": {
+              "allocations": 4,
+              "bytes_allocated": 4112,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 4,
+              "live_bytes_delta": 4112,
+              "reallocations": 0
+            },
+            "retire_peers": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 1408,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -1408,
+              "reallocations": 0
+            }
+          },
+          {
+            "cycle": 3,
+            "drain": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 12336,
+              "bytes_reallocated": 0,
+              "deallocations": 12,
+              "live_blocks_delta": -12,
+              "live_bytes_delta": -12336,
+              "reallocations": 0
+            },
+            "expire": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -4112,
+              "reallocations": 0
+            },
+            "fill_and_reject": {
+              "allocations": 20,
+              "bytes_allocated": 17856,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": 16,
+              "live_bytes_delta": 13744,
+              "reallocations": 0
+            },
+            "live_after_retirement_from_initial": 1368,
+            "refill_for_expiry": {
+              "allocations": 4,
+              "bytes_allocated": 4112,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 4,
+              "live_bytes_delta": 4112,
+              "reallocations": 0
+            },
+            "retire_peers": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 1408,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -1408,
+              "reallocations": 0
+            }
+          },
+          {
+            "cycle": 4,
+            "drain": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 12336,
+              "bytes_reallocated": 0,
+              "deallocations": 12,
+              "live_blocks_delta": -12,
+              "live_bytes_delta": -12336,
+              "reallocations": 0
+            },
+            "expire": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -4112,
+              "reallocations": 0
+            },
+            "fill_and_reject": {
+              "allocations": 20,
+              "bytes_allocated": 17856,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": 16,
+              "live_bytes_delta": 13744,
+              "reallocations": 0
+            },
+            "live_after_retirement_from_initial": 1368,
+            "refill_for_expiry": {
+              "allocations": 4,
+              "bytes_allocated": 4112,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 4,
+              "live_bytes_delta": 4112,
+              "reallocations": 0
+            },
+            "retire_peers": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 1408,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -1408,
+              "reallocations": 0
+            }
+          },
+          {
+            "cycle": 5,
+            "drain": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 12336,
+              "bytes_reallocated": 0,
+              "deallocations": 12,
+              "live_blocks_delta": -12,
+              "live_bytes_delta": -12336,
+              "reallocations": 0
+            },
+            "expire": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -4112,
+              "reallocations": 0
+            },
+            "fill_and_reject": {
+              "allocations": 20,
+              "bytes_allocated": 17856,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": 16,
+              "live_bytes_delta": 13744,
+              "reallocations": 0
+            },
+            "live_after_retirement_from_initial": 1368,
+            "refill_for_expiry": {
+              "allocations": 4,
+              "bytes_allocated": 4112,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 4,
+              "live_bytes_delta": 4112,
+              "reallocations": 0
+            },
+            "retire_peers": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 1408,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -1408,
+              "reallocations": 0
+            }
+          },
+          {
+            "cycle": 6,
+            "drain": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 12336,
+              "bytes_reallocated": 0,
+              "deallocations": 12,
+              "live_blocks_delta": -12,
+              "live_bytes_delta": -12336,
+              "reallocations": 0
+            },
+            "expire": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -4112,
+              "reallocations": 0
+            },
+            "fill_and_reject": {
+              "allocations": 20,
+              "bytes_allocated": 17856,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": 16,
+              "live_bytes_delta": 13744,
+              "reallocations": 0
+            },
+            "live_after_retirement_from_initial": 1368,
+            "refill_for_expiry": {
+              "allocations": 4,
+              "bytes_allocated": 4112,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 4,
+              "live_bytes_delta": 4112,
+              "reallocations": 0
+            },
+            "retire_peers": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 1408,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -1408,
+              "reallocations": 0
+            }
+          },
+          {
+            "cycle": 7,
+            "drain": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 12336,
+              "bytes_reallocated": 0,
+              "deallocations": 12,
+              "live_blocks_delta": -12,
+              "live_bytes_delta": -12336,
+              "reallocations": 0
+            },
+            "expire": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -4112,
+              "reallocations": 0
+            },
+            "fill_and_reject": {
+              "allocations": 20,
+              "bytes_allocated": 17856,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": 16,
+              "live_bytes_delta": 13744,
+              "reallocations": 0
+            },
+            "live_after_retirement_from_initial": 1368,
+            "refill_for_expiry": {
+              "allocations": 4,
+              "bytes_allocated": 4112,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 4,
+              "live_bytes_delta": 4112,
+              "reallocations": 0
+            },
+            "retire_peers": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 1408,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -1408,
+              "reallocations": 0
+            }
+          },
+          {
+            "cycle": 8,
+            "drain": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 12336,
+              "bytes_reallocated": 0,
+              "deallocations": 12,
+              "live_blocks_delta": -12,
+              "live_bytes_delta": -12336,
+              "reallocations": 0
+            },
+            "expire": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -4112,
+              "reallocations": 0
+            },
+            "fill_and_reject": {
+              "allocations": 20,
+              "bytes_allocated": 17856,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": 16,
+              "live_bytes_delta": 13744,
+              "reallocations": 0
+            },
+            "live_after_retirement_from_initial": 1368,
+            "refill_for_expiry": {
+              "allocations": 4,
+              "bytes_allocated": 4112,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 4,
+              "live_bytes_delta": 4112,
+              "reallocations": 0
+            },
+            "retire_peers": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 1408,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -1408,
+              "reallocations": 0
+            }
+          },
+          {
+            "cycle": 9,
+            "drain": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 12336,
+              "bytes_reallocated": 0,
+              "deallocations": 12,
+              "live_blocks_delta": -12,
+              "live_bytes_delta": -12336,
+              "reallocations": 0
+            },
+            "expire": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -4112,
+              "reallocations": 0
+            },
+            "fill_and_reject": {
+              "allocations": 20,
+              "bytes_allocated": 17856,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": 16,
+              "live_bytes_delta": 13744,
+              "reallocations": 0
+            },
+            "live_after_retirement_from_initial": 1368,
+            "refill_for_expiry": {
+              "allocations": 4,
+              "bytes_allocated": 4112,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 4,
+              "live_bytes_delta": 4112,
+              "reallocations": 0
+            },
+            "retire_peers": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 1408,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -1408,
+              "reallocations": 0
+            }
+          },
+          {
+            "cycle": 10,
+            "drain": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 12336,
+              "bytes_reallocated": 0,
+              "deallocations": 12,
+              "live_blocks_delta": -12,
+              "live_bytes_delta": -12336,
+              "reallocations": 0
+            },
+            "expire": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -4112,
+              "reallocations": 0
+            },
+            "fill_and_reject": {
+              "allocations": 20,
+              "bytes_allocated": 17856,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": 16,
+              "live_bytes_delta": 13744,
+              "reallocations": 0
+            },
+            "live_after_retirement_from_initial": 1368,
+            "refill_for_expiry": {
+              "allocations": 4,
+              "bytes_allocated": 4112,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 4,
+              "live_bytes_delta": 4112,
+              "reallocations": 0
+            },
+            "retire_peers": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 1408,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -1408,
+              "reallocations": 0
+            }
+          }
+        ],
+        "mode": "bytes",
+        "packet_limit": 16,
+        "payload_bytes": 1028,
+        "peers": 4,
+        "schema_version": 1,
+        "whole_owner": {
+          "allocations": 243,
+          "bytes_allocated": 221676,
+          "bytes_deallocated": 221676,
+          "bytes_reallocated": 0,
+          "deallocations": 243,
+          "live_blocks_delta": 0,
+          "live_bytes_delta": 0,
+          "reallocations": 0
+        }
+      }
+    },
+    {
+      "log": "/tmp/p2p-vpn-queue-allocation-3-bytes.log",
+      "log_sha256": "6e0021aa47a9f0d64dae7b7280bb772ba12b86ecd7d9ab112f6ed7c1f7a7185b",
+      "sample": {
+        "admitted_per_peer": 3,
+        "byte_limit": 4096,
+        "cycles": [
+          {
+            "cycle": 1,
+            "drain": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 12336,
+              "bytes_reallocated": 0,
+              "deallocations": 12,
+              "live_blocks_delta": -12,
+              "live_bytes_delta": -12336,
+              "reallocations": 0
+            },
+            "expire": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -4112,
+              "reallocations": 0
+            },
+            "fill_and_reject": {
+              "allocations": 23,
+              "bytes_allocated": 19852,
+              "bytes_deallocated": 4740,
+              "bytes_reallocated": 0,
+              "deallocations": 5,
+              "live_blocks_delta": 18,
+              "live_bytes_delta": 15112,
+              "reallocations": 0
+            },
+            "live_after_retirement_from_initial": 1368,
+            "refill_for_expiry": {
+              "allocations": 4,
+              "bytes_allocated": 4112,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 4,
+              "live_bytes_delta": 4112,
+              "reallocations": 0
+            },
+            "retire_peers": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 1408,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -1408,
+              "reallocations": 0
+            }
+          },
+          {
+            "cycle": 2,
+            "drain": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 12336,
+              "bytes_reallocated": 0,
+              "deallocations": 12,
+              "live_blocks_delta": -12,
+              "live_bytes_delta": -12336,
+              "reallocations": 0
+            },
+            "expire": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -4112,
+              "reallocations": 0
+            },
+            "fill_and_reject": {
+              "allocations": 20,
+              "bytes_allocated": 17856,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": 16,
+              "live_bytes_delta": 13744,
+              "reallocations": 0
+            },
+            "live_after_retirement_from_initial": 1368,
+            "refill_for_expiry": {
+              "allocations": 4,
+              "bytes_allocated": 4112,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 4,
+              "live_bytes_delta": 4112,
+              "reallocations": 0
+            },
+            "retire_peers": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 1408,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -1408,
+              "reallocations": 0
+            }
+          },
+          {
+            "cycle": 3,
+            "drain": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 12336,
+              "bytes_reallocated": 0,
+              "deallocations": 12,
+              "live_blocks_delta": -12,
+              "live_bytes_delta": -12336,
+              "reallocations": 0
+            },
+            "expire": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -4112,
+              "reallocations": 0
+            },
+            "fill_and_reject": {
+              "allocations": 20,
+              "bytes_allocated": 17856,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": 16,
+              "live_bytes_delta": 13744,
+              "reallocations": 0
+            },
+            "live_after_retirement_from_initial": 1368,
+            "refill_for_expiry": {
+              "allocations": 4,
+              "bytes_allocated": 4112,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 4,
+              "live_bytes_delta": 4112,
+              "reallocations": 0
+            },
+            "retire_peers": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 1408,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -1408,
+              "reallocations": 0
+            }
+          },
+          {
+            "cycle": 4,
+            "drain": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 12336,
+              "bytes_reallocated": 0,
+              "deallocations": 12,
+              "live_blocks_delta": -12,
+              "live_bytes_delta": -12336,
+              "reallocations": 0
+            },
+            "expire": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -4112,
+              "reallocations": 0
+            },
+            "fill_and_reject": {
+              "allocations": 20,
+              "bytes_allocated": 17856,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": 16,
+              "live_bytes_delta": 13744,
+              "reallocations": 0
+            },
+            "live_after_retirement_from_initial": 1368,
+            "refill_for_expiry": {
+              "allocations": 4,
+              "bytes_allocated": 4112,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 4,
+              "live_bytes_delta": 4112,
+              "reallocations": 0
+            },
+            "retire_peers": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 1408,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -1408,
+              "reallocations": 0
+            }
+          },
+          {
+            "cycle": 5,
+            "drain": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 12336,
+              "bytes_reallocated": 0,
+              "deallocations": 12,
+              "live_blocks_delta": -12,
+              "live_bytes_delta": -12336,
+              "reallocations": 0
+            },
+            "expire": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -4112,
+              "reallocations": 0
+            },
+            "fill_and_reject": {
+              "allocations": 20,
+              "bytes_allocated": 17856,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": 16,
+              "live_bytes_delta": 13744,
+              "reallocations": 0
+            },
+            "live_after_retirement_from_initial": 1368,
+            "refill_for_expiry": {
+              "allocations": 4,
+              "bytes_allocated": 4112,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 4,
+              "live_bytes_delta": 4112,
+              "reallocations": 0
+            },
+            "retire_peers": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 1408,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -1408,
+              "reallocations": 0
+            }
+          },
+          {
+            "cycle": 6,
+            "drain": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 12336,
+              "bytes_reallocated": 0,
+              "deallocations": 12,
+              "live_blocks_delta": -12,
+              "live_bytes_delta": -12336,
+              "reallocations": 0
+            },
+            "expire": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -4112,
+              "reallocations": 0
+            },
+            "fill_and_reject": {
+              "allocations": 20,
+              "bytes_allocated": 17856,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": 16,
+              "live_bytes_delta": 13744,
+              "reallocations": 0
+            },
+            "live_after_retirement_from_initial": 1368,
+            "refill_for_expiry": {
+              "allocations": 4,
+              "bytes_allocated": 4112,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 4,
+              "live_bytes_delta": 4112,
+              "reallocations": 0
+            },
+            "retire_peers": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 1408,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -1408,
+              "reallocations": 0
+            }
+          },
+          {
+            "cycle": 7,
+            "drain": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 12336,
+              "bytes_reallocated": 0,
+              "deallocations": 12,
+              "live_blocks_delta": -12,
+              "live_bytes_delta": -12336,
+              "reallocations": 0
+            },
+            "expire": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -4112,
+              "reallocations": 0
+            },
+            "fill_and_reject": {
+              "allocations": 20,
+              "bytes_allocated": 17856,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": 16,
+              "live_bytes_delta": 13744,
+              "reallocations": 0
+            },
+            "live_after_retirement_from_initial": 1368,
+            "refill_for_expiry": {
+              "allocations": 4,
+              "bytes_allocated": 4112,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 4,
+              "live_bytes_delta": 4112,
+              "reallocations": 0
+            },
+            "retire_peers": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 1408,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -1408,
+              "reallocations": 0
+            }
+          },
+          {
+            "cycle": 8,
+            "drain": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 12336,
+              "bytes_reallocated": 0,
+              "deallocations": 12,
+              "live_blocks_delta": -12,
+              "live_bytes_delta": -12336,
+              "reallocations": 0
+            },
+            "expire": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -4112,
+              "reallocations": 0
+            },
+            "fill_and_reject": {
+              "allocations": 20,
+              "bytes_allocated": 17856,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": 16,
+              "live_bytes_delta": 13744,
+              "reallocations": 0
+            },
+            "live_after_retirement_from_initial": 1368,
+            "refill_for_expiry": {
+              "allocations": 4,
+              "bytes_allocated": 4112,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 4,
+              "live_bytes_delta": 4112,
+              "reallocations": 0
+            },
+            "retire_peers": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 1408,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -1408,
+              "reallocations": 0
+            }
+          },
+          {
+            "cycle": 9,
+            "drain": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 12336,
+              "bytes_reallocated": 0,
+              "deallocations": 12,
+              "live_blocks_delta": -12,
+              "live_bytes_delta": -12336,
+              "reallocations": 0
+            },
+            "expire": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -4112,
+              "reallocations": 0
+            },
+            "fill_and_reject": {
+              "allocations": 20,
+              "bytes_allocated": 17856,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": 16,
+              "live_bytes_delta": 13744,
+              "reallocations": 0
+            },
+            "live_after_retirement_from_initial": 1368,
+            "refill_for_expiry": {
+              "allocations": 4,
+              "bytes_allocated": 4112,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 4,
+              "live_bytes_delta": 4112,
+              "reallocations": 0
+            },
+            "retire_peers": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 1408,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -1408,
+              "reallocations": 0
+            }
+          },
+          {
+            "cycle": 10,
+            "drain": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 12336,
+              "bytes_reallocated": 0,
+              "deallocations": 12,
+              "live_blocks_delta": -12,
+              "live_bytes_delta": -12336,
+              "reallocations": 0
+            },
+            "expire": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -4112,
+              "reallocations": 0
+            },
+            "fill_and_reject": {
+              "allocations": 20,
+              "bytes_allocated": 17856,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": 16,
+              "live_bytes_delta": 13744,
+              "reallocations": 0
+            },
+            "live_after_retirement_from_initial": 1368,
+            "refill_for_expiry": {
+              "allocations": 4,
+              "bytes_allocated": 4112,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 4,
+              "live_bytes_delta": 4112,
+              "reallocations": 0
+            },
+            "retire_peers": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 1408,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -1408,
+              "reallocations": 0
+            }
+          }
+        ],
+        "mode": "bytes",
+        "packet_limit": 16,
+        "payload_bytes": 1028,
+        "peers": 4,
+        "schema_version": 1,
+        "whole_owner": {
+          "allocations": 243,
+          "bytes_allocated": 221676,
+          "bytes_deallocated": 221676,
+          "bytes_reallocated": 0,
+          "deallocations": 243,
+          "live_blocks_delta": 0,
+          "live_bytes_delta": 0,
+          "reallocations": 0
+        }
+      }
+    },
+    {
+      "log": "/tmp/p2p-vpn-queue-allocation-4-packets.log",
+      "log_sha256": "d067c46dafa3de0eadefed53e40c85759193adf3012d8e7b6e567cbe68e8493b",
+      "sample": {
+        "admitted_per_peer": 4,
+        "byte_limit": 8192,
+        "cycles": [
+          {
+            "cycle": 1,
+            "drain": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 16448,
+              "bytes_reallocated": 0,
+              "deallocations": 16,
+              "live_blocks_delta": -16,
+              "live_bytes_delta": -16448,
+              "reallocations": 0
+            },
+            "expire": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -4112,
+              "reallocations": 0
+            },
+            "fill_and_reject": {
+              "allocations": 27,
+              "bytes_allocated": 23964,
+              "bytes_deallocated": 4740,
+              "bytes_reallocated": 0,
+              "deallocations": 5,
+              "live_blocks_delta": 22,
+              "live_bytes_delta": 19224,
+              "reallocations": 0
+            },
+            "live_after_retirement_from_initial": 1368,
+            "refill_for_expiry": {
+              "allocations": 4,
+              "bytes_allocated": 4112,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 4,
+              "live_bytes_delta": 4112,
+              "reallocations": 0
+            },
+            "retire_peers": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 1408,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -1408,
+              "reallocations": 0
+            }
+          },
+          {
+            "cycle": 2,
+            "drain": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 16448,
+              "bytes_reallocated": 0,
+              "deallocations": 16,
+              "live_blocks_delta": -16,
+              "live_bytes_delta": -16448,
+              "reallocations": 0
+            },
+            "expire": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -4112,
+              "reallocations": 0
+            },
+            "fill_and_reject": {
+              "allocations": 24,
+              "bytes_allocated": 21968,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": 20,
+              "live_bytes_delta": 17856,
+              "reallocations": 0
+            },
+            "live_after_retirement_from_initial": 1368,
+            "refill_for_expiry": {
+              "allocations": 4,
+              "bytes_allocated": 4112,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 4,
+              "live_bytes_delta": 4112,
+              "reallocations": 0
+            },
+            "retire_peers": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 1408,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -1408,
+              "reallocations": 0
+            }
+          },
+          {
+            "cycle": 3,
+            "drain": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 16448,
+              "bytes_reallocated": 0,
+              "deallocations": 16,
+              "live_blocks_delta": -16,
+              "live_bytes_delta": -16448,
+              "reallocations": 0
+            },
+            "expire": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -4112,
+              "reallocations": 0
+            },
+            "fill_and_reject": {
+              "allocations": 24,
+              "bytes_allocated": 21968,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": 20,
+              "live_bytes_delta": 17856,
+              "reallocations": 0
+            },
+            "live_after_retirement_from_initial": 1368,
+            "refill_for_expiry": {
+              "allocations": 4,
+              "bytes_allocated": 4112,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 4,
+              "live_bytes_delta": 4112,
+              "reallocations": 0
+            },
+            "retire_peers": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 1408,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -1408,
+              "reallocations": 0
+            }
+          },
+          {
+            "cycle": 4,
+            "drain": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 16448,
+              "bytes_reallocated": 0,
+              "deallocations": 16,
+              "live_blocks_delta": -16,
+              "live_bytes_delta": -16448,
+              "reallocations": 0
+            },
+            "expire": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -4112,
+              "reallocations": 0
+            },
+            "fill_and_reject": {
+              "allocations": 24,
+              "bytes_allocated": 21968,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": 20,
+              "live_bytes_delta": 17856,
+              "reallocations": 0
+            },
+            "live_after_retirement_from_initial": 1368,
+            "refill_for_expiry": {
+              "allocations": 4,
+              "bytes_allocated": 4112,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 4,
+              "live_bytes_delta": 4112,
+              "reallocations": 0
+            },
+            "retire_peers": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 1408,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -1408,
+              "reallocations": 0
+            }
+          },
+          {
+            "cycle": 5,
+            "drain": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 16448,
+              "bytes_reallocated": 0,
+              "deallocations": 16,
+              "live_blocks_delta": -16,
+              "live_bytes_delta": -16448,
+              "reallocations": 0
+            },
+            "expire": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -4112,
+              "reallocations": 0
+            },
+            "fill_and_reject": {
+              "allocations": 24,
+              "bytes_allocated": 21968,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": 20,
+              "live_bytes_delta": 17856,
+              "reallocations": 0
+            },
+            "live_after_retirement_from_initial": 1368,
+            "refill_for_expiry": {
+              "allocations": 4,
+              "bytes_allocated": 4112,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 4,
+              "live_bytes_delta": 4112,
+              "reallocations": 0
+            },
+            "retire_peers": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 1408,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -1408,
+              "reallocations": 0
+            }
+          },
+          {
+            "cycle": 6,
+            "drain": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 16448,
+              "bytes_reallocated": 0,
+              "deallocations": 16,
+              "live_blocks_delta": -16,
+              "live_bytes_delta": -16448,
+              "reallocations": 0
+            },
+            "expire": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -4112,
+              "reallocations": 0
+            },
+            "fill_and_reject": {
+              "allocations": 24,
+              "bytes_allocated": 21968,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": 20,
+              "live_bytes_delta": 17856,
+              "reallocations": 0
+            },
+            "live_after_retirement_from_initial": 1368,
+            "refill_for_expiry": {
+              "allocations": 4,
+              "bytes_allocated": 4112,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 4,
+              "live_bytes_delta": 4112,
+              "reallocations": 0
+            },
+            "retire_peers": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 1408,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -1408,
+              "reallocations": 0
+            }
+          },
+          {
+            "cycle": 7,
+            "drain": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 16448,
+              "bytes_reallocated": 0,
+              "deallocations": 16,
+              "live_blocks_delta": -16,
+              "live_bytes_delta": -16448,
+              "reallocations": 0
+            },
+            "expire": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -4112,
+              "reallocations": 0
+            },
+            "fill_and_reject": {
+              "allocations": 24,
+              "bytes_allocated": 21968,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": 20,
+              "live_bytes_delta": 17856,
+              "reallocations": 0
+            },
+            "live_after_retirement_from_initial": 1368,
+            "refill_for_expiry": {
+              "allocations": 4,
+              "bytes_allocated": 4112,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 4,
+              "live_bytes_delta": 4112,
+              "reallocations": 0
+            },
+            "retire_peers": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 1408,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -1408,
+              "reallocations": 0
+            }
+          },
+          {
+            "cycle": 8,
+            "drain": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 16448,
+              "bytes_reallocated": 0,
+              "deallocations": 16,
+              "live_blocks_delta": -16,
+              "live_bytes_delta": -16448,
+              "reallocations": 0
+            },
+            "expire": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -4112,
+              "reallocations": 0
+            },
+            "fill_and_reject": {
+              "allocations": 24,
+              "bytes_allocated": 21968,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": 20,
+              "live_bytes_delta": 17856,
+              "reallocations": 0
+            },
+            "live_after_retirement_from_initial": 1368,
+            "refill_for_expiry": {
+              "allocations": 4,
+              "bytes_allocated": 4112,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 4,
+              "live_bytes_delta": 4112,
+              "reallocations": 0
+            },
+            "retire_peers": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 1408,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -1408,
+              "reallocations": 0
+            }
+          },
+          {
+            "cycle": 9,
+            "drain": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 16448,
+              "bytes_reallocated": 0,
+              "deallocations": 16,
+              "live_blocks_delta": -16,
+              "live_bytes_delta": -16448,
+              "reallocations": 0
+            },
+            "expire": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -4112,
+              "reallocations": 0
+            },
+            "fill_and_reject": {
+              "allocations": 24,
+              "bytes_allocated": 21968,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": 20,
+              "live_bytes_delta": 17856,
+              "reallocations": 0
+            },
+            "live_after_retirement_from_initial": 1368,
+            "refill_for_expiry": {
+              "allocations": 4,
+              "bytes_allocated": 4112,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 4,
+              "live_bytes_delta": 4112,
+              "reallocations": 0
+            },
+            "retire_peers": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 1408,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -1408,
+              "reallocations": 0
+            }
+          },
+          {
+            "cycle": 10,
+            "drain": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 16448,
+              "bytes_reallocated": 0,
+              "deallocations": 16,
+              "live_blocks_delta": -16,
+              "live_bytes_delta": -16448,
+              "reallocations": 0
+            },
+            "expire": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -4112,
+              "reallocations": 0
+            },
+            "fill_and_reject": {
+              "allocations": 24,
+              "bytes_allocated": 21968,
+              "bytes_deallocated": 4112,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": 20,
+              "live_bytes_delta": 17856,
+              "reallocations": 0
+            },
+            "live_after_retirement_from_initial": 1368,
+            "refill_for_expiry": {
+              "allocations": 4,
+              "bytes_allocated": 4112,
+              "bytes_deallocated": 0,
+              "bytes_reallocated": 0,
+              "deallocations": 0,
+              "live_blocks_delta": 4,
+              "live_bytes_delta": 4112,
+              "reallocations": 0
+            },
+            "retire_peers": {
+              "allocations": 0,
+              "bytes_allocated": 0,
+              "bytes_deallocated": 1408,
+              "bytes_reallocated": 0,
+              "deallocations": 4,
+              "live_blocks_delta": -4,
+              "live_bytes_delta": -1408,
+              "reallocations": 0
+            }
+          }
+        ],
+        "mode": "packets",
+        "packet_limit": 4,
+        "payload_bytes": 1028,
+        "peers": 4,
+        "schema_version": 1,
+        "whole_owner": {
+          "allocations": 283,
+          "bytes_allocated": 262796,
+          "bytes_deallocated": 262796,
+          "bytes_reallocated": 0,
+          "deallocations": 283,
+          "live_blocks_delta": 0,
+          "live_bytes_delta": 0,
+          "reallocations": 0
+        }
+      }
+    }
+  ]
+}

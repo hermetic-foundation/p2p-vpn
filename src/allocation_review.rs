@@ -1,6 +1,8 @@
 use stats_alloc::{INSTRUMENTED_SYSTEM, Stats, StatsAlloc};
 use std::alloc::System;
 
+mod queue;
+
 #[global_allocator]
 static ALLOCATOR: &StatsAlloc<System> = &INSTRUMENTED_SYSTEM;
 

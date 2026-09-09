@@ -17,6 +17,7 @@ No physical device or deployed host is authorized for this work.
 - [x] Measure repeated packet/byte pressure and recovery (S4); allocation attribution remains open.
 - [ ] Attribute retained allocations, including signed-ledger refreshes.
 - [x] Complete the twelve-capture signed-ledger allocation matrix; packet/runtime attribution remains open.
+- [x] Attribute packet-queue payload/container ownership across 40 cycles; transport/runtime allocations remain open.
 - [ ] Measure lifecycle churn and multi-network isolation.
 - [ ] Measure Android background CPU/wakeup proxies on a cached emulator.
 - [ ] Reproduce and correct defects; validate before/after behavior.
@@ -29,6 +30,8 @@ No physical device or deployed host is authorized for this work.
 | [Idle comparison](idle-resource-comparison.md) | Paired debug 60-second captures; current-only release samples | Sustained plateau and matching release baseline |
 | [Membership resources](forwarder-resource-comparison.md) | 8/128/256 records; evaluation reuse | Exact retained allocations and whole-daemon impact |
 | [Queue pressure](sustained-pressure-results.md) | Corrected S4: 20 TCP pressure/recovery rounds; probe rejection/owner regression passes | RSS allocation attribution and broader workload coverage |
+| [Ledger allocations](allocation-review.md) | Twelve captures, 120 teardowns; zero retained requested Rust bytes/blocks | Whole-runtime/native allocation attribution |
+| [Queue allocations](queue-allocation-review.md) | Four captures, 40 cycles; exact payload release, stable container storage, full owner release | Transport buffers and full-process pressure retention |
 | [Kademlia acceptance](kademlia-workstream-acceptance.md) | Enforcement and scoped recovery fixes | RM-2 sampling, RM-3 unequal work, RM-4 backend confounding, RM-5 allocation attribution |
 | [Android lifecycle](android-lifecycle-audit.md) | Ownership regressions and multi-network restoration | Sustained CPU/memory and physical battery behavior |
 
