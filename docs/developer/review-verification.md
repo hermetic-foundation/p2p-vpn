@@ -20,14 +20,15 @@ required for the broader review.
 
 Update 2026-09-09: the [Kademlia resource workstream](kademlia-workstream-acceptance.md)
 is complete with its recorded limits, including RM-1 at `ceb6e4e2`.
-The [recovery event ownership review](recovery-event-ownership-review.md) is active.
+The [recovery event ownership review](recovery-event-ownership-review.md) is complete:
+epoch/dial admission, timer catch-up and listener ownership fixes are verified.
 
 ## Current Evidence
 
 | Area | Evidence | Limitation |
 | --- | --- | --- |
-| Workspace | Latest Goal 1 run: 1,247 passed, 23 opt-in tests ignored. [Durable cancellation evidence](pairing-cancellation-plan.md#final-verification) includes cleanup/retry, five mutation cases, expired replacement, and built-in-address protection. | Native Linux toolchain; not an Android device run. |
-| Namespace integration | Goal 1 reruns pass peerless code pairing, direct/relay pairing acceptance, UDP, and QUIC datagrams. The historical all-12 pass remains in `/tmp/p2p-vpn-review-queue-pressure-namespace-suite.log`. | Controlled topology; not public NAT or final all-platform acceptance. Historical pressure/isolation limits remain in their linked reports. |
+| Workspace | Latest [recovery review](recovery-event-ownership-review.md#final-verification): 1,475 passed, 36 opt-in exclusions. Earlier [durable cancellation evidence](pairing-cancellation-plan.md#final-verification) remains retained. | Native Linux toolchain; not an Android device run. |
+| Namespace integration | Recovery review: all 12 compatibility cases and delayed/renumbered recovery in both public/private profiles passed. Earlier all-12 evidence remains in `/tmp/p2p-vpn-review-queue-pressure-namespace-suite.log`. | Controlled topology; not public NAT or final all-platform acceptance. Historical pressure/isolation limits remain in their linked reports. |
 | Static analysis | Required correctness, suspicious, and performance Clippy groups pass. | Existing non-fatal style warnings remain. |
 | Formatting | Changed Rust files pass rustfmt; whitespace checks pass. | Not proof of the complete flake `fmt` target. |
 | Nix source parity | The unchanged `rust-test-sources` script passes in a sandbox with cached tool inputs; details in the [cancellation report](pairing-cancellation-plan.md#nix-check-tooling). | Default tool-closure build failed fetching a dependency. This verifies source inclusion, not a full package build. |
@@ -173,8 +174,8 @@ Logs use `/tmp/p2p-vpn-review-startup-snapshot-*`.
 
 | Workstream | Required Next Evidence |
 | --- | --- |
-| Recovery ownership | Finish timer/event and stale-completion review beyond the extracted targeted-query owner. |
-| Probe response ownership | [Wrong-peer probe consumption](path-probe-ownership-review.md) is corrected with a failing/passing regression, full native workspace checks, and UDP/QUIC namespace passes. Prepared pairing and the broader timer audit remain separate requirements. |
+| Recovery ownership | [Bounded timer/event review complete](recovery-event-ownership-review.md): stale dial, timer, listener and task ownership verified. Do not reopen it solely to complete broader lifecycle/platform acceptance. |
+| Probe response ownership | [Wrong-peer probe consumption](path-probe-ownership-review.md) is corrected; current recovery review retains token/window guards and verifies timer integration. Broader pairing/platform acceptance remains separate. |
 | Session lifecycle | [Membership-sync review](membership-sync-review.md) cases are fixed. Reconcile broader session-lifecycle review and final platform evidence. |
 | Android lifecycle ownership | [Three event-ownership findings](android-event-ownership-review.md) have JVM/emulator coverage, including recurring JNI health polling and automatic native-failure recovery at `4b90f3bc`. Reconcile broader lifecycle evidence on final code. |
 | Pairing orchestration | Goal 1 closes the identified Prepared mutation defect; broader lifecycle/platform acceptance remains separate. |
@@ -197,6 +198,6 @@ A missing result cannot support a completion claim for the broader review.
 | Workstream | Scope Retained |
 | --- | --- |
 | Kademlia resources | Complete with documented limits; retain original measurement exclusions |
-| Lifecycle review | Active [recovery timer/event review](recovery-event-ownership-review.md); pairing and Android lifecycle remain separate |
+| Lifecycle review | [Recovery timer/event review complete](recovery-event-ownership-review.md); reconcile remaining pairing and Android lifecycle work separately |
 | Resource measurement | Establish baseline and sustained CPU/memory evidence |
 | Final acceptance | Reconcile affected NixOS/Android scenarios and documentation on final code |

@@ -2,8 +2,9 @@
 
 ## Status
 
-Active; baseline `ceb6e4e2`. This follows the completed Kademlia resource
-workstream and RM-1. It does not complete the broader reliability review.
+Completed bounded review on 2026-09-09; baseline `ceb6e4e2`. This follows the
+completed Kademlia resource workstream and RM-1. It does not complete the broader
+reliability review or constitute physical/public-WAN certification.
 
 ## Plan
 
@@ -16,19 +17,20 @@ workstream and RM-1. It does not complete the broader reliability review.
 ## Ownership Inventory
 
 Symbols refer to [the runtime adapter](../../src/runtime/runner.rs).
-This initial inventory is not completed verification.
+The final verification section records whole-workstream gates separately from
+the source traces and focused tests below.
 
 | Boundary | Owners / Entry Points | Review Status |
 | --- | --- | --- |
-| Network transition | `handle_runtime_network_change`, `ConnectionEpochs::advance` | Reset sequence traced; stale terminal effects under review |
+| Network transition | `handle_runtime_network_change`, `ConnectionEpochs::advance` | Reset sequence traced; epoch, listener and QUIC replacement tests pass |
 | Dial start / establishment | `ConnectionEpochs`, `handle_swarm_event` | Application/startup registration corrected; admission regressions pass |
 | Outgoing failure | `PublicDiscoveryBackoff`, `DiscoveredPeerAddresses` | Old-epoch and late initial-epoch failures guarded; current failures retain backoff |
-| Connection close | `active_connections`, `record_path_closed`, capability/session invalidation | Source traced; replacement-preservation tests pending |
+| Connection close | `active_connections`, `record_path_closed`, capability/session invalidation | Stateful old-close/replacement and last-close cleanup test passed |
 | Periodic work | Runtime intervals, `handle_redial_tick`, `KademliaMaintenance` | RE-3 catch-up correction verified; existing cooldown/suppression coverage retained |
-| Relay reservations | `ConfiguredRelayReservationRetries`, `RelayReadiness`, `AutoRelayState`, listener sets | Old listener failure and replacement ownership review pending |
-| Packet negotiation | `PacketPlaneNegotiator`, QUIC task generations | Existing generation implementation; cancellation/completion review pending |
-| Probes / stream completions | `PathProbeTracker`, `PacketInFlight` | Completed targeted fixes retained; timer integration review pending |
-| Discovery completions | `stale_behaviour_event_connection`, targeted query owner | Completed Kademlia ownership retained; connection-bound event review pending |
+| Relay reservations | `ConfiguredRelayReservationRetries`, `RelayReadiness`, `AutoRelayState`, listener sets | RE-4 old/current/pending listener regressions pass; retries retain their owners |
+| Packet negotiation | `PacketPlaneNegotiator`, QUIC task generations | Old-result/cancellation, current failure and new-attempt admission test passed |
+| Probes / stream completions | `PathProbeTracker`, `PacketInFlight` | Published token/window guards retained; reset/expiry paths traced and current workspace passed |
+| Discovery completions | `stale_behaviour_event_connection`, targeted query owner | Connection-ID guards traced; existing stale-response, query-owner and cadence tests passed |
 
 ## RE-1: Obsolete Failure Reapplies Backoff
 
@@ -106,17 +108,17 @@ already-produced terminal event. Preserve both cancellation and event guards.
 | Source Inspection | Required Next Evidence |
 | --- | --- |
 | Recovery intervals replayed overdue ticks | RE-3 reproduces all four timers; correction passed workspace and isolated recovery verification |
-| QUIC task completion matches peer, role and generation | Reconcile existing replacement/cancellation tests with the network-change reset path |
-| Close events carry a connection ID and established-count snapshot | Verify per-connection retirement preserves a replacement path; inspect library event ordering before claiming a stale-count defect |
+| QUIC task completion matches peer, role and generation | Reset, cancelled joins, old results and current failure verified through the production completion adapter |
+| Close events carry a connection ID and established-count snapshot | Replacement-preserving and last-close dispatch verified; source ordering does not support the hypothesized stale-count race |
 
 ### Source-Backed Completion Boundaries
 
 | Boundary | Traced Guarantee | Remaining Evidence |
 | --- | --- | --- |
-| Connection close | The runner removes the exact connection ID; `PathSet::record_connection_lost` does not decrement a candidate for an untracked ID | Combined dispatch regression preserving replacement capabilities and recovery state |
+| Connection close | The runner removes the exact connection ID; `PathSet::record_connection_lost` does not decrement a candidate for an untracked ID | Combined dispatch regression passed, preserving replacement capabilities and recovery state |
 | libp2p close ordering | `libp2p-swarm 0.47.1` derives the count from remaining IDs, queues the event, and drains queued events before polling the pool again | Do not inject a contradictory zero-count ordering and call it a library race |
-| QUIC completion | `finish_quic_connection_task` matches peer, role and generation before removing the handle or applying the result | Old-result and cancellation dispatch tests across network reset/replacement |
-| Network reset | `PacketPlaneNegotiator::clear` aborts tasks and clears pending owners without resetting the generation counter | Verify late results cannot consume newly started task ownership |
+| QUIC completion | `finish_quic_connection_task` matches peer, role and generation before removing the handle or applying the result | Old-result and cancellation dispatch across network reset/replacement passed |
+| Network reset | `PacketPlaneNegotiator::clear` aborts tasks and clears pending owners without resetting the generation counter | Late-result tests preserve newly started task ownership |
 
 ## RE-3: Recovery Timer Catch-Up
 
@@ -167,25 +169,71 @@ Recorded test-binary SHA-256:
 - No builds during recovery observations or physical deployment.
 - No ARM64, device, long-soak, public-WAN or formal-proof claim.
 
-## Relay Listener Ordering Hypothesis
+## RE-4: Relay Listener Ownership
 
-`ListenerError` removes a configured listener from the retired-listener set and
-requests its removal. A later `ListenerClosed` no longer sees that retired marker
-and processes its addresses through relay readiness.
+Status: listener and acceptance regressions reproduced through production dispatch;
+corrections passed full scoped verification. Tests live in
+[recovery_event_tests.rs](../../src/runtime/runner/recovery_event_tests.rs).
 
-Pinned `libp2p-relay 0.21.1` emits `ListenerClosed` for reservation errors, not
-`ListenerError`. The initial error-then-close hypothesis is therefore not yet
-a demonstrated production relay path; an injected error alone would not prove it.
+| Defect / Boundary | Correction / Evidence |
+| --- | --- |
+| Old automatic close removes replacement readiness | Readiness addresses now retain listener IDs; old close/expiry cannot remove another listener's address |
+| Late announcement restores addresses after reset | Announcements require a current configured listener or the matching automatic relay/listener pair |
+| Two configured listeners share an address | Each retains ownership; returned dial addresses remain deduplicated |
+| Peer-only acceptance consumes a new pending deadline | Automatic acceptance waits for a matching listener announcement; peer-level readiness/metrics behavior remains unchanged |
+| Listener error clears another listener's readiness | Automatic termination forgets only its listener's addresses |
+| Retired configured error loses its terminal marker | The marker remains until `ListenerClosed`; defensive error/close coverage passed |
+| Configured address loss cancels a pending automatic replacement | Reproduced; close/expiry now release automatic state only for a matching listener ID |
 
-Review ordinary close ordering against replacement listeners with the same relay
-base address, especially automatic listeners reset without a retired-ID marker.
-No reproduced listener defect or fix is claimed yet.
+The first three regressions failed before correction (exit 101), then passed.
+Peer-only acceptance separately failed by consuming the new deadline (exit 101).
+Logs: `/tmp/p2p-vpn-recovery-listener-negative.log` and
+`/tmp/p2p-vpn-recovery-listener-acceptance-negative.log`.
 
-## Constraints and Remaining Work
+Pinned `libp2p-relay 0.21.1` queues listener announcements for successful initial
+reservations and renewals. Closing a listener drains already queued events before
+its terminal close; announcement IDs therefore need explicit ownership checks.
+
+Reservation errors use `ListenerClosed`, not `ListenerError`. The error/close
+tests are defensive handler coverage, not evidence that the initial hypothesized
+error sequence occurs in the pinned relay transport.
+
+The pending-replacement regression separately failed with the newer listener
+missing from its owner map. Raw evidence is retained at
+`/tmp/p2p-vpn-recovery-listener-pending-negative.log` (exit 101).
+
+The same event fixture verifies old connection closure and QUIC cancellation/result
+dispatch. It preserves current connection capabilities, task generations and
+retry owners; current failure and final closure still perform normal cleanup.
+
+### Review Boundary Map
+
+| Boundary | Evidence / Disposition |
+| --- | --- |
+| Epoch admission and terminal cleanup | RE-1/RE-2: old/current/initial failure dispatch, admitted/rejected dials, late success classification |
+| Network-change reset | Production namespace transitions plus explicit epoch, listener and QUIC reset regressions |
+| Close while a replacement is healthy | `old_connection_close_preserves_replacement_until_last_connection_closes`; capabilities/path/epoch preserved, last close cleaned up |
+| QUIC task replacement/cancellation | `quic_reset_discards_cancelled_and_old_results_without_consuming_new_tasks`; both roles, cancelled joins, old result, current failure and new admission |
+| Timer missed deadlines | RE-3; all four recovery intervals coalesce overdue ticks without disabling future ticks |
+| Cooldown and healthy settling | Existing `settling_timeline_tests`: 24-hour explicit-time bootstrap backoff, healthy suppression and released capacity |
+| Configured/automatic relay retry | RE-4 plus existing pending-listener, accepted-listener, timeout, failure-eviction and 24-hour synchronous-failure tests |
+| Probe and packet completion | Existing `stale_packet_responses_release_only_their_own_window_without_path_effects`, token ownership and pending-probe expiry tests |
+| Discovery completion | Existing connection-event guards, targeted-query ownership, AutoNAT and Kademlia cadence/expiry tests; no change to completed Kademlia enforcement |
+
+Cancellation is tested with actual aborted Tokio tasks. Old-result and connection
+events are injected through production adapters; they do not measure physical
+race frequency. Namespace recovery supplies separate successful-transition evidence.
+
+The relay changes add no configuration, route override or public struct fields.
+Unowned relay listeners cannot advertise readiness; normal constructors and the
+runtime reservation manager already record their listener IDs. No retired-ID
+tombstone store or independent epoch registry was added.
+
+## Scope Limits
 
 - Preserve LAN-first discovery, minimal configuration, authentication, DCUtR and relay fallback.
 - No retry/deadline relaxation, route injection, manual rescue or production deployment.
-- Use focused event regressions, applicable namespace checks, workspace/static checks and affected native compilation.
+- Focused event regressions, namespace checks, workspace/static checks and affected native compilation passed.
 - Keep all temporary task storage below 10 GiB; initial total is 7.818 GiB. Preserve raw evidence and use at most two build jobs.
 
 Pairing orchestration, Android service ownership, heap attribution and final
@@ -226,7 +274,7 @@ The source-parity check uses the documented cached-tool override; it is not a
 full Nix package build. Run recovery only after all builds have finished.
 
 Full Nix packages, ARM64, APK/device acceptance and a new long soak are not
-claimed by this checkpoint. The overall goal remains active.
+claimed by this checkpoint. The overall goal remained active at this stage.
 
 ## Dial-Registration Checkpoint
 
@@ -259,4 +307,94 @@ Recorded test-binary SHA-256:
 
 This checkpoint uses the commands and cached-tool boundaries above. It does not
 claim full Nix packages, ARM64, APK/device acceptance or formal proof coverage;
-the repository has no Lean project. The full timer/event goal remains active.
+the repository has no Lean project. The full timer/event goal remained active at this stage.
+
+## Final Verification
+
+| Gate | Final Result |
+| --- | --- |
+| Workspace | 1,475 passed; 36 opt-in exclusions; all nine event-dispatch tests passed |
+| Required Clippy / formatting | Passed; advisory warnings remain, including test-style warnings |
+| Android native | x86_64/API 26 compiled in 35.94 seconds; four target warnings |
+| Cached Nix source parity | Passed with unchanged source/test-target assertions; not a full package build |
+| Namespace compatibility | All 12 selected cases passed; summed test duration 236.60 seconds |
+| Public-profile recovery | Passed in 142.90 seconds including setup; one delayed/renumbered cycle and healthy dwell |
+| Private-profile recovery | Passed in 177.93 seconds including setup; one delayed/renumbered cycle and healthy dwell |
+
+Final logs use `/tmp/p2p-vpn-recovery-final-` with `fixed-workspace.log`,
+`clippy.log`, `android.log`, `nix.log`, `namespace-suite.log`, `public.log` and
+`private.log`. The earlier `workspace.log` preserves the 1,474-test checkpoint
+before adding the pending-replacement regression and correction.
+
+Both recovery profiles used the same test executable, unchanged daemon processes
+and configurations, and the original 375-second direct-recovery deadline.
+No task builds ran during observations; no routes or operator rescue were injected.
+
+| Profile | Artifact Suffix | Elapsed Excluding Setup |
+| --- | --- | ---: |
+| Public | `db7ceb2102a2d6d6` | 136.199 seconds |
+| Private | `cd4cc9628e849aaa` | 171.291 seconds |
+
+Artifact directory prefix:
+`/tmp/p2p-vpn-tun_namespace_automatic_discovery_recovers_after_link_changes.`.
+Both summaries record SHA-256
+`99a8022db6d8b793003da77d73cb6e6deb759e613d13bd69b181c55a0b51b3fd`.
+
+### Commands and Provenance
+
+| Tool / Setting | Used |
+| --- | --- |
+| Compiler | Rust 1.97.1, `8bab26f4f`, cached Nix tool |
+| Cargo executable | Reports 1.97.0, `c980f4866`, cached Nix tool |
+| Native build | Cached NDK 28.2.13676358; Android x86_64/API 26; cached `build-std` inputs |
+| Build limits | Two Cargo jobs; debug info and incremental compilation disabled; 8 MiB Rust minimum stack |
+| Dependencies | Offline and locked; no dependency/flake-lock changes or uncontrolled source builds |
+| Task storage | 7.824 GiB before final native compilation; 7.830 GiB after verification; below 10 GiB |
+| Nix parity output | `/nix/store/9hn3rmr3wkals62fkj7mncrmlqf3k4j3-p2p-vpn-rust-test-sources` |
+
+Use the matching cached toolchain and target directories, as in the
+[verification tooling notes](pairing-cancellation-plan.md#nix-check-tooling).
+The native command additionally requires the cached NDK linker/AR/CC and
+Android compiler wrapper; it is not an APK/device verification command.
+
+```sh
+export RUST_MIN_STACK=8388608 CARGO_BUILD_JOBS=2
+export CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
+export CARGO_TARGET_DIR=/tmp/p2p-vpn-review-target
+cargo test --offline --locked --workspace -- --test-threads=2
+cargo clippy --offline --locked --workspace --all-targets -- \
+  -D clippy::correctness -D clippy::suspicious -D clippy::perf
+cargo fmt --check
+RUSTC_BOOTSTRAP=1 RUSTC=/tmp/p2p-vpn-review-android-rustc \
+CARGO_TARGET_DIR=/tmp/p2p-vpn-android-target \
+cargo build --offline --locked --package p2p-vpn-android --lib \
+  --target x86_64-linux-android -Z build-std=std,panic_abort \
+  --config 'source.crates-io.replace-with="cached-android"' \
+  --config 'source.cached-android.directory="/tmp/p2p-vpn-kad-android-vendor"'
+```
+
+Run only the 12 named cases in `namespace-suite.log`, individually with
+`--ignored --exact "$CASE" --nocapture` and `P2P_VPN_TUN_E2E_KEEP_TEMP=1`.
+Do not substitute every ignored test; that includes separate resource campaigns.
+
+For recovery, use the command in the tracked-failure checkpoint with `public`
+and `private` profiles, collision diagnostics enabled, and soak mode unset.
+The standard source-parity attribute is `checks.x86_64-linux.rust-test-sources`;
+the recorded run used cached input overrides rather than the unavailable default closure.
+
+### Acceptance Audit
+
+| Requirement | Disposition |
+| --- | --- |
+| Reconcile completed Kademlia work | Index/checklist updated; RM-1 and historical exclusions preserved |
+| Inventory recovery ownership | Connection, epoch, timer, listener, probe, query and QUIC owners traced above |
+| Regress stale/terminal events | RE-1 through RE-4 and nine stateful dispatch tests; current loss and retry remain exercised |
+| Reproduce before correction | Negative registration, timer, listener, acceptance and pending-replacement logs retained |
+| Preserve architecture / defaults | No new configuration, route override, protocol/security change or public construction fields |
+| Verify affected behavior | Workspace, required static checks, Nix source parity, Android native, 12 compatibility cases and both recovery profiles passed |
+| Publish structured evidence | This report plus the updated broader refactor indexes; raw artifacts retained |
+| Atomic publication | Verified corrections use Conventional Commits on `main`; publication is checked before completing the goal |
+
+This review closes its declared timer/connection-event boundary. Pairing orchestration,
+Android lifecycle, heap attribution and final cross-platform acceptance remain separate.
+It makes no new physical WAN, ARM64, APK/device, full Nix package, long-soak or formal-proof claim.

@@ -10,8 +10,9 @@ evidence, exported check inventory, and outstanding acceptance work. Milestone
 sections below retain historical failures and their subsequent fixes.
 
 The [Kademlia workstream](kademlia-workstream-acceptance.md) is complete through
-RM-1 at `ceb6e4e2`. The next bounded workstream is
-[recovery timer and event ownership](recovery-event-ownership-review.md).
+RM-1 at `ceb6e4e2`. The bounded
+[recovery timer and event ownership review](recovery-event-ownership-review.md)
+is also complete; broader lifecycle, resource attribution and platform acceptance remain separate.
 
 ## Completion Criteria
 

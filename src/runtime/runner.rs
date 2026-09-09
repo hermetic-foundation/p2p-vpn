@@ -162,6 +162,8 @@ use packet_endpoint_selection::packet_capabilities_for_lan_connection;
 #[cfg(test)]
 mod kademlia_contention_tests;
 #[cfg(test)]
+mod recovery_event_tests;
+#[cfg(test)]
 mod settling_timeline_tests;
 
 const TUN_READ_CHANNEL: usize = 1024;
@@ -7726,7 +7728,7 @@ fn ordinary_peer_dial_uses_fresh_port(
 #[derive(Debug, Default)]
 struct RelayReadiness {
     accepted_reservations: HashSet<Libp2pPeerId>,
-    relayed_listen_addresses: HashMap<Libp2pPeerId, Vec<Multiaddr>>,
+    relayed_listen_addresses: HashMap<Libp2pPeerId, Vec<(ListenerId, Multiaddr)>>,
 }
 
 #[derive(Debug, Default)]
@@ -8056,6 +8058,10 @@ impl AutoRelayState {
         }
         self.reservation_listeners.insert(peer, listener_id);
         true
+    }
+
+    fn owns_listener(&self, relay: Libp2pPeerId, listener_id: ListenerId) -> bool {
+        self.reservation_listeners.get(&relay) == Some(&listener_id)
     }
 
     #[cfg(test)]
@@ -8530,7 +8536,7 @@ fn record_auto_relay_listener_termination(
 ) -> Option<ReleasedAutoRelayListener> {
     let released = auto_relay.release_listener_for_retry_after(listener_id, now)?;
     let status = if released.was_accepted {
-        relay_readiness.record_relay_reservation_lost(released.relay);
+        relay_readiness.forget_listener(released.relay, listener_id);
         metrics.record_relay_reservation_lost();
         "accepted"
     } else {
@@ -8763,23 +8769,32 @@ impl RelayReadiness {
         self.accepted_reservations.insert(relay);
     }
 
-    fn record_relay_listen_address(&mut self, relay: Libp2pPeerId, address: Multiaddr) {
+    fn record_relay_listen_address(
+        &mut self,
+        relay: Libp2pPeerId,
+        listener: ListenerId,
+        address: Multiaddr,
+    ) {
         let addresses = self.relayed_listen_addresses.entry(relay).or_default();
-        if !addresses.contains(&address) {
-            addresses.push(address);
+        if !addresses
+            .iter()
+            .any(|(owner, candidate)| *owner == listener && candidate == &address)
+        {
+            addresses.push((listener, address));
         }
     }
 
     fn record_relay_listen_address_lost(
         &mut self,
         relay: Libp2pPeerId,
+        listener: ListenerId,
         address: &Multiaddr,
     ) -> bool {
         let Some(addresses) = self.relayed_listen_addresses.get_mut(&relay) else {
             return false;
         };
         let original_len = addresses.len();
-        addresses.retain(|candidate| candidate != address);
+        addresses.retain(|(owner, candidate)| *owner != listener || candidate != address);
         let removed = addresses.len() != original_len;
         if !removed || !addresses.is_empty() {
             return false;
@@ -8787,6 +8802,18 @@ impl RelayReadiness {
 
         self.relayed_listen_addresses.remove(&relay);
         true
+    }
+
+    fn forget_listener(&mut self, relay: Libp2pPeerId, listener: ListenerId) {
+        if let Some(addresses) = self.relayed_listen_addresses.get_mut(&relay) {
+            addresses.retain(|(owner, _)| *owner != listener);
+            if addresses.is_empty() {
+                self.relayed_listen_addresses.remove(&relay);
+            }
+        }
+        if !self.relayed_listen_addresses.contains_key(&relay) {
+            self.accepted_reservations.remove(&relay);
+        }
     }
 
     fn record_relay_reservation_lost(&mut self, relay: Libp2pPeerId) -> bool {
@@ -8813,12 +8840,14 @@ impl RelayReadiness {
     }
 
     fn ready_relay_addresses(&self, relay: Libp2pPeerId) -> Vec<(Libp2pPeerId, Multiaddr)> {
+        let mut seen = HashSet::new();
         self.relayed_listen_addresses
             .get(&relay)
             .into_iter()
             .flatten()
-            .cloned()
-            .map(|address| (relay, address))
+            .map(|(_, address)| address)
+            .filter(|address| seen.insert(*address))
+            .map(|address| (relay, address.clone()))
             .collect()
     }
 }
@@ -12322,12 +12351,30 @@ async fn handle_swarm_event(
             }
             let mut publish_peer_address_record = kademlia_peer_address_is_advertisable(&address);
             if let Some(relay) = relayed_address_relay_peer(&address) {
+                if !context
+                    .configured_relay_reservation_listeners
+                    .contains(&listener_id)
+                    && !context.auto_relay.owns_listener(relay, listener_id)
+                {
+                    log_runtime_event(
+                        LogLevel::Info,
+                        "unowned_relay_reservation_address_ignored",
+                        &[("listener", &listener_id.to_string())],
+                    );
+                    return Ok(());
+                }
                 if let Some(relay_base_address) =
                     relay_base_address_from_relayed_listen_address(&address)
                 {
-                    context
-                        .relay_readiness
-                        .record_relay_listen_address(relay, relay_base_address);
+                    // Unlike peer-only acceptance, this event identifies the reservation owner.
+                    if context.auto_relay.owns_listener(relay, listener_id) {
+                        context.auto_relay.record_reservation_accepted(relay);
+                    }
+                    context.relay_readiness.record_relay_listen_address(
+                        relay,
+                        listener_id,
+                        relay_base_address,
+                    );
                 }
                 dial_relay_ready_configured_peers(
                     swarm,
@@ -12371,13 +12418,17 @@ async fn handle_swarm_event(
             if let Some(relay) = relayed_address_relay_peer(&address)
                 && let Some(relay_base_address) =
                     relay_base_address_from_relayed_listen_address(&address)
-                && context
-                    .relay_readiness
-                    .record_relay_listen_address_lost(relay, &relay_base_address)
+                && context.relay_readiness.record_relay_listen_address_lost(
+                    relay,
+                    listener_id,
+                    &relay_base_address,
+                )
             {
-                context
-                    .auto_relay
-                    .release_reservation_for_retry_after(relay, Instant::now());
+                if context.auto_relay.owns_listener(relay, listener_id) {
+                    context
+                        .auto_relay
+                        .release_reservation_for_retry_after(relay, Instant::now());
+                }
                 context.metrics.record_relay_reservation_lost();
                 log_runtime_event(
                     LogLevel::Warn,
@@ -12415,13 +12466,17 @@ async fn handle_swarm_event(
                     if let Some(relay) = relayed_address_relay_peer(&address)
                         && let Some(relay_base_address) =
                             relay_base_address_from_relayed_listen_address(&address)
-                        && context
-                            .relay_readiness
-                            .record_relay_listen_address_lost(relay, &relay_base_address)
+                        && context.relay_readiness.record_relay_listen_address_lost(
+                            relay,
+                            listener_id,
+                            &relay_base_address,
+                        )
                     {
-                        context
-                            .auto_relay
-                            .release_reservation_for_retry_after(relay, Instant::now());
+                        if context.auto_relay.owns_listener(relay, listener_id) {
+                            context
+                                .auto_relay
+                                .release_reservation_for_retry_after(relay, Instant::now());
+                        }
                         context.metrics.record_relay_reservation_lost();
                         log_runtime_event(
                             LogLevel::Warn,
@@ -12457,10 +12512,7 @@ async fn handle_swarm_event(
         SwarmEvent::ListenerError { listener_id, error } => {
             let retired_configured_listener = context
                 .retiring_configured_relay_reservation_listeners
-                .remove(&listener_id);
-            context
-                .configured_relay_reservation_listeners
-                .remove(&listener_id);
+                .contains(&listener_id);
             if !retired_configured_listener
                 && record_auto_relay_listener_termination(
                     context.auto_relay,
@@ -20095,7 +20147,6 @@ fn handle_behaviour_event(
             context.connection_epochs,
             context.forwarder,
             context.relay_readiness,
-            context.auto_relay,
             context.paths,
             context.relay_addresses,
             context.configured_peer_addresses,
@@ -21068,7 +21119,6 @@ fn handle_relay_event(
     connection_epochs: &mut ConnectionEpochs,
     forwarder: &Forwarder,
     relay_readiness: &mut RelayReadiness,
-    auto_relay: &mut AutoRelayState,
     paths: &PathSet,
     relay_addresses: &[(Libp2pPeerId, Multiaddr)],
     configured_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
@@ -21080,7 +21130,6 @@ fn handle_relay_event(
 ) {
     let accepted_relay = record_relay_client_event(metrics, event);
     if let Some(relay_peer_id) = accepted_relay {
-        auto_relay.record_reservation_accepted(relay_peer_id);
         relay_readiness.record_reservation_accepted(relay_peer_id);
         dial_relay_ready_configured_peers(
             swarm,
@@ -22533,7 +22582,7 @@ mod tests {
         }
     }
 
-    fn config_with_peer(
+    pub(super) fn config_with_peer(
         local_identity: &crate::identity::NodeIdentity,
         peer: Libp2pPeerId,
     ) -> Config {
@@ -31438,6 +31487,7 @@ mod tests {
     #[test]
     fn relay_readiness_requires_reservation_and_relayed_listen_address() {
         let relay = peer_id();
+        let listener = ListenerId::next();
         let relay_address: Multiaddr = format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}")
             .parse()
             .expect("relay address");
@@ -31447,7 +31497,7 @@ mod tests {
 
         assert!(!readiness.relay_ready(relay));
 
-        readiness.record_relay_listen_address(relay, relay_address.clone());
+        readiness.record_relay_listen_address(relay, listener, relay_address.clone());
 
         assert!(readiness.relay_ready(relay));
     }
@@ -31551,12 +31601,13 @@ mod tests {
     #[test]
     fn relay_readiness_allows_listen_address_before_reservation_acceptance() {
         let relay = peer_id();
+        let listener = ListenerId::next();
         let relay_address: Multiaddr = format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}")
             .parse()
             .expect("relay address");
         let mut readiness = RelayReadiness::default();
 
-        readiness.record_relay_listen_address(relay, relay_address.clone());
+        readiness.record_relay_listen_address(relay, listener, relay_address.clone());
         assert!(!readiness.relay_ready(relay));
 
         readiness.record_reservation_accepted(relay);
@@ -31570,6 +31621,7 @@ mod tests {
     #[test]
     fn relay_readiness_clears_on_lost_listen_address_and_reservation() {
         let relay = peer_id();
+        let listener = ListenerId::next();
         let relay_address: Multiaddr = format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}")
             .parse()
             .expect("relay address");
@@ -31579,17 +31631,17 @@ mod tests {
         let mut readiness = RelayReadiness::default();
 
         readiness.record_reservation_accepted(relay);
-        readiness.record_relay_listen_address(relay, relay_address.clone());
-        readiness.record_relay_listen_address(relay, relay_address_backup.clone());
+        readiness.record_relay_listen_address(relay, listener, relay_address.clone());
+        readiness.record_relay_listen_address(relay, listener, relay_address_backup.clone());
         assert!(readiness.relay_ready(relay));
 
-        assert!(!readiness.record_relay_listen_address_lost(relay, &relay_address));
+        assert!(!readiness.record_relay_listen_address_lost(relay, listener, &relay_address));
         assert!(readiness.relay_ready(relay));
-        assert!(readiness.record_relay_listen_address_lost(relay, &relay_address_backup));
+        assert!(readiness.record_relay_listen_address_lost(relay, listener, &relay_address_backup));
         assert!(!readiness.relay_ready(relay));
-        assert!(!readiness.record_relay_listen_address_lost(relay, &relay_address));
+        assert!(!readiness.record_relay_listen_address_lost(relay, listener, &relay_address));
 
-        readiness.record_relay_listen_address(relay, relay_address.clone());
+        readiness.record_relay_listen_address(relay, listener, relay_address.clone());
         assert!(readiness.relay_ready(relay));
 
         assert!(readiness.record_relay_reservation_lost(relay));
@@ -31597,7 +31649,7 @@ mod tests {
         assert!(!readiness.record_relay_reservation_lost(relay));
 
         readiness.record_reservation_accepted(relay);
-        readiness.record_relay_listen_address(relay, relay_address);
+        readiness.record_relay_listen_address(relay, listener, relay_address);
         assert!(readiness.relay_ready(relay));
     }
 
@@ -38398,7 +38450,7 @@ mod tests {
         assert_eq!(snapshot.membership_state_persists, 0);
     }
 
-    fn membership_sync_test_node(identity: NodeIdentity) -> P2pNode {
+    pub(super) fn membership_sync_test_node(identity: NodeIdentity) -> P2pNode {
         build_node(&HostConfig {
             identity,
             network_name: "lab".to_owned(),
