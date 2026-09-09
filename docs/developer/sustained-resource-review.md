@@ -420,6 +420,63 @@ ranges, infrastructure/overlay retry attribution and the open RSS investigation.
 - Earlier smoke retained in `1.0f4c43171f24e683`, with executable hash `7454336fc3fa3f2c572ac3086d1cf4108b3c7058dce8d03d3bd6bf40ff0e9ddb`.
 - No builds overlapped either smoke capture; no physical device was contacted.
 
+### Pressure Protocol
+
+S4 reuses `tun_namespace_recovers_after_tcp_queue_pressure` with five existing
+pressure/drain rounds per process pair. Packet and byte profiles are separate
+captures. Freeze the following settings before collecting sustained evidence.
+
+| Setting | Frozen Value |
+| --- | --- |
+| Runtime | Debug integration binary, `TOKIO_WORKER_THREADS=2`; direct TCP, no packet datagram listeners |
+| Profiles | `packets`: 4 packets / 8192 bytes; `bytes`: 16 packets / 4096 bytes |
+| Repetitions | Two fresh five-round captures per profile; same executable for all four |
+| Sequence | Packets, bytes, bytes, packets |
+| Traffic | Existing ping: 1000-byte payload, 5 ms interval, at most 3000 requests, 20-second deadline |
+| Shaping | A egress: 64 kbit/s, 50 ms delay, 16-packet netem queue |
+| Sampling / diagnostics | Approximately 250 ms sequential status/state/process observations; five-second metric logs |
+| Recovery | Remove qdisc; existing TCP-path waits; queues and stream requests drain within 30 seconds; unchanged 5/5 checks |
+| Watchdogs | Existing 450-second namespace budget; external watchdog 480 seconds; no wait scaling |
+| Budgets | All per-case JSON below 8 MiB; combined node logs below 2 MiB |
+
+Single-round smoke tests validate each profile before the four captures. They
+do not count as sustained repetitions. Record executable hash, profile, actual
+transmissions/replies and TUN byte/packet deltas, not just nominal offered load.
+
+The byte profile has capacity for three 1028-byte requests before the byte limit
+binds, well below its 16-packet limit. Per-drop runtime counters do not distinguish
+which limit fired; report this limitation alongside the queue-admission tests.
+
+This is pressure/recovery evidence, not the separate 300-second fixed-load S3
+workload. Two-worker results are not matched CPU comparisons with the earlier
+default-worker idle captures. RSS changes still require allocation attribution.
+
+#### Pressure Harness Validation
+
+The final fixture passes 50 namespace unit tests, required Clippy groups and
+cached rustfmt checks. Advisory Clippy warnings remain. Only test code and
+developer documentation changed; no production runtime was modified.
+
+| One-Round Smoke | Packets Profile | Bytes Profile |
+| --- | ---: | ---: |
+| Test duration, seconds | 39.13 | 59.94 |
+| Generator transmitted / received | 1975 / 10 | 1972 / 10 |
+| A peak queued packets / bytes | 4 / 4112 | 3 / 3084 |
+| Final queues / stream requests | Empty / zero | Empty / zero |
+| Recovery traffic | 5/5 both directions | 5/5 both directions |
+| Combined node logs, bytes | 271248 | 347702 |
+
+Both smoke tests pass, retain the same daemon identities and leave no matching
+fixture processes. Replay scripts preserve the limit profile and round count.
+No builds overlapped either smoke. Four five-round captures remain outstanding.
+
+- Executable SHA-256: `ab3f2fe482dfb48d2915074b04c81a4e037b9a6c02f94e590af07292f68de666`.
+- Packet artifact suffix: `1.35cc20df7fd8c5a8`; byte suffix: `1.3e33a24e9bf968d6`.
+- Artifact prefix: `/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-`.
+- Smoke logs: `/tmp/p2p-vpn-sustained-pressure-{packets,bytes}-smoke.log`.
+- Final checks: `/tmp/p2p-vpn-sustained-pressure-profile-{admission-tests,clippy}.log`.
+- Initial JSON-macro compile error was corrected before runtime tests; its log remains at `/tmp/p2p-vpn-sustained-pressure-profile-tests.log`.
+
 ### Shared Limits
 
 | Resource | Limit |

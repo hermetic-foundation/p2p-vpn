@@ -453,6 +453,9 @@ outbound_quic_datagram_packets 1\n";
 
 fn reexec_orchestrator(test_name: &str) {
     let current_exe = env::current_exe().expect("current test binary");
+    if test_name == QUEUE_PRESSURE_TEST_NAME {
+        queue_pressure::requested_limits();
+    }
     if test_name == unavailable_peer::TEST_NAME {
         assert!(
             idle_sample::requested_duration().is_some(),
@@ -2066,6 +2069,7 @@ fn namespace_replay_env_exports() -> String {
             idle_sample::SAMPLE_ENV,
             idle_sample::RUNTIME_SAMPLING_ENV,
             queue_pressure::ROUNDS_ENV,
+            queue_pressure::LIMIT_ENV,
             recovery_soak::PROFILE_ENV,
             recovery_soak::SOAK_ENV,
             recovery_soak::COLLISION_ENV,
@@ -3032,8 +3036,9 @@ fn run_node_child() {
         config.network.packet_plane.listen.clear();
         config.network.packet_plane.external_endpoints.clear();
         config.network.discovery = relay_test_discovery();
-        config.queue.max_packets_per_peer = 4;
-        config.queue.max_bytes_per_peer = 8192;
+        let limits = queue_pressure::requested_limits();
+        config.queue.max_packets_per_peer = limits.packets;
+        config.queue.max_bytes_per_peer = limits.bytes;
     }
     let interface = config.interface.name.clone();
     let runtime = TunRuntimeConfig::from_config(&config).expect("TUN config");
@@ -3474,6 +3479,8 @@ async fn run_ready_node(
         config.resources,
         Some(if idle_sample::requested_duration().is_some() {
             idle_sample::METRICS_INTERVAL
+        } else if env::args().any(|argument| argument == QUEUE_PRESSURE_TEST_NAME) {
+            queue_pressure::METRICS_INTERVAL
         } else {
             Duration::from_secs(1)
         }),

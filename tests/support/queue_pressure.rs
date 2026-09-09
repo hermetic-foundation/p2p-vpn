@@ -14,6 +14,54 @@ use super::{
 };
 
 pub const ROUNDS_ENV: &str = "P2P_VPN_TUN_E2E_PRESSURE_ROUNDS";
+pub const LIMIT_ENV: &str = "P2P_VPN_TUN_E2E_PRESSURE_LIMIT";
+pub const METRICS_INTERVAL: Duration = Duration::from_secs(5);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Limits {
+    pub name: &'static str,
+    pub packets: usize,
+    pub bytes: usize,
+}
+
+fn parse_limits(value: Option<&str>) -> Option<Limits> {
+    match value {
+        None | Some("packets") => Some(Limits {
+            name: "packets",
+            packets: 4,
+            bytes: 8192,
+        }),
+        Some("bytes") => Some(Limits {
+            name: "bytes",
+            packets: 16,
+            bytes: 4096,
+        }),
+        _ => None,
+    }
+}
+
+pub fn requested_limits() -> Limits {
+    let value = match env::var(LIMIT_ENV) {
+        Ok(value) => Some(value),
+        Err(env::VarError::NotPresent) => None,
+        Err(error) => panic!("invalid {LIMIT_ENV}: {error}"),
+    };
+    parse_limits(value.as_deref()).expect("pressure limit must be packets or bytes")
+}
+
+fn ping_counts(output: &str) -> Option<(usize, usize)> {
+    output.lines().find_map(|line| {
+        let words = line.split_whitespace().collect::<Vec<_>>();
+        if words.get(1..3) != Some(&["packets", "transmitted,"][..])
+            || words.get(4) != Some(&"received,")
+        {
+            return None;
+        }
+        let sent = words.first()?.parse().ok()?;
+        let received = words.get(3)?.parse().ok()?;
+        (sent > 0 && sent <= 3000 && received <= sent).then_some((sent, received))
+    })
+}
 
 fn parse_rounds(value: &str) -> Option<u64> {
     value.parse().ok().filter(|rounds| (1..=5).contains(rounds))
@@ -50,12 +98,14 @@ pub fn capture(temp: &Path, pid_a: u32, pid_b: u32, destination: Ipv4Addr) {
         series.push(serde_json::json!({
             "round": round, "before": report["before"], "after_load": report["after_load"],
             "after": report["after"], "transmitted_packets": report["transmitted_packets"],
+            "received_packets": report["received_packets"],
         }));
         fs::write(
             temp.join("queue-pressure-series.json"),
             serde_json::to_vec_pretty(&serde_json::json!({
                 "schema_version": 1, "requested_rounds": rounds, "completed_rounds": series.len(),
                 "complete": round == rounds, "rounds": series,
+                "queue_limit_profile": requested_limits().name,
             }))
             .unwrap(),
         )
@@ -70,6 +120,7 @@ fn capture_round(
     pid_b: u32,
     destination: Ipv4Addr,
 ) -> serde_json::Value {
+    let limits = requested_limits();
     let started = Instant::now();
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -94,9 +145,26 @@ fn capture_round(
                 state_metric_count(&lines, "queue_queued_packets").expect("queue packets");
             let bytes = state_metric_count(&lines, "queue_queued_bytes").expect("queue bytes");
             assert!(
-                packets <= 4 && bytes <= 8192,
+                packets <= limits.packets && bytes <= limits.bytes,
                 "queue exceeded configured bound"
             );
+            let work = [
+                "tun_read_packets",
+                "tun_read_bytes",
+                "tun_write_packets",
+                "tun_write_bytes",
+                "inbound_accepted_packets",
+                "outbound_sent_packets",
+                "outbound_direct_tcp_stream_fallback_packets",
+            ]
+            .into_iter()
+            .map(|name| {
+                (
+                    name,
+                    state_metric_count(&lines, name).expect("work counter"),
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
             nodes.insert(role.to_owned(), serde_json::json!({
                 "process": idle_sample::process_observation(role, pid, started),
                 "queued_packets": packets, "queued_bytes": bytes,
@@ -105,6 +173,7 @@ fn capture_round(
                 "stream_in_flight": state_metric_count(&state, "packet_stream_fallback_in_flight").expect("stream owners"),
                 "outbound_failures": state_metric_count(&lines, "outbound_failures").expect("outbound failures"),
                 "inbound_dropped_packets": state_metric_count(&lines, "inbound_dropped_packets").expect("inbound drops"),
+                "work": work,
             }));
         }
         serde_json::Value::Object(nodes)
@@ -164,16 +233,14 @@ fn capture_round(
     ns_command(pid_a, "tc", &["qdisc", "del", "dev", "veth-a", "root"]);
     let after_load = observe();
     let ping_log = fs::read_to_string(output.join("pressure-ping.log")).unwrap();
-    let transmitted: usize = ping_log
-        .lines()
-        .find_map(|line| line.split_once(" packets transmitted")?.0.parse().ok())
-        .expect("ping transmission summary");
-    assert!(transmitted > 0 && transmitted <= 3000);
+    let (transmitted, received) =
+        ping_counts(&ping_log).expect("valid ping transmission/reply summary");
     fs::write(
         output.join("queue-pressure-partial.json"),
         serde_json::to_vec_pretty(&serde_json::json!({
             "stage": "load_completed", "before": before, "samples": samples,
             "after_load": after_load, "transmitted_packets": transmitted,
+            "received_packets": received, "queue_limit_profile": limits.name,
         }))
         .unwrap(),
     )
@@ -261,7 +328,9 @@ fn capture_round(
         "packet_limit": 3000, "transmitted_packets": transmitted,
         "traffic_deadline_seconds": 20, "ping_payload_bytes": 1000, "interval_millis": 5,
         "underlay_rate_kbit": 64, "underlay_delay_millis": 50,
-        "queue_packet_limit": 4, "queue_byte_limit": 8192,
+        "queue_packet_limit": limits.packets, "queue_byte_limit": limits.bytes,
+        "queue_limit_profile": limits.name, "received_packets": received,
+        "fixture_metrics_interval_seconds": METRICS_INTERVAL.as_secs(),
     });
     fs::write(
         output.join("queue-pressure.json"),
@@ -278,6 +347,66 @@ fn capture_round(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn profiles_preserve_default_and_separately_bind_packet_or_byte_capacity() {
+        let packets = parse_limits(None).unwrap();
+        assert_eq!(Some(packets), parse_limits(Some("packets")));
+        assert_eq!((packets.packets, packets.bytes), (4, 8192));
+        let bytes = parse_limits(Some("bytes")).unwrap();
+        assert_eq!((bytes.packets, bytes.bytes), (16, 4096));
+        let ip_packet_bytes = 1000 + 8 + 20;
+        assert!(packets.bytes / ip_packet_bytes > packets.packets);
+        assert!(bytes.bytes / ip_packet_bytes < bytes.packets);
+        for invalid in ["", "byte", "packet", "0", "PACKETS"] {
+            assert_eq!(parse_limits(Some(invalid)), None);
+        }
+    }
+
+    #[test]
+    fn ping_summary_requires_valid_sent_and_received_counts() {
+        assert_eq!(
+            ping_counts("100 packets transmitted, 5 received, 95% packet loss"),
+            Some((100, 5))
+        );
+        assert_eq!(
+            ping_counts("100 packets transmitted, 0 received, +100 errors, 100% packet loss"),
+            Some((100, 0))
+        );
+        for invalid in [
+            "",
+            "5 received",
+            "0 packets transmitted, 0 received,",
+            "3001 packets transmitted, 1 received,",
+            "1 packets transmitted, 2 received,",
+            "1 packets transmitted, invalid received,",
+        ] {
+            assert_eq!(ping_counts(invalid), None);
+        }
+    }
+
+    #[test]
+    fn queue_admission_exercises_each_profile_limit_independently() {
+        use p2p_vpn::{
+            PeerId,
+            queue::{EnqueueError, Packet, PeerQueue},
+        };
+        for (profile, accepted) in [("packets", 4), ("bytes", 3)] {
+            let limits = parse_limits(Some(profile)).unwrap();
+            let mut queue = PeerQueue::new(limits.packets, limits.bytes);
+            let packet = || Packet::new(PeerId::from_bytes([1; 32]), 1, vec![0; 1028]);
+            for _ in 0..accepted {
+                queue.enqueue(packet()).unwrap();
+            }
+            assert_eq!(
+                queue.enqueue(packet()),
+                Err(EnqueueError::QueueFull { packet_bytes: 1028 })
+            );
+            assert_eq!(queue.stats().queued_packets, accepted);
+            assert_eq!(queue.stats().queued_bytes, accepted * 1028);
+            assert_eq!(queue.stats().dropped_packets, 1);
+        }
+    }
 
     #[test]
     fn rounds_are_bounded_and_invalid_values_are_rejected() {

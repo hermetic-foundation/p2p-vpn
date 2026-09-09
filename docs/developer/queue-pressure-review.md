@@ -128,6 +128,29 @@ TOKIO_WORKER_THREADS=2 P2P_VPN_TUN_E2E_KEEP_TEMP=1 \
 | Replay | Generated commands preserve the pressure-round environment setting |
 | Failure diagnostics | Each recovery ping saves stdout, stderr, exit code, and before/after observations before assertions |
 
+### Sustained Review Controls
+
+The [sustained review](sustained-resource-review.md#pressure-protocol) adds an
+independent byte-limited profile. Historical measurements above retain their
+original packet limits and logging settings; they are not matched baselines.
+
+| Control / Field | Behavior |
+| --- | --- |
+| `P2P_VPN_TUN_E2E_PRESSURE_LIMIT=packets` | Default: four packets and 8192 bytes |
+| `P2P_VPN_TUN_E2E_PRESSURE_LIMIT=bytes` | Sixteen packets and 4096 bytes; byte capacity binds first for 1028-byte IPv4 requests |
+| Diagnostic cadence | New pressure captures log runtime metrics every five seconds; sampling remains approximately 250 ms |
+| `received_packets` | Generator reply count; transmitted requests alone are not delivered work |
+| `work` | TUN read/write packet and byte counters, inbound accepted packets, outbound sent packets and direct-TCP fallback packets |
+| Replay | Saved commands retain the selected limit profile and round count |
+
+Invalid profiles and malformed ping summaries are rejected. Admission tests use
+the real queue: packet mode admits four 1028-byte packets; byte mode admits three;
+the next enqueue fails while the other limit still has capacity.
+
+Counters are cumulative. Compute each round's load deltas from `before` and
+`after_load`; final recovery probes are additional work. No efficiency comparison
+is valid merely because two runs requested the same number of packets.
+
 ### Repetition Evidence
 
 The first three-cycle attempt failed in cycle one after 37.21 seconds.
