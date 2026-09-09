@@ -2412,6 +2412,23 @@ impl CodePairingSessions {
         self.outbound_requests.remove(&request_id)
     }
 
+    pub(crate) fn take_outbound_request_for_peer(
+        &mut self,
+        request_id: OutboundRequestId,
+        peer: Libp2pPeerId,
+    ) -> Option<OutboundCodeRequest> {
+        let expected_peer = match self.outbound_requests.get(&request_id)? {
+            OutboundCodeRequest::Hello(request) => request.peer,
+            OutboundCodeRequest::Submit(request) | OutboundCodeRequest::Poll(request) => {
+                request.peer
+            }
+        };
+        if expected_peer != peer {
+            return None;
+        }
+        self.outbound_requests.remove(&request_id)
+    }
+
     pub fn insert_inbound_session(
         &mut self,
         peer: Libp2pPeerId,

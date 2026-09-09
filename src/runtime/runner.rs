@@ -13997,6 +13997,18 @@ fn handle_pairing_code_event(
     event: request_response::Event<PairingCodeRequest, PairingCodeResponse>,
 ) -> Result<(), RunnerError> {
     if !request_response_message_is_usable(context.connection_epochs, &event, "pairing_code") {
+        // A response is terminal in libp2p even when its connection has been retired.
+        if let request_response::Event::Message {
+            peer,
+            message: Message::Response { request_id, .. },
+            ..
+        } = &event
+            && let Some(request) = context
+                .code_pairing_sessions
+                .take_outbound_request_for_peer(*request_id, *peer)
+        {
+            release_outbound_code_request(context.code_pairing_sessions, &request);
+        }
         return Ok(());
     }
     match event {
@@ -22679,7 +22691,7 @@ mod tests {
         directory.join("pairing-state.json")
     }
 
-    fn code_pairing_runtime_fixture() -> (
+    pub(super) fn code_pairing_runtime_fixture() -> (
         Config,
         NodeIdentity,
         NodeIdentity,

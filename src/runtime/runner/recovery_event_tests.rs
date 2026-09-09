@@ -34,6 +34,7 @@ struct EventFixture {
     maintenance: KademliaMaintenance,
     configured_listeners: HashSet<ListenerId>,
     retired_listeners: HashSet<ListenerId>,
+    pairing: CodePairingSessions,
 }
 
 impl EventFixture {
@@ -57,6 +58,7 @@ impl EventFixture {
             maintenance: KademliaMaintenance::new(Instant::now()),
             configured_listeners: HashSet::new(),
             retired_listeners: HashSet::new(),
+            pairing: CodePairingSessions::new(),
         }
     }
 
@@ -104,7 +106,7 @@ impl EventFixture {
                 packet_plane_session_ttl: Duration::from_secs(60),
                 packet_plane_replay_windows_per_session: 1,
                 pairing_replay_tokens: &mut PairingReplayTokens::default(),
-                code_pairing_sessions: &mut CodePairingSessions::new(),
+                code_pairing_sessions: &mut self.pairing,
                 pairing_state_store: None,
                 active_connections: &mut self.active_connections,
                 connection_epochs: &mut self.epochs,
@@ -135,6 +137,261 @@ fn relay_address(relay: Libp2pPeerId) -> Multiaddr {
     format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}")
         .parse()
         .unwrap()
+}
+
+#[tokio::test]
+async fn pairing_hello_terminal_stale_reply_releases_retry_ownership() {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let mut remote = membership_sync_test_node(NodeIdentity::generate_ed25519().unwrap());
+        let peer = *remote.swarm.local_peer_id();
+        let mut fixture = EventFixture::new(peer);
+        remote.swarm.listen_on("/ip4/127.0.0.1/tcp/0".parse().unwrap()).unwrap();
+        let address = loop {
+            if let SwarmEvent::NewListenAddr { address, .. } = remote.swarm.select_next_some().await {
+                break address;
+            }
+        };
+        for _ in 0..2 {
+            fixture.node.swarm.dial(DialOpts::peer_id(peer).condition(PeerCondition::Always)
+                .addresses(vec![address.clone()]).build()).unwrap();
+            loop {
+                tokio::select! {
+                    event = fixture.node.swarm.select_next_some() => {
+                        if let SwarmEvent::ConnectionEstablished { connection_id, .. } = event {
+                            assert!(fixture.epochs.record_established(connection_id));
+                            break;
+                        }
+                    }
+                    _ = remote.swarm.select_next_some() => {}
+                }
+            }
+        }
+        let now = Instant::now();
+        fixture.pairing.join("lab", crate::pairing_code::PairingCode::generate(), None,
+            vec![], 600, current_unix_seconds_lossy(), now).unwrap();
+        send_pairing_code_hello(&mut fixture.node.swarm, &mut fixture.pairing,
+            &fixture.node.identity, "lab", peer, PairingDiscoveryStage::Lan,
+            &fixture.metrics, now);
+        let response_event = loop {
+            tokio::select! {
+                event = fixture.node.swarm.select_next_some() => {
+                    if let SwarmEvent::Behaviour(BehaviourEvent::PairingCode(event @ request_response::Event::Message {
+                        message: Message::Response { .. }, ..
+                    })) = event { break event; }
+                }
+                event = remote.swarm.select_next_some() => {
+                    if let SwarmEvent::Behaviour(BehaviourEvent::PairingCode(request_response::Event::Message {
+                        message: Message::Request { request, channel, .. }, ..
+                    })) = event {
+                        assert!(matches!(request, PairingCodeRequest::Hello { .. }));
+                        remote.swarm.behaviour_mut().pairing_code.send_response(channel,
+                            PairingCodeResponse::Rejected { reason: PairingCodeRejectionReason::Unavailable }).unwrap();
+                    }
+                }
+            }
+        };
+        let request_response::Event::Message { connection_id, message: Message::Response { request_id, .. }, .. } = &response_event
+            else { panic!("expected response"); };
+        assert!(!fixture.node.swarm.behaviour().pairing_code.is_pending_outbound(&peer, request_id));
+        let (old_connection, old_request) = (*connection_id, *request_id);
+        assert!(fixture.epochs.mark_retiring(old_connection));
+        assert!(fixture.node.swarm.close_connection(old_connection));
+        fixture.dispatch(SwarmEvent::Behaviour(BehaviourEvent::PairingCode(response_event))).await;
+        assert!(fixture.pairing.mark_peer_attempted(peer, Instant::now()).is_none(), "retry must retain backoff");
+        let mut tick = tokio::time::interval(Duration::from_millis(20));
+        let retried = loop {
+            tokio::select! {
+                _ = tick.tick() => send_pairing_code_hello(&mut fixture.node.swarm, &mut fixture.pairing,
+                    &fixture.node.identity, "lab", peer, PairingDiscoveryStage::Lan,
+                    &fixture.metrics, Instant::now()),
+                event = fixture.node.swarm.select_next_some() => {
+                    if let SwarmEvent::Behaviour(BehaviourEvent::PairingCode(event @ request_response::Event::Message {
+                        message: Message::Response { .. }, ..
+                    })) = event { break event; }
+                }
+                event = remote.swarm.select_next_some() => {
+                    if let SwarmEvent::Behaviour(BehaviourEvent::PairingCode(request_response::Event::Message {
+                        message: Message::Request { request, channel, .. }, ..
+                    })) = event {
+                        assert!(matches!(request, PairingCodeRequest::Hello { .. }));
+                        remote.swarm.behaviour_mut().pairing_code.send_response(channel,
+                            PairingCodeResponse::Rejected { reason: PairingCodeRejectionReason::Unavailable }).unwrap();
+                    }
+                }
+            }
+        };
+        let request_response::Event::Message { connection_id, message: Message::Response { request_id, .. }, .. } = &retried
+            else { panic!("expected retry response"); };
+        assert_ne!(*connection_id, old_connection);
+        assert_ne!(*request_id, old_request);
+        let new_request = *request_id;
+        for (sender, request_id) in [(peer, old_request), (Libp2pPeerId::random(), new_request)] {
+            fixture.dispatch(SwarmEvent::Behaviour(BehaviourEvent::PairingCode(request_response::Event::Message {
+                peer: sender, connection_id: old_connection,
+                message: Message::Response { request_id,
+                    response: PairingCodeResponse::Rejected { reason: PairingCodeRejectionReason::Unavailable } },
+            }))).await;
+            assert!(fixture.pairing.mark_peer_attempted(peer, Instant::now() + Duration::from_secs(60)).is_none(),
+                "unrelated stale event released the replacement attempt");
+        }
+        fixture.dispatch(SwarmEvent::Behaviour(BehaviourEvent::PairingCode(retried))).await;
+        assert!(fixture.pairing.take_outbound_request(new_request).is_none());
+        assert!(fixture.pairing.mark_peer_attempted(peer, Instant::now()).is_none());
+        assert!(fixture.pairing.mark_peer_attempted(peer, Instant::now() + Duration::from_secs(60)).is_some(),
+            "retry response must release the replacement attempt");
+    }).await.expect("loopback pairing response deadline");
+}
+
+fn pending_pairing_request(
+    fixture: &mut EventFixture,
+    poll: bool,
+    offer: &PairingOffer,
+    request: &PairingRequest,
+) -> (String, request_response::OutboundRequestId) {
+    let peer = offer.payload.inviter_peer.parse().unwrap();
+    let now = Instant::now();
+    let operation = fixture
+        .pairing
+        .join(
+            "lab",
+            crate::pairing_code::PairingCode::generate(),
+            None,
+            vec![],
+            600,
+            current_unix_seconds_lossy(),
+            now,
+        )
+        .unwrap()
+        .operation_id;
+    let transcript = pairing_request_transcript_sha256(request).unwrap();
+    let outbound = OutboundPairing {
+        operation_id: operation.clone(),
+        peer,
+        offer: offer.clone(),
+        transcript_sha256: transcript.clone(),
+    };
+    let id = if poll {
+        let ticket = URL_SAFE_NO_PAD.encode([0xab; 16]);
+        fixture
+            .pairing
+            .set_remote_pending(
+                &operation,
+                peer,
+                offer.clone(),
+                transcript,
+                ticket.clone(),
+                now,
+            )
+            .unwrap();
+        assert!(
+            fixture
+                .pairing
+                .due_remote_poll(now + Duration::from_secs(2))
+                .is_some()
+        );
+        let id = fixture
+            .node
+            .swarm
+            .behaviour_mut()
+            .pairing_code
+            .send_request(&peer, PairingCodeRequest::Poll { ticket });
+        fixture.pairing.insert_outbound_poll(id, outbound).unwrap();
+        id
+    } else {
+        fixture
+            .pairing
+            .set_pending_submission(
+                &operation,
+                peer,
+                request.clone(),
+                offer.clone(),
+                transcript,
+                now,
+            )
+            .unwrap();
+        assert!(fixture.pairing.due_pending_submission(now).is_some());
+        let id = fixture
+            .node
+            .swarm
+            .behaviour_mut()
+            .pairing_code
+            .send_request(
+                &peer,
+                PairingCodeRequest::Submit {
+                    request: Box::new(request.clone()),
+                },
+            );
+        fixture
+            .pairing
+            .insert_outbound_submit(id, outbound)
+            .unwrap();
+        id
+    };
+    (operation, id)
+}
+
+fn pairing_retry_due(fixture: &mut EventFixture, poll: bool, now: Instant) -> bool {
+    if poll {
+        fixture.pairing.due_remote_poll(now).is_some()
+    } else {
+        fixture.pairing.due_pending_submission(now).is_some()
+    }
+}
+
+#[tokio::test]
+async fn pairing_submit_poll_stale_cleanup_preserves_replacement_and_backoff() {
+    for poll in [false, true] {
+        let (_, inviter, _, offer, request, _) = super::tests::code_pairing_runtime_fixture();
+        let peer = inviter.peer_id.parse().unwrap();
+        let mut fixture = EventFixture::new(peer);
+        let connection = ConnectionId::new_unchecked(45);
+        assert!(fixture.epochs.record_established(connection));
+        assert!(fixture.epochs.mark_retiring(connection));
+        let (old_operation, old_id) = pending_pairing_request(&mut fixture, poll, &offer, &request);
+        let reply = |peer, request_id| {
+            SwarmEvent::Behaviour(BehaviourEvent::PairingCode(
+                request_response::Event::Message {
+                    peer,
+                    connection_id: connection,
+                    message: Message::Response {
+                        request_id,
+                        response: PairingCodeResponse::Rejected {
+                            reason: PairingCodeRejectionReason::UserRejected,
+                        },
+                    },
+                },
+            ))
+        };
+        fixture.dispatch(reply(peer, old_id)).await;
+        assert!(fixture.pairing.take_outbound_request(old_id).is_none());
+        assert!(!pairing_retry_due(&mut fixture, poll, Instant::now()));
+        assert!(pairing_retry_due(
+            &mut fixture,
+            poll,
+            Instant::now() + Duration::from_secs(60)
+        ));
+        fixture.pairing.cancel(&old_operation).unwrap();
+        let (new_operation, new_id) = pending_pairing_request(&mut fixture, poll, &offer, &request);
+        assert_ne!(new_operation, old_operation);
+        assert_ne!(new_id, old_id);
+        for (sender, id) in [(peer, old_id), (Libp2pPeerId::random(), new_id)] {
+            fixture.dispatch(reply(sender, id)).await;
+            assert!(
+                !pairing_retry_due(&mut fixture, poll, Instant::now() + Duration::from_secs(60)),
+                "old/wrong-peer reply released replacement retry ownership"
+            );
+        }
+        fixture.dispatch(reply(peer, new_id)).await;
+        assert!(fixture.pairing.take_outbound_request(new_id).is_none());
+        assert!(!pairing_retry_due(&mut fixture, poll, Instant::now()));
+        assert!(pairing_retry_due(
+            &mut fixture,
+            poll,
+            Instant::now() + Duration::from_secs(60)
+        ));
+        assert!(fixture.pairing.join_completion(&new_operation).is_none());
+        assert_eq!(fixture.pairing.enrollments().len(), 0);
+    }
 }
 
 #[tokio::test]
