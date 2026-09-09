@@ -79,6 +79,24 @@ sudo env \
 
 Neither phase 3 nor production readiness is established by collection completion.
 
+#### Counter Analysis Preparation
+
+The pinned baseline/current `src/metrics.rs` files are byte-identical. Their
+application event counters provide common semantics; this does not make every
+internal Kademlia measurement available on the baseline.
+
+| Source | Interpretation |
+| --- | --- |
+| Runtime metric status lines | Named application event counters and gauges; classify from source, not name suffix alone |
+| `kad_primary_*`, `kad_pairing_*` resource lines | Current-only internal lifecycle, admission, rejection and retained-owner instrumentation |
+| `app_*` recovery snapshot | Current-only owner counts, ages and cooldown gauges; not cumulative events |
+
+- `direct_connections_established` counts establishment events, not currently open connections. Use process/socket observations for owned socket counts.
+- Query phases, RPC requests, application lookup calls and dial intents are distinct events. Do not sum them into a single request counter.
+- `tests/support/resource_counters.rs` extracts explicitly selected unsigned values from control-line arrays. Absent fields remain unavailable, distinct from zero.
+- The parser rejects duplicate selected fields, malformed numbers, overflow and oversized captures; unselected control payloads are never emitted.
+- Parser tests and existing measurement tests pass. Window aggregation, availability catalog, paired comparisons and full-dataset analysis remain outstanding.
+
 #### Collection Auditor
 
 `tests/support/resource_collection.rs` audits saved artifacts without rerunning

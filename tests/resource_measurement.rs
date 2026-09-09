@@ -4,6 +4,8 @@ mod process_sample;
 mod resource_analysis;
 #[path = "support/resource_collection.rs"]
 mod resource_collection;
+#[path = "support/resource_counters.rs"]
+mod resource_counters;
 #[path = "support/resource_matrix.rs"]
 mod resource_matrix;
 #[path = "support/resource_protocol.rs"]
