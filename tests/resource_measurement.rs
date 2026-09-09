@@ -6,6 +6,16 @@ mod resource_analysis;
 mod resource_collection;
 #[path = "support/resource_counters.rs"]
 mod resource_counters;
+#[path = "support/resource_dataset.rs"]
+mod resource_dataset;
+#[path = "support/resource_metrics.rs"]
+mod resource_metrics;
+
+#[test]
+#[ignore = "aggregates audited campaign using P2P_VPN_ANALYSIS_ROOT and new P2P_VPN_ANALYSIS_OUTPUT"]
+fn resource_dataset_analysis() {
+    resource_dataset::run().unwrap();
+}
 #[path = "support/resource_matrix.rs"]
 mod resource_matrix;
 #[path = "support/resource_protocol.rs"]

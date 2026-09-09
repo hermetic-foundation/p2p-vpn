@@ -98,7 +98,28 @@ internal Kademlia measurement available on the baseline.
 - Counter-window aggregation reuses process identity/timing validation and rejects missing values, counter resets and gaps over 7.5 seconds.
 - Full-window deltas/rates require at least three samples, 95% coverage, and no invalid interval. Partial valid deltas remain diagnostic only.
 - Rates use summed valid elapsed time, not the mean of per-interval rates. Missing counters remain distinct from genuine zero-event windows.
-- Tests cover parsing, valid rates, resets, missing captures, replacement, gaps and partial coverage. The availability catalog, dataset integration and paired comparisons remain outstanding.
+- Tests cover parsing, valid rates, resets, missing captures, replacement, gaps and partial coverage. Dataset integration is implemented; paired comparisons remain outstanding.
+
+#### Per-Run Dataset Analysis
+
+The metric catalog contains 86 explicitly classified counters/gauges. The runner
+re-audits the collection, compares immutable provenance with the published index,
+and hash-checks each observation file before regenerating derived summaries.
+
+```bash
+sudo env \
+  P2P_VPN_ANALYSIS_ROOT=/tmp/p2p-vpn-phase3-v3-acceptance-20260908 \
+  P2P_VPN_ANALYSIS_OUTPUT=/tmp/p2p-vpn-analysis-new.json \
+  "$MEASUREMENT_TEST" --ignored --exact resource_dataset_analysis --nocapture
+```
+
+- Output must be new. It contains the catalog, all run outcomes, packet counts, stage outcomes, control windows and existing process summaries.
+- This is per-run analysis, not paired efficiency claims. Current-only metrics must not be compared against missing baseline fields.
+- Full-dataset execution passed in 50.31 seconds: 48 runs, four censored outcomes retained, and six explicitly partial endpoint control windows.
+- Partial control windows end at their last captured process timestamp. Their deltas describe only that interval; they cannot stand in for full stages.
+- Three truncated runs retain an explicit unavailable process-summary reason. Complete process windows are not synthesized across missing boundaries.
+- Immutable hashes/outcomes are checked exactly. Floating-point derived summaries are recomputed from raw input instead of compared as identity metadata.
+- Reproduction determinism, paired outcome/workload gating and repetition statistics remain to be verified before analysis-goal completion.
 
 #### Collection Auditor
 
