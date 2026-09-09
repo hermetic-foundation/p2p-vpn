@@ -101,4 +101,4 @@ Expected uncompressed SHA-256:
 - Two final full-dataset passes took 54.27/54.59 seconds and produced byte-identical JSON, including the transport-context counters.
 - Measurement tests, required Clippy groups, formatting and cached Nix source checks passed. Full-dataset audit/aggregation was executed without new measurements.
 - Runtime/vendor code is unchanged; full workspace and Android builds were not repeated for analysis-only tooling.
-- The [final report](kademlia-resource-final-report.md) records phase-3 acceptance and prioritized follow-ups. Phase-4 workstream acceptance remains open.
+- The [final report](kademlia-resource-final-report.md) records phase-3 acceptance. The [phase-4 audit](kademlia-workstream-acceptance.md) defers overall acceptance for RM-1.

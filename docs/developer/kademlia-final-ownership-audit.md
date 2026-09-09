@@ -5,7 +5,8 @@
 This audit covers phase 1, **Aggregate Resource Bounds**, of the
 [resource-limits workstream](kademlia-resource-plan.md).
 Phase 1 implementation and verification are complete. This is not
-production-readiness acceptance; phases 2-4 remain open.
+production-readiness acceptance. Subsequent phase status and the overall
+disposition are in the [workstream audit](kademlia-workstream-acceptance.md).
 
 | Included | Not Completed By This Phase |
 | --- | --- |

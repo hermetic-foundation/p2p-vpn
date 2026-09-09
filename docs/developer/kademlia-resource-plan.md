@@ -6,6 +6,8 @@ The original broad goal was superseded without being marked complete.
 **Aggregate Resource Bounds**, phase 1 below, is complete.
 Phase 2, [Sustained Recovery And Healthy Settling](kademlia-settling.md), is complete.
 Phase 3, [Before/After Resource Measurements](kademlia-resource-final-report.md), is complete with explicit evidence limitations.
+The [phase-4 audit](kademlia-workstream-acceptance.md) is complete; overall
+acceptance remains open pending RM-1 late-promotion diagnosis.
 This workstream does not complete the broader reliability review.
 Starting revision: `5ecb01ea`. No deployed service or physical device has changed.
 
@@ -16,14 +18,14 @@ Starting revision: `5ecb01ea`. No deployed service or physical device has change
 | 1. Aggregate Resource Bounds | Handler pending work, total routing storage, total retained query state | Enforced limits and deterministic saturation/recovery evidence | Complete |
 | 2. Sustained Recovery And Settling | Prolonged failures, churn, transitions, healthy idle behavior | Long-running tests recover without intervention and settle when healthy | Complete; both final 30-minute profiles passed |
 | 3. Before/After Measurements | Sockets, dial/query rates, CPU, RSS | Comparable baseline/current captures, commands, and limitations | Complete with limits; [acceptance report](kademlia-resource-final-report.md), 44 completed and four censored runs |
-| 4. Final Acceptance | All original requirements, documentation, packaging | Requirement-by-requirement evidence audit and residual risks | Open |
+| 4. Final Acceptance | All original requirements, documentation, packaging | Requirement-by-requirement evidence audit and residual risks | Audit complete; acceptance deferred for RM-1; [disposition](kademlia-workstream-acceptance.md) |
 
-Phases 1-3 are complete; phase 4 remains open. Verified commits remain valid;
+Phases 1-3 are complete; phase-4 acceptance remains open. Verified commits remain valid;
 the completion gates below retain the original workstream's full scope.
 See [Aggregate Bounds](kademlia-aggregate-bounds.md) for phase 1 ownership and tests.
 
-The [final acceptance audit](kademlia-final-ownership-audit.md) records its complete
-owner/producer inventory and final checks. Historical findings below preserve
+The [phase-1 ownership audit](kademlia-final-ownership-audit.md) records its complete
+owner/producer inventory and checks. Historical findings below preserve
 checkpoint-specific gaps; this status table is authoritative for current progress.
 
 ## Completion Gates
@@ -33,10 +35,10 @@ checkpoint-specific gaps; this status table is authoritative for current progres
 | Internal addresses | Count/byte bounds for present and pending buckets, address changes, and query caches | Aggregate routing and query retention verified, including backing capacity |
 | Query state | Bounded candidate identities, active queries, and retained results | All retained owners and production producers audited; saturation/retirement verified |
 | Scheduling | Bounded bootstrap, discovery, and dial activity under failure and churn | Aggregate bounds and phase-2 sustained activity/settling passed |
-| Recovery | LAN-first lookup, relay fallback, network-change recovery, and healthy-path settling | Namespace gates and both final five-cycle sustained profiles passed |
+| Recovery | LAN-first lookup, relay fallback, network-change recovery, and healthy-path settling | Both final five-cycle profiles passed; later missed direct-confirmation deadline remains unresolved (RM-1) |
 | Measurements | Comparable before/after CPU, RSS, sockets, dial rates, and query rates | Audited and published with explicit comparison limits; see phase-3 report |
-| Packaging | Matching Cargo, desktop Nix, and Android source inclusion | Phase-2 Nix source parity and native x86_64 Android verified; broader final acceptance open |
-| Delivery | Regression tests, broader validation, documentation, atomic verified pushes | Phases 1-3 complete; phase 4 remains open |
+| Packaging | Matching Cargo, desktop Nix, and Android source inclusion | Fresh phase-4 source parity passed; unchanged native x86_64 Android compilation reused; no full package/APK/ARM64 claim |
+| Delivery | Regression tests, broader validation, documentation, atomic verified pushes | Phases 1-3 and final audit published; overall acceptance deferred for RM-1 |
 
 ## Baseline Reproduction
 

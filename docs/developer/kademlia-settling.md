@@ -8,7 +8,9 @@ Both final sustained profiles passed on the same binary, including five recovery
 cycles, continuous healthy traffic, UDP renewal, owner cleanup, and quiet settling.
 
 The final evidence below supersedes the historical checkpoints and failures.
-Phase 3 resource comparisons and phase 4 broader final acceptance remain open.
+Phase 3 [resource comparisons](kademlia-resource-final-report.md) are complete
+with limitations. The [phase-4 audit](kademlia-workstream-acceptance.md) records
+the unresolved later direct-promotion result and deferred overall acceptance.
 
 See the [workstream plan](kademlia-resource-plan.md) and the completed
 [aggregate ownership audit](kademlia-final-ownership-audit.md).

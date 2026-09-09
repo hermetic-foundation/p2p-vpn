@@ -4,7 +4,8 @@
 
 **Phase 3: complete with explicit evidence limitations.** This accepts the
 measurement, analysis and reporting deliverables, not every subject's runtime
-behavior. Phase 4 and production readiness remain open.
+behavior. The subsequent [phase-4 audit](kademlia-workstream-acceptance.md)
+defers overall acceptance for RM-1; production readiness remains open.
 
 The original protocol permits failures, censoring and unavailable metrics.
 All 24 prescribed pairs were executed and retained; acceptance does not require
