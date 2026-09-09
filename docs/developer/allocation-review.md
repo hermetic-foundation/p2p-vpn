@@ -101,12 +101,14 @@ deadline was changed.
 - First log: `/tmp/p2p-vpn-allocation-s6-8-1-cached.log`.
 - Executable SHA-256: `509996713072b3089f29565260f22337d452528c22c2d7623a0c9312d4b89805`.
 - RSS after drop rose from 23032 to 23036 KiB despite zero retained Rust-byte deltas.
-- [Raw samples and hashes](allocation-review-samples.json) preserve five of twelve planned captures.
+- [Raw samples and hashes](allocation-review-samples.json) preserve six of twelve planned captures.
 - All four eight-record captures passed: 40 cycles, zero post-drop live byte/block deltas.
 - Eight-record cached refreshes allocated zero; three forced refreshes made 3171 allocations per cycle.
 - The first 128-record cached capture passed in 23.19 seconds: ten zero-retention cycles, zero refresh allocations.
 - Its post-drop RSS rose from 23984 to 24036 KiB, then settled; this is not retained Rust requested bytes.
-- Seven remaining captures and packet allocation attribution are pending.
+- The first 128-record forced capture passed in 155.04 seconds: ten zero-retention byte/block cycles.
+- Three forced refreshes made 47535 allocations per cycle; post-drop RSS rose 24 KiB before settling.
+- Six remaining captures and packet allocation attribution are pending.
 
 ### Validation After Dependency Packaging Correction
 
