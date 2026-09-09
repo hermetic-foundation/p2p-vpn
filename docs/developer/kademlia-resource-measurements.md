@@ -8,7 +8,8 @@ The numeric protocol below is version 3. The replacement generator is integrated
 and passed paired traffic VPN preflight. Version-2 artifacts remain archived separately.
 Version-3 collection is complete: all 48 outcomes are recorded and audited,
 with 44 completed and four censored. The redacted index is published below.
-Comparative analysis and the final report remain separate follow-up goals.
+Comparative analysis is [published](kademlia-resource-analysis.md). The final
+report and phase-3 acceptance review remain a separate follow-up goal.
 
 See the [workstream plan](kademlia-resource-plan.md).
 Phases 1 and 2 remain complete; this phase does not establish production readiness.
@@ -74,8 +75,8 @@ sudo env \
 
 #### Follow-Up Goals
 
-1. Counter aggregation and comparative analysis: common/current-only fields, reset handling, useful-work comparability, paired variation, and censored-window handling.
-2. Final report and validation: investigate regressions and uncertainty, publish conclusions and limitations, and close phase 3 against its original requirements.
+1. Completed: counter aggregation and comparative analysis, including common/current-only fields, reset handling, useful-work comparability, paired variation and censoring.
+2. Outstanding: final report and acceptance review, including regression/uncertainty decisions, conclusions, limitations and original phase-3 requirements.
 
 Neither phase 3 nor production readiness is established by collection completion.
 
@@ -98,11 +99,11 @@ internal Kademlia measurement available on the baseline.
 - Counter-window aggregation reuses process identity/timing validation and rejects missing values, counter resets and gaps over 7.5 seconds.
 - Full-window deltas/rates require at least three samples, 95% coverage, and no invalid interval. Partial valid deltas remain diagnostic only.
 - Rates use summed valid elapsed time, not the mean of per-interval rates. Missing counters remain distinct from genuine zero-event windows.
-- Tests cover parsing, valid rates, resets, missing captures, replacement, gaps and partial coverage. Dataset integration is implemented; paired comparisons remain outstanding.
+- Tests cover parsing, valid rates, resets, missing captures, replacement, gaps and partial coverage. Dataset integration and paired comparisons are implemented.
 
 #### Per-Run Dataset Analysis
 
-The metric catalog contains 86 explicitly classified counters/gauges. The runner
+The metric catalog contains 90 explicitly classified counters/gauges. The runner
 re-audits the collection, compares immutable provenance with the published index,
 and hash-checks each observation file before regenerating derived summaries.
 
@@ -119,7 +120,7 @@ sudo env \
 - Partial control windows end at their last captured process timestamp. Their deltas describe only that interval; they cannot stand in for full stages.
 - Three truncated runs retain an explicit unavailable process-summary reason. Complete process windows are not synthesized across missing boundaries.
 - Immutable hashes/outcomes are checked exactly. Floating-point derived summaries are recomputed from raw input instead of compared as identity metadata.
-- Paired outcome/workload gating and repetition statistics are implemented. Publication and interpretation of final analysis remain outstanding.
+- Paired outcome/workload gating, repetition statistics and [analysis notes](kademlia-resource-analysis.md) are published. Final reporting remains outstanding.
 
 #### Paired Comparison Rules
 
@@ -138,6 +139,15 @@ sudo env \
 - All six pressure pairs have unequal delivered work; their absolute observations remain available, but efficiency deltas are withheld.
 - All three private recovery pairs and the third public recovery pair are censored. Public recovery comparisons therefore have at most two eligible repetitions.
 - Most idle/traffic metrics have three eligible repetitions. Some startup windows are invalid; inspect each metric's actual eligibility count.
+
+#### Attribution Checks
+
+- All three private traffic pairs used direct TCP stream fallback on baseline and packet-plane datagrams on current. Transport choice is a measured behavioral difference, not a controlled constant.
+- The catalog now includes four outbound transport counters. Inspect their deltas alongside CPU/RSS before attributing a change to DHT resource controls.
+- `outbound_quic_datagram_packets` is a legacy metric name: both packet-plane backends increment it. It does not alone prove use of QUIC.
+- End-to-end matched-work comparisons remain available, but they are not transport-controlled microbenchmarks or isolated DHT-cost measurements.
+- Public recovery repetition 3 reached its first direct success at 360.12 seconds of the 375-second stage, too late to confirm five consecutive successes.
+- That run confirmed recovery during the following post-recovery stage. Preserve its censored outcome: late recovery is not success within the frozen deadline.
 
 #### Collection Auditor
 
@@ -250,7 +260,7 @@ These runs are preflight evidence, not acceptance matrix repetitions.
 - Baseline observation SHA-256: `a6dec060dcc3e8e8f79984c0b7239467a4a0d7d05d2eb4601c3fbb2bbee3bb32`.
 - Validation passed 26 measurement and 41 namespace unit tests, required Clippy groups, formatting, and cached Nix source parity.
 - Runtime and vendor sources are unchanged. Full workspace and Android builds were not repeated for this measurement-only integration.
-- Version-3 matrix collection is complete; counter aggregation and comparative reporting remain outstanding.
+- Version-3 collection and comparative analysis are complete; final reporting and phase-3 acceptance remain outstanding.
 
 ### Version-3 Pressure Preflight
 
@@ -366,7 +376,7 @@ sudo env \
 - Unknown metadata fields are discarded; configurations and private keys never enter the output.
 - Output creation refuses to overwrite an existing file. Input is bounded by the protocol's 16-MiB observation limit.
 - Incomplete stage boundaries are rejected explicitly; this tool does not yet summarize interrupted windows.
-- This is process-only analysis. Counter aggregation, run-outcome gating, paired deltas, and repetition statistics remain outstanding.
+- This helper is process-only. The separate dataset/pair analysis now supplies counter aggregation, run-outcome gating, paired deltas and repetition statistics.
 
 Validation: 26 measurement tests passed, plus analysis of both first-pair
 acceptance artifacts. Each endpoint's idle window had over 99.99% coverage
@@ -544,7 +554,8 @@ Implementation: [resource analysis](../../tests/support/resource_analysis.rs).
 
 The caller must supply matching workload/metric windows and a frozen maximum
 sampling gap. Interval checks alone do not establish workload equivalence.
-Acceptance matrix execution is implemented; run-level aggregation remains outstanding.
+Acceptance matrix execution and run-level aggregation are implemented; final
+reporting and phase-3 acceptance remain outstanding.
 
 ### CLI Harness Smoke
 

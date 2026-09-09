@@ -38,13 +38,21 @@ pub fn catalog() -> Vec<Metric> {
         "kademlia_membership_record_publications",
         "kademlia_bootstrap_refreshes",
         "kademlia_bootstrap_failures",
+        "outbound_direct_tcp_stream_fallback_packets",
+        "outbound_direct_quic_stream_fallback_packets",
+        "outbound_relay_stream_fallback_packets",
+        "outbound_quic_datagram_packets",
     ] {
         metrics.push(Metric {
             name: name.to_owned(),
             kind: Kind::Counter,
             availability: "common",
             source: "src/metrics.rs (identical pinned subjects)",
-            scope: if name.starts_with("auto_relay_") {
+            scope: if name == "outbound_quic_datagram_packets" {
+                "legacy name: packet-plane datagram sends across backends; not proof of QUIC transport"
+            } else if name.starts_with("outbound_") {
+                "overlay packet transport events; inspect when attributing resource deltas"
+            } else if name.starts_with("auto_relay_") {
                 "relay infrastructure application events"
             } else {
                 "application events; not all libp2p RPCs or dials"

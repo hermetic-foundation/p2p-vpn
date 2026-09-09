@@ -15,7 +15,7 @@ Starting revision: `5ecb01ea`. No deployed service or physical device has change
 | --- | --- | --- | --- |
 | 1. Aggregate Resource Bounds | Handler pending work, total routing storage, total retained query state | Enforced limits and deterministic saturation/recovery evidence | Complete |
 | 2. Sustained Recovery And Settling | Prolonged failures, churn, transitions, healthy idle behavior | Long-running tests recover without intervention and settle when healthy | Complete; both final 30-minute profiles passed |
-| 3. Before/After Measurements | Sockets, dial/query rates, CPU, RSS | Comparable baseline/current captures, commands, and limitations | Active; version-3 collection audited: 48 outcomes, 44 completed and four censored; analysis/report pending |
+| 3. Before/After Measurements | Sockets, dial/query rates, CPU, RSS | Comparable baseline/current captures, commands, and limitations | Collection and analysis published; 48 outcomes, 44 completed and four censored; final report/acceptance pending |
 | 4. Final Acceptance | All original requirements, documentation, packaging | Requirement-by-requirement evidence audit and residual risks | Open |
 
 Completing phases 1-2 does not complete phases 3-4. Verified commits remain valid;
