@@ -24,7 +24,7 @@ This initial inventory is not completed verification.
 | Dial start / establishment | `ConnectionEpochs`, `handle_swarm_event` | Application/startup registration corrected; admission regressions pass |
 | Outgoing failure | `PublicDiscoveryBackoff`, `DiscoveredPeerAddresses` | Old-epoch and late initial-epoch failures guarded; current failures retain backoff |
 | Connection close | `active_connections`, `record_path_closed`, capability/session invalidation | Source traced; replacement-preservation tests pending |
-| Periodic work | Runtime intervals, `handle_redial_tick`, `KademliaMaintenance` | Existing timeline coverage; reset/event interactions pending |
+| Periodic work | Runtime intervals, `handle_redial_tick`, `KademliaMaintenance` | RE-3 catch-up correction verified; existing cooldown/suppression coverage retained |
 | Relay reservations | `ConfiguredRelayReservationRetries`, `RelayReadiness`, `AutoRelayState`, listener sets | Old listener failure and replacement ownership review pending |
 | Packet negotiation | `PacketPlaneNegotiator`, QUIC task generations | Existing generation implementation; cancellation/completion review pending |
 | Probes / stream completions | `PathProbeTracker`, `PacketInFlight` | Completed targeted fixes retained; timer integration review pending |
@@ -105,9 +105,67 @@ already-produced terminal event. Preserve both cancellation and event guards.
 
 | Source Inspection | Required Next Evidence |
 | --- | --- |
-| `RuntimeTimers::new` uses default interval missed-tick behavior | Test delayed polling and whether recovery/probe work bursts after missed deadlines |
+| Recovery intervals replayed overdue ticks | RE-3 reproduces all four timers; correction passed workspace and isolated recovery verification |
 | QUIC task completion matches peer, role and generation | Reconcile existing replacement/cancellation tests with the network-change reset path |
 | Close events carry a connection ID and established-count snapshot | Verify per-connection retirement preserves a replacement path; inspect library event ordering before claiming a stale-count defect |
+
+### Source-Backed Completion Boundaries
+
+| Boundary | Traced Guarantee | Remaining Evidence |
+| --- | --- | --- |
+| Connection close | The runner removes the exact connection ID; `PathSet::record_connection_lost` does not decrement a candidate for an untracked ID | Combined dispatch regression preserving replacement capabilities and recovery state |
+| libp2p close ordering | `libp2p-swarm 0.47.1` derives the count from remaining IDs, queues the event, and drains queued events before polling the pool again | Do not inject a contradictory zero-count ordering and call it a library race |
+| QUIC completion | `finish_quic_connection_task` matches peer, role and generation before removing the handle or applying the result | Old-result and cancellation dispatch tests across network reset/replacement |
+| Network reset | `PacketPlaneNegotiator::clear` aborts tasks and clears pending owners without resetting the generation counter | Verify late results cannot consume newly started task ownership |
+
+## RE-3: Recovery Timer Catch-Up
+
+Status: reproduced with production timer construction; changed recovery timers
+to `MissedTickBehavior::Skip`. Workspace, static, native and recovery checks passed.
+
+| Timer | Work / Clock Semantics |
+| --- | --- |
+| Redial | Current connection, address, reservation and cooldown state; `Instant::now()` for expiry and retry admission |
+| Kademlia maintenance | Current publication/query owners and deadlines; healthy-path suppression retained |
+| Queue expiry | Current packet age, replay-session age and membership validity; expired records are still pruned |
+| Path probe | Current probe deadlines and path state; expiration precedes sending current probes |
+
+`recovery_timers_coalesce_missed_deadlines_and_resume` primes the production
+timers, backdates each deadline by 4.5 periods and checks subsequent tick timestamps.
+It also verifies that resetting a timer afterward leaves it usable.
+
+All four replayed expired ticks before the correction. The negative run exited
+101 and recorded `redial`, `kademlia`, `queue_expiry` and `path_probe` in its failure.
+Log: `/tmp/p2p-vpn-recovery-timer-negative.log`.
+
+- One overdue pass remains immediate; subsequent missed ticks are skipped.
+- Periods, first-tick priming, expiry thresholds and retry backoff are unchanged.
+- Metrics and code-pairing intervals are unchanged; pairing orchestration is separate.
+- This reproduces timer catch-up, not a measured physical-network packet storm.
+
+### Verification
+
+| Check | Result |
+| --- | --- |
+| Workspace | 1,466 passed; 36 opt-in exclusions; timer regression passed |
+| Formatting / Clippy | Formatting and required correctness, suspicious and performance groups passed; advisory warnings remain |
+| Android native | x86_64/API 26 compiled in 35.11 seconds; four target warnings |
+| Nix source parity | Cached-tool source and test-target assertions passed; not a full package build |
+| Public-profile delayed/renumbered recovery | Passed in 167.93 seconds including setup; direct LAN, circuit relay, direct UDP return and healthy dwell |
+
+Logs use `/tmp/p2p-vpn-recovery-timer-` with `negative.log`, `workspace.log`,
+`clippy.log`, `android.log`, `nix.log` and `public.log`.
+Commands and cached-tool limitations match the checkpoints below.
+
+Recovery artifact:
+`/tmp/p2p-vpn-tun_namespace_automatic_discovery_recovers_after_link_changes.b650c6138cea2ede`.
+Recorded test-binary SHA-256:
+`8f2c522b757c01b2b5586d8caeb817a4fdff8db2360c4167e9cf0340e293dd7c`.
+
+- One cycle; 161.251 seconds excluding setup; original 375-second direct deadline.
+- Storage before native compilation: 7.821 GiB; evidence retained.
+- No builds during recovery observations or physical deployment.
+- No ARM64, device, long-soak, public-WAN or formal-proof claim.
 
 ## Relay Listener Ordering Hypothesis
 

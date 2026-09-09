@@ -3473,15 +3473,19 @@ impl RuntimeTimers {
         kademlia_enabled: bool,
         queue_config: QueueConfig,
     ) -> Self {
+        // Recovery examines current state; replaying missed ticks only repeats work.
+        let recovery_interval = |period| {
+            let mut timer = tokio::time::interval(period);
+            timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            timer
+        };
         Self {
             metrics: metrics_interval.map(tokio::time::interval),
-            redial: tokio::time::interval(REDIAL_INTERVAL),
+            redial: recovery_interval(REDIAL_INTERVAL),
             kademlia_maintenance: kademlia_enabled
-                .then(|| tokio::time::interval(KADEMLIA_MAINTENANCE_POLL_INTERVAL)),
-            queue_expiry: tokio::time::interval(queue_expiry_interval(
-                queue_config.max_packet_age(),
-            )),
-            path_probe: tokio::time::interval(PATH_PROBE_INTERVAL),
+                .then(|| recovery_interval(KADEMLIA_MAINTENANCE_POLL_INTERVAL)),
+            queue_expiry: recovery_interval(queue_expiry_interval(queue_config.max_packet_age())),
+            path_probe: recovery_interval(PATH_PROBE_INTERVAL),
             code_pairing: tokio::time::interval(CODE_PAIRING_TICK),
         }
     }
@@ -22263,6 +22267,37 @@ mod tests {
 
     fn peer_id() -> Libp2pPeerId {
         Keypair::generate_ed25519().public().to_peer_id()
+    }
+
+    #[tokio::test]
+    async fn recovery_timers_coalesce_missed_deadlines_and_resume() {
+        let mut timers = RuntimeTimers::new(None, true, QueueConfig::default());
+        timers.prime().await;
+        let mut replayed = Vec::new();
+        for (name, timer) in [
+            ("redial", &mut timers.redial),
+            ("kademlia", timers.kademlia_maintenance.as_mut().unwrap()),
+            ("queue_expiry", &mut timers.queue_expiry),
+            ("path_probe", &mut timers.path_probe),
+        ] {
+            let observed_at = tokio::time::Instant::now();
+            let overdue = observed_at - timer.period() * 4 - timer.period() / 2;
+            timer.reset_at(overdue);
+            assert_eq!(timer.tick().await, overdue);
+            if let Ok(next) = timeout(Duration::from_millis(20), timer.tick()).await
+                && next <= observed_at
+            {
+                replayed.push(name);
+            }
+            let resumed = tokio::time::Instant::now();
+            timer.reset_at(resumed);
+            assert_eq!(
+                timeout(Duration::from_secs(1), timer.tick()).await.unwrap(),
+                resumed,
+                "{name} failed to resume after delayed polling"
+            );
+        }
+        assert!(replayed.is_empty(), "replayed overdue work: {replayed:?}");
     }
 
     fn ipv4_packet(source: Ipv4Addr, destination: Ipv4Addr) -> Vec<u8> {
