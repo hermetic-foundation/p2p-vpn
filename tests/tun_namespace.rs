@@ -39,6 +39,8 @@ mod idle_sample;
 mod kademlia_resources;
 #[path = "support/paced_ping.rs"]
 mod paced_ping;
+#[path = "support/process_sample.rs"]
+mod process_sample;
 #[path = "support/queue_pressure.rs"]
 mod queue_pressure;
 #[path = "support/recovery_soak.rs"]
@@ -3443,7 +3445,11 @@ async fn run_ready_node(
         mtu,
         config.queue,
         config.resources,
-        Some(Duration::from_secs(1)),
+        Some(if idle_sample::requested_duration().is_some() {
+            idle_sample::METRICS_INTERVAL
+        } else {
+            Duration::from_secs(1)
+        }),
         Some(control_socket),
         pairing_state_path,
         packet_plane,

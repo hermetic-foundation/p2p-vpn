@@ -3,8 +3,6 @@ use p2p_vpn::runtime::control_socket::query_status;
 use serde_json::json;
 use std::os::unix::process::CommandExt as _;
 
-#[path = "process_sample.rs"]
-mod process_sample;
 #[path = "resource_protocol.rs"]
 mod protocol;
 #[path = "resource_workload.rs"]

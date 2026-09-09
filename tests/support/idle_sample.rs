@@ -14,8 +14,11 @@ use p2p_vpn::runtime::control_socket::{query_state, query_status};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
+use super::process_sample;
+
 pub const SAMPLE_ENV: &str = "P2P_VPN_TUN_E2E_IDLE_SECONDS";
 pub const WARMUP: Duration = Duration::from_secs(30);
+pub const METRICS_INTERVAL: Duration = Duration::from_secs(5);
 
 pub fn requested_duration() -> Option<Duration> {
     match env::var(SAMPLE_ENV) {
@@ -43,84 +46,29 @@ struct ProcessSample {
     threads: u64,
     socket_fds: usize,
     tcp_states: BTreeMap<String, usize>,
-}
-
-fn process_times(stat: &str) -> io::Result<(u64, u64)> {
-    // The comm field may contain spaces and parentheses; numeric fields follow its last ')'.
-    let fields = stat
-        .rsplit_once(')')
-        .ok_or_else(invalid_sample)?
-        .1
-        .split_whitespace()
-        .collect::<Vec<_>>();
-    let number = |index: usize| {
-        fields
-            .get(index)
-            .ok_or_else(invalid_sample)?
-            .parse::<u64>()
-            .map_err(|_| invalid_sample())
-    };
-    Ok((
-        number(19)?,
-        number(11)?
-            .checked_add(number(12)?)
-            .ok_or_else(invalid_sample)?,
-    ))
-}
-
-fn invalid_sample() -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, "invalid process sample")
-}
-
-fn status_number(status: &str, key: &str) -> io::Result<u64> {
-    status
-        .lines()
-        .find_map(|line| line.strip_prefix(key))
-        .and_then(|rest| rest.split_whitespace().next())
-        .ok_or_else(invalid_sample)?
-        .parse()
-        .map_err(|_| invalid_sample())
-}
-
-fn tcp_states(table: &str, counts: &mut BTreeMap<String, usize>) -> io::Result<()> {
-    for line in table.lines().skip(1).filter(|line| !line.trim().is_empty()) {
-        let state = line.split_whitespace().nth(3).ok_or_else(invalid_sample)?;
-        *counts.entry(state.to_owned()).or_default() += 1;
-    }
-    Ok(())
+    total_fds: Option<usize>,
+    capture_seconds: f64,
+    vanished_fds: usize,
+    process_tcp_states: BTreeMap<String, usize>,
 }
 
 fn sample(role: &str, pid: u32, started: Instant) -> io::Result<ProcessSample> {
-    let root = format!("/proc/{pid}");
-    let (start_ticks, cpu_ticks) = process_times(&fs::read_to_string(format!("{root}/stat"))?)?;
-    let status = fs::read_to_string(format!("{root}/status"))?;
-    let mut socket_fds = 0;
-    for entry in fs::read_dir(format!("{root}/fd"))? {
-        match fs::read_link(entry?.path()) {
-            Ok(target) => {
-                socket_fds += usize::from(target.to_string_lossy().starts_with("socket:["));
-            }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error),
-        }
-    }
-    let mut tcp_counts = BTreeMap::new();
-    for protocol in ["tcp", "tcp6"] {
-        tcp_states(
-            &fs::read_to_string(format!("{root}/net/{protocol}"))?,
-            &mut tcp_counts,
-        )?;
-    }
+    let observed = process_sample::capture(pid, started)?;
     Ok(ProcessSample {
-        elapsed_seconds: started.elapsed().as_secs_f64(),
+        elapsed_seconds: observed.elapsed_seconds,
         role: role.to_owned(),
-        pid,
-        start_ticks,
-        cpu_ticks,
-        rss_kib: status_number(&status, "VmRSS:")?,
-        threads: status_number(&status, "Threads:")?,
-        socket_fds,
-        tcp_states: tcp_counts,
+        pid: observed.pid,
+        start_ticks: observed.start_ticks,
+        cpu_ticks: observed.cpu_ticks,
+        rss_kib: observed.rss_kib,
+        threads: observed.threads,
+        socket_fds: observed.socket_fds,
+        // Preserve the historical field's namespace-wide meaning.
+        tcp_states: observed.namespace_tcp_states,
+        total_fds: observed.total_fds,
+        capture_seconds: observed.capture_seconds,
+        vanished_fds: observed.vanished_fds,
+        process_tcp_states: observed.process_tcp_states,
     })
 }
 
@@ -211,7 +159,7 @@ pub fn capture(temp: &Path, roles: &[(&str, u32)]) {
     let report = serde_json::json!({
         "schema_version": 1, "binary_sha256": hash, "binary": env::current_exe().unwrap(),
         "build_profile": "cargo integration test", "topology": "two isolated namespaces; direct UDP; no Internet route",
-        "fixture_metrics_interval_seconds": 1,
+        "fixture_metrics_interval_seconds": METRICS_INTERVAL.as_secs(),
         "available_parallelism": thread::available_parallelism().unwrap().get(),
         "kernel_release": fs::read_to_string("/proc/sys/kernel/osrelease").unwrap().trim(),
         "host_load_before": load_before.trim(),
@@ -242,34 +190,25 @@ mod tests {
     }
 
     #[test]
-    fn stat_parser_handles_parentheses_and_rejects_truncation_and_overflow() {
-        let mut fields = vec!["0"; 22];
-        fields[0] = "S";
-        fields[11] = "17";
-        fields[12] = "4";
-        fields[19] = "1234";
-        let stat = format!("42 (worker ) with (spaces)) {}", fields.join(" "));
-        assert_eq!(process_times(&stat).unwrap(), (1234, 21));
-        assert!(process_times("42 (truncated) S 1").is_err());
-        fields[11] = "18446744073709551615";
-        assert!(process_times(&format!("42 (worker) {}", fields.join(" "))).is_err());
-    }
-
-    #[test]
-    fn status_and_tcp_parsers_preserve_units_and_states() {
-        let status = "Name:\tworker\nVmRSS:\t2048 kB\nThreads:\t19\n";
-        assert_eq!(status_number(status, "VmRSS:").unwrap(), 2048);
-        assert_eq!(status_number(status, "Threads:").unwrap(), 19);
-        assert!(status_number(status, "Missing:").is_err());
-        let mut tcp_counts = BTreeMap::new();
-        tcp_states(
-            "header\n0: local remote 01 rest\n1: local remote 0A rest\n",
-            &mut tcp_counts,
-        )
-        .unwrap();
-        tcp_states("header\n0: local remote 01 rest\n", &mut tcp_counts).unwrap();
-        assert_eq!(tcp_counts["01"], 2);
-        assert_eq!(tcp_counts["0A"], 1);
-        assert!(tcp_states("header\nbroken\n", &mut tcp_counts).is_err());
+    fn live_idle_sample_preserves_fields_and_adds_process_attribution() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let observed = sample("a", std::process::id(), Instant::now()).unwrap();
+        assert_eq!(observed.role, "a");
+        assert!(observed.total_fds.unwrap() >= observed.socket_fds);
+        assert!(observed.process_tcp_states.get("0A").copied().unwrap_or(0) >= 1);
+        assert!(observed.tcp_states["0A"] >= observed.process_tcp_states["0A"]);
+        assert!(observed.capture_seconds >= 0.0);
+        let value = serde_json::to_value(observed).unwrap();
+        for field in [
+            "role",
+            "pid",
+            "cpu_ticks",
+            "rss_kib",
+            "tcp_states",
+            "total_fds",
+        ] {
+            assert!(value.get(field).is_some(), "missing field: {field}");
+        }
+        drop(listener);
     }
 }

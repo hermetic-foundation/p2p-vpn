@@ -283,6 +283,20 @@ mod tests {
 
     #[test]
     fn live_process_capture_observes_its_listener() {
+        let test = format!(
+            "{}::live_process_capture_observes_its_listener",
+            module_path!().split_once("::").unwrap().1
+        );
+        if std::env::var("P2P_VPN_SAMPLE_TEST_CHILD").as_deref() != Ok(test.as_str()) {
+            // Exact descriptor deltas require a process without concurrent tests.
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", &test, "--nocapture"])
+                .env("P2P_VPN_SAMPLE_TEST_CHILD", &test)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "isolated sample test: {output:?}");
+            return;
+        }
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let sample = capture(std::process::id(), Instant::now()).unwrap();
         assert!(

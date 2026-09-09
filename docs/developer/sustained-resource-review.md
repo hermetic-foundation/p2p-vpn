@@ -109,7 +109,87 @@ The existing `/tmp/p2p-vpn-review-rustfmt/bin/rustfmt` performed the check direc
 no formatter or dependency download was needed.
 
 Full collector integration, independently timed probes and compact runtime
-sampling remain open before S1/S2. This unit gate is not a sustained capture.
+sampling remain open for full S1/S2 acceptance. This unit gate is not a sustained capture.
+
+### Idle Collector Integration
+
+The isolated idle fixture now delegates to the shared process sampler. Existing
+report fields retain their meanings; total descriptors, capture duration,
+vanished descriptors and process-owned TCP states are additive.
+
+One descriptor-duplication unit test failed under parallel tests because another
+test changed the process socket count. It now runs in an isolated child process;
+the exact descriptor/inode assertions are unchanged.
+
+- Negative: `/tmp/p2p-vpn-sustained-idle-final-tests.log`, expected three socket descriptors but observed two.
+- Final tests: `/tmp/p2p-vpn-sustained-idle-cadence-tests.log`, 44 resource and 42 namespace tests pass.
+- Static: `/tmp/p2p-vpn-sustained-idle-cadence-clippy.log`, required groups pass; advisory warnings remain.
+- Cached rustfmt passes. Opt-in namespace/campaign tests remain ignored by the unit gate.
+
+The first 300-second attempt was stopped before its diagnostic logs exceeded the
+declared budget: 1,733,189 bytes retained. This is an incomplete capture, not a
+daemon failure or valid CPU/memory comparison. No completed sample report exists.
+
+Its retained directory is
+`/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.974ebd4b7fd17955`;
+outer log: `/tmp/p2p-vpn-sustained-idle-os-1.log`.
+
+The unshare parent did not terminate its namespace on SIGTERM. Killing the owned
+namespace init ended all child processes; the outer runner exited 101. Evidence
+was preserved. No deployed service or physical device was involved.
+
+Idle-mode diagnostic cadence is now five seconds, matching the planned runtime
+observation cadence; other modes retain one second. This changes fixture overhead,
+so earlier one-second captures are not paired efficiency baselines.
+
+### First Five-Minute OS Capture
+
+The revised fixture passed in 346.49 seconds, including its 30-second warmup
+and 300-second capture. Runtime source is unchanged from `00b1b58a`; test tooling
+is based on `2f430c58` plus the idle-collector integration described above.
+
+| Observation | Node A | Node B |
+| --- | ---: | ---: |
+| Samples | 300 | 300 |
+| CPU, percent of one core | 0.1633 | 0.1600 |
+| RSS range, KiB | 36,424-36,716 | 36,404-36,444 |
+| Total descriptors | 21 throughout | 19 throughout |
+| Socket descriptors | 14 throughout | 12 throughout |
+| Threads | 20 throughout | 20 throughout |
+| Maximum sample gap, seconds | 1.0093 | 1.0097 |
+| Maximum capture duration, milliseconds | 5.782 | 5.176 |
+| New redials / connection errors | 0 / 0 | 0 / 0 |
+| New probes / probe failures | 60 / 0 | 60 / 0 |
+
+Both processes retain one start identity. Both boundary snapshots select validated
+direct UDP paths; queue occupancy, queue drops and expiry are zero at boundaries.
+These boundary readings are not continuous queue or allocation measurements.
+
+Host one-minute load changed from 1.37 to 1.91. No review builds ran during
+capture. This is a debug integration fixture with no Internet route, not a
+packaged-daemon, release, QUIC-stream, public-DHT or Android measurement.
+
+| Artifact | Value |
+| --- | --- |
+| Report | `/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.69b7706adef627f1/idle-sample.json` |
+| Outer log | `/tmp/p2p-vpn-sustained-idle-os-2.log` |
+| Fixture SHA-256 | `517f34821d2d9bd37e697def3b790e45e733edfe1597b9d2ddb6fa1131095dbe` |
+| CLI helper SHA-256 | `44ee4819a945a3d0714d19c6ff13a38ba5a5d45b8002b63942f78e69736378e0` |
+| Node diagnostic bytes | 1,130,187 combined, below 2 MiB |
+| Report bytes | 362,608, below 8 MiB |
+| Teardown | Test exits zero; no matching fixture processes remain; evidence retained |
+
+```sh
+timeout --signal=TERM --kill-after=10s 450 env \
+  P2P_VPN_TUN_E2E_KEEP_TEMP=1 P2P_VPN_TUN_E2E_IDLE_SECONDS=300 \
+  /tmp/p2p-vpn-review-target/debug/deps/tun_namespace-fc4bbc3b02326c73 \
+  tun_namespace_ping_crosses_two_node_overlay --ignored --exact --nocapture
+```
+
+This supplies the first S1 OS-resource observation, not completed S1 acceptance.
+Repetition, collector overhead, compact runtime ownership series, unavailable-peer
+behavior and retained-allocation attribution remain open. Stable descriptors
+and small RSS ranges do not establish long-term leak freedom.
 
 ### Workload Acceptance
 

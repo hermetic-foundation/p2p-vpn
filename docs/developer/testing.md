@@ -41,18 +41,22 @@ P2P_VPN_TUN_E2E_KEEP_TEMP=1 P2P_VPN_TUN_E2E_IDLE_SECONDS=60 \
 The fixture verifies direct UDP traffic, waits 30 seconds, then samples once per
 second without generating additional payload traffic. Sampling accepts 10 through
 300 seconds and extends the default orchestrator deadline automatically.
+In idle-sampling mode, fixture runtime metrics are logged every five seconds;
+normal fixture runs retain their one-second interval.
 
 | Artifact Field | Meaning |
 | --- | --- |
 | `binary_sha256` | Identity of the integration-test executable running both nodes. |
 | `clock_ticks_per_second` | Conversion factor for process CPU ticks. |
-| `samples` | Per-process CPU, RSS in KiB, threads, socket FDs, and TCP states. |
+| `samples` | Per-process CPU, RSS in KiB, threads, total/socket FDs, capture duration and TCP states. |
 | `daemon_before`, `daemon_after` | Runtime counters and path state at interval boundaries. |
 | `host_load_before`, `host_load_after` | Host load context; not CPU attributed to the VPN. |
 
 The printed `idle-sample.json` path is retained with normal fixture artifacts.
 TCP state codes include `01` for established, `02` for SYN-sent, and `0A` for listen.
-TCP tables cover each isolated network namespace; socket FDs cover the node process.
+`tcp_states` retains its historical namespace-wide meaning; `process_tcp_states`
+filters by process socket inodes. `total_fds` counts resolved descriptor links;
+concurrent disappearance is reported separately as `vanished_fds`.
 
 Compute one-core CPU percent as `100 * delta(cpu_ticks) / CLK_TCK / delta(elapsed_seconds)`.
 Compare identical fixture code, compiler/profile settings, warmup, and sample
