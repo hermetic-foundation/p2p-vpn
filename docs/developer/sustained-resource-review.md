@@ -32,6 +32,8 @@ No physical device or deployed host is authorized for this work.
 | [Queue pressure](sustained-pressure-results.md) | Corrected S4: 20 TCP pressure/recovery rounds; probe rejection/owner regression passes | RSS allocation attribution and broader workload coverage |
 | [Ledger allocations](allocation-review.md) | Twelve captures, 120 teardowns; zero retained requested Rust bytes/blocks | Whole-runtime/native allocation attribution |
 | [Queue allocations](queue-allocation-review.md) | Four captures, 40 cycles; exact payload release, stable container storage, full owner release | Transport buffers and full-process pressure retention |
+| [Sustained traffic fixture](sustained-traffic-review.md) | Corrected-runtime smoke passes; fixed-transport and delivery checks | Two full captures unrun |
+| [Capability retirement](capability-retirement-review.md) | Retry gap reproduced; guarded correction and dispatch regressions pass | Live follow-ups pass but did not exercise the retry branch |
 | [Kademlia acceptance](kademlia-workstream-acceptance.md) | Enforcement and scoped recovery fixes | RM-2 sampling, RM-3 unequal work, RM-4 backend confounding, RM-5 allocation attribution |
 | [Android lifecycle](android-lifecycle-audit.md) | Ownership regressions and multi-network restoration | Sustained CPU/memory and physical battery behavior |
 

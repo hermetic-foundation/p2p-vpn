@@ -136,6 +136,38 @@ pub(super) fn capture_with_transition(
     let Some(duration) = requested_duration() else {
         return;
     };
+    capture_phase(
+        temp,
+        roles,
+        Phase {
+            workload,
+            duration,
+            warmup: WARMUP,
+            report_name: "idle-sample.json",
+        },
+        transition,
+    );
+}
+
+pub(super) struct Phase<'a> {
+    pub workload: &'a str,
+    pub duration: Duration,
+    pub warmup: Duration,
+    pub report_name: &'a str,
+}
+
+pub(super) fn capture_phase(
+    temp: &Path,
+    roles: &[(&str, u32)],
+    phase: Phase<'_>,
+    transition: impl FnOnce(),
+) {
+    let Phase {
+        workload,
+        duration,
+        warmup,
+        report_name,
+    } = phase;
     let runtime_sampling = match env::var(RUNTIME_SAMPLING_ENV) {
         Ok(value) => Some(value),
         Err(env::VarError::NotPresent) => None,
@@ -155,7 +187,7 @@ pub(super) fn capture_with_transition(
         .parse()
         .expect("clock ticks per second");
     assert!(ticks > 0);
-    thread::sleep(WARMUP);
+    thread::sleep(warmup);
     let before = daemon_views(temp, roles);
     let transition_started = Instant::now();
     transition();
@@ -206,7 +238,7 @@ pub(super) fn capture_with_transition(
         "kernel_release": fs::read_to_string("/proc/sys/kernel/osrelease").unwrap().trim(),
         "host_load_before": load_before.trim(),
         "host_load_after": fs::read_to_string("/proc/loadavg").unwrap().trim(),
-        "warmup_seconds": WARMUP.as_secs(), "requested_seconds": duration.as_secs(),
+        "warmup_seconds": warmup.as_secs(), "requested_seconds": duration.as_secs(),
         "clock_ticks_per_second": ticks, "samples": samples, "runtime_samples": counters,
         "runtime_samples_complete": runtime_samples_complete,
         "runtime_sampling_enabled": runtime_sampling_enabled,
@@ -218,8 +250,8 @@ pub(super) fn capture_with_transition(
         bytes.len() <= 8 * 1024 * 1024,
         "idle report exceeds 8 MiB budget"
     );
-    fs::write(temp.join("idle-sample.json"), bytes).expect("idle report");
-    eprintln!("idle sample: {}", temp.join("idle-sample.json").display());
+    fs::write(temp.join(report_name), bytes).expect("resource report");
+    eprintln!("idle sample: {}", temp.join(report_name).display());
     assert!(
         runtime_samples_complete != Some(false),
         "runtime counter series incomplete; report retained"

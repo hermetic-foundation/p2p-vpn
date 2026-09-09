@@ -49,6 +49,8 @@ mod queue_pressure;
 mod recovery_soak;
 #[path = "support/resource_cli.rs"]
 mod resource_cli;
+#[path = "support/sustained_traffic.rs"]
+mod sustained_traffic;
 #[path = "support/tcp_collision.rs"]
 mod tcp_collision;
 #[path = "support/unavailable_peer.rs"]
@@ -71,6 +73,16 @@ const NETWORK_MOVE_TEST_NAME: &str = "tun_namespace_recovers_relay_and_direct_af
 const DHT_TEST_NAME: &str = "tun_namespace_ping_crosses_dht_discovered_overlay";
 const NETWORK_NAME: &str = "tun-e2e";
 const NODE_A_LOCAL_ROUTE_ADDRESS: Ipv4Addr = Ipv4Addr::new(10, 41, 0, 9);
+
+#[test]
+#[ignore = "bounded sustained traffic resource capture; requires isolated namespaces"]
+fn tun_namespace_measures_sustained_traffic_resources() {
+    match env::var(CHILD_ENV).as_deref() {
+        Ok("orchestrator") => run_direct_orchestrator(sustained_traffic::TEST_NAME),
+        Ok("node") => run_node_child(),
+        _ => reexec_orchestrator(sustained_traffic::TEST_NAME),
+    }
+}
 
 #[test]
 #[ignore = "bounded unavailable-peer resource capture; requires namespaces and idle sampling"]
@@ -453,6 +465,22 @@ outbound_quic_datagram_packets 1\n";
 
 fn reexec_orchestrator(test_name: &str) {
     let current_exe = env::current_exe().expect("current test binary");
+    if test_name == sustained_traffic::TEST_NAME {
+        assert!(
+            keep_temp_artifacts(),
+            "sustained traffic requires retained evidence"
+        );
+        assert!(
+            idle_sample::requested_duration().is_none(),
+            "use the sustained workload's fixed phases"
+        );
+        match env::var(idle_sample::RUNTIME_SAMPLING_ENV) {
+            Err(env::VarError::NotPresent) => {}
+            Ok(value) if value == "1" => {}
+            _ => panic!("sustained traffic requires runtime counter sampling"),
+        }
+        sustained_traffic::settings();
+    }
     if test_name == QUEUE_PRESSURE_TEST_NAME {
         queue_pressure::requested_limits();
         queue_pressure::requested_initiator();
@@ -474,7 +502,9 @@ fn reexec_orchestrator(test_name: &str) {
         );
         idle_sample::WARMUP + duration
     });
-    let default_timeout = if test_name == unavailable_peer::TEST_NAME {
+    let default_timeout = if test_name == sustained_traffic::TEST_NAME {
+        Duration::from_secs(90) + sustained_traffic::duration_budget()
+    } else if test_name == unavailable_peer::TEST_NAME {
         Duration::from_secs(90) + unavailable_peer::WATCHDOG_EXTRA
     } else if test_name == tcp_collision::TEST_NAME {
         Duration::from_secs(30)
@@ -506,6 +536,7 @@ fn reexec_orchestrator(test_name: &str) {
     if idle_extra > Duration::ZERO
         || test_name == recovery_soak::TEST_NAME
         || test_name == tcp_collision::TEST_NAME
+        || test_name == sustained_traffic::TEST_NAME
     {
         eprint!("{}", String::from_utf8_lossy(&output.stderr));
     }
@@ -599,6 +630,8 @@ fn run_direct_orchestrator(test_name: &str) {
 
     if test_name == unavailable_peer::TEST_NAME {
         unavailable_peer::capture(&temp_dir, node_a.id(), node_b.id(), address_b);
+    } else if test_name == sustained_traffic::TEST_NAME {
+        sustained_traffic::capture(&temp_dir, node_a.id(), node_b.id(), address_b);
     } else {
         idle_sample::capture(&temp_dir, &[("a", node_a.id()), ("b", node_b.id())]);
     }
@@ -2078,6 +2111,7 @@ fn namespace_replay_env_exports() -> String {
             WAIT_TIMEOUT_SCALE_ENV,
             idle_sample::SAMPLE_ENV,
             idle_sample::RUNTIME_SAMPLING_ENV,
+            sustained_traffic::SMOKE_ENV,
             queue_pressure::ROUNDS_ENV,
             queue_pressure::LIMIT_ENV,
             queue_pressure::INITIATOR_ENV,
@@ -3488,13 +3522,17 @@ async fn run_ready_node(
         mtu,
         config.queue,
         config.resources,
-        Some(if idle_sample::requested_duration().is_some() {
-            idle_sample::METRICS_INTERVAL
-        } else if env::args().any(|argument| argument == QUEUE_PRESSURE_TEST_NAME) {
-            queue_pressure::METRICS_INTERVAL
-        } else {
-            Duration::from_secs(1)
-        }),
+        Some(
+            if idle_sample::requested_duration().is_some()
+                || env::args().any(|argument| argument == sustained_traffic::TEST_NAME)
+            {
+                idle_sample::METRICS_INTERVAL
+            } else if env::args().any(|argument| argument == QUEUE_PRESSURE_TEST_NAME) {
+                queue_pressure::METRICS_INTERVAL
+            } else {
+                Duration::from_secs(1)
+            },
+        ),
         Some(control_socket),
         pairing_state_path,
         packet_plane,
