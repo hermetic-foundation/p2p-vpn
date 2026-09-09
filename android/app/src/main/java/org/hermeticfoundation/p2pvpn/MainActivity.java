@@ -160,14 +160,26 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
             return;
         }
         serviceConnection = new ActivityServiceConnection();
-        bindingRegistered = bindService(
-                new Intent(this, P2pVpnService.class),
-                serviceConnection,
-                Context.BIND_AUTO_CREATE);
+        // Android requires unbinding failed attempts as well as successful bindings.
+        bindingRegistered = true;
+        try {
+            bindService(
+                    new Intent(this, P2pVpnService.class),
+                    serviceConnection,
+                    Context.BIND_AUTO_CREATE);
+        } catch (SecurityException error) {
+            releaseServiceBinding();
+            throw error;
+        }
     }
 
     @Override
     protected void onStop() {
+        releaseServiceBinding();
+        super.onStop();
+    }
+
+    private void releaseServiceBinding() {
         ActivityServiceConnection retiring = serviceConnection;
         serviceConnection = null;
         if (binder != null && retiring != null) {
@@ -179,7 +191,6 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
             bindingRegistered = false;
             unbindService(retiring);
         }
-        super.onStop();
     }
 
     @Override

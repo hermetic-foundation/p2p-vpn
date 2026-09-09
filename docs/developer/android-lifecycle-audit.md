@@ -27,7 +27,7 @@ reopen them only if this audit produces new causal evidence.
 - [x] Test profile-join cancellation, late completion and subsequent successful local commit (AL1).
 - [x] Verify multi-network enablement, persistence and native generation isolation.
 - [x] Audit native shutdown, TUN descriptors, callback retirement and timer bounds.
-- [ ] Verify failed binding and exception cleanup (AL4).
+- [x] Verify failed binding and exception cleanup (AL4).
 - [x] Reconcile process death, always-on, reboot and app replacement on reviewed source.
 - [x] Run bounded cached-emulator lifecycle and applicable underlay scenarios.
 - [x] Record historical failure dispositions and precise missing attribution evidence.
@@ -376,10 +376,10 @@ policy or packaging configuration changed.
 
 ## AL4: Failed Binding Cleanup
 
-Status: source-backed contract gap identified during final audit; regression
-reproduction and correction remain open. Do not close the review with this gap.
+Status: reproduced and fixed after `ca2d2989`; both failure paths and subsequent
+framework rebinding pass on the API 35 emulator.
 
-`MainActivity.onStart` assigns `bindingRegistered` from the Boolean returned by
+Previously, `MainActivity.onStart` assigned `bindingRegistered` from the Boolean returned by
 `bindService`. A false return therefore prevents `onStop` from releasing the
 connection's tracking resources; a thrown security exception also lacks cleanup.
 
@@ -387,9 +387,46 @@ connection's tracking resources; a thrown security exception also lacks cleanup.
 requires releasing the connection after a false return or `SecurityException`.
 The existing pending-stop tests cover successful registration, not these outcomes.
 
-Required evidence: reproduce failed admission, preserve cleanup ownership, and
-verify a later successful binding. Keep registration-attempt ownership distinct
-from whether the service is connected; cover the exception cleanup path as well.
+The activity now owns cleanup before attempting admission. A false return retains
+that owner until stop; `SecurityException` releases it immediately and propagates.
+Both paths use the same owner-retirement helper, preserving stale-callback guards.
+
+### Regression Evidence
+
+| Gate | Result |
+| --- | --- |
+| JVM negative | `ActivityBindingTest` fails: failed binding lost cleanup ownership |
+| Emulator false-return negative | Fails: failed binding was not released exactly once |
+| Emulator security-exception negative | Fails: security exception leaked binding tracking |
+| Combined emulator positive | Both paths release exactly once; repeated stop is inert; real replacement binding survives stale callbacks |
+| Broader instrumentation | Binding cycles, recreation, VPN denial, join cancellation, deferred join, superseded stop, health poll, local-permission recovery and occupied-worker replacement pass |
+| JVM, lint and APKs | 131 JVM tests pass with no skips; full gate passes: 78 tasks, 15 executed, 17 seconds |
+
+The instrumentation wraps the activity context only in the test APK. It allocates
+real framework binding resources, then injects a false return or security exception
+before callback delivery. These are controlled admission outcomes, not an OS policy denial.
+
+No fault-injection hook, permission bypass, profile change or wire change enters
+the production app. Native source and staged JNI are unchanged from the provenance
+below; the 68-check multi-network run retains its original APK and reuse boundary.
+
+| Artifact | Path or SHA-256 |
+| --- | --- |
+| JVM negative | `/tmp/p2p-vpn-lifecycle-failed-bind-negative.log` |
+| False-return negative | `/tmp/p2p-vpn-lifecycle-failed-bind-platform-negative.log` |
+| Exception negative | `/tmp/p2p-vpn-lifecycle-security-bind-negative.log` |
+| Combined positive | `/tmp/p2p-vpn-lifecycle-failed-bind-positive.log`; `passed=true`, code `-1` |
+| Full build | `/tmp/p2p-vpn-lifecycle-failed-bind-fixed-build.log` |
+| App APK | `63eb12af5b8b613bfb2bab8aae91d619cc7fd82c14976a626cee42108d3b181c` |
+| Test APK | `319170af6e2cadeeabfe7d813d75c0be5a9f6067d2c94b75489509b97682c0cd` |
+
+Use the AL1 instrumentation command with `-e failed_binding true` plus the
+existing binding, permission, join, stop and polling opt-ins. The combined run
+kept its 90-second watchdog; no builds ran during observation.
+
+The emulator exited normally after `emu kill`; its disposable private state was
+removed. Negative and positive logs remain. No physical device was accessed.
+Final temporary storage is 8,286,676 KiB, below the 10 GiB limit.
 
 ## Current Native Provenance
 

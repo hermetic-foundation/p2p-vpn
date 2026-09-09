@@ -5,6 +5,7 @@ import android.app.ActivityManager;
 import android.app.Instrumentation;
 import android.content.ComponentName;
 import android.content.Context;
+import android.content.ContextWrapper;
 import android.content.Intent;
 import android.content.ServiceConnection;
 import android.net.VpnService;
@@ -61,6 +62,9 @@ public final class ServiceLifecycleInstrumentation extends Instrumentation {
             }
             if ("true".equals(arguments.getString("activity_binding"))) {
                 exerciseActivityBinding();
+            }
+            if ("true".equals(arguments.getString("failed_binding"))) {
+                exerciseFailedBinding();
             }
             if ("true".equals(arguments.getString("activity_permissions"))) {
                 exerciseActivityPermissions();
@@ -206,6 +210,84 @@ public final class ServiceLifecycleInstrumentation extends Instrumentation {
             waitForIdleSync();
         }
         sendStatus(2, message("activity_binding", "passed: three pending-stop and framework-rebind cycles"));
+    }
+
+    private void exerciseFailedBinding() throws Exception {
+        MainActivity activity = (MainActivity) startActivitySync(
+                new Intent(getTargetContext(), MainActivity.class)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK));
+        Field base = ContextWrapper.class.getDeclaredField("mBase");
+        base.setAccessible(true);
+        Context original = activity.getBaseContext();
+        java.util.function.Consumer<Context> setBase = context -> {
+            try {
+                base.set(activity, context);
+            } catch (IllegalAccessException error) {
+                throw new IllegalStateException(error);
+            }
+        };
+        try {
+            awaitActivityBound(activity);
+            for (boolean denied : new boolean[] {true, false}) {
+                AtomicInteger releases = new AtomicInteger();
+                AtomicReference<ServiceConnection> attempted = new AtomicReference<>();
+                SecurityException rejection = new SecurityException("instrumented binding rejection");
+                ContextWrapper failure = new ContextWrapper(original) {
+                    @Override
+                    public boolean bindService(Intent intent, ServiceConnection callback, int flags) {
+                        // Allocate real framework tracking, then inject the admission outcome.
+                        require(super.bindService(intent, callback, flags), "framework binding setup failed");
+                        attempted.set(callback);
+                        if (denied) {
+                            throw rejection;
+                        }
+                        return false;
+                    }
+
+                    @Override
+                    public void unbindService(ServiceConnection callback) {
+                        require(callback == attempted.get(), "released a different binding owner");
+                        super.unbindService(callback);
+                        releases.incrementAndGet();
+                    }
+                };
+                onMain(() -> {
+                    activity.onStop();
+                    setBase.accept(failure);
+                    try {
+                        activity.onStart();
+                        require(!denied, "binding security exception was swallowed");
+                    } catch (SecurityException error) {
+                        require(denied && error == rejection, "unexpected binding exception");
+                        require(releases.get() == 1, "security exception leaked binding tracking");
+                    }
+                    activity.onStop();
+                    activity.onStop();
+                    require(releases.get() == 1, "failed binding was not released exactly once");
+                    require(activityField(activity, "serviceConnection") == null,
+                            "failed binding retained callback owner");
+                    setBase.accept(original);
+                    activity.onStart();
+                });
+                awaitActivityBound(activity);
+                onMain(() -> {
+                    Object current = activityField(activity, "binder");
+                    attempted.get().onServiceConnected(null, (IBinder) current);
+                    attempted.get().onServiceDisconnected(null);
+                    require(activityField(activity, "binder") == current
+                                    && (boolean) activityField(activity, "bound"),
+                            "failed binding callback disrupted replacement");
+                });
+            }
+        } finally {
+            onMain(() -> {
+                activity.onStop();
+                setBase.accept(original);
+                activity.finish();
+            });
+            waitForIdleSync();
+        }
+        sendStatus(2, message("failed_binding", "passed: false and security exception cleanup, real rebind"));
     }
 
     private void awaitActivityBound(MainActivity activity) {

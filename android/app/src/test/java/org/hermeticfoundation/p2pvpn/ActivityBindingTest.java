@@ -9,6 +9,22 @@ import org.junit.Test;
 
 public final class ActivityBindingTest {
     @Test
+    public void unsuccessfulBindingStillOwnsCleanupUntilStop() throws Exception {
+        MainActivity activity = new MainActivity();
+        // The Android JVM stub returns false from bindService.
+        activity.onStart();
+        try {
+            assertTrue("failed binding lost cleanup ownership", (boolean) get(activity, "bindingRegistered"));
+            assertFalse((boolean) get(activity, "bound"));
+            assertNotNull(get(activity, "serviceConnection"));
+        } finally {
+            activity.onStop();
+        }
+        assertFalse((boolean) get(activity, "bindingRegistered"));
+        assertNull(get(activity, "serviceConnection"));
+    }
+
+    @Test
     public void stoppedActivityRejectsLateBindingCallback() throws Exception {
         MainActivity activity = new MainActivity();
         activity.onStart();
