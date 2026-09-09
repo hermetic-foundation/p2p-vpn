@@ -246,6 +246,62 @@ No universal RSS ceiling or physical-energy claim is declared.
 
 ## Execution Order
 
+### S1: Two Full Idle Captures
+
+Two current-only captures pass at fixture `67b1ff3b`, with no runtime changes
+from `00b1b58a`. Each uses 30-second warmup, 300-second observation, identical
+debug binaries and settings, and a fresh isolated pair of processes.
+
+| Run | A CPU, One Core | B CPU, One Core | A RSS Range, KiB | B RSS Range, KiB |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 0.1733% | 0.1667% | 36,448-36,692 | 36,868-37,004 |
+| 2 | 0.1833% | 0.1733% | 37,076-37,168 | 36,808-36,872 |
+
+| Observation Across Both Runs | A | B |
+| --- | ---: | ---: |
+| OS samples per run | 300 | 300 |
+| Runtime snapshots per run | 60 | 60 |
+| Total descriptors | 21 throughout | 19 throughout |
+| Socket descriptors | 14 throughout | 12 throughout |
+| Threads | 20 throughout | 20 throughout |
+| Sampled queue packets/bytes | 0 throughout | 0 throughout |
+| Pending connection attempts / retiring connections | 0 / 0 throughout | 0 / 0 throughout |
+| Added redials / outgoing connection errors | 0 / 0 | 0 / 0 |
+| Added probes over runtime-series interval | 59 | 59 |
+| Added probe failures | 0 | 0 |
+
+Every runtime slot from scheduled second 0 through 295 is present without errors.
+The OS series spans 300 seconds; do not equate its duration with the 295-second
+first-to-last runtime-counter interval. Maximum OS gap was 1.011 seconds rounded up.
+
+Maximum query time was 3.696 ms rounded up. Host one-minute load changed from
+3.14 to 1.69 in run 1 and 1.64 to 1.61 in run 2. No review builds ran during either
+capture. Native health and AutoNAT work continue; these are not zero-work idle claims.
+
+Both test processes exit successfully: 371.85 seconds and 346.57 seconds including
+startup, warmup and teardown. No matching fixture processes remain. Each report
+is about 2.29 MB; each pair of node logs is below 1.22 MB, within declared limits.
+
+The [portable derived samples](sustained-idle-samples.json) retain raw paths,
+report hashes, binary identity, resource ranges and counter deltas. Raw logs are
+`/tmp/p2p-vpn-sustained-s1-1.log` and `/tmp/p2p-vpn-sustained-s1-2.log`.
+
+### RSS Attribution Trigger
+
+Run 2 node B has final three minute checkpoints of 36,856, 36,864 and 36,872 KiB.
+This meets the declared investigation trigger. It does not establish a leak:
+allocator retention, committed pages and allocating owners are not isolated yet.
+
+Run 1 RSS is unchanged at its final two minute checkpoints; run 2 A rises again
+at the final checkpoint. Neither is evidence of an asymptotic heap bound.
+The allocation and observer-overhead work must account for these observations.
+
+S1 now has repeated debug idle resource evidence. Collector-on/off comparison,
+release/representative transport coverage, unavailable peers, sustained load,
+lifecycle churn and Android resource evidence remain open.
+
+### Next Execution Steps
+
 1. Audit existing idle, process, queue-pressure and resource collectors.
 2. Inventory cached binaries and storage; build only missing affected targets.
 3. Run S1/S2 and overhead controls; finalize S3/S5 fixture manifests.

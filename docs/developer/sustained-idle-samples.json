@@ -1,0 +1,452 @@
+{
+  "schema_version": 1,
+  "fixture_revision": "67b1ff3b",
+  "runtime_revision": "00b1b58a",
+  "profile": "debug integration test; not packaged daemon",
+  "topology": "two isolated namespaces; direct UDP; no Internet route",
+  "warmup_seconds": 30,
+  "capture_seconds": 300,
+  "os_sampling_seconds": 1,
+  "runtime_sampling_seconds": 5,
+  "comparison": "two current-only repetitions; no collector-off or revision baseline",
+  "runs": [
+    {
+      "directory": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.4ddb6160e81140e8",
+      "report_sha256": "e2e0ff7a591d4c8badb22f9c072d25e593eef541739d980c9ac7c7b13841fa74",
+      "binary_sha256": "0b77b6c8e603a4b3fff775ad51a1cae56f6d45f3dfa8d7cea7a14007eb3d20f1",
+      "report_bytes": 2290185,
+      "log_bytes": 1218684,
+      "host_load": [
+        "3.14 2.00 1.65 3/1625 184",
+        "1.69 1.88 1.72 3/1619 185"
+      ],
+      "nodes": {
+        "a": {
+          "samples": 300,
+          "runtime_samples": 60,
+          "cpu_percent_one_core": 0.1733329162117149,
+          "rss_kib": [
+            36448,
+            36692
+          ],
+          "rss_checkpoints": [
+            36448,
+            36484,
+            36632,
+            36640,
+            36692,
+            36692
+          ],
+          "total_fds": [
+            21,
+            21
+          ],
+          "socket_fds": [
+            14,
+            14
+          ],
+          "threads": [
+            20,
+            20
+          ],
+          "max_sample_gap_seconds": 1.0096358720000183,
+          "max_query_seconds": 0.002933098,
+          "counters": {
+            "queue_queued_packets": {
+              "range": [
+                0,
+                0
+              ],
+              "delta": 0
+            },
+            "queue_queued_bytes": {
+              "range": [
+                0,
+                0
+              ],
+              "delta": 0
+            },
+            "queue_dropped_packets": {
+              "range": [
+                0,
+                0
+              ],
+              "delta": 0
+            },
+            "queue_expired_packets": {
+              "range": [
+                0,
+                0
+              ],
+              "delta": 0
+            },
+            "app_connection_attempts_pending": {
+              "range": [
+                0,
+                0
+              ],
+              "delta": 0
+            },
+            "app_connections_retiring": {
+              "range": [
+                0,
+                0
+              ],
+              "delta": 0
+            },
+            "redial_attempts": {
+              "range": [
+                0,
+                0
+              ],
+              "delta": 0
+            },
+            "outgoing_connection_errors": {
+              "range": [
+                5,
+                5
+              ],
+              "delta": 0
+            },
+            "outbound_path_probes_sent": {
+              "range": [
+                15,
+                74
+              ],
+              "delta": 59
+            },
+            "outbound_path_probe_failures": {
+              "range": [
+                0,
+                0
+              ],
+              "delta": 0
+            }
+          }
+        },
+        "b": {
+          "samples": 300,
+          "runtime_samples": 60,
+          "cpu_percent_one_core": 0.16666654436397865,
+          "rss_kib": [
+            36868,
+            37004
+          ],
+          "rss_checkpoints": [
+            36868,
+            36872,
+            36872,
+            36996,
+            37004,
+            37004
+          ],
+          "total_fds": [
+            19,
+            19
+          ],
+          "socket_fds": [
+            12,
+            12
+          ],
+          "threads": [
+            20,
+            20
+          ],
+          "max_sample_gap_seconds": 1.010144261000022,
+          "max_query_seconds": 0.003695979,
+          "counters": {
+            "queue_queued_packets": {
+              "range": [
+                0,
+                0
+              ],
+              "delta": 0
+            },
+            "queue_queued_bytes": {
+              "range": [
+                0,
+                0
+              ],
+              "delta": 0
+            },
+            "queue_dropped_packets": {
+              "range": [
+                0,
+                0
+              ],
+              "delta": 0
+            },
+            "queue_expired_packets": {
+              "range": [
+                0,
+                0
+              ],
+              "delta": 0
+            },
+            "app_connection_attempts_pending": {
+              "range": [
+                0,
+                0
+              ],
+              "delta": 0
+            },
+            "app_connections_retiring": {
+              "range": [
+                0,
+                0
+              ],
+              "delta": 0
+            },
+            "redial_attempts": {
+              "range": [
+                0,
+                0
+              ],
+              "delta": 0
+            },
+            "outgoing_connection_errors": {
+              "range": [
+                5,
+                5
+              ],
+              "delta": 0
+            },
+            "outbound_path_probes_sent": {
+              "range": [
+                15,
+                74
+              ],
+              "delta": 59
+            },
+            "outbound_path_probe_failures": {
+              "range": [
+                0,
+                0
+              ],
+              "delta": 0
+            }
+          }
+        }
+      }
+    },
+    {
+      "directory": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.e735e2b66a016c19",
+      "report_sha256": "d605f6fe2f0d126651325247fbe335af7b0bbf374716a345178cab8ace61b6d2",
+      "binary_sha256": "0b77b6c8e603a4b3fff775ad51a1cae56f6d45f3dfa8d7cea7a14007eb3d20f1",
+      "report_bytes": 2290132,
+      "log_bytes": 1129015,
+      "host_load": [
+        "1.64 1.81 1.72 3/1603 184",
+        "1.61 1.53 1.61 1/1605 185"
+      ],
+      "nodes": {
+        "a": {
+          "samples": 300,
+          "runtime_samples": 60,
+          "cpu_percent_one_core": 0.18333308211873311,
+          "rss_kib": [
+            37076,
+            37168
+          ],
+          "rss_checkpoints": [
+            37076,
+            37108,
+            37116,
+            37128,
+            37128,
+            37168
+          ],
+          "total_fds": [
+            21,
+            21
+          ],
+          "socket_fds": [
+            14,
+            14
+          ],
+          "threads": [
+            20,
+            20
+          ],
+          "max_sample_gap_seconds": 1.0093786950000023,
+          "max_query_seconds": 0.002704746,
+          "counters": {
+            "queue_queued_packets": {
+              "range": [
+                0,
+                0
+              ],
+              "delta": 0
+            },
+            "queue_queued_bytes": {
+              "range": [
+                0,
+                0
+              ],
+              "delta": 0
+            },
+            "queue_dropped_packets": {
+              "range": [
+                0,
+                0
+              ],
+              "delta": 0
+            },
+            "queue_expired_packets": {
+              "range": [
+                0,
+                0
+              ],
+              "delta": 0
+            },
+            "app_connection_attempts_pending": {
+              "range": [
+                0,
+                0
+              ],
+              "delta": 0
+            },
+            "app_connections_retiring": {
+              "range": [
+                0,
+                0
+              ],
+              "delta": 0
+            },
+            "redial_attempts": {
+              "range": [
+                0,
+                0
+              ],
+              "delta": 0
+            },
+            "outgoing_connection_errors": {
+              "range": [
+                5,
+                5
+              ],
+              "delta": 0
+            },
+            "outbound_path_probes_sent": {
+              "range": [
+                9,
+                68
+              ],
+              "delta": 59
+            },
+            "outbound_path_probe_failures": {
+              "range": [
+                0,
+                0
+              ],
+              "delta": 0
+            }
+          }
+        },
+        "b": {
+          "samples": 300,
+          "runtime_samples": 60,
+          "cpu_percent_one_core": 0.17333314611735778,
+          "rss_kib": [
+            36808,
+            36872
+          ],
+          "rss_checkpoints": [
+            36808,
+            36812,
+            36856,
+            36856,
+            36864,
+            36872
+          ],
+          "total_fds": [
+            19,
+            19
+          ],
+          "socket_fds": [
+            12,
+            12
+          ],
+          "threads": [
+            20,
+            20
+          ],
+          "max_sample_gap_seconds": 1.0093209750000085,
+          "max_query_seconds": 0.002068716,
+          "counters": {
+            "queue_queued_packets": {
+              "range": [
+                0,
+                0
+              ],
+              "delta": 0
+            },
+            "queue_queued_bytes": {
+              "range": [
+                0,
+                0
+              ],
+              "delta": 0
+            },
+            "queue_dropped_packets": {
+              "range": [
+                0,
+                0
+              ],
+              "delta": 0
+            },
+            "queue_expired_packets": {
+              "range": [
+                0,
+                0
+              ],
+              "delta": 0
+            },
+            "app_connection_attempts_pending": {
+              "range": [
+                0,
+                0
+              ],
+              "delta": 0
+            },
+            "app_connections_retiring": {
+              "range": [
+                0,
+                0
+              ],
+              "delta": 0
+            },
+            "redial_attempts": {
+              "range": [
+                0,
+                0
+              ],
+              "delta": 0
+            },
+            "outgoing_connection_errors": {
+              "range": [
+                5,
+                5
+              ],
+              "delta": 0
+            },
+            "outbound_path_probes_sent": {
+              "range": [
+                10,
+                69
+              ],
+              "delta": 59
+            },
+            "outbound_path_probe_failures": {
+              "range": [
+                0,
+                0
+              ],
+              "delta": 0
+            }
+          }
+        }
+      }
+    }
+  ]
+}
