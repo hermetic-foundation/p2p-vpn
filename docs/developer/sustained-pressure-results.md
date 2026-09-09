@@ -8,7 +8,8 @@ Diagnostic passes do not replace that failure or complete the campaign.
 
 The later corrected campaign completed all four captures and 20 rounds.
 This establishes bounded local pressure/recovery measurements, not allocation
-attribution or a proof of all stream-owner limits; see the open finding below.
+attribution or a proof of all stream-owner limits. The diagnostic peak's
+ownership interpretation is covered by the regression below.
 
 | Campaign Run | Profile | Completed Rounds | Result | Seconds |
 | --- | --- | ---: | --- | ---: |
@@ -218,12 +219,51 @@ The aggregate `packet_stream_fallback_in_flight` peak was 257 on A in captures
 | --- | --- |
 | `PacketInFlight::can_send` in `src/runtime/runner.rs` | Data admission checks the per-peer total |
 | `send_path_probes` and `record_path_probe` | Stream probes enter the same request tracker without that check |
-| Five-second probe timer; 15-second request expiry | Time-based controls exist; a strict aggregate bound is not established by these samples |
+| Pinned `Behaviour::send_request_on_connection` | At per-connection capacity, queues a failure ID without retaining another payload owner |
+| `handle_pinned_packet_stream_event` | Completes rejected request accounting; local capacity failures do not demote paths |
+| Five-second probe timer; 15-second expiry threshold | Request metadata can await failure delivery or become eligible for expiry during queue drain |
 
-- Verify saturated data admission plus repeated probes with a deterministic ownership regression.
-- Establish or correct the probe reserve and expiry bound without starving recovery.
-- Do not classify the extra request as either harmless or an unbounded leak from this observation alone.
-- Allocation attribution and the owner-accounting finding remain open after S4 measurement completion.
+The diagnostic peak does not violate the per-connection payload limit.
+`saturated_stream_probes_retain_only_rejected_metadata_until_completion`
+reproduces the distinction using actual probe dispatch, pinned behaviour
+admission/events and runtime request-tracking primitives.
+
+| Regression Case | Result |
+| --- | --- |
+| Limits / repetitions | 1, 4 and 256; ten saturation/drain cycles each |
+| Full data window plus probe | Tracker rises to limit + 1; payload owners remain at the limit |
+| Rejection delivery | Capacity failure releases the extra tracking entry; selected path remains healthy |
+| Data completion | Accepted payload owners and tracking entries drain to zero |
+| Probe after capacity release | Admitted successfully, rather than permanently suppressed |
+| Expiry boundary | Exactly 15 seconds retains metadata; one nanosecond beyond expires it |
+| Late completion after expiry | Does not recreate tracking or double-release a slot |
+| End of each cycle | Zero payload owners, tracked requests, peer/shard entries and pending behaviour events |
+
+This is a deterministic ownership test with injected connection/handler events,
+not another network campaign. It does not identify individual requests in the
+historical samples or certify a universal metadata bound under event-loop stalls.
+
+No production change is justified by the 257-request observation: asynchronous
+rejection explains a count above data admission without excess payload admission.
+S4's real-daemon recovery/cleanup results provide separate integration evidence.
+Retained-allocation attribution remains open.
+
+### Ownership Regression Validation
+
+| Gate | Result |
+| --- | --- |
+| Focused regression | Passed, 0.02 seconds |
+| Offline locked workspace | 1497 passed; 37 opt-in cases ignored |
+| Required Clippy groups | Workspace/all targets passed; advisory warnings remain |
+| Formatting | Changed Rust source passed cached rustfmt |
+| Nix source check | Evaluated flake script passed with cached Cargo, JQ and diff; not a sandboxed package build |
+| Packaged runner source | Linux and Android filtered sources exactly match the working runner source |
+| Platform reruns | No new namespace/emulator/cross-target build: only a `cfg(test)` regression changed |
+
+- Logs: `/tmp/p2p-vpn-sustained-probe-owner-{test,workspace,clippy,nix-cached}.log`.
+- Source-check artifacts: `/tmp/p2p-vpn-probe-source.MKMRzV/`.
+- Initial Nix-check attempt used a stale Cargo wrapper; failure is retained in `/tmp/p2p-vpn-sustained-probe-owner-nix.log`.
+- Cached Cargo executable then ran the unchanged source-comparison assertions successfully; no tools were downloaded.
 
 ### Verification and Cleanup
 

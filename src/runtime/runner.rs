@@ -44395,6 +44395,210 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn saturated_stream_probes_retain_only_rejected_metadata_until_completion() {
+        use libp2p::swarm::{NetworkBehaviour, ToSwarm};
+        use std::task::{Context, Poll};
+
+        for limit in [1, 4, 256] {
+            let identity = NodeIdentity::generate_ed25519().unwrap();
+            let remote = peer_id();
+            let peer = PeerId::from_libp2p(remote);
+            let config = config_with_peer(&identity, remote);
+            let mut node = membership_sync_test_node(identity);
+            node.swarm.behaviour_mut().pinned_packet_stream =
+                pinned_packet_stream::Behaviour::new(1280).with_max_concurrent_streams(limit);
+            let connection = ConnectionId::new_unchecked(41);
+            let endpoint = libp2p::core::ConnectedPoint::Listener {
+                local_addr: "/memory/1".parse().unwrap(),
+                send_back_addr: "/memory/2".parse().unwrap(),
+            };
+            node.swarm
+                .behaviour_mut()
+                .pinned_packet_stream
+                .on_swarm_event(libp2p::swarm::FromSwarm::ConnectionEstablished(
+                    libp2p::swarm::behaviour::ConnectionEstablished {
+                        peer_id: remote,
+                        connection_id: connection,
+                        endpoint: &endpoint,
+                        failed_addresses: &[],
+                        other_established: 0,
+                    },
+                ));
+            let mut paths = PathSet::new();
+            paths.record_established_with_details(
+                peer,
+                PathKind::DirectTcpStream,
+                None,
+                Some(1280),
+                PathOrigin::Configured,
+                PathConnectionRole::Listener,
+                false,
+                Some(connection),
+                None,
+            );
+            let path = paths.best_for(peer).unwrap();
+            let mut forwarder = Forwarder::from_config(&config).unwrap();
+            let mut capabilities = PeerCapabilities::default();
+            capabilities.record(peer, ControlCapabilities::local("lab", None, 1280));
+            let mut in_flight = PacketInFlight::new(limit);
+            let mut probes = PathProbeTracker::default();
+            let metrics = RuntimeMetrics::default();
+            let packet = crate::queue::Packet::new(peer, 1, vec![0x45; 20]);
+            let poll = |behaviour: &mut pinned_packet_stream::Behaviour| {
+                behaviour.poll(&mut Context::from_waker(futures::task::noop_waker_ref()))
+            };
+
+            for cycle in 0..10 {
+                let mut accepted = Vec::new();
+                for _ in 0..limit {
+                    assert!(in_flight.can_send(peer));
+                    let id = node
+                        .swarm
+                        .behaviour_mut()
+                        .pinned_packet_stream
+                        .send_request_on_connection(
+                            remote,
+                            connection,
+                            Frame::packet(1, 1, vec![0x45; 20]).unwrap(),
+                        );
+                    in_flight.record(&packet, PacketInFlightId::PinnedPacketStream(id), path);
+                    accepted.push(id);
+                }
+                assert!(!in_flight.can_send(peer));
+                send_path_probes(
+                    &mut node.swarm,
+                    &mut forwarder,
+                    &mut paths,
+                    &capabilities,
+                    None,
+                    None,
+                    &mut in_flight,
+                    &mut probes,
+                    &metrics,
+                )
+                .await;
+
+                let behaviour = &mut node.swarm.behaviour_mut().pinned_packet_stream;
+                assert_eq!(behaviour.pending_outbound_count(), limit);
+                assert_eq!(in_flight.stats().packets, limit + 1);
+                for _ in 0..limit {
+                    assert!(matches!(
+                        poll(behaviour),
+                        Poll::Ready(ToSwarm::NotifyHandler { .. })
+                    ));
+                }
+                let Poll::Ready(ToSwarm::GenerateEvent(
+                    pinned_packet_stream::Event::OutboundFailure {
+                        request_id, error, ..
+                    },
+                )) = poll(behaviour)
+                else {
+                    panic!("expected asynchronous capacity rejection")
+                };
+                assert!(error.is_capacity_exhausted());
+                assert!(
+                    in_flight
+                        .complete(PacketInFlightId::PinnedPacketStream(request_id))
+                        .is_some()
+                );
+                assert_eq!(in_flight.stats().packets, limit);
+                assert!(!maybe_demote_pinned_stream_fallback_path(
+                    &mut paths,
+                    &metrics,
+                    peer,
+                    PathKind::DirectTcpStream,
+                    None,
+                    connection,
+                    &error
+                ));
+                for id in accepted {
+                    behaviour.on_connection_handler_event(
+                        remote,
+                        connection,
+                        pinned_packet_stream::HandlerEvent::OutboundResponse {
+                            request_id: id,
+                            response: PacketResponse::Accepted,
+                        },
+                    );
+                    assert!(
+                        matches!(poll(behaviour), Poll::Ready(ToSwarm::GenerateEvent(
+                        pinned_packet_stream::Event::OutboundResponse { request_id, .. }
+                    )) if request_id == id)
+                    );
+                    assert!(
+                        in_flight
+                            .complete(PacketInFlightId::PinnedPacketStream(id))
+                            .is_some()
+                    );
+                }
+                assert_eq!(behaviour.pending_outbound_count(), 0);
+
+                // Recovery probes must still be admitted when payload capacity is released.
+                send_path_probes(
+                    &mut node.swarm,
+                    &mut forwarder,
+                    &mut paths,
+                    &capabilities,
+                    None,
+                    None,
+                    &mut in_flight,
+                    &mut probes,
+                    &metrics,
+                )
+                .await;
+                let behaviour = &mut node.swarm.behaviour_mut().pinned_packet_stream;
+                assert_eq!(behaviour.pending_outbound_count(), 1);
+                let Poll::Ready(ToSwarm::NotifyHandler {
+                    event: pinned_packet_stream::HandlerCommand::OutboundRequest { request_id, .. },
+                    ..
+                }) = poll(behaviour)
+                else {
+                    panic!("probe was not admitted after drain")
+                };
+                let tracked_id = PacketInFlightId::PinnedPacketStream(request_id);
+                if cycle % 2 == 0 {
+                    let sent_at = in_flight.requests[&tracked_id].sent_at;
+                    assert_eq!(
+                        in_flight.expire(
+                            sent_at + PACKET_STREAM_IN_FLIGHT_TIMEOUT,
+                            PACKET_STREAM_IN_FLIGHT_TIMEOUT
+                        ),
+                        0
+                    );
+                    assert_eq!(
+                        in_flight.expire(
+                            sent_at + PACKET_STREAM_IN_FLIGHT_TIMEOUT + Duration::from_nanos(1),
+                            PACKET_STREAM_IN_FLIGHT_TIMEOUT
+                        ),
+                        1
+                    );
+                }
+                behaviour.on_connection_handler_event(
+                    remote,
+                    connection,
+                    pinned_packet_stream::HandlerEvent::OutboundResponse {
+                        request_id,
+                        response: PacketResponse::Accepted,
+                    },
+                );
+                assert!(matches!(
+                    poll(behaviour),
+                    Poll::Ready(ToSwarm::GenerateEvent(
+                        pinned_packet_stream::Event::OutboundResponse { .. }
+                    ))
+                ));
+                assert_eq!(in_flight.complete(tracked_id).is_some(), cycle % 2 != 0);
+                assert_eq!(behaviour.pending_outbound_count(), 0);
+                assert!(matches!(poll(behaviour), Poll::Pending));
+                assert_eq!(in_flight.stats().packets, 0);
+                assert_eq!(in_flight.stats().peers, 0);
+                assert_eq!(in_flight.stats().shards, 0);
+                assert_eq!(paths.best_for(peer), Some(path));
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn path_probes_wait_for_capabilities_and_supported_path() {
         let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
         let remote = peer_id();

@@ -14,7 +14,7 @@ No physical device or deployed host is authorized for this work.
 - [x] Measure connected idle and periodic-collector overhead in the isolated debug fixture.
 - [x] Measure unavailable peers and retain retry/backoff timelines in the isolated debug fixture.
 - [ ] Measure matched sustained traffic (S3).
-- [x] Measure repeated packet/byte pressure and recovery (S4); allocation and probe-owner findings remain open.
+- [x] Measure repeated packet/byte pressure and recovery (S4); allocation attribution remains open.
 - [ ] Attribute retained allocations, including signed-ledger refreshes.
 - [ ] Measure lifecycle churn and multi-network isolation.
 - [ ] Measure Android background CPU/wakeup proxies on a cached emulator.
@@ -27,7 +27,7 @@ No physical device or deployed host is authorized for this work.
 | --- | --- | --- |
 | [Idle comparison](idle-resource-comparison.md) | Paired debug 60-second captures; current-only release samples | Sustained plateau and matching release baseline |
 | [Membership resources](forwarder-resource-comparison.md) | 8/128/256 records; evaluation reuse | Exact retained allocations and whole-daemon impact |
-| [Queue pressure](sustained-pressure-results.md) | Corrected S4: 20 TCP pressure/recovery rounds, two captures per limit profile | RSS allocation attribution and aggregate probe-owner bound |
+| [Queue pressure](sustained-pressure-results.md) | Corrected S4: 20 TCP pressure/recovery rounds; probe rejection/owner regression passes | RSS allocation attribution and broader workload coverage |
 | [Kademlia acceptance](kademlia-workstream-acceptance.md) | Enforcement and scoped recovery fixes | RM-2 sampling, RM-3 unequal work, RM-4 backend confounding, RM-5 allocation attribution |
 | [Android lifecycle](android-lifecycle-audit.md) | Ownership regressions and multi-network restoration | Sustained CPU/memory and physical battery behavior |
 
@@ -496,8 +496,9 @@ separate evidence and do not substitute for corrected-fixture repetitions.
 
 All four corrected captures passed on fixture `82980db4`; see the
 [full campaign summary](sustained-pressure-results.md#full-campaign-summary).
-The 257-request aggregate peak requires the documented probe-owner follow-up;
-S4 measurement completion does not close resource-bound or allocation review.
+The 257-request aggregate peak was reproduced as rejected-probe metadata
+without excess payload admission. S4 measurement completion does not close
+allocation attribution or resource review across the other workloads.
 
 ### Shared Limits
 
