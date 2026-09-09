@@ -2040,6 +2040,7 @@ fn namespace_replay_env_exports() -> String {
             ORCHESTRATOR_TIMEOUT_ENV,
             WAIT_TIMEOUT_SCALE_ENV,
             idle_sample::SAMPLE_ENV,
+            idle_sample::RUNTIME_SAMPLING_ENV,
             queue_pressure::ROUNDS_ENV,
             recovery_soak::PROFILE_ENV,
             recovery_soak::SOAK_ENV,

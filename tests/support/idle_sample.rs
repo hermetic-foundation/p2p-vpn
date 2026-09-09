@@ -17,8 +17,17 @@ use sha2::{Digest, Sha256};
 use super::process_sample;
 
 pub const SAMPLE_ENV: &str = "P2P_VPN_TUN_E2E_IDLE_SECONDS";
+pub const RUNTIME_SAMPLING_ENV: &str = "P2P_VPN_TUN_E2E_IDLE_RUNTIME_SAMPLING";
 pub const WARMUP: Duration = Duration::from_secs(30);
 pub const METRICS_INTERVAL: Duration = Duration::from_secs(5);
+
+fn parse_runtime_sampling(value: Option<&str>) -> Result<bool, &'static str> {
+    match value {
+        None | Some("1") => Ok(true),
+        Some("0") => Ok(false),
+        _ => Err("runtime sampling must be 0 or 1"),
+    }
+}
 
 pub fn requested_duration() -> Option<Duration> {
     match env::var(SAMPLE_ENV) {
@@ -118,6 +127,13 @@ pub fn capture(temp: &Path, roles: &[(&str, u32)]) {
     let Some(duration) = requested_duration() else {
         return;
     };
+    let runtime_sampling = match env::var(RUNTIME_SAMPLING_ENV) {
+        Ok(value) => Some(value),
+        Err(env::VarError::NotPresent) => None,
+        Err(error) => panic!("invalid {RUNTIME_SAMPLING_ENV}: {error}"),
+    };
+    let runtime_sampling_enabled =
+        parse_runtime_sampling(runtime_sampling.as_deref()).expect("runtime sampling mode");
     let hash = fingerprint().expect("test binary fingerprint");
     let ticks = Command::new("getconf")
         .arg("CLK_TCK")
@@ -134,10 +150,12 @@ pub fn capture(temp: &Path, roles: &[(&str, u32)]) {
     let before = daemon_views(temp, roles);
     let load_before = fs::read_to_string("/proc/loadavg").expect("host load before sample");
     let started = Instant::now();
+    let collector_before = process_sample::capture(std::process::id(), started)
+        .expect("collector initial observation");
     let mut samples = Vec::new();
     let counters = thread::scope(|scope| {
-        let counters =
-            scope.spawn(|| super::idle_counters::capture(temp, roles, started, duration));
+        let counters = runtime_sampling_enabled
+            .then(|| scope.spawn(|| super::idle_counters::capture(temp, roles, started, duration)));
         loop {
             for (role, pid) in roles {
                 samples.push(sample(role, *pid, started).expect("live process sample"));
@@ -147,8 +165,12 @@ pub fn capture(temp: &Path, roles: &[(&str, u32)]) {
             }
             thread::sleep(Duration::from_secs(1).min(duration.saturating_sub(started.elapsed())));
         }
-        counters.join().expect("counter collector")
+        counters.map_or_else(Vec::new, |counters| {
+            counters.join().expect("counter collector")
+        })
     });
+    let collector_after =
+        process_sample::capture(std::process::id(), started).expect("collector final observation");
     for (role, _) in roles {
         let first = samples.iter().find(|row| row.role == *role).unwrap();
         let last = samples.iter().rfind(|row| row.role == *role).unwrap();
@@ -161,7 +183,8 @@ pub fn capture(temp: &Path, roles: &[(&str, u32)]) {
             "CPU accounting decreased"
         );
     }
-    let runtime_samples_complete = super::idle_counters::complete(&counters, roles.len(), duration);
+    let runtime_samples_complete = runtime_sampling_enabled
+        .then(|| super::idle_counters::complete(&counters, roles.len(), duration));
     let report = serde_json::json!({
         "schema_version": 1, "binary_sha256": hash, "binary": env::current_exe().unwrap(),
         "build_profile": "cargo integration test", "topology": "two isolated namespaces; direct UDP; no Internet route",
@@ -173,6 +196,8 @@ pub fn capture(temp: &Path, roles: &[(&str, u32)]) {
         "warmup_seconds": WARMUP.as_secs(), "requested_seconds": duration.as_secs(),
         "clock_ticks_per_second": ticks, "samples": samples, "runtime_samples": counters,
         "runtime_samples_complete": runtime_samples_complete,
+        "runtime_sampling_enabled": runtime_sampling_enabled,
+        "collector_before": collector_before, "collector_after": collector_after,
         "daemon_before": before, "daemon_after": daemon_views(temp, roles),
     });
     let bytes = serde_json::to_vec_pretty(&report).unwrap();
@@ -183,7 +208,7 @@ pub fn capture(temp: &Path, roles: &[(&str, u32)]) {
     fs::write(temp.join("idle-sample.json"), bytes).expect("idle report");
     eprintln!("idle sample: {}", temp.join("idle-sample.json").display());
     assert!(
-        runtime_samples_complete,
+        runtime_samples_complete != Some(false),
         "runtime counter series incomplete; report retained"
     );
 }
@@ -191,6 +216,16 @@ pub fn capture(temp: &Path, roles: &[(&str, u32)]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runtime_sampling_is_default_on_and_only_explicit_zero_disables_it() {
+        assert_eq!(parse_runtime_sampling(None), Ok(true));
+        assert_eq!(parse_runtime_sampling(Some("1")), Ok(true));
+        assert_eq!(parse_runtime_sampling(Some("0")), Ok(false));
+        for invalid in ["", "false", "true", "2", "-1"] {
+            assert!(parse_runtime_sampling(Some(invalid)).is_err());
+        }
+    }
 
     #[test]
     fn duration_is_bounded_and_rejects_invalid_inputs() {

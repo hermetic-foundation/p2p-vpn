@@ -302,6 +302,49 @@ lifecycle churn and Android resource evidence remain open.
 
 ### Next Execution Steps
 
+#### Observer Control Protocol
+
+The idle fixture accepts `P2P_VPN_TUN_E2E_IDLE_RUNTIME_SAMPLING=0` to omit only
+periodic status queries. Default/on mode uses `1`. OS sampling, before/after
+queries, diagnostic cadence, topology and VPN runtime behavior are unchanged.
+
+Disabled reports have `runtime_sampling_enabled=false`, an empty runtime series
+and `runtime_samples_complete=null`. Disabled is not a zero-valued or failed
+metric series. Replay artifacts retain the selected mode.
+
+Both modes record the collector process before and after sampling. These capture
+sampling-phase CPU/retention, not fixture startup, report serialization or the
+total cost of diagnostics. Do not subtract assumed overhead from daemon samples.
+
+| Frozen Comparison Setting | Value |
+| --- | --- |
+| Sequence | Off, on, on, off; fresh processes for each capture |
+| Binary / fixture | Identical for all four runs; record executable hash |
+| Warmup / capture | 30 / 300 seconds |
+| OS / diagnostic cadence | One / five seconds in both modes |
+| Workload | Two static peers; no added payload; same isolated direct-UDP topology |
+| Scope | Incremental cost of periodic status queries, not all instrumentation |
+
+Short off/on smoke runs verify the control before the four sustained captures.
+Those smoke runs do not count as the declared repetitions.
+
+| Control Validation | Result |
+| --- | --- |
+| Unit tests | 46 passed, 22 opt-in tests ignored; `/tmp/p2p-vpn-sustained-observer-control-tests.log` |
+| Static checks | Required Clippy groups and cached rustfmt pass; advisory warnings remain |
+| Off smoke | Pass, 56.44 seconds; 22 OS samples, no periodic runtime samples, completeness null |
+| On smoke | Pass, 56.49 seconds; 22 OS samples, four runtime snapshots, completeness true |
+| Collector identity | Stable before/after; CPU counters nondecreasing in both modes |
+| Teardown | Both tests exit zero; no matching fixture process remains |
+
+Both smoke reports use fixture SHA-256
+`4bdeffb4b9e6c2eed1130e0976fa995dd03eea606c35c322b41f31883f6c506e`.
+Neither used a physical device or concurrent review build.
+
+- Off report: `/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.521ad8940416b3ee/idle-sample.json`.
+- On report: `/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.f7f806fadb8f1b42/idle-sample.json`.
+- Outer logs: `/tmp/p2p-vpn-sustained-observer-{off,on}-smoke.log`.
+
 1. Audit existing idle, process, queue-pressure and resource collectors.
 2. Inventory cached binaries and storage; build only missing affected targets.
 3. Run S1/S2 and overhead controls; finalize S3/S5 fixture manifests.
