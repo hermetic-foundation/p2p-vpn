@@ -45,6 +45,8 @@ mod queue_pressure;
 mod recovery_soak;
 #[path = "support/resource_cli.rs"]
 mod resource_cli;
+#[path = "support/tcp_collision.rs"]
+mod tcp_collision;
 const KEEP_TEMP_ENV: &str = "P2P_VPN_TUN_E2E_KEEP_TEMP";
 const ORCHESTRATOR_TIMEOUT_ENV: &str = "P2P_VPN_TUN_E2E_ORCHESTRATOR_TIMEOUT_SECONDS";
 const WAIT_TIMEOUT_SCALE_ENV: &str = "P2P_VPN_TUN_E2E_WAIT_SCALE";
@@ -63,6 +65,15 @@ const NETWORK_MOVE_TEST_NAME: &str = "tun_namespace_recovers_relay_and_direct_af
 const DHT_TEST_NAME: &str = "tun_namespace_ping_crosses_dht_discovered_overlay";
 const NETWORK_NAME: &str = "tun-e2e";
 const NODE_A_LOCAL_ROUTE_ADDRESS: Ipv4Addr = Ipv4Addr::new(10, 41, 0, 9);
+
+#[test]
+#[ignore = "isolated TCP simultaneous-dial diagnostic; requires namespaces and netem"]
+fn tun_namespace_tcp_simultaneous_dial_diagnostic() {
+    match env::var(CHILD_ENV).as_deref() {
+        Ok("orchestrator") => tcp_collision::run(),
+        _ => reexec_orchestrator(tcp_collision::TEST_NAME),
+    }
+}
 
 #[test]
 #[ignore = "requires isolated Linux namespaces and P2P_VPN_RESOURCE_SUBJECT CLI binary"]
@@ -428,7 +439,9 @@ fn reexec_orchestrator(test_name: &str) {
         );
         idle_sample::WARMUP + duration
     });
-    let default_timeout = if test_name == recovery_soak::TEST_NAME {
+    let default_timeout = if test_name == tcp_collision::TEST_NAME {
+        Duration::from_secs(30)
+    } else if test_name == recovery_soak::TEST_NAME {
         recovery_soak::requested_watchdog()
     } else if test_name == RELAY_PROMOTION_TEST_NAME {
         Duration::from_secs(150)
@@ -453,7 +466,10 @@ fn reexec_orchestrator(test_name: &str) {
     .expect("failed to execute unshare");
 
     assert_output_success("unshare tun e2e orchestrator", &output);
-    if idle_extra > Duration::ZERO || test_name == recovery_soak::TEST_NAME {
+    if idle_extra > Duration::ZERO
+        || test_name == recovery_soak::TEST_NAME
+        || test_name == tcp_collision::TEST_NAME
+    {
         eprint!("{}", String::from_utf8_lossy(&output.stderr));
     }
 }
