@@ -2,14 +2,14 @@
 
 ## Status
 
-Phase 3 is active. Four version-2 runs are recorded: two completed and two failed.
+Phase 3 is complete with explicit evidence limitations. Four version-2 runs are recorded: two completed and two failed.
 Subject selection, sampling, CLI smoke, and timed workload preflight are implemented.
 The numeric protocol below is version 3. The replacement generator is integrated
 and passed paired traffic VPN preflight. Version-2 artifacts remain archived separately.
 Version-3 collection is complete: all 48 outcomes are recorded and audited,
 with 44 completed and four censored. The redacted index is published below.
-Comparative analysis is [published](kademlia-resource-analysis.md). The final
-report and phase-3 acceptance review remain a separate follow-up goal.
+Comparative analysis is [published](kademlia-resource-analysis.md). The
+[final report](kademlia-resource-final-report.md) records acceptance and follow-ups.
 
 See the [workstream plan](kademlia-resource-plan.md).
 Phases 1 and 2 remain complete; this phase does not establish production readiness.
@@ -76,7 +76,8 @@ sudo env \
 #### Follow-Up Goals
 
 1. Completed: counter aggregation and comparative analysis, including common/current-only fields, reset handling, useful-work comparability, paired variation and censoring.
-2. Outstanding: final report and acceptance review, including regression/uncertainty decisions, conclusions, limitations and original phase-3 requirements.
+2. Completed: [final report and acceptance review](kademlia-resource-final-report.md), including regression/uncertainty decisions, limitations and original phase-3 requirements.
+3. Outstanding: phase-4 workstream acceptance, distinct from phase-3 measurement completion.
 
 Neither phase 3 nor production readiness is established by collection completion.
 
@@ -120,7 +121,7 @@ sudo env \
 - Partial control windows end at their last captured process timestamp. Their deltas describe only that interval; they cannot stand in for full stages.
 - Three truncated runs retain an explicit unavailable process-summary reason. Complete process windows are not synthesized across missing boundaries.
 - Immutable hashes/outcomes are checked exactly. Floating-point derived summaries are recomputed from raw input instead of compared as identity metadata.
-- Paired outcome/workload gating, repetition statistics and [analysis notes](kademlia-resource-analysis.md) are published. Final reporting remains outstanding.
+- Paired outcome/workload gating, repetition statistics, [analysis notes](kademlia-resource-analysis.md) and the [final report](kademlia-resource-final-report.md) are published.
 
 #### Paired Comparison Rules
 
@@ -260,7 +261,7 @@ These runs are preflight evidence, not acceptance matrix repetitions.
 - Baseline observation SHA-256: `a6dec060dcc3e8e8f79984c0b7239467a4a0d7d05d2eb4601c3fbb2bbee3bb32`.
 - Validation passed 26 measurement and 41 namespace unit tests, required Clippy groups, formatting, and cached Nix source parity.
 - Runtime and vendor sources are unchanged. Full workspace and Android builds were not repeated for this measurement-only integration.
-- Version-3 collection and comparative analysis are complete; final reporting and phase-3 acceptance remain outstanding.
+- Version-3 collection, comparative analysis and [phase-3 acceptance](kademlia-resource-final-report.md) are complete with explicit evidence limitations.
 
 ### Version-3 Pressure Preflight
 
@@ -389,7 +390,7 @@ passed; no runtime, Android, or Lean verification was added for this reader.
 | --- | --- | --- |
 | Baseline | `5ecb01ea` | Immediately precedes the first workstream fix, `14782e7d`, for recovery-query backoff |
 | Current | `3b503ad2` | Completed aggregate bounds and sustained recovery/settling acceptance |
-| Measurement harness | `2a1ff204` | One external orchestrator and infrastructure helper for both subjects; executable hashes in the campaign evidence |
+| Measurement harness | `92ca4bc3` | Version-3 integration; one external orchestrator and infrastructure helper for both subjects; executable hashes in campaign evidence |
 
 - Build each subject from its own unchanged runtime, manifest, and lockfile.
 - Record full revisions, binary hashes, compiler, profile, environment, and harness hashes before runs.
@@ -444,7 +445,7 @@ three-packet preload, and 98% offered-count gate. It replaces `ping` pacing with
 absolute-time ICMP deadlines and a bounded structured traffic report.
 
 - Do not resume the archived version-2 matrix using version-3 executables.
-- The revised matrix will use one newly pinned harness for every pair. Archived observations remain available for audit.
+- The version-3 matrix used one pinned harness for every pair. Archived version-2 observations from harness `2a1ff204` remain available for audit.
 - The standalone process reader supports both versions; that does not make their workloads interchangeable.
 
 | Common Setting | Value |
@@ -554,8 +555,8 @@ Implementation: [resource analysis](../../tests/support/resource_analysis.rs).
 
 The caller must supply matching workload/metric windows and a frozen maximum
 sampling gap. Interval checks alone do not establish workload equivalence.
-Acceptance matrix execution and run-level aggregation are implemented; final
-reporting and phase-3 acceptance remain outstanding.
+Acceptance matrix execution and run-level aggregation are implemented. The
+[final report](kademlia-resource-final-report.md) records phase-3 acceptance with limitations.
 
 ### CLI Harness Smoke
 
