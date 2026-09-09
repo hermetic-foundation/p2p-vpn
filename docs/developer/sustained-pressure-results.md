@@ -6,6 +6,10 @@ The frozen four-run S4 campaign stopped at its first failure. One packet-profile
 run passed five rounds; the following byte-profile run failed in round two.
 Diagnostic passes do not replace that failure or complete the campaign.
 
+The later corrected campaign completed all four captures and 20 rounds.
+This establishes bounded local pressure/recovery measurements, not allocation
+attribution or a proof of all stream-owner limits; see the open finding below.
+
 | Campaign Run | Profile | Completed Rounds | Result | Seconds |
 | --- | --- | ---: | --- | ---: |
 | 1 | Packets | 5 / 5 | Pass | 169.67 |
@@ -146,8 +150,8 @@ by 5/5 delivery in both directions. This is not a sustained repetition.
 
 The deterministic test proves a fixture flaw, not the original failure's exact
 timeline: its pre-ping path-health evidence is missing. Preserve that failure
-as unresolved retrospective attribution and restart the four-run campaign
-with the corrected readiness condition. Any new delivery failure remains actionable.
+as unresolved retrospective attribution. The four-run campaign below uses
+the corrected readiness condition; any new delivery failure remains actionable.
 
 ## Corrected Campaign
 
@@ -158,9 +162,9 @@ deltas, CPU windows, queue observations, process identities and source hashes.
 | Run | Profile | Result | Duration |
 | --- | --- | --- | ---: |
 | 1 | Packets | Five rounds passed | 189.82 s |
-| 2 | Bytes | Pending | - |
-| 3 | Bytes | Pending | - |
-| 4 | Packets | Pending | - |
+| 2 | Bytes | Five rounds passed | 169.43 s |
+| 3 | Bytes | Five rounds passed | 249.66 s |
+| 4 | Packets | Five rounds passed | 170.38 s |
 
 | Run 1 Round | Pressure Requests / Replies | Final RSS A / B, KiB |
 | --- | ---: | ---: |
@@ -180,7 +184,54 @@ deltas, CPU windows, queue observations, process identities and source hashes.
 
 Artifact suffix: `1.e44e49d8c1aabbb5`; outer log:
 `/tmp/p2p-vpn-sustained-pressure-corrected-1-packets.log`.
-This first corrected capture does not complete S4 or resolve historical attribution.
+### Full Campaign Summary
+
+All 20 rounds ended with empty queues/stream owners and unchanged daemon
+identities. All 40 recovery-ping reports show 5/5 replies. Corrected results do
+not establish the missing historical failure timeline retrospectively.
+
+| Capture | A Load CPU, % Core | B Load CPU, % Core | JSON / Node Logs, Bytes |
+| --- | ---: | ---: | ---: |
+| 1, packets | 7.90-9.14 | 1.78-2.50 | 3419022 / 1332605 |
+| 2, bytes | 7.90-9.85 | 1.88-2.57 | 3450859 / 1255369 |
+| 3, bytes | 8.04-9.74 | 1.85-2.20 | 3363191 / 1530291 |
+| 4, packets | 7.60-9.39 | 1.95-2.17 | 3445877 / 1241835 |
+
+- Packet-profile queue peaks: four packets / 4112 bytes on each node in every round.
+- Byte-profile queue peaks: three packets / 3084 bytes on each node in every round.
+- Load observations: 13-15 total descriptors, 6-8 socket descriptors and six threads per daemon.
+- Final total descriptors: 13 per daemon after every round.
+- A's final three RSS checkpoints rose in all four captures; B's also rose in capture 4.
+- Source report hashes, actual traffic counts and counter increments are retained in the portable JSON.
+
+Capture 3's last post-load snapshot had no supported path on either node.
+Both recovered within the existing path waits and passed strict delivery.
+Its longer duration is retained, not discarded or hidden by a timeout extension.
+
+### Stream-Owner Accounting Follow-Up
+
+The aggregate `packet_stream_fallback_in_flight` peak was 257 on A in captures
+1 and 2. Data admission uses a per-peer limit of 256. This is not proof of
+257 simultaneously open transport streams: the gauge counts tracked requests.
+
+| Source Evidence | Implication |
+| --- | --- |
+| `PacketInFlight::can_send` in `src/runtime/runner.rs` | Data admission checks the per-peer total |
+| `send_path_probes` and `record_path_probe` | Stream probes enter the same request tracker without that check |
+| Five-second probe timer; 15-second request expiry | Time-based controls exist; a strict aggregate bound is not established by these samples |
+
+- Verify saturated data admission plus repeated probes with a deterministic ownership regression.
+- Establish or correct the probe reserve and expiry bound without starving recovery.
+- Do not classify the extra request as either harmless or an unbounded leak from this observation alone.
+- Allocation attribution and the owner-accounting finding remain open after S4 measurement completion.
+
+### Verification and Cleanup
+
+- Fixture revision and binary hash stayed unchanged across all four captures.
+- Series checkpoints match corresponding round reports; portable summaries were derived from raw reports.
+- Every readiness trace ended before its deadline with healthy TCP and empty queues/stream owners.
+- All captures exited successfully and left no matching fixture process.
+- No builds, deployments, physical devices or public-network tests occurred during the campaign.
 
 ## Diagnostic Validation
 

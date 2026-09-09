@@ -13,7 +13,8 @@ No physical device or deployed host is authorized for this work.
 - [ ] Audit collectors and freeze workload manifests before capture.
 - [x] Measure connected idle and periodic-collector overhead in the isolated debug fixture.
 - [x] Measure unavailable peers and retain retry/backoff timelines in the isolated debug fixture.
-- [ ] Measure matched sustained traffic and pressure/recovery cycles.
+- [ ] Measure matched sustained traffic (S3).
+- [x] Measure repeated packet/byte pressure and recovery (S4); allocation and probe-owner findings remain open.
 - [ ] Attribute retained allocations, including signed-ledger refreshes.
 - [ ] Measure lifecycle churn and multi-network isolation.
 - [ ] Measure Android background CPU/wakeup proxies on a cached emulator.
@@ -26,7 +27,7 @@ No physical device or deployed host is authorized for this work.
 | --- | --- | --- |
 | [Idle comparison](idle-resource-comparison.md) | Paired debug 60-second captures; current-only release samples | Sustained plateau and matching release baseline |
 | [Membership resources](forwarder-resource-comparison.md) | 8/128/256 records; evaluation reuse | Exact retained allocations and whole-daemon impact |
-| [Queue pressure](queue-pressure-review.md) | Three corrected TCP recovery cycles | Cause of increasing RSS and longer-run retention |
+| [Queue pressure](sustained-pressure-results.md) | Corrected S4: 20 TCP pressure/recovery rounds, two captures per limit profile | RSS allocation attribution and aggregate probe-owner bound |
 | [Kademlia acceptance](kademlia-workstream-acceptance.md) | Enforcement and scoped recovery fixes | RM-2 sampling, RM-3 unequal work, RM-4 backend confounding, RM-5 allocation attribution |
 | [Android lifecycle](android-lifecycle-audit.md) | Ownership regressions and multi-network restoration | Sustained CPU/memory and physical battery behavior |
 
@@ -471,10 +472,17 @@ fixture processes. Replay scripts preserve the limit profile and round count.
 No builds overlapped either smoke. The subsequent campaign stopped on a
 round-two byte-profile failure; see [pressure investigation](sustained-pressure-results.md).
 
+- Executable SHA-256: `ab3f2fe482dfb48d2915074b04c81a4e037b9a6c02f94e590af07292f68de666`.
+- Packet artifact suffix: `1.35cc20df7fd8c5a8`; byte suffix: `1.3e33a24e9bf968d6`.
+- Artifact prefix: `/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-`.
+- Smoke logs: `/tmp/p2p-vpn-sustained-pressure-{packets,bytes}-smoke.log`.
+- Final checks: `/tmp/p2p-vpn-sustained-pressure-profile-{admission-tests,clippy}.log`.
+- Initial JSON-macro compile error was corrected before runtime tests; its log remains at `/tmp/p2p-vpn-sustained-pressure-profile-tests.log`.
+
 #### Corrected S4 Campaign
 
 The deterministic path-demotion regression exposed a stale readiness check.
-Restart all four captures after its correction; historical captures remain
+All four captures were restarted after its correction; historical captures remain
 separate evidence and do not substitute for corrected-fixture repetitions.
 
 | Setting | Corrected Campaign |
@@ -486,12 +494,10 @@ separate evidence and do not substitute for corrected-fixture repetitions.
 | Other controls | Frozen S4 traffic, two Tokio workers, shaping, logging, watchdogs and evidence budgets above |
 | Failure handling | Retain failed evidence and stop the campaign for causal investigation |
 
-- Executable SHA-256: `ab3f2fe482dfb48d2915074b04c81a4e037b9a6c02f94e590af07292f68de666`.
-- Packet artifact suffix: `1.35cc20df7fd8c5a8`; byte suffix: `1.3e33a24e9bf968d6`.
-- Artifact prefix: `/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-`.
-- Smoke logs: `/tmp/p2p-vpn-sustained-pressure-{packets,bytes}-smoke.log`.
-- Final checks: `/tmp/p2p-vpn-sustained-pressure-profile-{admission-tests,clippy}.log`.
-- Initial JSON-macro compile error was corrected before runtime tests; its log remains at `/tmp/p2p-vpn-sustained-pressure-profile-tests.log`.
+All four corrected captures passed on fixture `82980db4`; see the
+[full campaign summary](sustained-pressure-results.md#full-campaign-summary).
+The 257-request aggregate peak requires the documented probe-owner follow-up;
+S4 measurement completion does not close resource-bound or allocation review.
 
 ### Shared Limits
 

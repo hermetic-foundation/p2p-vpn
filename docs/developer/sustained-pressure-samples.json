@@ -14,7 +14,7 @@
     "bytes",
     "packets"
   ],
-  "completed_captures": 1,
+  "completed_captures": 4,
   "captures": [
     {
       "index": 1,
@@ -93,6 +93,27 @@
               ],
               "drops_delta": 1430,
               "expiry_delta": 22,
+              "round_seconds": 30.427004895000003,
+              "sampled_load_seconds": 20.027785362,
+              "outbound_failures_delta": 257,
+              "blocked_no_path_events_delta": 343,
+              "load_fd_range": [
+                13,
+                15
+              ],
+              "load_socket_fd_range": [
+                6,
+                8
+              ],
+              "load_stream_in_flight_peak": 257,
+              "load_healthy_tcp_range": [
+                0,
+                1
+              ],
+              "load_unsupported_peer_range": [
+                0,
+                1
+              ],
               "work_load_delta": {
                 "inbound_accepted_packets": 10,
                 "outbound_direct_tcp_stream_fallback_packets": 545,
@@ -145,6 +166,27 @@
               ],
               "drops_delta": 6,
               "expiry_delta": 4,
+              "round_seconds": 30.427498094,
+              "sampled_load_seconds": 20.027091808,
+              "outbound_failures_delta": 55,
+              "blocked_no_path_events_delta": 27,
+              "load_fd_range": [
+                13,
+                15
+              ],
+              "load_socket_fd_range": [
+                6,
+                8
+              ],
+              "load_stream_in_flight_peak": 55,
+              "load_healthy_tcp_range": [
+                0,
+                1
+              ],
+              "load_unsupported_peer_range": [
+                0,
+                1
+              ],
               "work_load_delta": {
                 "inbound_accepted_packets": 75,
                 "outbound_direct_tcp_stream_fallback_packets": 69,
@@ -209,6 +251,27 @@
               ],
               "drops_delta": 1428,
               "expiry_delta": 22,
+              "round_seconds": 30.403819823,
+              "sampled_load_seconds": 20.015017041,
+              "outbound_failures_delta": 257,
+              "blocked_no_path_events_delta": 327,
+              "load_fd_range": [
+                13,
+                15
+              ],
+              "load_socket_fd_range": [
+                6,
+                8
+              ],
+              "load_stream_in_flight_peak": 256,
+              "load_healthy_tcp_range": [
+                0,
+                1
+              ],
+              "load_unsupported_peer_range": [
+                0,
+                1
+              ],
               "work_load_delta": {
                 "inbound_accepted_packets": 15,
                 "outbound_direct_tcp_stream_fallback_packets": 545,
@@ -261,6 +324,27 @@
               ],
               "drops_delta": 7,
               "expiry_delta": 4,
+              "round_seconds": 30.404136649,
+              "sampled_load_seconds": 20.015650243,
+              "outbound_failures_delta": 54,
+              "blocked_no_path_events_delta": 42,
+              "load_fd_range": [
+                13,
+                15
+              ],
+              "load_socket_fd_range": [
+                6,
+                8
+              ],
+              "load_stream_in_flight_peak": 53,
+              "load_healthy_tcp_range": [
+                0,
+                1
+              ],
+              "load_unsupported_peer_range": [
+                0,
+                1
+              ],
               "work_load_delta": {
                 "inbound_accepted_packets": 79,
                 "outbound_direct_tcp_stream_fallback_packets": 72,
@@ -325,6 +409,27 @@
               ],
               "drops_delta": 1682,
               "expiry_delta": 64,
+              "round_seconds": 49.182519766,
+              "sampled_load_seconds": 19.999511820000002,
+              "outbound_failures_delta": 257,
+              "blocked_no_path_events_delta": 1211,
+              "load_fd_range": [
+                13,
+                14
+              ],
+              "load_socket_fd_range": [
+                6,
+                7
+              ],
+              "load_stream_in_flight_peak": 256,
+              "load_healthy_tcp_range": [
+                0,
+                1
+              ],
+              "load_unsupported_peer_range": [
+                0,
+                1
+              ],
               "work_load_delta": {
                 "inbound_accepted_packets": 10,
                 "outbound_direct_tcp_stream_fallback_packets": 292,
@@ -377,6 +482,27 @@
               ],
               "drops_delta": 17,
               "expiry_delta": 8,
+              "round_seconds": 49.182311905999995,
+              "sampled_load_seconds": 19.999169797,
+              "outbound_failures_delta": 50,
+              "blocked_no_path_events_delta": 55,
+              "load_fd_range": [
+                13,
+                14
+              ],
+              "load_socket_fd_range": [
+                6,
+                7
+              ],
+              "load_stream_in_flight_peak": 49,
+              "load_healthy_tcp_range": [
+                0,
+                1
+              ],
+              "load_unsupported_peer_range": [
+                0,
+                1
+              ],
               "work_load_delta": {
                 "inbound_accepted_packets": 65,
                 "outbound_direct_tcp_stream_fallback_packets": 48,
@@ -441,6 +567,27 @@
               ],
               "drops_delta": 1422,
               "expiry_delta": 16,
+              "round_seconds": 29.871423334000003,
+              "sampled_load_seconds": 20.002720671,
+              "outbound_failures_delta": 257,
+              "blocked_no_path_events_delta": 343,
+              "load_fd_range": [
+                13,
+                15
+              ],
+              "load_socket_fd_range": [
+                6,
+                8
+              ],
+              "load_stream_in_flight_peak": 257,
+              "load_healthy_tcp_range": [
+                0,
+                1
+              ],
+              "load_unsupported_peer_range": [
+                0,
+                1
+              ],
               "work_load_delta": {
                 "inbound_accepted_packets": 11,
                 "outbound_direct_tcp_stream_fallback_packets": 550,
@@ -493,6 +640,27 @@
               ],
               "drops_delta": 7,
               "expiry_delta": 4,
+              "round_seconds": 29.872518224,
+              "sampled_load_seconds": 20.002816833,
+              "outbound_failures_delta": 55,
+              "blocked_no_path_events_delta": 32,
+              "load_fd_range": [
+                13,
+                15
+              ],
+              "load_socket_fd_range": [
+                6,
+                8
+              ],
+              "load_stream_in_flight_peak": 55,
+              "load_healthy_tcp_range": [
+                0,
+                1
+              ],
+              "load_unsupported_peer_range": [
+                0,
+                1
+              ],
               "work_load_delta": {
                 "inbound_accepted_packets": 82,
                 "outbound_direct_tcp_stream_fallback_packets": 75,
@@ -557,6 +725,27 @@
               ],
               "drops_delta": 1701,
               "expiry_delta": 66,
+              "round_seconds": 39.868274147,
+              "sampled_load_seconds": 20.241117477,
+              "outbound_failures_delta": 257,
+              "blocked_no_path_events_delta": 1241,
+              "load_fd_range": [
+                13,
+                15
+              ],
+              "load_socket_fd_range": [
+                6,
+                8
+              ],
+              "load_stream_in_flight_peak": 256,
+              "load_healthy_tcp_range": [
+                0,
+                1
+              ],
+              "load_unsupported_peer_range": [
+                0,
+                1
+              ],
               "work_load_delta": {
                 "inbound_accepted_packets": 10,
                 "outbound_direct_tcp_stream_fallback_packets": 271,
@@ -609,6 +798,27 @@
               ],
               "drops_delta": 18,
               "expiry_delta": 8,
+              "round_seconds": 39.868900566,
+              "sampled_load_seconds": 20.241713749,
+              "outbound_failures_delta": 48,
+              "blocked_no_path_events_delta": 62,
+              "load_fd_range": [
+                13,
+                14
+              ],
+              "load_socket_fd_range": [
+                6,
+                7
+              ],
+              "load_stream_in_flight_peak": 48,
+              "load_healthy_tcp_range": [
+                0,
+                1
+              ],
+              "load_unsupported_peer_range": [
+                0,
+                1
+              ],
               "work_load_delta": {
                 "inbound_accepted_packets": 65,
                 "outbound_direct_tcp_stream_fallback_packets": 47,
@@ -626,6 +836,2484 @@
                 "tun_read_packets": 75,
                 "tun_write_bytes": 67660,
                 "tun_write_packets": 75
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "profile": "bytes",
+      "preferred_initiator_override": null,
+      "artifact_directory": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.7a875c91dd8d2fc5",
+      "log": "/tmp/p2p-vpn-sustained-pressure-corrected-2-bytes.log",
+      "duration_seconds": 169.43,
+      "result": "passed",
+      "series_sha256": "27d85e23053d055b63201f2fca056a8a5ad024243e50347e8e584688b1b14edf",
+      "json_bytes": 3450859,
+      "node_log_bytes": 1255369,
+      "round_report_hashes": [
+        {
+          "sha256": "132d261b2a356d9d32c20593ac84250872753833df157c00c6a42067defe4680",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.7a875c91dd8d2fc5/round-1/queue-pressure.json"
+        },
+        {
+          "sha256": "5bdc6175ea82a43e77c3593a59b462536c194920db4395081db8cfdff0dab6c0",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.7a875c91dd8d2fc5/round-2/queue-pressure.json"
+        },
+        {
+          "sha256": "867a9c308dc71d1dcdc2fed75734fb517f3c64659f99bf1aed95dfc91391506d",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.7a875c91dd8d2fc5/round-3/queue-pressure.json"
+        },
+        {
+          "sha256": "4565f567ca42f86dc6c11befacecf18109714b413b25bab3106b126d282233cf",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.7a875c91dd8d2fc5/round-4/queue-pressure.json"
+        },
+        {
+          "sha256": "b8f85ecd64a949e5208796b0ff90cd62ce910bf7635e67f7e404f575704f8c2c",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.7a875c91dd8d2fc5/round-5/queue-pressure.json"
+        }
+      ],
+      "rounds": [
+        {
+          "queue_limit_profile": "bytes",
+          "transmitted_packets": 1969,
+          "received_packets": 13,
+          "limits": [
+            16,
+            4096
+          ],
+          "sample_count": 79,
+          "roles": [
+            {
+              "role": "a",
+              "identity": [
+                18,
+                83858802
+              ],
+              "final_identity": [
+                18,
+                83858802
+              ],
+              "rss_kib": [
+                35692,
+                36984,
+                37416
+              ],
+              "load_cpu_percent": 9.681276554352685,
+              "final_fds": 13,
+              "final_socket_fds": 6,
+              "thread_range": [
+                6,
+                6
+              ],
+              "queue_peak": [
+                3,
+                3084
+              ],
+              "queue_final": [
+                0,
+                0,
+                0
+              ],
+              "drops_delta": 1210,
+              "expiry_delta": 11,
+              "round_seconds": 30.374619235,
+              "sampled_load_seconds": 20.245264030999998,
+              "outbound_failures_delta": 442,
+              "blocked_no_path_events_delta": 219,
+              "load_fd_range": [
+                13,
+                15
+              ],
+              "load_socket_fd_range": [
+                6,
+                8
+              ],
+              "load_stream_in_flight_peak": 257,
+              "load_healthy_tcp_range": [
+                0,
+                1
+              ],
+              "load_unsupported_peer_range": [
+                0,
+                1
+              ],
+              "work_load_delta": {
+                "inbound_accepted_packets": 13,
+                "outbound_direct_tcp_stream_fallback_packets": 759,
+                "outbound_sent_packets": 759,
+                "tun_read_bytes": 2024180,
+                "tun_read_packets": 1970,
+                "tun_write_bytes": 13364,
+                "tun_write_packets": 13
+              },
+              "work_final_delta": {
+                "inbound_accepted_packets": 276,
+                "outbound_direct_tcp_stream_fallback_packets": 769,
+                "outbound_sent_packets": 769,
+                "tun_read_bytes": 2025068,
+                "tun_read_packets": 1981,
+                "tun_write_bytes": 274288,
+                "tun_write_packets": 276
+              }
+            },
+            {
+              "role": "b",
+              "identity": [
+                19,
+                83858803
+              ],
+              "final_identity": [
+                19,
+                83858803
+              ],
+              "rss_kib": [
+                35188,
+                35908,
+                36664
+              ],
+              "load_cpu_percent": 2.568490302407817,
+              "final_fds": 13,
+              "final_socket_fds": 6,
+              "thread_range": [
+                6,
+                6
+              ],
+              "queue_peak": [
+                3,
+                3084
+              ],
+              "queue_final": [
+                0,
+                0,
+                0
+              ],
+              "drops_delta": 7,
+              "expiry_delta": 3,
+              "round_seconds": 30.374512384000003,
+              "sampled_load_seconds": 20.245355783999997,
+              "outbound_failures_delta": 71,
+              "blocked_no_path_events_delta": 38,
+              "load_fd_range": [
+                13,
+                15
+              ],
+              "load_socket_fd_range": [
+                6,
+                8
+              ],
+              "load_stream_in_flight_peak": 53,
+              "load_healthy_tcp_range": [
+                0,
+                1
+              ],
+              "load_unsupported_peer_range": [
+                0,
+                1
+              ],
+              "work_load_delta": {
+                "inbound_accepted_packets": 77,
+                "outbound_direct_tcp_stream_fallback_packets": 70,
+                "outbound_sent_packets": 70,
+                "tun_read_bytes": 79252,
+                "tun_read_packets": 79,
+                "tun_write_bytes": 79156,
+                "tun_write_packets": 77
+              },
+              "work_final_delta": {
+                "inbound_accepted_packets": 340,
+                "outbound_direct_tcp_stream_fallback_packets": 333,
+                "outbound_sent_packets": 333,
+                "tun_read_bytes": 340176,
+                "tun_read_packets": 342,
+                "tun_write_bytes": 340080,
+                "tun_write_packets": 340
+              }
+            }
+          ]
+        },
+        {
+          "queue_limit_profile": "bytes",
+          "transmitted_packets": 1972,
+          "received_packets": 9,
+          "limits": [
+            16,
+            4096
+          ],
+          "sample_count": 79,
+          "roles": [
+            {
+              "role": "a",
+              "identity": [
+                18,
+                83858802
+              ],
+              "final_identity": [
+                18,
+                83858802
+              ],
+              "rss_kib": [
+                37416,
+                37444,
+                37444
+              ],
+              "load_cpu_percent": 7.902870119753451,
+              "final_fds": 13,
+              "final_socket_fds": 6,
+              "thread_range": [
+                6,
+                6
+              ],
+              "queue_peak": [
+                3,
+                3084
+              ],
+              "queue_final": [
+                0,
+                0,
+                0
+              ],
+              "drops_delta": 1682,
+              "expiry_delta": 47,
+              "round_seconds": 39.364959496,
+              "sampled_load_seconds": 20.245809127,
+              "outbound_failures_delta": 252,
+              "blocked_no_path_events_delta": 1212,
+              "load_fd_range": [
+                13,
+                14
+              ],
+              "load_socket_fd_range": [
+                6,
+                7
+              ],
+              "load_stream_in_flight_peak": 256,
+              "load_healthy_tcp_range": [
+                0,
+                1
+              ],
+              "load_unsupported_peer_range": [
+                0,
+                1
+              ],
+              "work_load_delta": {
+                "inbound_accepted_packets": 9,
+                "outbound_direct_tcp_stream_fallback_packets": 290,
+                "outbound_sent_packets": 290,
+                "tun_read_bytes": 2027216,
+                "tun_read_packets": 1972,
+                "tun_write_bytes": 9252,
+                "tun_write_packets": 9
+              },
+              "work_final_delta": {
+                "inbound_accepted_packets": 19,
+                "outbound_direct_tcp_stream_fallback_packets": 300,
+                "outbound_sent_packets": 300,
+                "tun_read_bytes": 2028104,
+                "tun_read_packets": 1983,
+                "tun_write_bytes": 10092,
+                "tun_write_packets": 19
+              }
+            },
+            {
+              "role": "b",
+              "identity": [
+                19,
+                83858803
+              ],
+              "final_identity": [
+                19,
+                83858803
+              ],
+              "rss_kib": [
+                36664,
+                36624,
+                36640
+              ],
+              "load_cpu_percent": 1.8768596783553844,
+              "final_fds": 13,
+              "final_socket_fds": 6,
+              "thread_range": [
+                6,
+                6
+              ],
+              "queue_peak": [
+                3,
+                3084
+              ],
+              "queue_final": [
+                0,
+                0,
+                0
+              ],
+              "drops_delta": 8,
+              "expiry_delta": 3,
+              "round_seconds": 39.365706540999994,
+              "sampled_load_seconds": 20.246585527,
+              "outbound_failures_delta": 54,
+              "blocked_no_path_events_delta": 28,
+              "load_fd_range": [
+                13,
+                15
+              ],
+              "load_socket_fd_range": [
+                6,
+                8
+              ],
+              "load_stream_in_flight_peak": 53,
+              "load_healthy_tcp_range": [
+                0,
+                1
+              ],
+              "load_unsupported_peer_range": [
+                0,
+                1
+              ],
+              "work_load_delta": {
+                "inbound_accepted_packets": 61,
+                "outbound_direct_tcp_stream_fallback_packets": 53,
+                "outbound_sent_packets": 53,
+                "tun_read_bytes": 62708,
+                "tun_read_packets": 61,
+                "tun_write_bytes": 62708,
+                "tun_write_packets": 61
+              },
+              "work_final_delta": {
+                "inbound_accepted_packets": 71,
+                "outbound_direct_tcp_stream_fallback_packets": 63,
+                "outbound_sent_packets": 63,
+                "tun_read_bytes": 63596,
+                "tun_read_packets": 72,
+                "tun_write_bytes": 63548,
+                "tun_write_packets": 71
+              }
+            }
+          ]
+        },
+        {
+          "queue_limit_profile": "bytes",
+          "transmitted_packets": 1978,
+          "received_packets": 11,
+          "limits": [
+            16,
+            4096
+          ],
+          "sample_count": 78,
+          "roles": [
+            {
+              "role": "a",
+              "identity": [
+                18,
+                83858802
+              ],
+              "final_identity": [
+                18,
+                83858802
+              ],
+              "rss_kib": [
+                37444,
+                37484,
+                37504
+              ],
+              "load_cpu_percent": 9.29869418344595,
+              "final_fds": 13,
+              "final_socket_fds": 6,
+              "thread_range": [
+                6,
+                6
+              ],
+              "queue_peak": [
+                3,
+                3084
+              ],
+              "queue_final": [
+                0,
+                0,
+                0
+              ],
+              "drops_delta": 1381,
+              "expiry_delta": 7,
+              "round_seconds": 29.870916735999998,
+              "sampled_load_seconds": 20.002808601999998,
+              "outbound_failures_delta": 258,
+              "blocked_no_path_events_delta": 364,
+              "load_fd_range": [
+                13,
+                15
+              ],
+              "load_socket_fd_range": [
+                6,
+                8
+              ],
+              "load_stream_in_flight_peak": 256,
+              "load_healthy_tcp_range": [
+                0,
+                1
+              ],
+              "load_unsupported_peer_range": [
+                0,
+                1
+              ],
+              "work_load_delta": {
+                "inbound_accepted_packets": 11,
+                "outbound_direct_tcp_stream_fallback_packets": 597,
+                "outbound_sent_packets": 597,
+                "tun_read_bytes": 2033384,
+                "tun_read_packets": 1978,
+                "tun_write_bytes": 11308,
+                "tun_write_packets": 11
+              },
+              "work_final_delta": {
+                "inbound_accepted_packets": 304,
+                "outbound_direct_tcp_stream_fallback_packets": 607,
+                "outbound_sent_packets": 607,
+                "tun_read_bytes": 2034224,
+                "tun_read_packets": 1988,
+                "tun_write_bytes": 303072,
+                "tun_write_packets": 304
+              }
+            },
+            {
+              "role": "b",
+              "identity": [
+                19,
+                83858803
+              ],
+              "final_identity": [
+                19,
+                83858803
+              ],
+              "rss_kib": [
+                36640,
+                36660,
+                36876
+              ],
+              "load_cpu_percent": 2.199672399270101,
+              "final_fds": 13,
+              "final_socket_fds": 6,
+              "thread_range": [
+                6,
+                6
+              ],
+              "queue_peak": [
+                3,
+                3084
+              ],
+              "queue_final": [
+                0,
+                0,
+                0
+              ],
+              "drops_delta": 12,
+              "expiry_delta": 3,
+              "round_seconds": 29.870737939999998,
+              "sampled_load_seconds": 20.002978631999998,
+              "outbound_failures_delta": 54,
+              "blocked_no_path_events_delta": 30,
+              "load_fd_range": [
+                13,
+                15
+              ],
+              "load_socket_fd_range": [
+                6,
+                8
+              ],
+              "load_stream_in_flight_peak": 54,
+              "load_healthy_tcp_range": [
+                0,
+                1
+              ],
+              "load_unsupported_peer_range": [
+                0,
+                1
+              ],
+              "work_load_delta": {
+                "inbound_accepted_packets": 94,
+                "outbound_direct_tcp_stream_fallback_packets": 88,
+                "outbound_sent_packets": 88,
+                "tun_read_bytes": 96632,
+                "tun_read_packets": 94,
+                "tun_write_bytes": 96632,
+                "tun_write_packets": 94
+              },
+              "work_final_delta": {
+                "inbound_accepted_packets": 360,
+                "outbound_direct_tcp_stream_fallback_packets": 348,
+                "outbound_sent_packets": 348,
+                "tun_read_bytes": 360640,
+                "tun_read_packets": 360,
+                "tun_write_bytes": 360640,
+                "tun_write_packets": 360
+              }
+            }
+          ]
+        },
+        {
+          "queue_limit_profile": "bytes",
+          "transmitted_packets": 1974,
+          "received_packets": 10,
+          "limits": [
+            16,
+            4096
+          ],
+          "sample_count": 78,
+          "roles": [
+            {
+              "role": "a",
+              "identity": [
+                18,
+                83858802
+              ],
+              "final_identity": [
+                18,
+                83858802
+              ],
+              "rss_kib": [
+                37504,
+                37544,
+                37544
+              ],
+              "load_cpu_percent": 9.848079462503904,
+              "final_fds": 13,
+              "final_socket_fds": 6,
+              "thread_range": [
+                6,
+                6
+              ],
+              "queue_peak": [
+                3,
+                3084
+              ],
+              "queue_final": [
+                0,
+                0,
+                0
+              ],
+              "drops_delta": 1378,
+              "expiry_delta": 11,
+              "round_seconds": 29.610543327000002,
+              "sampled_load_seconds": 20.003900329,
+              "outbound_failures_delta": 258,
+              "blocked_no_path_events_delta": 451,
+              "load_fd_range": [
+                13,
+                15
+              ],
+              "load_socket_fd_range": [
+                6,
+                8
+              ],
+              "load_stream_in_flight_peak": 256,
+              "load_healthy_tcp_range": [
+                0,
+                1
+              ],
+              "load_unsupported_peer_range": [
+                0,
+                1
+              ],
+              "work_load_delta": {
+                "inbound_accepted_packets": 10,
+                "outbound_direct_tcp_stream_fallback_packets": 596,
+                "outbound_sent_packets": 596,
+                "tun_read_bytes": 2029272,
+                "tun_read_packets": 1974,
+                "tun_write_bytes": 10280,
+                "tun_write_packets": 10
+              },
+              "work_final_delta": {
+                "inbound_accepted_packets": 307,
+                "outbound_direct_tcp_stream_fallback_packets": 606,
+                "outbound_sent_packets": 606,
+                "tun_read_bytes": 2030112,
+                "tun_read_packets": 1984,
+                "tun_write_bytes": 306156,
+                "tun_write_packets": 307
+              }
+            },
+            {
+              "role": "b",
+              "identity": [
+                19,
+                83858803
+              ],
+              "final_identity": [
+                19,
+                83858803
+              ],
+              "rss_kib": [
+                36876,
+                36672,
+                36940
+              ],
+              "load_cpu_percent": 2.1995862910324098,
+              "final_fds": 13,
+              "final_socket_fds": 6,
+              "thread_range": [
+                6,
+                6
+              ],
+              "queue_peak": [
+                3,
+                3084
+              ],
+              "queue_final": [
+                0,
+                0,
+                0
+              ],
+              "drops_delta": 12,
+              "expiry_delta": 6,
+              "round_seconds": 29.610515676,
+              "sampled_load_seconds": 20.003761698,
+              "outbound_failures_delta": 53,
+              "blocked_no_path_events_delta": 39,
+              "load_fd_range": [
+                13,
+                15
+              ],
+              "load_socket_fd_range": [
+                6,
+                8
+              ],
+              "load_stream_in_flight_peak": 53,
+              "load_healthy_tcp_range": [
+                0,
+                1
+              ],
+              "load_unsupported_peer_range": [
+                0,
+                1
+              ],
+              "work_load_delta": {
+                "inbound_accepted_packets": 95,
+                "outbound_direct_tcp_stream_fallback_packets": 85,
+                "outbound_sent_packets": 85,
+                "tun_read_bytes": 97708,
+                "tun_read_packets": 96,
+                "tun_write_bytes": 97660,
+                "tun_write_packets": 95
+              },
+              "work_final_delta": {
+                "inbound_accepted_packets": 361,
+                "outbound_direct_tcp_stream_fallback_packets": 349,
+                "outbound_sent_packets": 349,
+                "tun_read_bytes": 361716,
+                "tun_read_packets": 362,
+                "tun_write_bytes": 361668,
+                "tun_write_packets": 361
+              }
+            }
+          ]
+        },
+        {
+          "queue_limit_profile": "bytes",
+          "transmitted_packets": 1972,
+          "received_packets": 12,
+          "limits": [
+            16,
+            4096
+          ],
+          "sample_count": 79,
+          "roles": [
+            {
+              "role": "a",
+              "identity": [
+                18,
+                83858802
+              ],
+              "final_identity": [
+                18,
+                83858802
+              ],
+              "rss_kib": [
+                37544,
+                37552,
+                37552
+              ],
+              "load_cpu_percent": 9.487254310815365,
+              "final_fds": 13,
+              "final_socket_fds": 6,
+              "thread_range": [
+                6,
+                6
+              ],
+              "queue_peak": [
+                3,
+                3084
+              ],
+              "queue_final": [
+                0,
+                0,
+                0
+              ],
+              "drops_delta": 1376,
+              "expiry_delta": 9,
+              "round_seconds": 30.106681861,
+              "sampled_load_seconds": 20.237678227,
+              "outbound_failures_delta": 258,
+              "blocked_no_path_events_delta": 381,
+              "load_fd_range": [
+                13,
+                15
+              ],
+              "load_socket_fd_range": [
+                6,
+                8
+              ],
+              "load_stream_in_flight_peak": 256,
+              "load_healthy_tcp_range": [
+                0,
+                1
+              ],
+              "load_unsupported_peer_range": [
+                0,
+                1
+              ],
+              "work_load_delta": {
+                "inbound_accepted_packets": 12,
+                "outbound_direct_tcp_stream_fallback_packets": 596,
+                "outbound_sent_packets": 596,
+                "tun_read_bytes": 2027264,
+                "tun_read_packets": 1973,
+                "tun_write_bytes": 12336,
+                "tun_write_packets": 12
+              },
+              "work_final_delta": {
+                "inbound_accepted_packets": 299,
+                "outbound_direct_tcp_stream_fallback_packets": 606,
+                "outbound_sent_packets": 606,
+                "tun_read_bytes": 2028104,
+                "tun_read_packets": 1983,
+                "tun_write_bytes": 297932,
+                "tun_write_packets": 299
+              }
+            },
+            {
+              "role": "b",
+              "identity": [
+                19,
+                83858803
+              ],
+              "final_identity": [
+                19,
+                83858803
+              ],
+              "rss_kib": [
+                36940,
+                36804,
+                36892
+              ],
+              "load_cpu_percent": 2.1247529419860296,
+              "final_fds": 13,
+              "final_socket_fds": 6,
+              "thread_range": [
+                6,
+                6
+              ],
+              "queue_peak": [
+                3,
+                3084
+              ],
+              "queue_final": [
+                0,
+                0,
+                0
+              ],
+              "drops_delta": 18,
+              "expiry_delta": 3,
+              "round_seconds": 30.108232469,
+              "sampled_load_seconds": 20.237646999000003,
+              "outbound_failures_delta": 53,
+              "blocked_no_path_events_delta": 33,
+              "load_fd_range": [
+                13,
+                15
+              ],
+              "load_socket_fd_range": [
+                6,
+                8
+              ],
+              "load_stream_in_flight_peak": 52,
+              "load_healthy_tcp_range": [
+                0,
+                1
+              ],
+              "load_unsupported_peer_range": [
+                0,
+                1
+              ],
+              "work_load_delta": {
+                "inbound_accepted_packets": 94,
+                "outbound_direct_tcp_stream_fallback_packets": 88,
+                "outbound_sent_packets": 88,
+                "tun_read_bytes": 96632,
+                "tun_read_packets": 94,
+                "tun_write_bytes": 96632,
+                "tun_write_packets": 94
+              },
+              "work_final_delta": {
+                "inbound_accepted_packets": 360,
+                "outbound_direct_tcp_stream_fallback_packets": 342,
+                "outbound_sent_packets": 342,
+                "tun_read_bytes": 360640,
+                "tun_read_packets": 360,
+                "tun_write_bytes": 360640,
+                "tun_write_packets": 360
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "index": 3,
+      "profile": "bytes",
+      "preferred_initiator_override": null,
+      "artifact_directory": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.fd651da963655049",
+      "log": "/tmp/p2p-vpn-sustained-pressure-corrected-3-bytes.log",
+      "duration_seconds": 249.66,
+      "result": "passed",
+      "series_sha256": "19966d4352e4de9848da51d4a4b49b9774920833167389c78ece7db2b6f38808",
+      "json_bytes": 3363191,
+      "node_log_bytes": 1530291,
+      "round_report_hashes": [
+        {
+          "sha256": "40eab3f72a5d3b5f91df3b8d7b69380bedaf7b3186262ed810cc04abf898f776",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.fd651da963655049/round-1/queue-pressure.json"
+        },
+        {
+          "sha256": "12621fbc97a224838a55c77bd6c39ee3d52fb1ad0991b794834f1babb82cbaac",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.fd651da963655049/round-2/queue-pressure.json"
+        },
+        {
+          "sha256": "a5eefbd1820764a79e9124574d838f17fd5d127413087f0176fdd7b116599745",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.fd651da963655049/round-3/queue-pressure.json"
+        },
+        {
+          "sha256": "6b429658d047b3cd966ebc65a5ed006716a2746fbc2600a1a3ef493fba6ced64",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.fd651da963655049/round-4/queue-pressure.json"
+        },
+        {
+          "sha256": "b003c4033c61833e1c90994fb5744462d519265c8d99f2074ee470fc3554375b",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.fd651da963655049/round-5/queue-pressure.json"
+        }
+      ],
+      "rounds": [
+        {
+          "queue_limit_profile": "bytes",
+          "transmitted_packets": 1971,
+          "received_packets": 10,
+          "limits": [
+            16,
+            4096
+          ],
+          "sample_count": 78,
+          "roles": [
+            {
+              "role": "a",
+              "identity": [
+                18,
+                83878685
+              ],
+              "final_identity": [
+                18,
+                83878685
+              ],
+              "rss_kib": [
+                35564,
+                36908,
+                36764
+              ],
+              "load_cpu_percent": 8.099313918052076,
+              "final_fds": 13,
+              "final_socket_fds": 6,
+              "thread_range": [
+                6,
+                6
+              ],
+              "queue_peak": [
+                3,
+                3084
+              ],
+              "queue_final": [
+                0,
+                0,
+                0
+              ],
+              "drops_delta": 1696,
+              "expiry_delta": 48,
+              "round_seconds": 39.628678531000006,
+              "sampled_load_seconds": 20.001694173,
+              "outbound_failures_delta": 257,
+              "blocked_no_path_events_delta": 1232,
+              "load_fd_range": [
+                13,
+                15
+              ],
+              "load_socket_fd_range": [
+                6,
+                8
+              ],
+              "load_stream_in_flight_peak": 256,
+              "load_healthy_tcp_range": [
+                0,
+                1
+              ],
+              "load_unsupported_peer_range": [
+                0,
+                1
+              ],
+              "work_load_delta": {
+                "inbound_accepted_packets": 10,
+                "outbound_direct_tcp_stream_fallback_packets": 275,
+                "outbound_sent_packets": 275,
+                "tun_read_bytes": 2026236,
+                "tun_read_packets": 1972,
+                "tun_write_bytes": 10280,
+                "tun_write_packets": 10
+              },
+              "work_final_delta": {
+                "inbound_accepted_packets": 20,
+                "outbound_direct_tcp_stream_fallback_packets": 285,
+                "outbound_sent_packets": 285,
+                "tun_read_bytes": 2027124,
+                "tun_read_packets": 1983,
+                "tun_write_bytes": 11120,
+                "tun_write_packets": 20
+              }
+            },
+            {
+              "role": "b",
+              "identity": [
+                19,
+                83878685
+              ],
+              "final_identity": [
+                19,
+                83878685
+              ],
+              "rss_kib": [
+                35564,
+                36196,
+                36240
+              ],
+              "load_cpu_percent": 1.849886813010448,
+              "final_fds": 13,
+              "final_socket_fds": 6,
+              "thread_range": [
+                6,
+                6
+              ],
+              "queue_peak": [
+                3,
+                3084
+              ],
+              "queue_final": [
+                0,
+                0,
+                0
+              ],
+              "drops_delta": 13,
+              "expiry_delta": 6,
+              "round_seconds": 39.628302773,
+              "sampled_load_seconds": 20.001223718,
+              "outbound_failures_delta": 53,
+              "blocked_no_path_events_delta": 42,
+              "load_fd_range": [
+                13,
+                14
+              ],
+              "load_socket_fd_range": [
+                6,
+                7
+              ],
+              "load_stream_in_flight_peak": 53,
+              "load_healthy_tcp_range": [
+                0,
+                1
+              ],
+              "load_unsupported_peer_range": [
+                0,
+                1
+              ],
+              "work_load_delta": {
+                "inbound_accepted_packets": 66,
+                "outbound_direct_tcp_stream_fallback_packets": 53,
+                "outbound_sent_packets": 53,
+                "tun_read_bytes": 67944,
+                "tun_read_packets": 68,
+                "tun_write_bytes": 67848,
+                "tun_write_packets": 66
+              },
+              "work_final_delta": {
+                "inbound_accepted_packets": 76,
+                "outbound_direct_tcp_stream_fallback_packets": 63,
+                "outbound_sent_packets": 63,
+                "tun_read_bytes": 68784,
+                "tun_read_packets": 78,
+                "tun_write_bytes": 68688,
+                "tun_write_packets": 76
+              }
+            }
+          ]
+        },
+        {
+          "queue_limit_profile": "bytes",
+          "transmitted_packets": 1978,
+          "received_packets": 14,
+          "limits": [
+            16,
+            4096
+          ],
+          "sample_count": 78,
+          "roles": [
+            {
+              "role": "a",
+              "identity": [
+                18,
+                83878685
+              ],
+              "final_identity": [
+                18,
+                83878685
+              ],
+              "rss_kib": [
+                36764,
+                37140,
+                37140
+              ],
+              "load_cpu_percent": 8.938676875647976,
+              "final_fds": 13,
+              "final_socket_fds": 6,
+              "thread_range": [
+                6,
+                6
+              ],
+              "queue_peak": [
+                3,
+                3084
+              ],
+              "queue_final": [
+                0,
+                0,
+                0
+              ],
+              "drops_delta": 1383,
+              "expiry_delta": 9,
+              "round_seconds": 29.643021453,
+              "sampled_load_seconds": 20.025335124,
+              "outbound_failures_delta": 258,
+              "blocked_no_path_events_delta": 301,
+              "load_fd_range": [
+                13,
+                15
+              ],
+              "load_socket_fd_range": [
+                6,
+                8
+              ],
+              "load_stream_in_flight_peak": 256,
+              "load_healthy_tcp_range": [
+                0,
+                1
+              ],
+              "load_unsupported_peer_range": [
+                0,
+                1
+              ],
+              "work_load_delta": {
+                "inbound_accepted_packets": 14,
+                "outbound_direct_tcp_stream_fallback_packets": 595,
+                "outbound_sent_packets": 595,
+                "tun_read_bytes": 2033432,
+                "tun_read_packets": 1979,
+                "tun_write_bytes": 14392,
+                "tun_write_packets": 14
+              },
+              "work_final_delta": {
+                "inbound_accepted_packets": 299,
+                "outbound_direct_tcp_stream_fallback_packets": 605,
+                "outbound_sent_packets": 605,
+                "tun_read_bytes": 2034272,
+                "tun_read_packets": 1989,
+                "tun_write_bytes": 297932,
+                "tun_write_packets": 299
+              }
+            },
+            {
+              "role": "b",
+              "identity": [
+                19,
+                83878685
+              ],
+              "final_identity": [
+                19,
+                83878685
+              ],
+              "rss_kib": [
+                36240,
+                36424,
+                37096
+              ],
+              "load_cpu_percent": 1.9975094068941461,
+              "final_fds": 13,
+              "final_socket_fds": 6,
+              "thread_range": [
+                6,
+                6
+              ],
+              "queue_peak": [
+                3,
+                3084
+              ],
+              "queue_final": [
+                0,
+                0,
+                0
+              ],
+              "drops_delta": 24,
+              "expiry_delta": 3,
+              "round_seconds": 29.644420837,
+              "sampled_load_seconds": 20.024936985,
+              "outbound_failures_delta": 50,
+              "blocked_no_path_events_delta": 38,
+              "load_fd_range": [
+                13,
+                14
+              ],
+              "load_socket_fd_range": [
+                6,
+                7
+              ],
+              "load_stream_in_flight_peak": 50,
+              "load_healthy_tcp_range": [
+                0,
+                1
+              ],
+              "load_unsupported_peer_range": [
+                0,
+                1
+              ],
+              "work_load_delta": {
+                "inbound_accepted_packets": 95,
+                "outbound_direct_tcp_stream_fallback_packets": 87,
+                "outbound_sent_packets": 87,
+                "tun_read_bytes": 97708,
+                "tun_read_packets": 96,
+                "tun_write_bytes": 97660,
+                "tun_write_packets": 95
+              },
+              "work_final_delta": {
+                "inbound_accepted_packets": 361,
+                "outbound_direct_tcp_stream_fallback_packets": 337,
+                "outbound_sent_packets": 337,
+                "tun_read_bytes": 361716,
+                "tun_read_packets": 362,
+                "tun_write_bytes": 361668,
+                "tun_write_packets": 361
+              }
+            }
+          ]
+        },
+        {
+          "queue_limit_profile": "bytes",
+          "transmitted_packets": 1972,
+          "received_packets": 13,
+          "limits": [
+            16,
+            4096
+          ],
+          "sample_count": 78,
+          "roles": [
+            {
+              "role": "a",
+              "identity": [
+                18,
+                83878685
+              ],
+              "final_identity": [
+                18,
+                83878685
+              ],
+              "rss_kib": [
+                37140,
+                37148,
+                37148
+              ],
+              "load_cpu_percent": 9.740961167313626,
+              "final_fds": 13,
+              "final_socket_fds": 6,
+              "thread_range": [
+                6,
+                6
+              ],
+              "queue_peak": [
+                3,
+                3084
+              ],
+              "queue_final": [
+                0,
+                0,
+                0
+              ],
+              "drops_delta": 1371,
+              "expiry_delta": 6,
+              "round_seconds": 29.112340651,
+              "sampled_load_seconds": 20.0185584,
+              "outbound_failures_delta": 258,
+              "blocked_no_path_events_delta": 437,
+              "load_fd_range": [
+                13,
+                15
+              ],
+              "load_socket_fd_range": [
+                6,
+                8
+              ],
+              "load_stream_in_flight_peak": 256,
+              "load_healthy_tcp_range": [
+                0,
+                1
+              ],
+              "load_unsupported_peer_range": [
+                0,
+                1
+              ],
+              "work_load_delta": {
+                "inbound_accepted_packets": 13,
+                "outbound_direct_tcp_stream_fallback_packets": 598,
+                "outbound_sent_packets": 598,
+                "tun_read_bytes": 2027216,
+                "tun_read_packets": 1972,
+                "tun_write_bytes": 13364,
+                "tun_write_packets": 13
+              },
+              "work_final_delta": {
+                "inbound_accepted_packets": 289,
+                "outbound_direct_tcp_stream_fallback_packets": 611,
+                "outbound_sent_packets": 611,
+                "tun_read_bytes": 2028056,
+                "tun_read_packets": 1982,
+                "tun_write_bytes": 287652,
+                "tun_write_packets": 289
+              }
+            },
+            {
+              "role": "b",
+              "identity": [
+                19,
+                83878685
+              ],
+              "final_identity": [
+                19,
+                83878685
+              ],
+              "rss_kib": [
+                37096,
+                36912,
+                37248
+              ],
+              "load_cpu_percent": 2.1979164263293964,
+              "final_fds": 13,
+              "final_socket_fds": 6,
+              "thread_range": [
+                6,
+                6
+              ],
+              "queue_peak": [
+                3,
+                3084
+              ],
+              "queue_final": [
+                0,
+                0,
+                0
+              ],
+              "drops_delta": 33,
+              "expiry_delta": 3,
+              "round_seconds": 29.111721185,
+              "sampled_load_seconds": 20.018959535,
+              "outbound_failures_delta": 54,
+              "blocked_no_path_events_delta": 38,
+              "load_fd_range": [
+                13,
+                15
+              ],
+              "load_socket_fd_range": [
+                6,
+                8
+              ],
+              "load_stream_in_flight_peak": 54,
+              "load_healthy_tcp_range": [
+                0,
+                1
+              ],
+              "load_unsupported_peer_range": [
+                0,
+                1
+              ],
+              "work_load_delta": {
+                "inbound_accepted_packets": 96,
+                "outbound_direct_tcp_stream_fallback_packets": 89,
+                "outbound_sent_packets": 89,
+                "tun_read_bytes": 98688,
+                "tun_read_packets": 96,
+                "tun_write_bytes": 98688,
+                "tun_write_packets": 96
+              },
+              "work_final_delta": {
+                "inbound_accepted_packets": 365,
+                "outbound_direct_tcp_stream_fallback_packets": 332,
+                "outbound_sent_packets": 332,
+                "tun_read_bytes": 365780,
+                "tun_read_packets": 365,
+                "tun_write_bytes": 365780,
+                "tun_write_packets": 365
+              }
+            }
+          ]
+        },
+        {
+          "queue_limit_profile": "bytes",
+          "transmitted_packets": 1975,
+          "received_packets": 10,
+          "limits": [
+            16,
+            4096
+          ],
+          "sample_count": 78,
+          "roles": [
+            {
+              "role": "a",
+              "identity": [
+                18,
+                83878685
+              ],
+              "final_identity": [
+                18,
+                83878685
+              ],
+              "rss_kib": [
+                37148,
+                37308,
+                37308
+              ],
+              "load_cpu_percent": 8.345683060654096,
+              "final_fds": 13,
+              "final_socket_fds": 6,
+              "thread_range": [
+                6,
+                6
+              ],
+              "queue_peak": [
+                3,
+                3084
+              ],
+              "queue_final": [
+                0,
+                0,
+                0
+              ],
+              "drops_delta": 1672,
+              "expiry_delta": 41,
+              "round_seconds": 61.267920436,
+              "sampled_load_seconds": 20.010345323,
+              "outbound_failures_delta": 258,
+              "blocked_no_path_events_delta": 1198,
+              "load_fd_range": [
+                13,
+                14
+              ],
+              "load_socket_fd_range": [
+                6,
+                7
+              ],
+              "load_stream_in_flight_peak": 256,
+              "load_healthy_tcp_range": [
+                0,
+                1
+              ],
+              "load_unsupported_peer_range": [
+                0,
+                1
+              ],
+              "work_load_delta": {
+                "inbound_accepted_packets": 10,
+                "outbound_direct_tcp_stream_fallback_packets": 303,
+                "outbound_sent_packets": 303,
+                "tun_read_bytes": 2030300,
+                "tun_read_packets": 1975,
+                "tun_write_bytes": 10280,
+                "tun_write_packets": 10
+              },
+              "work_final_delta": {
+                "inbound_accepted_packets": 20,
+                "outbound_direct_tcp_stream_fallback_packets": 313,
+                "outbound_sent_packets": 313,
+                "tun_read_bytes": 2031188,
+                "tun_read_packets": 1986,
+                "tun_write_bytes": 11120,
+                "tun_write_packets": 20
+              }
+            },
+            {
+              "role": "b",
+              "identity": [
+                19,
+                83878685
+              ],
+              "final_identity": [
+                19,
+                83878685
+              ],
+              "rss_kib": [
+                37248,
+                37264,
+                37132
+              ],
+              "load_cpu_percent": 1.999122102321391,
+              "final_fds": 13,
+              "final_socket_fds": 6,
+              "thread_range": [
+                6,
+                6
+              ],
+              "queue_peak": [
+                3,
+                3084
+              ],
+              "queue_final": [
+                0,
+                0,
+                0
+              ],
+              "drops_delta": 10,
+              "expiry_delta": 3,
+              "round_seconds": 61.268313516,
+              "sampled_load_seconds": 20.008782832,
+              "outbound_failures_delta": 52,
+              "blocked_no_path_events_delta": 32,
+              "load_fd_range": [
+                13,
+                14
+              ],
+              "load_socket_fd_range": [
+                6,
+                7
+              ],
+              "load_stream_in_flight_peak": 52,
+              "load_healthy_tcp_range": [
+                0,
+                1
+              ],
+              "load_unsupported_peer_range": [
+                0,
+                1
+              ],
+              "work_load_delta": {
+                "inbound_accepted_packets": 61,
+                "outbound_direct_tcp_stream_fallback_packets": 51,
+                "outbound_sent_packets": 51,
+                "tun_read_bytes": 62708,
+                "tun_read_packets": 61,
+                "tun_write_bytes": 62708,
+                "tun_write_packets": 61
+              },
+              "work_final_delta": {
+                "inbound_accepted_packets": 71,
+                "outbound_direct_tcp_stream_fallback_packets": 61,
+                "outbound_sent_packets": 61,
+                "tun_read_bytes": 63596,
+                "tun_read_packets": 72,
+                "tun_write_bytes": 63548,
+                "tun_write_packets": 71
+              }
+            }
+          ]
+        },
+        {
+          "queue_limit_profile": "bytes",
+          "transmitted_packets": 1974,
+          "received_packets": 10,
+          "limits": [
+            16,
+            4096
+          ],
+          "sample_count": 78,
+          "roles": [
+            {
+              "role": "a",
+              "identity": [
+                18,
+                83878685
+              ],
+              "final_identity": [
+                18,
+                83878685
+              ],
+              "rss_kib": [
+                37308,
+                37336,
+                37344
+              ],
+              "load_cpu_percent": 8.043449574329141,
+              "final_fds": 13,
+              "final_socket_fds": 6,
+              "thread_range": [
+                6,
+                6
+              ],
+              "queue_peak": [
+                3,
+                3084
+              ],
+              "queue_final": [
+                0,
+                0,
+                0
+              ],
+              "drops_delta": 1676,
+              "expiry_delta": 48,
+              "round_seconds": 79.887669626,
+              "sampled_load_seconds": 20.016287603,
+              "outbound_failures_delta": 257,
+              "blocked_no_path_events_delta": 1207,
+              "load_fd_range": [
+                13,
+                14
+              ],
+              "load_socket_fd_range": [
+                6,
+                7
+              ],
+              "load_stream_in_flight_peak": 256,
+              "load_healthy_tcp_range": [
+                0,
+                1
+              ],
+              "load_unsupported_peer_range": [
+                0,
+                1
+              ],
+              "work_load_delta": {
+                "inbound_accepted_packets": 10,
+                "outbound_direct_tcp_stream_fallback_packets": 298,
+                "outbound_sent_packets": 298,
+                "tun_read_bytes": 2029272,
+                "tun_read_packets": 1974,
+                "tun_write_bytes": 10280,
+                "tun_write_packets": 10
+              },
+              "work_final_delta": {
+                "inbound_accepted_packets": 20,
+                "outbound_direct_tcp_stream_fallback_packets": 308,
+                "outbound_sent_packets": 308,
+                "tun_read_bytes": 2030112,
+                "tun_read_packets": 1984,
+                "tun_write_bytes": 11120,
+                "tun_write_packets": 20
+              }
+            },
+            {
+              "role": "b",
+              "identity": [
+                19,
+                83878685
+              ],
+              "final_identity": [
+                19,
+                83878685
+              ],
+              "rss_kib": [
+                37132,
+                37136,
+                37136
+              ],
+              "load_cpu_percent": 1.8984740376086207,
+              "final_fds": 13,
+              "final_socket_fds": 6,
+              "thread_range": [
+                6,
+                6
+              ],
+              "queue_peak": [
+                3,
+                3084
+              ],
+              "queue_final": [
+                0,
+                0,
+                0
+              ],
+              "drops_delta": 11,
+              "expiry_delta": 6,
+              "round_seconds": 79.88796366,
+              "sampled_load_seconds": 20.016075673,
+              "outbound_failures_delta": 53,
+              "blocked_no_path_events_delta": 39,
+              "load_fd_range": [
+                13,
+                14
+              ],
+              "load_socket_fd_range": [
+                6,
+                7
+              ],
+              "load_stream_in_flight_peak": 53,
+              "load_healthy_tcp_range": [
+                0,
+                1
+              ],
+              "load_unsupported_peer_range": [
+                0,
+                1
+              ],
+              "work_load_delta": {
+                "inbound_accepted_packets": 63,
+                "outbound_direct_tcp_stream_fallback_packets": 52,
+                "outbound_sent_packets": 52,
+                "tun_read_bytes": 64764,
+                "tun_read_packets": 63,
+                "tun_write_bytes": 64764,
+                "tun_write_packets": 63
+              },
+              "work_final_delta": {
+                "inbound_accepted_packets": 73,
+                "outbound_direct_tcp_stream_fallback_packets": 62,
+                "outbound_sent_packets": 62,
+                "tun_read_bytes": 65604,
+                "tun_read_packets": 73,
+                "tun_write_bytes": 65604,
+                "tun_write_packets": 73
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "index": 4,
+      "profile": "packets",
+      "preferred_initiator_override": null,
+      "artifact_directory": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.c9e3fe5731c6d3ed",
+      "log": "/tmp/p2p-vpn-sustained-pressure-corrected-4-packets.log",
+      "duration_seconds": 170.38,
+      "result": "passed",
+      "series_sha256": "9ea77eb58e02327db4f289b7a6241f813199201fb919a464d3a2f6bbc6d812bd",
+      "json_bytes": 3445877,
+      "node_log_bytes": 1241835,
+      "round_report_hashes": [
+        {
+          "sha256": "559ae1baeffeb347fcfb06ef64d11a2831cb1c4523ae48b6be9ef1bb8d578a61",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.c9e3fe5731c6d3ed/round-1/queue-pressure.json"
+        },
+        {
+          "sha256": "f713d902d87a3f39574236c1730dbd2d16e3733acd2e0d3b01c83f15ee413721",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.c9e3fe5731c6d3ed/round-2/queue-pressure.json"
+        },
+        {
+          "sha256": "2d8ff6419ed825f624732388a6db868573c3ef589e668862e5ccbc7aab2c1bd7",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.c9e3fe5731c6d3ed/round-3/queue-pressure.json"
+        },
+        {
+          "sha256": "8d9b0effe9dde00a8dcf76c7b7e55d13526832c1fad81952f477d2b839e2fc67",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.c9e3fe5731c6d3ed/round-4/queue-pressure.json"
+        },
+        {
+          "sha256": "a8dda08a9a5d4e6f9191268c9e5f9f28777a6c2966deff186882ce9c2c66482c",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.c9e3fe5731c6d3ed/round-5/queue-pressure.json"
+        }
+      ],
+      "rounds": [
+        {
+          "queue_limit_profile": "packets",
+          "transmitted_packets": 1980,
+          "received_packets": 14,
+          "limits": [
+            4,
+            8192
+          ],
+          "sample_count": 79,
+          "roles": [
+            {
+              "role": "a",
+              "identity": [
+                18,
+                83911608
+              ],
+              "final_identity": [
+                18,
+                83911608
+              ],
+              "rss_kib": [
+                35348,
+                36696,
+                36948
+              ],
+              "load_cpu_percent": 8.592773105750988,
+              "final_fds": 13,
+              "final_socket_fds": 6,
+              "thread_range": [
+                6,
+                6
+              ],
+              "queue_peak": [
+                4,
+                4112
+              ],
+              "queue_final": [
+                0,
+                0,
+                0
+              ],
+              "drops_delta": 1378,
+              "expiry_delta": 9,
+              "round_seconds": 29.866699649,
+              "sampled_load_seconds": 20.249574597,
+              "outbound_failures_delta": 258,
+              "blocked_no_path_events_delta": 304,
+              "load_fd_range": [
+                13,
+                15
+              ],
+              "load_socket_fd_range": [
+                6,
+                8
+              ],
+              "load_stream_in_flight_peak": 256,
+              "load_healthy_tcp_range": [
+                0,
+                1
+              ],
+              "load_unsupported_peer_range": [
+                0,
+                1
+              ],
+              "work_load_delta": {
+                "inbound_accepted_packets": 14,
+                "outbound_direct_tcp_stream_fallback_packets": 602,
+                "outbound_sent_packets": 602,
+                "tun_read_bytes": 2035536,
+                "tun_read_packets": 1982,
+                "tun_write_bytes": 14392,
+                "tun_write_packets": 14
+              },
+              "work_final_delta": {
+                "inbound_accepted_packets": 294,
+                "outbound_direct_tcp_stream_fallback_packets": 612,
+                "outbound_sent_packets": 612,
+                "tun_read_bytes": 2036376,
+                "tun_read_packets": 1992,
+                "tun_write_bytes": 292792,
+                "tun_write_packets": 294
+              }
+            },
+            {
+              "role": "b",
+              "identity": [
+                19,
+                83911609
+              ],
+              "final_identity": [
+                19,
+                83911609
+              ],
+              "rss_kib": [
+                35532,
+                36256,
+                37188
+              ],
+              "load_cpu_percent": 2.024713422601677,
+              "final_fds": 13,
+              "final_socket_fds": 6,
+              "thread_range": [
+                6,
+                6
+              ],
+              "queue_peak": [
+                4,
+                4112
+              ],
+              "queue_final": [
+                0,
+                0,
+                0
+              ],
+              "drops_delta": 23,
+              "expiry_delta": 0,
+              "round_seconds": 29.866688639,
+              "sampled_load_seconds": 20.249779323,
+              "outbound_failures_delta": 55,
+              "blocked_no_path_events_delta": 20,
+              "load_fd_range": [
+                13,
+                15
+              ],
+              "load_socket_fd_range": [
+                6,
+                8
+              ],
+              "load_stream_in_flight_peak": 55,
+              "load_healthy_tcp_range": [
+                0,
+                1
+              ],
+              "load_unsupported_peer_range": [
+                0,
+                1
+              ],
+              "work_load_delta": {
+                "inbound_accepted_packets": 96,
+                "outbound_direct_tcp_stream_fallback_packets": 95,
+                "outbound_sent_packets": 95,
+                "tun_read_bytes": 98736,
+                "tun_read_packets": 97,
+                "tun_write_bytes": 98688,
+                "tun_write_packets": 96
+              },
+              "work_final_delta": {
+                "inbound_accepted_packets": 362,
+                "outbound_direct_tcp_stream_fallback_packets": 339,
+                "outbound_sent_packets": 339,
+                "tun_read_bytes": 362792,
+                "tun_read_packets": 364,
+                "tun_write_bytes": 362696,
+                "tun_write_packets": 362
+              }
+            }
+          ]
+        },
+        {
+          "queue_limit_profile": "packets",
+          "transmitted_packets": 1981,
+          "received_packets": 12,
+          "limits": [
+            4,
+            8192
+          ],
+          "sample_count": 79,
+          "roles": [
+            {
+              "role": "a",
+              "identity": [
+                18,
+                83911608
+              ],
+              "final_identity": [
+                18,
+                83911608
+              ],
+              "rss_kib": [
+                36948,
+                36848,
+                36992
+              ],
+              "load_cpu_percent": 8.842808633042472,
+              "final_fds": 13,
+              "final_socket_fds": 6,
+              "thread_range": [
+                6,
+                6
+              ],
+              "queue_peak": [
+                4,
+                4112
+              ],
+              "queue_final": [
+                0,
+                0,
+                0
+              ],
+              "drops_delta": 1389,
+              "expiry_delta": 15,
+              "round_seconds": 29.841395799,
+              "sampled_load_seconds": 20.242437377999998,
+              "outbound_failures_delta": 258,
+              "blocked_no_path_events_delta": 409,
+              "load_fd_range": [
+                13,
+                15
+              ],
+              "load_socket_fd_range": [
+                6,
+                8
+              ],
+              "load_stream_in_flight_peak": 256,
+              "load_healthy_tcp_range": [
+                0,
+                1
+              ],
+              "load_unsupported_peer_range": [
+                0,
+                1
+              ],
+              "work_load_delta": {
+                "inbound_accepted_packets": 12,
+                "outbound_direct_tcp_stream_fallback_packets": 592,
+                "outbound_sent_packets": 592,
+                "tun_read_bytes": 2036516,
+                "tun_read_packets": 1982,
+                "tun_write_bytes": 12336,
+                "tun_write_packets": 12
+              },
+              "work_final_delta": {
+                "inbound_accepted_packets": 292,
+                "outbound_direct_tcp_stream_fallback_packets": 602,
+                "outbound_sent_packets": 602,
+                "tun_read_bytes": 2037356,
+                "tun_read_packets": 1992,
+                "tun_write_bytes": 290736,
+                "tun_write_packets": 292
+              }
+            },
+            {
+              "role": "b",
+              "identity": [
+                19,
+                83911609
+              ],
+              "final_identity": [
+                19,
+                83911609
+              ],
+              "rss_kib": [
+                37188,
+                37000,
+                37360
+              ],
+              "load_cpu_percent": 2.0750087941145323,
+              "final_fds": 13,
+              "final_socket_fds": 6,
+              "thread_range": [
+                6,
+                6
+              ],
+              "queue_peak": [
+                4,
+                4112
+              ],
+              "queue_final": [
+                0,
+                0,
+                0
+              ],
+              "drops_delta": 25,
+              "expiry_delta": 4,
+              "round_seconds": 29.841984576999998,
+              "sampled_load_seconds": 20.240878072,
+              "outbound_failures_delta": 52,
+              "blocked_no_path_events_delta": 41,
+              "load_fd_range": [
+                13,
+                15
+              ],
+              "load_socket_fd_range": [
+                6,
+                8
+              ],
+              "load_stream_in_flight_peak": 51,
+              "load_healthy_tcp_range": [
+                0,
+                1
+              ],
+              "load_unsupported_peer_range": [
+                0,
+                1
+              ],
+              "work_load_delta": {
+                "inbound_accepted_packets": 93,
+                "outbound_direct_tcp_stream_fallback_packets": 86,
+                "outbound_sent_packets": 86,
+                "tun_read_bytes": 95604,
+                "tun_read_packets": 93,
+                "tun_write_bytes": 95604,
+                "tun_write_packets": 93
+              },
+              "work_final_delta": {
+                "inbound_accepted_packets": 359,
+                "outbound_direct_tcp_stream_fallback_packets": 334,
+                "outbound_sent_packets": 334,
+                "tun_read_bytes": 359660,
+                "tun_read_packets": 360,
+                "tun_write_bytes": 359612,
+                "tun_write_packets": 359
+              }
+            }
+          ]
+        },
+        {
+          "queue_limit_profile": "packets",
+          "transmitted_packets": 1981,
+          "received_packets": 11,
+          "limits": [
+            4,
+            8192
+          ],
+          "sample_count": 78,
+          "roles": [
+            {
+              "role": "a",
+              "identity": [
+                18,
+                83911608
+              ],
+              "final_identity": [
+                18,
+                83911608
+              ],
+              "rss_kib": [
+                36992,
+                36992,
+                37016
+              ],
+              "load_cpu_percent": 7.601967004781406,
+              "final_fds": 13,
+              "final_socket_fds": 6,
+              "thread_range": [
+                6,
+                6
+              ],
+              "queue_peak": [
+                4,
+                4112
+              ],
+              "queue_final": [
+                0,
+                0,
+                0
+              ],
+              "drops_delta": 1673,
+              "expiry_delta": 54,
+              "round_seconds": 39.85934562,
+              "sampled_load_seconds": 19.994825011,
+              "outbound_failures_delta": 257,
+              "blocked_no_path_events_delta": 1199,
+              "load_fd_range": [
+                13,
+                14
+              ],
+              "load_socket_fd_range": [
+                6,
+                7
+              ],
+              "load_stream_in_flight_peak": 256,
+              "load_healthy_tcp_range": [
+                0,
+                1
+              ],
+              "load_unsupported_peer_range": [
+                0,
+                1
+              ],
+              "work_load_delta": {
+                "inbound_accepted_packets": 11,
+                "outbound_direct_tcp_stream_fallback_packets": 308,
+                "outbound_sent_packets": 308,
+                "tun_read_bytes": 2036468,
+                "tun_read_packets": 1981,
+                "tun_write_bytes": 11308,
+                "tun_write_packets": 11
+              },
+              "work_final_delta": {
+                "inbound_accepted_packets": 21,
+                "outbound_direct_tcp_stream_fallback_packets": 318,
+                "outbound_sent_packets": 318,
+                "tun_read_bytes": 2037308,
+                "tun_read_packets": 1991,
+                "tun_write_bytes": 12148,
+                "tun_write_packets": 21
+              }
+            },
+            {
+              "role": "b",
+              "identity": [
+                19,
+                83911609
+              ],
+              "final_identity": [
+                19,
+                83911609
+              ],
+              "rss_kib": [
+                37360,
+                37380,
+                37156
+              ],
+              "load_cpu_percent": 1.9505491641460135,
+              "final_fds": 13,
+              "final_socket_fds": 6,
+              "thread_range": [
+                6,
+                6
+              ],
+              "queue_peak": [
+                4,
+                4112
+              ],
+              "queue_final": [
+                0,
+                0,
+                0
+              ],
+              "drops_delta": 19,
+              "expiry_delta": 12,
+              "round_seconds": 39.859466097,
+              "sampled_load_seconds": 19.994369133,
+              "outbound_failures_delta": 53,
+              "blocked_no_path_events_delta": 65,
+              "load_fd_range": [
+                13,
+                14
+              ],
+              "load_socket_fd_range": [
+                6,
+                7
+              ],
+              "load_stream_in_flight_peak": 53,
+              "load_healthy_tcp_range": [
+                0,
+                1
+              ],
+              "load_unsupported_peer_range": [
+                0,
+                1
+              ],
+              "work_load_delta": {
+                "inbound_accepted_packets": 66,
+                "outbound_direct_tcp_stream_fallback_packets": 53,
+                "outbound_sent_packets": 53,
+                "tun_read_bytes": 67848,
+                "tun_read_packets": 66,
+                "tun_write_bytes": 67848,
+                "tun_write_packets": 66
+              },
+              "work_final_delta": {
+                "inbound_accepted_packets": 82,
+                "outbound_direct_tcp_stream_fallback_packets": 63,
+                "outbound_sent_packets": 63,
+                "tun_read_bytes": 74856,
+                "tun_read_packets": 82,
+                "tun_write_bytes": 74856,
+                "tun_write_packets": 82
+              }
+            }
+          ]
+        },
+        {
+          "queue_limit_profile": "packets",
+          "transmitted_packets": 1982,
+          "received_packets": 14,
+          "limits": [
+            4,
+            8192
+          ],
+          "sample_count": 79,
+          "roles": [
+            {
+              "role": "a",
+              "identity": [
+                18,
+                83911608
+              ],
+              "final_identity": [
+                18,
+                83911608
+              ],
+              "rss_kib": [
+                37016,
+                37160,
+                37160
+              ],
+              "load_cpu_percent": 8.89030570156684,
+              "final_fds": 13,
+              "final_socket_fds": 6,
+              "thread_range": [
+                6,
+                6
+              ],
+              "queue_peak": [
+                4,
+                4112
+              ],
+              "queue_final": [
+                0,
+                0,
+                0
+              ],
+              "drops_delta": 1386,
+              "expiry_delta": 14,
+              "round_seconds": 29.332530311000003,
+              "sampled_load_seconds": 20.246772838,
+              "outbound_failures_delta": 258,
+              "blocked_no_path_events_delta": 370,
+              "load_fd_range": [
+                13,
+                15
+              ],
+              "load_socket_fd_range": [
+                6,
+                8
+              ],
+              "load_stream_in_flight_peak": 256,
+              "load_healthy_tcp_range": [
+                0,
+                1
+              ],
+              "load_unsupported_peer_range": [
+                0,
+                1
+              ],
+              "work_load_delta": {
+                "inbound_accepted_packets": 14,
+                "outbound_direct_tcp_stream_fallback_packets": 596,
+                "outbound_sent_packets": 596,
+                "tun_read_bytes": 2037544,
+                "tun_read_packets": 1983,
+                "tun_write_bytes": 14392,
+                "tun_write_packets": 14
+              },
+              "work_final_delta": {
+                "inbound_accepted_packets": 301,
+                "outbound_direct_tcp_stream_fallback_packets": 606,
+                "outbound_sent_packets": 606,
+                "tun_read_bytes": 2038384,
+                "tun_read_packets": 1993,
+                "tun_write_bytes": 299988,
+                "tun_write_packets": 301
+              }
+            },
+            {
+              "role": "b",
+              "identity": [
+                19,
+                83911609
+              ],
+              "final_identity": [
+                19,
+                83911609
+              ],
+              "rss_kib": [
+                37156,
+                37180,
+                37280
+              ],
+              "load_cpu_percent": 2.0744527745966455,
+              "final_fds": 13,
+              "final_socket_fds": 6,
+              "thread_range": [
+                6,
+                6
+              ],
+              "queue_peak": [
+                4,
+                4112
+              ],
+              "queue_final": [
+                0,
+                0,
+                0
+              ],
+              "drops_delta": 13,
+              "expiry_delta": 1,
+              "round_seconds": 29.332087758,
+              "sampled_load_seconds": 20.246303273000002,
+              "outbound_failures_delta": 55,
+              "blocked_no_path_events_delta": 25,
+              "load_fd_range": [
+                13,
+                15
+              ],
+              "load_socket_fd_range": [
+                6,
+                8
+              ],
+              "load_stream_in_flight_peak": 53,
+              "load_healthy_tcp_range": [
+                0,
+                1
+              ],
+              "load_unsupported_peer_range": [
+                0,
+                1
+              ],
+              "work_load_delta": {
+                "inbound_accepted_packets": 93,
+                "outbound_direct_tcp_stream_fallback_packets": 91,
+                "outbound_sent_packets": 91,
+                "tun_read_bytes": 95604,
+                "tun_read_packets": 93,
+                "tun_write_bytes": 95604,
+                "tun_write_packets": 93
+              },
+              "work_final_delta": {
+                "inbound_accepted_packets": 359,
+                "outbound_direct_tcp_stream_fallback_packets": 346,
+                "outbound_sent_packets": 346,
+                "tun_read_bytes": 359660,
+                "tun_read_packets": 360,
+                "tun_write_bytes": 359612,
+                "tun_write_packets": 359
+              }
+            }
+          ]
+        },
+        {
+          "queue_limit_profile": "packets",
+          "transmitted_packets": 1977,
+          "received_packets": 12,
+          "limits": [
+            4,
+            8192
+          ],
+          "sample_count": 79,
+          "roles": [
+            {
+              "role": "a",
+              "identity": [
+                18,
+                83911608
+              ],
+              "final_identity": [
+                18,
+                83911608
+              ],
+              "rss_kib": [
+                37160,
+                37172,
+                37172
+              ],
+              "load_cpu_percent": 9.38853202845857,
+              "final_fds": 13,
+              "final_socket_fds": 6,
+              "thread_range": [
+                6,
+                6
+              ],
+              "queue_peak": [
+                4,
+                4112
+              ],
+              "queue_final": [
+                0,
+                0,
+                0
+              ],
+              "drops_delta": 1378,
+              "expiry_delta": 15,
+              "round_seconds": 31.399258853000003,
+              "sampled_load_seconds": 20.237455592,
+              "outbound_failures_delta": 259,
+              "blocked_no_path_events_delta": 473,
+              "load_fd_range": [
+                13,
+                15
+              ],
+              "load_socket_fd_range": [
+                6,
+                8
+              ],
+              "load_stream_in_flight_peak": 256,
+              "load_healthy_tcp_range": [
+                0,
+                1
+              ],
+              "load_unsupported_peer_range": [
+                0,
+                1
+              ],
+              "work_load_delta": {
+                "inbound_accepted_packets": 12,
+                "outbound_direct_tcp_stream_fallback_packets": 599,
+                "outbound_sent_packets": 599,
+                "tun_read_bytes": 2032356,
+                "tun_read_packets": 1977,
+                "tun_write_bytes": 12336,
+                "tun_write_packets": 12
+              },
+              "work_final_delta": {
+                "inbound_accepted_packets": 281,
+                "outbound_direct_tcp_stream_fallback_packets": 609,
+                "outbound_sent_packets": 609,
+                "tun_read_bytes": 2033196,
+                "tun_read_packets": 1987,
+                "tun_write_bytes": 279428,
+                "tun_write_packets": 281
+              }
+            },
+            {
+              "role": "b",
+              "identity": [
+                19,
+                83911609
+              ],
+              "final_identity": [
+                19,
+                83911609
+              ],
+              "rss_kib": [
+                37280,
+                37292,
+                37404
+              ],
+              "load_cpu_percent": 2.174267797721137,
+              "final_fds": 13,
+              "final_socket_fds": 6,
+              "thread_range": [
+                6,
+                6
+              ],
+              "queue_peak": [
+                4,
+                4112
+              ],
+              "queue_final": [
+                0,
+                0,
+                0
+              ],
+              "drops_delta": 39,
+              "expiry_delta": 5,
+              "round_seconds": 31.399536677,
+              "sampled_load_seconds": 20.236697635000002,
+              "outbound_failures_delta": 53,
+              "blocked_no_path_events_delta": 37,
+              "load_fd_range": [
+                13,
+                15
+              ],
+              "load_socket_fd_range": [
+                6,
+                8
+              ],
+              "load_stream_in_flight_peak": 52,
+              "load_healthy_tcp_range": [
+                0,
+                1
+              ],
+              "load_unsupported_peer_range": [
+                0,
+                1
+              ],
+              "work_load_delta": {
+                "inbound_accepted_packets": 96,
+                "outbound_direct_tcp_stream_fallback_packets": 90,
+                "outbound_sent_packets": 90,
+                "tun_read_bytes": 98688,
+                "tun_read_packets": 96,
+                "tun_write_bytes": 98688,
+                "tun_write_packets": 96
+              },
+              "work_final_delta": {
+                "inbound_accepted_packets": 362,
+                "outbound_direct_tcp_stream_fallback_packets": 323,
+                "outbound_sent_packets": 323,
+                "tun_read_bytes": 362696,
+                "tun_read_packets": 362,
+                "tun_write_bytes": 362696,
+                "tun_write_packets": 362
               }
             }
           ]
