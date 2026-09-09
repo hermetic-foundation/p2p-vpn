@@ -54,8 +54,16 @@ public final class ServiceLifecycleInstrumentation extends Instrumentation {
             require("true".equals(arguments.getString("isolated_emulator")), "explicit emulator opt-in required");
             require("ranchu".equals(Build.HARDWARE) || "goldfish".equals(Build.HARDWARE), "emulator required");
             require(!new ProfileStore(getTargetContext()).exists(), "test requires an empty profile store");
+            if (Build.VERSION.SDK_INT >= 33 && "true".equals(arguments.getString("activity_permissions"))) {
+                // An unrelated notification dialog would defer the VPN activity result.
+                getUiAutomation().grantRuntimePermission(getTargetContext().getPackageName(),
+                        android.Manifest.permission.POST_NOTIFICATIONS);
+            }
             if ("true".equals(arguments.getString("activity_binding"))) {
                 exerciseActivityBinding();
+            }
+            if ("true".equals(arguments.getString("activity_permissions"))) {
+                exerciseActivityPermissions();
             }
             exerciseReplacement();
             result.putString("stream", "OK: occupied-worker service replacement and native cleanup passed\n");
@@ -69,6 +77,86 @@ public final class ServiceLifecycleInstrumentation extends Instrumentation {
             sendStatus(-2, status);
             finish(Activity.RESULT_CANCELED, result);
         }
+    }
+
+    private void exerciseActivityPermissions() throws Exception {
+        MainActivity original = (MainActivity) startActivitySync(
+                new Intent(getTargetContext(), MainActivity.class)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK));
+        AtomicReference<MainActivity> current = new AtomicReference<>(original);
+        ActivityMonitor monitor = addMonitor(MainActivity.class.getName(), null, false);
+        try {
+            awaitActivityBound(original);
+            Field pending = MainActivity.class.getDeclaredField("pendingEnableNetworkId");
+            pending.setAccessible(true);
+            Field requestCode = MainActivity.class.getDeclaredField("VPN_PERMISSION_REQUEST");
+            requestCode.setAccessible(true);
+            int code = requestCode.getInt(null);
+            onMain(() -> {
+                try {
+                    pending.set(original, "00000000-0000-4000-8000-000000000001");
+                } catch (IllegalAccessException error) {
+                    throw new AssertionError(error);
+                }
+                original.recreate();
+            });
+            Activity observed = monitor.waitForActivityWithTimeout(10000);
+            require(observed instanceof MainActivity && observed != original,
+                    "framework did not recreate activity");
+            MainActivity restored = (MainActivity) observed;
+            current.set(restored);
+            awaitActivityBound(restored);
+            onMain(() -> {
+                require(activityField(original, "serviceConnection") == null,
+                        "recreated activity retained old binding");
+                require("00000000-0000-4000-8000-000000000001".equals(
+                                activityField(restored, "pendingEnableNetworkId")),
+                        "recreation lost pending permission network");
+                restored.onActivityResult(code, Activity.RESULT_CANCELED, null);
+                restored.onActivityResult(code, Activity.RESULT_OK, null);
+                require(activityField(restored, "pendingEnableNetworkId") == null
+                                && activityField(restored, "pendingMutationNetworkId") == null,
+                        "denied restored request dispatched activation");
+            });
+
+            setVpnConsent(false);
+            Method request = MainActivity.class.getDeclaredMethod("requestNetworkEnabled", String.class, boolean.class);
+            request.setAccessible(true);
+            onMain(() -> {
+                try {
+                    request.invoke(restored, "00000000-0000-4000-8000-000000000002", true);
+                } catch (ReflectiveOperationException error) {
+                    throw new AssertionError(error);
+                }
+            });
+            await(() -> {
+                android.view.accessibility.AccessibilityNodeInfo root = getUiAutomation().getRootInActiveWindow();
+                return root != null && root.getPackageName() != null
+                        && "com.android.vpndialogs".contentEquals(root.getPackageName());
+            }, 10, "system VPN consent dialog");
+            android.view.accessibility.AccessibilityNodeInfo dialog = getUiAutomation().getRootInActiveWindow();
+            boolean dismissed = false;
+            for (android.view.accessibility.AccessibilityNodeInfo button :
+                    dialog.findAccessibilityNodeInfosByText("Cancel")) {
+                if (button.isClickable() && button.isEnabled()) {
+                    dismissed = button.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK);
+                    if (dismissed) break;
+                }
+            }
+            require(dismissed, "system VPN Cancel button was not actionable");
+            await(() -> {
+                AtomicReference<Boolean> cleared = new AtomicReference<>(false);
+                onMain(() -> cleared.set(activityField(restored, "pendingEnableNetworkId") == null));
+                return cleared.get();
+            }, 10, "system VPN denial result");
+            onMain(() -> require(activityField(restored, "pendingMutationNetworkId") == null,
+                    "system denial dispatched activation"));
+        } finally {
+            removeMonitor(monitor);
+            onMain(() -> current.get().finish());
+            waitForIdleSync();
+        }
+        sendStatus(2, message("activity_permissions", "passed: recreation, stale result, system consent denial"));
     }
 
     private void exerciseActivityBinding() throws Exception {

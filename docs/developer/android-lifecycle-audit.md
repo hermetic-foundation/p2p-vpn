@@ -128,11 +128,56 @@ service delivery. No production permission behavior changed.
 
 - Focused log: `/tmp/p2p-vpn-lifecycle-permission-unit.log`.
 - Full checks: `/tmp/p2p-vpn-lifecycle-permission-verified.log`.
-- Outstanding: saved-state recreation, actual permission delivery and local-network permission outcomes.
+- Platform recreation and VPN denial are covered below; local-network permission outcomes remain open.
 
 `MainActivity` persists a pending enable network in instance state. Pending join
 code/hostname are not serialized there; rotation before local permission returns
 can discard that unstarted request. No enrollment exists to commit at that point.
+
+### Recreation and System VPN Denial
+
+Passed on API 35 x86_64 with production source `8674af4c` and the new
+`activity_permissions` instrumentation option. No production change was needed.
+
+| Stage | Required Result |
+| --- | --- |
+| Framework `Activity.recreate()` | A different activity instance receives the saved pending network |
+| Old activity | Binding owner cleared; replacement establishes a real service binding |
+| Injected denial then late success | Restored request clears without an activation mutation |
+| Fresh request | Android's real VPN consent dialog appears |
+| System Cancel button | Real activity result clears the pending network without activation |
+| Subsequent combined run | Native connection, health recovery, cancelled joins and service replacement pass |
+
+The saved request is seeded at the activity boundary; no pending system dialog
+is carried through recreation. This is not process-death restoration or a grant
+of Android's newer local-network permission, which API 35 does not exercise.
+
+#### Setup Failure and Correction
+
+Two initial attempts timed out waiting for the VPN denial callback, first with
+Back and then the explicit Cancel button. The notification-permission dialog
+remained underneath VPN consent, keeping the target activity paused.
+
+Retained system logs show `REQUEST_PERMISSIONS` and VPN `ConfirmDialog` together.
+The harness now grants only notification permission before launching activities,
+then explicitly removes VPN consent and clicks the system Cancel button.
+
+| Evidence | Path |
+| --- | --- |
+| Back attempt | `/tmp/p2p-vpn-lifecycle-permission-platform.log` |
+| Cancel with overlapping notification dialog | `/tmp/p2p-vpn-lifecycle-permission-platform-cancel.log` |
+| System activity logs | `/tmp/p2p-vpn-lifecycle-permission-dialog-overlap.log` |
+| Isolated pass | `/tmp/p2p-vpn-lifecycle-permission-platform-isolated.log` |
+| Offline JVM, lint and APK checks | `/tmp/p2p-vpn-lifecycle-permission-isolated-build.log` |
+
+The passing run reports `activity_permissions=passed`, `passed=true` and result
+code `-1`. Add `-e activity_permissions true` to AL1's instrumentation command.
+The emulator was stopped, private state removed and all result logs retained.
+
+| Artifact | SHA-256 |
+| --- | --- |
+| App APK | `1f2e8a985f64a933e462545e73c4e1cffee463a1cbc4aa7e7ff76d63c26326d0` |
+| Instrumentation APK | `643f32c5f577da6c6bd646e0b9065bf77a674b17dec6fda10a3335391ea4a51e` |
 
 ## AL1: Cancelled Profile Join
 
@@ -205,7 +250,7 @@ that directory. Temporary storage began at 7.84 GiB; emulator state reached 1.1 
 
 Priority: P2. JVM callback ordering reproduced and corrected at `481bc16a`.
 API 35 x86_64 pending-stop and framework-rebind instrumentation now passes.
-Full activity recreation and permission outcome validation remain open.
+Framework recreation and VPN denial also pass in the permission scenario above.
 
 | Previous Ordering | Consequence |
 | --- | --- |
@@ -269,8 +314,35 @@ This does not prove rotation, process recreation, permission dialogs or battery 
 | App APK | `1f2e8a985f64a933e462545e73c4e1cffee463a1cbc4aa7e7ff76d63c26326d0` |
 | Instrumentation APK | `6b6a5d3f02d209a2b9d826d2881c50cbe517834bad09363a99afe7f8051d059d` |
 
-JNI is the same cached artifact identified in AL1. Current-source native and
-broader multi-network reconciliation are still required by this review.
+JNI is the same artifact identified in AL1 and verified against current source
+below. Broader multi-network reconciliation remains required.
+
+## Current Native Provenance
+
+The offline locked x86_64/API 26 native rebuild passed in 39.03 seconds after
+the permission run. Its output is byte-identical to the staged library used
+by AL1, AL2 and the recreation/permission instrumentation.
+
+| Check | Result |
+| --- | --- |
+| `jj diff --from d0e38487 --to @ --stat src crates Cargo.toml Cargo.lock` | Zero changed files at production `8674af4c` |
+| Build | `/tmp/p2p-vpn-lifecycle-current-native.log`; four existing Rust warnings |
+| Fresh and staged unstripped library hashes | Both `cf9a1d40b71cc17b38759ced5352690183818c5c27bbebeb9a7fd82fa88c548b` |
+| Toolchain | Cached Rust 1.97.1, NDK 28.2.13676358, two Cargo jobs, no debug symbols/incremental state |
+
+The command used the existing cached Android vendor directory and Rust source
+wrapper, with `CARGO_TARGET_DIR=/tmp/p2p-vpn-android-target`:
+
+```sh
+cargo build --offline --locked \
+  --config 'source.crates-io.replace-with="cached-android"' \
+  --config 'source.cached-android.directory="/tmp/p2p-vpn-kad-android-vendor"' \
+  -Z build-std=std,panic_abort --target x86_64-linux-android \
+  --package p2p-vpn-android --lib
+```
+
+This establishes native provenance for the lifecycle scenarios, not ARM64,
+release packaging, packet delivery or sustained resource attribution.
 
 ## Historical Attribution Ledger
 
