@@ -12,7 +12,7 @@ No physical device or deployed host is authorized for this work.
 - [x] Define capture windows, budgets and decision rules.
 - [ ] Audit collectors and freeze workload manifests before capture.
 - [x] Measure connected idle and periodic-collector overhead in the isolated debug fixture.
-- [ ] Measure unavailable peers and retain retry/backoff timelines.
+- [x] Measure unavailable peers and retain retry/backoff timelines in the isolated debug fixture.
 - [ ] Measure matched sustained traffic and pressure/recovery cycles.
 - [ ] Attribute retained allocations, including signed-ledger refreshes.
 - [ ] Measure lifecycle churn and multi-network isolation.
@@ -367,7 +367,7 @@ The short harness smoke test does not count as a sustained repetition.
 
 | Setting | Frozen Value |
 | --- | --- |
-| Topology | Existing two-node isolated direct UDP fixture; static overlay peer bindings; no public infrastructure |
+| Topology | Existing two-node isolated direct UDP fixture; static overlay peer bindings; no reachable public infrastructure |
 | Preparation | Initial overlay traffic, then 30 seconds connected warmup |
 | Transition | Node B `veth-b` down; require failed one-second underlay ping |
 | Outage observation | 300 seconds after negative ping; OS 1 second, runtime status and diagnostics 5 seconds |
@@ -388,6 +388,8 @@ the outage samples. Do not restart a daemon or manually repair runtime paths.
 
 This measures local link loss with a known endpoint, not discovery of a new WAN
 address. It does not close public-path migration or multi-network isolation.
+Default bootstrap candidates remain configured and fail locally without an
+Internet route; distinguish those attempts from the single overlay peer.
 
 #### Harness Validation
 
@@ -408,7 +410,9 @@ address. It does not close public-path migration or multi-network isolation.
 
 Final fixture SHA-256:
 `466f9c5612253f689651771b02c68bb397d4994adcc566cc439ad938b4bd3804`.
-The two declared 300-second S2 captures remain outstanding.
+Both declared 300-second S2 captures passed. See
+[sustained unavailable-peer results](sustained-unavailable-results.md) for resource
+ranges, infrastructure/overlay retry attribution and the open RSS investigation.
 
 - Final smoke artifacts: `/tmp/p2p-vpn-tun_namespace_measures_unavailable_peer_resources-1.cf63a9f794fa498f/`.
 - Validation logs: `/tmp/p2p-vpn-sustained-unavailable-final-{tests,clippy,smoke}.log`.

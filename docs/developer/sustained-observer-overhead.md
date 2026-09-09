@@ -121,5 +121,5 @@ Raw reports and logs remain at their original paths; no evidence was deleted.
   They do not establish payload delivery after the observation window.
 - Stable sampled gauges do not rule out between-sample transients.
   RSS increases do not identify live allocations or establish a leak.
-- These runs do not exercise public discovery, relays, QUIC streams, Android,
+- These runs do not exercise successful public discovery, relays, QUIC streams, Android,
   unavailable peers, sustained offered load or physical energy use.
