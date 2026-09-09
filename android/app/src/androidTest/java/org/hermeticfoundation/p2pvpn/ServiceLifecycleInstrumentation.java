@@ -86,6 +86,9 @@ public final class ServiceLifecycleInstrumentation extends Instrumentation {
             if ("true".equals(arguments.getString("deferred_join"))) {
                 exerciseDeferredJoin();
             }
+            if ("true".equals(arguments.getString("cancelled_join"))) {
+                exerciseCancelledJoin();
+            }
             if ("true".equals(arguments.getString("superseded_stop"))) {
                 exerciseSupersededStop();
             }
@@ -356,6 +359,69 @@ public final class ServiceLifecycleInstrumentation extends Instrumentation {
             }, 0, TimeUnit.SECONDS).get(30, TimeUnit.SECONDS);
         }
         sendStatus(2, message("deferred_join", "passed: failed join, withdrawn intent, successful disabled join"));
+    }
+
+    private void exerciseCancelledJoin() throws Exception {
+        Field instance = P2pVpnService.class.getDeclaredField("debugInstance");
+        instance.setAccessible(true);
+        P2pVpnService service = (P2pVpnService) instance.get(null);
+        Class<?> operationClass = Class.forName(P2pVpnService.class.getName() + "$ProfileJoinOperation");
+        Class<?> resultClass = Class.forName(P2pVpnService.class.getName() + "$ProfileJoinResult");
+        Constructor<?> constructor = operationClass.getDeclaredConstructor(String.class);
+        constructor.setAccessible(true);
+        Method success = resultClass.getDeclaredMethod("success", AndroidProfile.class);
+        Method complete = P2pVpnService.class.getDeclaredMethod("completeProfileJoin", String.class, resultClass);
+        Method cancel = P2pVpnService.class.getDeclaredMethod("cancelProfileJoin");
+        for (Method method : new Method[] {success, complete, cancel}) {
+            method.setAccessible(true);
+        }
+        Field operation = P2pVpnService.class.getDeclaredField("profileJoinOperation");
+        Field busy = P2pVpnService.class.getDeclaredField("operationInProgress");
+        for (Field field : new Field[] {operation, busy}) {
+            field.setAccessible(true);
+        }
+        currentScope.schedule(() -> {
+            try {
+                ProfileStore store = new ProfileStore(getTargetContext());
+                String before = store.load();
+                String cancelledId = PairingOperationId.generate();
+                Object cancelled = constructor.newInstance(cancelledId);
+                Object result = success.invoke(null, AndroidProfile.fromNative(NativeResponse.objectValue(
+                        NativeBridge.nativeCreateProfile("cancelled-lifecycle", "test-phone"))));
+                operation.set(service, cancelled);
+                busy.setBoolean(service, true);
+                // Native has returned; cancellation wins admission on the service worker.
+                cancel.invoke(service);
+                cancel.invoke(service);
+                complete.invoke(service, cancelledId, result);
+                require(before.equals(store.load()), "cancelled join persisted a late successful profile");
+                require(operation.get(service) == null, "cancelled completion retained its owner");
+                require(!busy.getBoolean(service), "cancelled completion retained busy state");
+
+                String nextId = PairingOperationId.generate();
+                Object next = constructor.newInstance(nextId);
+                operation.set(service, next);
+                busy.setBoolean(service, true);
+                complete.invoke(service, cancelledId, result);
+                require(operation.get(service) == next, "stale completion consumed replacement owner");
+                require(busy.getBoolean(service), "stale completion released replacement busy state");
+                Object nextResult = success.invoke(null, AndroidProfile.fromNative(NativeResponse.objectValue(
+                        NativeBridge.nativeCreateProfile("replacement-lifecycle", "test-phone"))));
+                complete.invoke(service, nextId, nextResult);
+                ProfileCollection saved = ProfileCollection.decode(store.load()).currentCollection();
+                require(saved.networks.size() == ProfileCollection.decode(before).currentCollection().networks.size() + 1,
+                        "replacement join did not persist exactly one profile");
+                require(operation.get(service) == null && !busy.getBoolean(service),
+                        "replacement join retained ownership");
+                String committed = store.load();
+                cancel.invoke(service);
+                complete.invoke(service, nextId, nextResult);
+                require(committed.equals(store.load()), "post-commit cancellation or duplicate changed profiles");
+            } catch (ReflectiveOperationException | P2pVpnException error) {
+                throw new AssertionError(error);
+            }
+        }, 0, TimeUnit.SECONDS).get(30, TimeUnit.SECONDS);
+        sendStatus(2, message("cancelled_join", "passed: late success discarded, replacement committed"));
     }
 
     private void exerciseSupersededStop() throws Exception {

@@ -24,7 +24,7 @@ reopen them only if this audit produces new causal evidence.
 - [ ] Finish source ownership inventory, including failure and replacement paths.
 - [ ] Test rapid commands and stale callbacks within and across service scopes.
 - [ ] Test permission success, denial and activity recreation without stale activation.
-- [ ] Test profile-join cancellation, late completion and subsequent successful joining.
+- [x] Test profile-join cancellation, late completion and subsequent successful local commit (AL1).
 - [ ] Verify multi-network enablement, persistence and native generation isolation.
 - [ ] Audit native shutdown, TUN descriptors, callback retirement and timer bounds.
 - [ ] Reconcile process death, always-on, reboot and app replacement on final source.
@@ -66,21 +66,72 @@ Entries locate ownership boundaries; they do not assert complete verification.
 | Native network generations | `supervisor.rs` reactivation and lease tests | Inspect assertions and rerun affected scope before claiming final-source coverage |
 | Formal models | No Lean/Lake files found by repository file search | No applicable existing Lean model identified; not a formal correctness claim |
 
-## Candidate Ordering: Cancelled Profile Join
+## AL1: Cancelled Profile Join
 
-Status: source-backed hypothesis; not yet reproduced or fixed.
+Priority: P1. Reproduced and fixed with API 35 x86_64 instrumentation.
 
 1. Native join returns a successful profile to the dedicated join worker.
 2. The service worker processes `cancelProfileJoin` before queued completion.
 3. Cancellation signals JNI but leaves the Java operation eligible for completion.
 4. `completeProfileJoin` checks only the operation ID before saving the profile.
 
-The JNI request may already have finished, so native cancellation alone cannot
-fence this local commit. Reproduce the ordering at the real service boundary,
-then verify cancellation cleanup and a successful replacement join.
+Native cancellation alone cannot fence this local commit after JNI returns.
+The operation now records cancellation on the service worker before signalling
+JNI. Completion checks that flag before preparing or saving any profile state.
+
+The existing `finally` block releases operation ownership and the multicast lock,
+publishes the snapshot and resumes deferred connection intent. The busy slot stays
+owned until completion, so cancellation does not admit overlapping native joins.
 
 Cancellation after a completed local commit is a different case. Do not silently
 revoke committed membership or alter the network's revocation policy.
+
+### Regression Evidence
+
+`ServiceLifecycleInstrumentation` holds a successful result at the service-worker
+boundary and invokes real cancellation before completion. It uses JNI-created
+profiles and real encrypted storage, not public pairing or an injected file store.
+
+| Assertion | Result |
+| --- | --- |
+| Before fix | `cancelled join persisted a late successful profile`; `passed=false`, result code `0` |
+| Repeated cancellation then late success | Stored profile collection remains byte-identical after decryption |
+| Completion cleanup | Busy flag and operation owner released |
+| Old completion during replacement | Replacement retains busy flag and owner |
+| New successful result | Exactly one additional network persists |
+| Cancel after commit and duplicate completion | Committed profile collection remains unchanged |
+| Combined lifecycle regressions | Deferred join, superseded stops, recurring health recovery and occupied-worker replacement pass |
+
+- Negative log: `/tmp/p2p-vpn-lifecycle-cancel-before.log`.
+- Positive log: `/tmp/p2p-vpn-lifecycle-cancel-after.log`; `passed=true`, result code `-1`.
+- Offline JVM tests, lint, app and instrumentation assembly: `/tmp/p2p-vpn-lifecycle-cancel-after-build.log`.
+- Initial test compile error and launcher lifetime error were setup failures, not defect evidence.
+
+### Commands and Provenance
+
+The cached Gradle 9.5.1 distribution used Nix OpenJDK 17.0.20+8 and SDK 37.
+No Rust source changed. JNI was reused from the cached review staging directory;
+this is Java ownership regression evidence, not final-source native certification.
+
+```sh
+gradle -p android --offline --no-daemon --max-workers=2 \
+  -Dorg.gradle.parallel=false -I /tmp/p2p-vpn-review-android-jni.gradle \
+  :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest
+adb -s emulator-5554 shell am instrument -w -r \
+  -e isolated_emulator true -e cancelled_join true -e deferred_join true \
+  -e superseded_stop true -e health_poll true \
+  org.hermeticfoundation.p2pvpn.debug.test/org.hermeticfoundation.p2pvpn.ServiceLifecycleInstrumentation
+```
+
+| Artifact | SHA-256 |
+| --- | --- |
+| Fixed APK | `3e4193cc2808a1ed95c7654a6b46728e5de7aa0eec85965674e6a00e4ac075fc` |
+| Instrumentation APK | `53724de7e3194e3ff0c65c597ddfa6e64642388ad8b1cab765352f2400274be9` |
+| Reused unstripped JNI | `cf9a1d40b71cc17b38759ced5352690183818c5c27bbebeb9a7fd82fa88c548b` |
+
+Only disposable emulator state was cleared between negative and positive runs.
+The emulator was stopped and private state removed afterward; logs remain outside
+that directory. Temporary storage began at 7.84 GiB; emulator state reached 1.1 GiB.
 
 ## Historical Attribution Ledger
 
@@ -114,4 +165,5 @@ a later pass does not supply missing historical observations.
 | Timing observations | No concurrent builds, manual repair or relaxed deadlines |
 | Cleanup | Bounded logs and watchdogs; terminate owned emulator/fixture processes |
 
-No build, emulator or physical-device scenario was started for this initial map.
+No physical device was used. The AL1 run above does not close the remaining
+inventory, permission, multi-network, underlay and historical-attribution gates.

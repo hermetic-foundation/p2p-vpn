@@ -1198,6 +1198,12 @@ public final class P2pVpnService extends VpnService {
         File uncommittedRuntimeDirectory = null;
         boolean profileCommitted = false;
         try {
+            if (operation.cancelled) {
+                pairingDetail = "Network join cancelled";
+                connectionDetail = profilePresent ? "Profile ready" : "No profile";
+                recordDiagnosticEvent("profile_join_cancelled");
+                return;
+            }
             if (result.error != null) {
                 throw new P2pVpnException(result.error);
             }
@@ -1264,6 +1270,7 @@ public final class P2pVpnService extends VpnService {
             finishPairingForegroundService();
             return;
         }
+        operation.cancelled = true;
         pairingDetail = "Cancelling network join";
         publishSnapshot();
         try {
@@ -3145,6 +3152,7 @@ public final class P2pVpnService extends VpnService {
     }
 
     private static final class ProfileJoinOperation {
+        private boolean cancelled;
         final String id;
 
         private ProfileJoinOperation(String id) {
