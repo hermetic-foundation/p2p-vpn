@@ -106,12 +106,48 @@ Executable SHA-256:
 Snapshot retention and checkpoint I/O can affect boundary timing; this is not
 a matched performance comparison or proof that the original failure is fixed.
 
+### Deterministic Readiness Regression
+
+`recovery_requires_current_path_health_after_queue_drain` uses the runtime's
+real `PathSet`: establish TCP, observe selection, demote it, then observe empty
+queues. The former queue-only predicate incorrectly accepts this state.
+
+| Step | Evidence |
+| --- | --- |
+| Before correction | Regression fails: `empty queues do not restore a's demoted path` |
+| Correction | Require healthy TCP, zero unsupported peers, empty packet/byte queues and zero stream owners on both nodes |
+| Positive transition | Re-establishing the path restores readiness |
+| Negative cases | Either node demoted, any queue/stream work, unsupported peer or missing observation rejects readiness |
+| Verification | 52 unit tests passed; required Clippy groups passed with 37 advisory warnings |
+
+The condition uses the current observation cycle, not the earlier path-selection
+result. Queries remain sequential, so it cannot promise a path will remain
+healthy afterward; unchanged 5/5 pings still check actual delivery.
+
+- The existing 30-second drain deadline and preceding TCP-path waits are unchanged.
+- `queue-pressure-drain.json` now records completion of this strengthened drain condition.
+- Production recovery logic and timers are unchanged.
+- Negative log: `/tmp/p2p-vpn-sustained-pressure-readiness-negative.log`.
+- Passing checks: `/tmp/p2p-vpn-sustained-pressure-readiness-{tests,clippy}.log`.
+
+The corrected single-round byte/A smoke passed in 59.93 seconds. Both nodes
+had healthy TCP paths and empty queues/stream owners at readiness, followed
+by 5/5 delivery in both directions. This is not a sustained repetition.
+
+| Smoke Evidence | Value |
+| --- | --- |
+| Artifact suffix | `1.eca19d1fb8ba1c43` |
+| Executable SHA-256 | `b49b4f71429dd5f24e08ea43fb9ca48d1ac1de10e5be32af3898e54e750ba028` |
+| JSON / node logs, bytes | 663387 / 347858 |
+| Outer log | `/tmp/p2p-vpn-sustained-pressure-readiness-smoke.log` |
+| Cleanup | Fixture terminal; no matching processes remain |
+
 ### Remaining Investigation
 
-- The original failure remains unresolved; the frozen campaign is still paused.
-- Isolate path invalidation between path selection and queue drainage with a deterministic fixture.
-- Distinguish a stale readiness observation from a path failure after resumed traffic.
-- Keep the failed artifacts, current deadlines and strict delivery assertions.
+The deterministic test proves a fixture flaw, not the original failure's exact
+timeline: its pre-ping path-health evidence is missing. Preserve that failure
+as unresolved retrospective attribution and restart the four-run campaign
+with the corrected readiness condition. Any new delivery failure remains actionable.
 
 ## Diagnostic Validation
 

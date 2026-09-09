@@ -46,7 +46,7 @@ TOKIO_WORKER_THREADS=2 P2P_VPN_TUN_E2E_KEEP_TEMP=1 \
 | Traffic | Up to 3,000 ICMP requests, 1,000-byte payloads, 5 ms interval |
 | Traffic deadline | Ping 20 seconds; fixture supervision 25 seconds |
 | Sampling | Both daemons approximately every 250 ms; 79 sample pairs in this run |
-| Recovery | Delete the test qdisc, await TCP selection, empty queues and stream-request windows, then ping both directions |
+| Recovery | Delete qdisc; await TCP selection, then current healthy TCP plus empty queues/stream windows; ping both directions |
 | Cleanup | Existing child guards kill and reap daemons; no matching test process remained |
 
 The offered ICMP request rate is at most approximately 1.65 Mbps before transport

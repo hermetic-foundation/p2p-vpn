@@ -471,6 +471,21 @@ fixture processes. Replay scripts preserve the limit profile and round count.
 No builds overlapped either smoke. The subsequent campaign stopped on a
 round-two byte-profile failure; see [pressure investigation](sustained-pressure-results.md).
 
+#### Corrected S4 Campaign
+
+The deterministic path-demotion regression exposed a stale readiness check.
+Restart all four captures after its correction; historical captures remain
+separate evidence and do not substitute for corrected-fixture repetitions.
+
+| Setting | Corrected Campaign |
+| --- | --- |
+| Sequence | Packets, bytes, bytes, packets; five rounds each, fresh process pairs |
+| Initiator | Unset override; preserve normal random peer-ID ordering |
+| Recovery readiness | Current healthy TCP paths and drained packet/byte queues plus stream requests on both nodes |
+| Deadline / delivery | Existing 30-second drain deadline and preceding path waits; unchanged 5/5 pings both ways |
+| Other controls | Frozen S4 traffic, two Tokio workers, shaping, logging, watchdogs and evidence budgets above |
+| Failure handling | Retain failed evidence and stop the campaign for causal investigation |
+
 - Executable SHA-256: `ab3f2fe482dfb48d2915074b04c81a4e037b9a6c02f94e590af07292f68de666`.
 - Packet artifact suffix: `1.35cc20df7fd8c5a8`; byte suffix: `1.3e33a24e9bf968d6`.
 - Artifact prefix: `/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-`.

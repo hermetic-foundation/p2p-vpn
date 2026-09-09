@@ -99,6 +99,18 @@ fn ping_counts(output: &str) -> Option<(usize, usize)> {
     })
 }
 
+fn recovery_ready(snapshot: &serde_json::Value) -> bool {
+    ["a", "b"].into_iter().all(|role| {
+        snapshot[role]["queued_packets"] == 0
+            && snapshot[role]["queued_bytes"] == 0
+            && snapshot[role]["stream_in_flight"] == 0
+            && snapshot[role]["healthy_tcp_paths"]
+                .as_u64()
+                .is_some_and(|count| count > 0)
+            && snapshot[role]["peers_without_supported_path"] == 0
+    })
+}
+
 fn parse_rounds(value: &str) -> Option<u64> {
     value.parse().ok().filter(|rounds| (1..=5).contains(rounds))
 }
@@ -297,9 +309,7 @@ fn capture_round(
     let mut drain_samples = Vec::new();
     loop {
         let snapshot = observe();
-        let drained = ["a", "b"].into_iter().all(|role| {
-            snapshot[role]["queued_packets"] == 0 && snapshot[role]["stream_in_flight"] == 0
-        });
+        let drained = recovery_ready(&snapshot);
         let expired = Instant::now() >= recovery_deadline;
         drain_samples.push(snapshot.clone());
         if drained || expired {
@@ -322,7 +332,7 @@ fn capture_round(
         }
         assert!(
             !expired,
-            "queues and stream requests did not drain after pressure"
+            "healthy TCP paths and drained queues/stream requests did not coexist after pressure"
         );
         thread::sleep(Duration::from_millis(250));
     }
@@ -405,6 +415,78 @@ fn capture_round(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recovery_requires_current_path_health_after_queue_drain() {
+        use p2p_vpn::{
+            PathKind, PeerId,
+            path::{PathSet, PathTransportSupport},
+        };
+
+        let peer = PeerId::from_bytes([1; 32]);
+        let mut paths = PathSet::new();
+        paths.record_established(peer, PathKind::DirectTcpStream);
+        assert_eq!(
+            paths.best_for(peer).unwrap().kind,
+            PathKind::DirectTcpStream
+        );
+        let observation = |paths: &PathSet| {
+            let stats =
+                paths.runtime_stats_for_peers([peer], |_| PathTransportSupport::stream_fallback());
+            serde_json::json!({
+                "queued_packets": 0, "queued_bytes": 0, "stream_in_flight": 0,
+                "healthy_tcp_paths": stats.healthy_direct_tcp_stream_paths,
+                "peers_without_supported_path": stats.peers_without_supported_path,
+            })
+        };
+        let healthy = observation(&paths);
+        let mut snapshot = serde_json::json!({"a": healthy, "b": healthy});
+        assert!(recovery_ready(&snapshot));
+
+        paths.mark_unhealthy(peer, PathKind::DirectTcpStream);
+        assert!(paths.best_for(peer).is_none());
+        for role in ["a", "b"] {
+            snapshot[role] = observation(&paths);
+            assert!(
+                !recovery_ready(&snapshot),
+                "empty queues do not restore {role}'s demoted path"
+            );
+            snapshot[role] = healthy.clone();
+        }
+        paths.record_established(peer, PathKind::DirectTcpStream);
+        snapshot["a"] = observation(&paths);
+        assert!(recovery_ready(&snapshot));
+
+        for role in ["a", "b"] {
+            for field in [
+                "queued_packets",
+                "queued_bytes",
+                "stream_in_flight",
+                "peers_without_supported_path",
+            ] {
+                snapshot[role][field] = 1.into();
+                assert!(
+                    !recovery_ready(&snapshot),
+                    "nonzero {role}.{field} is not ready"
+                );
+                snapshot[role] = healthy.clone();
+            }
+            for field in [
+                "queued_packets",
+                "queued_bytes",
+                "stream_in_flight",
+                "healthy_tcp_paths",
+                "peers_without_supported_path",
+            ] {
+                snapshot[role].as_object_mut().unwrap().remove(field);
+                assert!(
+                    !recovery_ready(&snapshot),
+                    "missing {role}.{field} is not ready"
+                );
+                snapshot[role] = healthy.clone();
+            }
+        }
+    }
 
     #[test]
     fn initiator_override_preserves_default_and_orders_actual_peer_ids() {
