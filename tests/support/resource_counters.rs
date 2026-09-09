@@ -214,6 +214,7 @@ mod window_tests {
                 cpu_ticks: 0,
                 rss_kib: 1,
                 threads: 1,
+                total_fds: Some(1),
                 socket_fds: 0,
                 socket_inodes: 0,
                 vanished_fds: 0,

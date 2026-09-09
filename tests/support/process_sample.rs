@@ -16,6 +16,8 @@ pub struct ProcessSample {
     pub cpu_ticks: u64,
     pub rss_kib: u64,
     pub threads: u64,
+    #[serde(default)]
+    pub total_fds: Option<usize>,
     pub socket_fds: usize,
     pub socket_inodes: usize,
     pub vanished_fds: usize,
@@ -131,11 +133,13 @@ pub fn capture(pid: u32, started: Instant) -> io::Result<ProcessSample> {
     let before = parse_stat(&fs::read_to_string(root.join("stat"))?)?;
     let status = fs::read_to_string(root.join("status"))?;
     let mut socket_fds = 0;
+    let mut total_fds = 0;
     let mut vanished_fds = 0;
     let mut inodes = BTreeSet::new();
     for entry in fs::read_dir(root.join("fd"))? {
         match fs::read_link(entry?.path()) {
             Ok(target) => {
+                total_fds += 1;
                 if let Some(inode) = socket_inode(&target)? {
                     socket_fds += 1;
                     inodes.insert(inode);
@@ -165,6 +169,7 @@ pub fn capture(pid: u32, started: Instant) -> io::Result<ProcessSample> {
         cpu_ticks: after.cpu_ticks,
         rss_kib: status_value(&status, "VmRSS:", Some("kB"))?,
         threads: status_value(&status, "Threads:", None)?,
+        total_fds: Some(total_fds),
         socket_fds,
         socket_inodes: inodes.len(),
         vanished_fds,
@@ -176,6 +181,20 @@ pub fn capture(pid: u32, started: Instant) -> io::Result<ProcessSample> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn descriptor_sample_counts_non_sockets_and_preserves_historical_unknowns() {
+        let file = fs::File::open("/dev/null").unwrap();
+        let sample = capture(std::process::id(), Instant::now()).unwrap();
+        assert!(sample.total_fds.unwrap() > sample.socket_fds);
+        let mut json = serde_json::to_value(&sample).unwrap();
+        let restored: ProcessSample = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(restored.total_fds, sample.total_fds);
+        json.as_object_mut().unwrap().remove("total_fds");
+        let historical: ProcessSample = serde_json::from_value(json).unwrap();
+        assert_eq!(historical.total_fds, None);
+        drop(file);
+    }
 
     #[test]
     fn tcp_attribution_excludes_other_processes_and_unowned_time_wait() {

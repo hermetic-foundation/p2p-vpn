@@ -147,6 +147,7 @@ mod tests {
             cpu_ticks: cpu,
             rss_kib: 1024,
             threads: 2,
+            total_fds: Some(4),
             socket_fds: 3,
             socket_inodes: 3,
             vanished_fds: 0,

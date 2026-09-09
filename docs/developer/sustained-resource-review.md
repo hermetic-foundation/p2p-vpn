@@ -82,6 +82,37 @@ on collector latency. Compare collector-on/off before attributing sensitive cost
 
 ## Decision Rules
 
+### Collector Audit: Descriptor Coverage
+
+The newer `process_sample` collector validates process identity across capture
+and separates process-owned TCP sockets from namespace-wide state. The older
+idle collector lacks that attribution and capture-duration metadata.
+
+The shared newer collector now records `total_fds` as well as socket descriptors.
+It counts successfully resolved descriptor links; concurrent disappearances
+remain in `vanished_fds`. This is a non-atomic sample, not a kernel resource bound.
+
+Historical samples without `total_fds` deserialize as unknown, not zero. Window
+summaries count these as missing and preserve unknown first/last values.
+This adds test-tool evidence only; no production runtime changed.
+
+| Validation | Evidence |
+| --- | --- |
+| Resource suite | 44 passed, four opt-in campaign tests ignored; `/tmp/p2p-vpn-sustained-collector-final-tests.log` |
+| Namespace sampler | Five passed; `/tmp/p2p-vpn-sustained-collector-namespace-tests.log`; no namespace campaign executed |
+| Live process / compatibility | Non-socket descriptors counted; old JSON remains readable; missing gauge samples are not zero |
+| Static checks | Required correctness/suspicious/performance Clippy groups pass for resource and namespace targets; advisory warnings retained |
+| Format | Cached rustfmt check passes on all four changed support files |
+
+Initial `cargo fmt` could not locate its subcommand in the cached Cargo wrapper.
+The existing `/tmp/p2p-vpn-review-rustfmt/bin/rustfmt` performed the check directly;
+no formatter or dependency download was needed.
+
+Full collector integration, independently timed probes and compact runtime
+sampling remain open before S1/S2. This unit gate is not a sustained capture.
+
+### Workload Acceptance
+
 | Dimension | Required Outcome / Trigger |
 | --- | --- |
 | Function | Existing traffic, admission, isolation and recovery assertions pass without rescue |

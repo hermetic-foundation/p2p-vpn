@@ -47,17 +47,24 @@ pub struct Gauge {
 }
 
 fn gauge(samples: &[Option<ProcessSample>], value: impl Fn(&ProcessSample) -> f64) -> Gauge {
+    optional_gauge(samples, |sample| Some(value(sample)))
+}
+
+fn optional_gauge(
+    samples: &[Option<ProcessSample>],
+    value: impl Fn(&ProcessSample) -> Option<f64>,
+) -> Gauge {
     let values: Vec<_> = samples
         .iter()
-        .filter_map(|sample| sample.as_ref().map(&value))
+        .filter_map(|sample| sample.as_ref().and_then(&value))
         .collect();
     Gauge {
         samples: values.len(),
         missing_samples: samples.len() - values.len(),
         mean: (!values.is_empty()).then(|| values.iter().sum::<f64>() / values.len() as f64),
         sampled_peak: values.iter().copied().reduce(f64::max),
-        first: samples.first().and_then(Option::as_ref).map(&value),
-        last: samples.last().and_then(Option::as_ref).map(value),
+        first: samples.first().and_then(Option::as_ref).and_then(&value),
+        last: samples.last().and_then(Option::as_ref).and_then(value),
     }
 }
 
@@ -126,6 +133,10 @@ fn window(
     }
     let comparable = reasons.is_empty();
     let mut gauges = BTreeMap::from([
+        (
+            "total_fds".to_owned(),
+            optional_gauge(samples, |s| s.total_fds.map(|count| count as f64)),
+        ),
         ("rss_kib".to_owned(), gauge(samples, |s| s.rss_kib as f64)),
         ("threads".to_owned(), gauge(samples, |s| s.threads as f64)),
         (
@@ -309,6 +320,7 @@ mod tests {
             cpu_ticks: ticks,
             rss_kib: 1024,
             threads: 2,
+            total_fds: Some(4),
             socket_fds: 3,
             socket_inodes: 3,
             vanished_fds: 0,
@@ -316,6 +328,20 @@ mod tests {
             namespace_tcp_states: BTreeMap::new(),
         })
     }
+    #[test]
+    fn missing_historical_descriptor_counts_are_not_zero() {
+        let mut historical = sample(0.0, 0);
+        historical.as_mut().unwrap().total_fds = None;
+        let samples = [historical, sample(5.0, 1), None];
+        let result = window("idle", "a", 0.0, 10.0, &samples, 100).unwrap();
+        let descriptors = &result.gauges["total_fds"];
+        assert_eq!(descriptors.samples, 1);
+        assert_eq!(descriptors.missing_samples, 2);
+        assert_eq!(descriptors.mean, Some(4.0));
+        assert_eq!(descriptors.first, None);
+        assert_eq!(descriptors.last, None);
+    }
+
     #[test]
     fn weighted_cpu_and_sample_gauges_use_distinct_denominators() {
         let samples = [sample(0.0, 0), sample(4.0, 100), sample(10.0, 300)];
