@@ -66,6 +66,74 @@ Entries locate ownership boundaries; they do not assert complete verification.
 | Native network generations | `supervisor.rs` reactivation and lease tests | Inspect assertions and rerun affected scope before claiming final-source coverage |
 | Formal models | No Lean/Lake files found by repository file search | No applicable existing Lean model identified; not a formal correctness claim |
 
+## Current Ownership Trace
+
+Inspected against `8a761622`. This is source evidence, not a replacement for
+the executable gates below. Service methods run on the scoped worker unless
+explicitly identified as main-thread callbacks.
+
+| Event / Resource | Admission and Owner | Retirement / Recovery |
+| --- | --- | --- |
+| Activity start/stop | Main-thread per-start `ActivityServiceConnection`; registration separate from `bound` | Stop clears owner first, removes its listener and unbinds even before connection delivery |
+| Service start | Main-thread `admittedStartOwner`; queued `processedStartOwner` | Deferred stops require the captured processed identity to remain the admitted identity |
+| Service replacement | Process-wide `ServiceRuntimeWorker.Dispatcher` | New scope closes old admission; old cleanup precedes replacement native work |
+| Desired connection | Worker `desiredConnected` plus `operationInProgress` | Deferred join completion reconciles intent; explicit disconnect clears it |
+| Persisted activation | Encrypted `ProfileCollection.Entry.enabled`, not UI selection | System/null start uses `restorePersistedActivation`; zero enabled networks stay idle |
+| Network mutation | Validate and save collection before `suspendConnectionForNetworkChange` | Successful mutation reconciles the enabled set; failed mutation does not publish candidate state |
+| Always-on / lockdown | `VpnMode` plus manager callback | Manual disconnect cannot override always-on; lockdown stops runtime and retains a mode poll |
+| Java health poll | One `statusFuture`, superseded before scheduling | Stop cancels it; connected mode event rearms it; native failure triggers recovery |
+| Native reconnect | One `reconnectFuture`; current connection intent checked when fired | Disconnect cancels it; busy operations reschedule; exponential delay is capped, attempt count is not |
+| Underlay callback | Main-handler registration for physical Internet networks; `UnderlayTracker` | Service destruction unregisters it; scoped worker rejects late work |
+| Underlay recovery | One coalesced `underlayRecoveryFuture` | Rechecks desired/connected state; signalling failure retries then requests native restart |
+| Profile-free join | Dedicated join executor plus operation ID; AL1 cancellation flag | Completion releases busy owner and multicast lock; scope retirement cancels JNI and closes executor |
+| Existing-network pairing | Saved operation references its network ID | Load rejects absent/disabled network ownership; explicit disconnect cancels and clears operation |
+| Notifications and snapshots | Main-handler effects gated by live service scope | Manual stop additionally checks start identity; activity snapshots check their binding owner |
+
+### Native and TUN Ownership
+
+Paths are relative to `crates/p2p-vpn-android/src/`.
+
+| Resource | Source Owner | Failure / Teardown Path |
+| --- | --- | --- |
+| Detached TUN fd | JNI start entry adopts `File` before string parsing | Validation errors drop the adopted file; Java closes the detached wrapper |
+| Read/write endpoints | `start_runtime` duplicates the writer fd into an independently owned reader `File` | Failed duplicate/setup drops owners; each running TUN thread owns its file |
+| TUN worker startup | Reader, writer, then supervisor thread | Writer spawn failure stops/joins reader; supervisor spawn failure stops/joins both TUN threads |
+| Runtime storage | Process-global `RUNTIME: Mutex<Option<RuntimeInstance>>` | `stop_runtime` takes the instance before signalling shutdown and joining owned threads |
+| Per-network attempt | `supervise_network` holds runtime task, health probe, shutdown sender and `NetworkLease` | Attempt exit retires its generation; sibling supervisors remain independent |
+| Packet ownership | `PacketSwitch`, per-network queues and generation-tagged routes | Closed or stale leases cannot deactivate replacement generations; queue limits remain per network |
+| Shared runtime failure | TUN error sets stop flag, closes switch and signals supervisor shutdown | Java health polling observes the aggregate failure and retains connection intent for recovery |
+| Native supervision | `JoinSet` owns network supervisors; Tokio worker count is clamped to 2-4 | Supervisor thread drains tasks, closes switch and shuts down Tokio |
+
+`AndroidTunReader` checks its stop flag around 250 ms polls. The writer has a
+total polling budget. Network shutdown requests grace, then aborts the task;
+the constants are four seconds of grace and one second of abort wait.
+
+These are cooperative limits. Scheduler progress is required, and native
+`thread::join` has no hard deadline. Existing occupied-worker instrumentation
+does not simulate a permanently wedged native call or certify that case.
+
+### Permission Callback Evidence
+
+`ActivityPermissionTest` invokes actual activity result handlers with JVM Android
+stubs. It verifies local command ownership, not framework permission grants or
+service delivery. No production permission behavior changed.
+
+| Case | Verified Result |
+| --- | --- |
+| Denied VPN request | Pending network cleared; no activation mutation dispatched |
+| Success after denial | Cleared request cannot be revived |
+| Accepted request | Exactly the pending network moves to activation state |
+| Duplicate success without a pending request | No second activation mutation |
+| Unrelated result code | Pending network ownership is preserved |
+
+- Focused log: `/tmp/p2p-vpn-lifecycle-permission-unit.log`.
+- Full checks: `/tmp/p2p-vpn-lifecycle-permission-verified.log`.
+- Outstanding: saved-state recreation, actual permission delivery and local-network permission outcomes.
+
+`MainActivity` persists a pending enable network in instance state. Pending join
+code/hostname are not serialized there; rotation before local permission returns
+can discard that unstarted request. No enrollment exists to commit at that point.
+
 ## AL1: Cancelled Profile Join
 
 Priority: P1. Reproduced and fixed with API 35 x86_64 instrumentation.
