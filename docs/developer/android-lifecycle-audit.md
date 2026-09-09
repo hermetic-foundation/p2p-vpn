@@ -25,11 +25,11 @@ reopen them only if this audit produces new causal evidence.
 - [ ] Test rapid commands and stale callbacks within and across service scopes.
 - [ ] Test permission success, denial and activity recreation without stale activation.
 - [x] Test profile-join cancellation, late completion and subsequent successful local commit (AL1).
-- [ ] Verify multi-network enablement, persistence and native generation isolation.
+- [x] Verify multi-network enablement, persistence and native generation isolation.
 - [ ] Audit native shutdown, TUN descriptors, callback retirement and timer bounds.
-- [ ] Reconcile process death, always-on, reboot and app replacement on final source.
-- [ ] Run bounded cached-emulator lifecycle and applicable underlay scenarios.
-- [ ] Record historical failure dispositions and precise missing attribution evidence.
+- [x] Reconcile process death, always-on, reboot and app replacement on reviewed source.
+- [x] Run bounded cached-emulator lifecycle and applicable underlay scenarios.
+- [x] Record historical failure dispositions and precise missing attribution evidence.
 - [ ] Run affected checks, inspect final diff, publish each atomic commit to `main`.
 - [ ] Audit every requirement before marking this review complete.
 
@@ -356,6 +356,73 @@ release packaging, packet delivery or sustained resource attribution.
 The [multi-network report](android-multi-network-review.md) retains original
 paths and sanitized samples. Inspect those artifacts during final reconciliation;
 a later pass does not supply missing historical observations.
+
+The original `evidence.json` files for the cellular and update failures were
+reinspected during this audit. Cellular `device.diagnostics` contains only
+`final_runtime` and `export`; update evidence additionally contains `os_underlay`.
+
+This supports distinct dispositions: cellular OS/tracker attribution is unresolved;
+the update lost reply cannot be attributed to absent OS connectivity. Its recorded
+validated underlays and aggregate counters still do not locate packet loss or delay.
+
+## Current Multi-Network Run
+
+Production `d6b6b1b0` passed all 68 checks on API 35 x86_64, from
+2026-09-09T10:47:40Z to 10:55:19Z (459 seconds). The APK, native library and
+rebuilt Linux fixture use current source; no runtime intervention was performed.
+
+| Lifecycle Stage | Result |
+| --- | --- |
+| Legacy migration and two independent joins | Identities preserved; private bootstrap discovers peers without configured overlay addresses |
+| Concurrent traffic and overlap rejection | Both networks pass dual-stack traffic; rejected overlap does not mutate live state |
+| Disable, app update, re-enable | Disabled set survives replacement; re-enable restores both networks |
+| Wi-Fi / emulated cellular / Wi-Fi | Both recover without shared-runtime restart |
+| Process death and app replacement | Both identities and traffic restore autonomously |
+| Temporary lockdown | Both recover automatically when lockdown is removed |
+| Emulator reboot | Both enabled networks restore and pass concurrent traffic |
+| Stop alpha fixture | Beta remains reachable; process identity and queue bounds remain stable |
+| Cleanup | Emulator, fixtures and private state removed; all six safeguards pass |
+
+Readiness retries precede fixed packet measurements. Beta required five Linux
+IPv4 attempts after the disabled-set update, twelve after cellular transition,
+and six after returning to Wi-Fi; alpha required two on Wi-Fi return.
+
+Every fixed traffic assertion passed 5/5. Retained reply sequences include the
+update and isolation measurements. This is recovery evidence, not uninterrupted
+traffic or proof of the cause of earlier failed measurements.
+
+### Artifacts and Limits
+
+- Evidence: `/tmp/p2p-vpn-lifecycle-multi-current/evidence.json`.
+- Preflight: `/tmp/p2p-vpn-lifecycle-multi-preflight/evidence.json`.
+- Fixture build: `/tmp/p2p-vpn-lifecycle-fixture-build.log`; offline locked, two jobs, 38.17 seconds.
+- Bounded fixture echo tracing enabled; no builds ran during traffic observation.
+- Final temporary storage: 8,286,588 KiB, below 10 GiB; growth watchdog limited the run to 1.5 GiB.
+
+| Artifact | SHA-256 |
+| --- | --- |
+| App APK | `1f2e8a985f64a933e462545e73c4e1cffee463a1cbc4aa7e7ff76d63c26326d0` |
+| Linux fixture | `3d5a7f52bd82918b8cdbeeeafe14ff372e8fbcad36e66a02f66858eaa9d756df` |
+| Linux CLI | `44ee4819a945a3d0714d19c6ff13a38ba5a5d45b8002b63942f78e69736378e0` |
+
+Final diagnostics: PSS 67,106 KiB, seven Java-reported active threads, empty
+packet queues, one expired 84-byte packet and seven outbound drops. The path
+snapshot has one direct QUIC stream and one relay; it is not all-QUIC evidence.
+
+The original OS diagnostics distinguish physical Wi-Fi/cellular from the VPN.
+These are emulator transports, not physical carrier NAT, hotspot/VPN, ARM64,
+release packaging or sustained battery/heap certification.
+
+```sh
+P2P_VPN_ANDROID_E2E_MAX_RUNTIME_GROWTH_BYTES=1610612736 \
+P2P_VPN_ANDROID_E2E_TRACE_ECHO=1 \
+bash scripts/android-e2e.sh --scenario multi-network \
+  --output /tmp/p2p-vpn-lifecycle-multi-current
+```
+
+The command selects the cached Nix launcher and ADB through the documented
+`P2P_VPN_ANDROID_EMULATOR`/`P2P_VPN_ADB` variables. `P2P_VPN_ANDROID_APK`,
+`P2P_VPN_ANDROID_E2E_FIXTURE` and `P2P_VPN_BIN` select the artifacts above.
 
 ## Validation Plan and Limits
 

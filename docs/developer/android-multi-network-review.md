@@ -2,6 +2,16 @@
 
 ## Latest Attempt
 
+The [current lifecycle audit run](android-lifecycle-audit.md#current-multi-network-run)
+at `d6b6b1b0` passed all 68 checks on 2026-09-09 in 459 seconds. It covers both
+networks through updates, underlay changes, process death, lockdown, reboot and isolation.
+
+All six cleanup safeguards passed. Readiness retries and exact artifacts are
+recorded in the audit; historical failures below remain attribution limits.
+This is emulator evidence, not physical carrier/VPN or sustained-load certification.
+
+## Admission-Fix Attempt
+
 The rebuilt APK and Linux fixture at `deedd041` passed all 68 checks on
 2026-09-07, from 01:17:04Z through 01:23:42Z (398 seconds). The scenario used
 the unchanged deadlines and packet assertions, with no manual recovery.
