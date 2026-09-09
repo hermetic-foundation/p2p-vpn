@@ -61,6 +61,7 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
     private P2pVpnService.LocalBinder binder;
     private P2pVpnService.Snapshot latestSnapshot;
     private boolean bound;
+    private boolean bindingRegistered;
     private String pendingDiagnosticReport;
     private String pendingEnableNetworkId;
     private String pendingJoinCode;
@@ -77,26 +78,42 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
     private String localStatus;
     private OnBackInvokedCallback backInvokedCallback;
 
-    private final ServiceConnection serviceConnection =
-            new ServiceConnection() {
-                @Override
-                public void onServiceConnected(ComponentName name, IBinder service) {
-                    binder = (P2pVpnService.LocalBinder) service;
-                    bound = true;
-                    binder.addListener(MainActivity.this);
-                    renderCurrentScreen();
-                }
+    private ActivityServiceConnection serviceConnection;
 
-                @Override
-                public void onServiceDisconnected(ComponentName name) {
-                    if (binder != null) {
-                        binder.removeListener(MainActivity.this);
-                    }
-                    binder = null;
-                    bound = false;
-                    showLocalStatus("VPN service stopped");
-                }
-            };
+    private final class ActivityServiceConnection implements ServiceConnection {
+        private final P2pVpnService.Listener listener = snapshot -> {
+            if (serviceConnection == this && bound) {
+                MainActivity.this.onSnapshot(snapshot);
+            }
+        };
+
+        @Override
+        public void onServiceConnected(ComponentName name, IBinder service) {
+            if (serviceConnection != this || !bindingRegistered) {
+                return;
+            }
+            if (binder != null) {
+                binder.removeListener(listener);
+            }
+            binder = (P2pVpnService.LocalBinder) service;
+            bound = true;
+            binder.addListener(listener);
+            renderCurrentScreen();
+        }
+
+        @Override
+        public void onServiceDisconnected(ComponentName name) {
+            if (serviceConnection != this) {
+                return;
+            }
+            if (binder != null) {
+                binder.removeListener(listener);
+            }
+            binder = null;
+            bound = false;
+            showLocalStatus("VPN service stopped");
+        }
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -139,7 +156,11 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
     @Override
     protected void onStart() {
         super.onStart();
-        bindService(
+        if (serviceConnection != null) {
+            return;
+        }
+        serviceConnection = new ActivityServiceConnection();
+        bindingRegistered = bindService(
                 new Intent(this, P2pVpnService.class),
                 serviceConnection,
                 Context.BIND_AUTO_CREATE);
@@ -147,11 +168,16 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
 
     @Override
     protected void onStop() {
-        if (bound) {
-            binder.removeListener(this);
-            unbindService(serviceConnection);
-            binder = null;
-            bound = false;
+        ActivityServiceConnection retiring = serviceConnection;
+        serviceConnection = null;
+        if (binder != null && retiring != null) {
+            binder.removeListener(retiring.listener);
+        }
+        binder = null;
+        bound = false;
+        if (bindingRegistered) {
+            bindingRegistered = false;
+            unbindService(retiring);
         }
         super.onStop();
     }

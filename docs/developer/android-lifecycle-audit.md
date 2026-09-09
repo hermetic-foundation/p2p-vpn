@@ -133,6 +133,43 @@ Only disposable emulator state was cleared between negative and positive runs.
 The emulator was stopped and private state removed afterward; logs remain outside
 that directory. Temporary storage began at 7.84 GiB; emulator state reached 1.1 GiB.
 
+## AL2: Activity Binding Ownership
+
+Priority: P2. JVM callback ordering reproduced and corrected.
+Android framework registration and activity-recreation validation remain open.
+
+| Previous Ordering | Consequence |
+| --- | --- |
+| `onStart` requests an asynchronous binding | `bound` remains false until the callback |
+| Activity stops before the callback | `onStop` skips unbinding because `bound` is false |
+| Late `onServiceConnected` arrives | Stopped activity attaches a binder and listener |
+| System disconnects before activity stop | Connected state clears, but the binding registration still needs release |
+
+Each activity start now creates a distinct connection owner. Registration state
+is separate from connected state; stop retires the owner before releasing its
+listener and binding. Old connect, disconnect and snapshot callbacks are ignored.
+
+### Verified and Pending
+
+| Check | Evidence / Limit |
+| --- | --- |
+| Negative control | `ActivityBindingTest`: `late callback attached a stopped activity` before correction |
+| Retired callback | Cannot install a binder or listener after stop |
+| Replacement | Old connect/disconnect and snapshot events preserve the new binder |
+| Recovery | Current connection accepts a reconnect after disconnect |
+| Listener cleanup | No listener remains after stop; one remains during replacement |
+| Offline checks | Full JVM suite, lint, app and instrumentation assembly passed |
+| Platform gate | Pending real activity stop-before-connect and subsequent framework rebind |
+
+The JVM uses Android stubs. Tests explicitly set registration admission for
+controlled callbacks; they do not prove Android unbind delivery or process
+recreation. No native runtime or physical device is involved in these tests.
+
+- Negative: `/tmp/p2p-vpn-lifecycle-binding-before.log`.
+- Focused positive: `/tmp/p2p-vpn-lifecycle-binding-after.log`.
+- Full checks: `/tmp/p2p-vpn-lifecycle-binding-verified.log`.
+- Tools and offline Gradle command match AL1, without instrumentation execution.
+
 ## Historical Attribution Ledger
 
 | Case | What the Retained Report Establishes | Missing Evidence / Next Check |
