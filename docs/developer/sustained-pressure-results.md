@@ -86,11 +86,32 @@ using SHA-256
 - Initiator direction alone therefore did not reproduce the failure.
 - These passes neither prove the stale-readiness hypothesis nor establish a runtime fix.
 
-### Next Diagnostic Boundary
+### Drain-Window Capture
 
-Capture path health alongside queue ownership throughout the drain window,
-including the instant its readiness condition succeeds. Keep the existing
-deadline and strict 5/5 assertions. Do not replace the failed campaign result.
+The next diagnostic retains `queue-pressure-drain.json` per round, containing
+the existing approximately 250 ms observations through readiness or timeout.
+It preserves the queue-only drain predicate, 30-second deadline and strict pings.
+
+| Drain Diagnostic | Result |
+| --- | --- |
+| Profile / initiator | Bytes / A |
+| Rounds / elapsed | 5 passed / 180.02 seconds |
+| Drain samples by round | 7, 8, 10, 1, 1 |
+| Unsupported peers during captured drain | Zero on both nodes in all samples |
+| Final readiness snapshots | One healthy TCP path per node in each round |
+| Combined JSON / node logs | 3419605 / 1300475 bytes |
+
+Executable SHA-256:
+`2e44cc4f31e9e51e43893a6c4ae65d25be5b3e425541835a7c521bdfddd67b61`.
+Snapshot retention and checkpoint I/O can affect boundary timing; this is not
+a matched performance comparison or proof that the original failure is fixed.
+
+### Remaining Investigation
+
+- The original failure remains unresolved; the frozen campaign is still paused.
+- Isolate path invalidation between path selection and queue drainage with a deterministic fixture.
+- Distinguish a stale readiness observation from a path failure after resumed traffic.
+- Keep the failed artifacts, current deadlines and strict delivery assertions.
 
 ## Diagnostic Validation
 
@@ -98,6 +119,7 @@ deadline and strict 5/5 assertions. Do not replace the failed campaign result.
 | --- | --- |
 | Namespace unit tests | 51 passed; 23 opt-in integration cases ignored |
 | Pinned-A namespace integration | Five pressure/recovery rounds passed |
+| Drain-window namespace integration | Five pressure/recovery rounds passed; 51 unit tests also passed |
 | Required Clippy groups | Correctness, suspicious and performance passed; 37 advisory warnings remain |
 | Rust formatting | Passed |
 | Production/platform gates | Not rerun: changes are namespace-test diagnostics and developer documentation only |
@@ -112,13 +134,16 @@ Artifact prefix: `/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-`
 | Campaign bytes | `1.a93f736c9be7df9a` | Incomplete series, round-two partial report and failed ping snapshots |
 | Observation-only diagnostic | `1.940022bd725a5c46` | Five rounds with pre-ping path state |
 | Pinned-A diagnostic | `1.ad3f49791461f1ea` | Five rounds, initiator override and pre-ping path state |
+| Drain-window diagnostic | `1.6c9c7cdd4d2c8002` | Five rounds and bounded drain traces |
 
 - Passing series SHA-256: `ca9934318243afe3195f780bea09ddf6d55236c6d6ce00156621bab42b9226c8`.
 - Failed series SHA-256: `039ed26d1b8ddeac8201eb321af99470c2e1891735b653fc19540f2bdd0a6ef6`.
 - Failed ping JSON SHA-256: `1f720277a38ab7640ad43db8718b6ed0e5456bd569a56ebb230f02bf336af824`.
 - Pinned-A series SHA-256: `b3f7cf8fc9f3513618b1068cb100873e0bbfd31dccb47fc1c3fa5c2f32f9fe0c`.
+- Drain-window series SHA-256: `8f26ff46a53e087cff0c6c61d0cb4da9bc7909b4798a2100f4e93c49bc064d7c`.
 - Outer logs: `/tmp/p2p-vpn-sustained-pressure-{1-packets,2-bytes,path-diagnostic,initiator-a-diagnostic}.log`.
+- Drain logs: `/tmp/p2p-vpn-sustained-pressure-drain-{diagnostic,tests,clippy}.log`.
 - Campaign node logs total 1243784 and 532673 bytes respectively, below 2 MiB each.
 - Pinned-A node logs total 1422965 bytes, also below 2 MiB.
-- All four captures terminated and left no matching fixture process; failed evidence is preserved.
+- All five captures terminated and left no matching fixture process; failed evidence is preserved.
 - No production code, recovery timers, physical host or public-network route was changed.

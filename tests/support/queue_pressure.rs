@@ -294,17 +294,34 @@ fn capture_round(
     wait_for_selected_path(temp, "a", "direct_tcp_stream");
     wait_for_selected_path(temp, "b", "direct_tcp_stream");
     let recovery_deadline = Instant::now() + Duration::from_secs(30);
+    let mut drain_samples = Vec::new();
     loop {
         let snapshot = observe();
-        if ["a", "b"].into_iter().all(|role| {
+        let drained = ["a", "b"].into_iter().all(|role| {
             snapshot[role]["queued_packets"] == 0 && snapshot[role]["stream_in_flight"] == 0
-        }) {
+        });
+        let expired = Instant::now() >= recovery_deadline;
+        drain_samples.push(snapshot.clone());
+        if drained || expired {
+            fs::write(
+                output.join("queue-pressure-drain.json"),
+                serde_json::to_vec_pretty(&serde_json::json!({
+                    "schema_version": 1,
+                    "drained": drained,
+                    "deadline_reached": expired,
+                    "samples": drain_samples,
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        }
+        if drained {
             assert_eq!(snapshot["a"]["queued_bytes"], 0);
             assert_eq!(snapshot["b"]["queued_bytes"], 0);
             break;
         }
         assert!(
-            Instant::now() < recovery_deadline,
+            !expired,
             "queues and stream requests did not drain after pressure"
         );
         thread::sleep(Duration::from_millis(250));
