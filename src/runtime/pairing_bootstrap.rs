@@ -751,15 +751,8 @@ fn handle_pairing_response(
                 response: *response,
             }))
         }
-        (
-            PendingRequest::Hello { peer, .. },
-            PairingCodeV2Response::Rejected {
-                reason:
-                    PairingCodeRejectionReason::Busy
-                    | PairingCodeRejectionReason::RateLimited
-                    | PairingCodeRejectionReason::Unavailable,
-            },
-        ) => {
+        (PendingRequest::Hello { peer, .. }, PairingCodeV2Response::Rejected { .. }) => {
+            // A discovery candidate has not authenticated as the inviter yet.
             state.release_candidate(peer, Instant::now());
             Ok(None)
         }
@@ -1051,5 +1044,239 @@ mod tests {
         state.selected_peer = Some(selected);
         assert!(state.may_accept_challenge_from(selected));
         assert!(!state.may_accept_challenge_from(other));
+    }
+
+    #[tokio::test]
+    async fn hello_rejection_cannot_terminate_another_selected_inviter() {
+        for reason in [
+            PairingCodeRejectionReason::InvalidRequest,
+            PairingCodeRejectionReason::UserRejected,
+            PairingCodeRejectionReason::Expired,
+            PairingCodeRejectionReason::Unavailable,
+            PairingCodeRejectionReason::Busy,
+            PairingCodeRejectionReason::RateLimited,
+        ] {
+            let identity = NodeIdentity::generate_ed25519().unwrap();
+            let mut swarm = build_bootstrap_swarm(&identity).unwrap();
+            let local = *swarm.local_peer_id();
+            let now = Instant::now();
+            let mut state = BootstrapState::new(now, PAIRING_BOOTSTRAP_LAN_GRACE);
+            let selected = PeerId::random();
+            let other = PeerId::random();
+            state.record_public_candidate(other, now);
+            drive_hellos(
+                &mut swarm,
+                &mut state,
+                &identity,
+                &PairingCode::generate(),
+                local,
+            );
+            let id = *state.requests.keys().next().unwrap();
+            assert!(state.candidates[&other].in_flight);
+            // Model selection by an earlier authenticated challenge while this Hello is pending.
+            state.selected_peer = Some(selected);
+            let result = handle_pairing_event(
+                &mut swarm,
+                &mut state,
+                &identity,
+                &PairingBootstrapOptions::default(),
+                request_response::Event::Message {
+                    peer: other,
+                    connection_id: libp2p::swarm::ConnectionId::new_unchecked(1),
+                    message: Message::Response {
+                        request_id: id,
+                        response: PairingCodeV2Response::Rejected { reason },
+                    },
+                },
+            );
+            assert!(
+                result.is_ok(),
+                "unselected Hello rejection terminated the join: {result:?}"
+            );
+            assert!(result.unwrap().is_none());
+            assert_eq!(state.selected_peer, Some(selected));
+            assert!(state.requests.is_empty());
+            assert!(!state.candidates[&other].in_flight);
+            let retry = state.candidates[&other].next_attempt_at;
+            assert!(retry > now);
+            assert!(state.next_candidate(local, retry).is_none());
+            // Losing selection later must still permit bounded discovery, not strand the candidate.
+            state.selected_peer = None;
+            assert!(state.next_candidate(local, now).is_none());
+            assert_eq!(state.next_candidate(local, retry), Some(other));
+        }
+    }
+
+    #[tokio::test]
+    async fn selected_submit_poll_rejection_remains_terminal() {
+        let identity = NodeIdentity::generate_ed25519().unwrap();
+        let inviter = NodeIdentity::generate_ed25519().unwrap();
+        let peer = inviter.peer_id.parse().unwrap();
+        let config = serde_json::from_value(serde_json::json!({
+            "network": { "name": "lab", "local_peer": inviter.peer_id, "private_key": inviter.private_key },
+            "peers": []
+        })).unwrap();
+        let offer = crate::pairing::export_code_pairing_offer_at(
+            &config,
+            crate::pairing::PairingOfferOptions {
+                expires_in_seconds: 600,
+                rendezvous_token: None,
+            },
+            current_unix_seconds(),
+        )
+        .unwrap();
+        for poll in [false, true] {
+            let mut swarm = build_bootstrap_swarm(&identity).unwrap();
+            let mut state = BootstrapState::new(Instant::now(), PAIRING_BOOTSTRAP_LAN_GRACE);
+            state.selected_peer = Some(peer);
+            let id = swarm.behaviour_mut().pairing_code_v2.send_request(
+                &peer,
+                PairingCodeV2Request::Poll {
+                    ticket: "fixture".to_owned(),
+                },
+            );
+            state.requests.insert(
+                id,
+                if poll {
+                    PendingRequest::Poll {
+                        peer,
+                        offer: offer.clone(),
+                    }
+                } else {
+                    PendingRequest::Submit {
+                        peer,
+                        offer: offer.clone(),
+                    }
+                },
+            );
+            let result = handle_pairing_response(
+                &mut swarm,
+                &mut state,
+                &identity,
+                &PairingBootstrapOptions::default(),
+                peer,
+                id,
+                PairingCodeV2Response::Rejected {
+                    reason: PairingCodeRejectionReason::UserRejected,
+                },
+            );
+            assert!(matches!(
+                result,
+                Err(PairingBootstrapError::Rejected(
+                    PairingCodeRejectionReason::UserRejected
+                ))
+            ));
+            assert!(!state.requests.contains_key(&id));
+        }
+    }
+
+    #[tokio::test]
+    async fn rejected_hello_retries_over_loopback_and_completes_authenticated_pairing() {
+        use crate::membership::{
+            MembershipRecordIssueOptions, MembershipRecordSubject, MembershipRole,
+            issue_membership_record_for_subject_at,
+        };
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let identity = NodeIdentity::generate_ed25519().unwrap();
+            let inviter = NodeIdentity::generate_ed25519().unwrap();
+            let peer = inviter.peer_id.parse().unwrap();
+            let local = identity.peer_id.parse().unwrap();
+            let config = serde_json::from_value(serde_json::json!({
+                "network": { "name": "lab", "local_peer": inviter.peer_id, "private_key": inviter.private_key },
+                "peers": []
+            })).unwrap();
+            let code = PairingCode::generate();
+            let mut client = build_bootstrap_swarm(&identity).unwrap();
+            let mut server = build_bootstrap_swarm(&inviter).unwrap();
+            // Remove seeded bootstrap queries before polling either swarm.
+            for swarm in [&mut client, &mut server] {
+                swarm.behaviour_mut().kad = kad::Behaviour::with_config(
+                    *swarm.local_peer_id(), kad::store::MemoryStore::new(*swarm.local_peer_id()),
+                    controlled_kademlia_config(StreamProtocol::new(PUBLIC_IPFS_KADEMLIA_PROTOCOL)),
+                );
+            }
+            let address = loop {
+                if let SwarmEvent::NewListenAddr { address, .. } = server.select_next_some().await {
+                    if let Some(libp2p::multiaddr::Protocol::Tcp(port)) = address.iter().find(|p| matches!(p, libp2p::multiaddr::Protocol::Tcp(_))) {
+                        break format!("/ip4/127.0.0.1/tcp/{port}").parse().unwrap();
+                    }
+                }
+            };
+            client.dial(libp2p::swarm::dial_opts::DialOpts::peer_id(peer).addresses(vec![address]).build()).unwrap();
+            let mut state = BootstrapState::new(Instant::now(), PAIRING_BOOTSTRAP_LAN_GRACE);
+            state.record_public_candidate(peer, Instant::now());
+            let mut tick = tokio::time::interval(Duration::from_millis(20));
+            let mut hellos = 0;
+            let mut session = None;
+            let mut server_offer = None;
+            let mut rejection_at = None;
+            let enrollment = loop {
+                tokio::select! {
+                    _ = tick.tick() => drive_hellos(&mut client, &mut state, &identity, &code, local),
+                    event = client.select_next_some() => {
+                        if let SwarmEvent::Behaviour(PairingBootstrapBehaviourEvent::PairingCodeV2(event)) = event {
+                            if let Some(enrollment) = handle_pairing_event(&mut client, &mut state, &identity,
+                                &PairingBootstrapOptions::default(), event).unwrap() { break enrollment; }
+                        }
+                    }
+                    event = server.select_next_some() => {
+                        if let SwarmEvent::Behaviour(PairingBootstrapBehaviourEvent::PairingCodeV2(request_response::Event::Message {
+                            peer: sender, message: Message::Request { request, channel, .. }, ..
+                        })) = event {
+                            assert_eq!(sender, local);
+                            let reply = match request {
+                                PairingCodeV2Request::Hello { hello } => {
+                                    hellos += 1;
+                                    if hellos == 1 {
+                                        rejection_at = Some(Instant::now());
+                                        PairingCodeV2Response::Rejected { reason: PairingCodeRejectionReason::InvalidRequest }
+                                    } else {
+                                        assert_eq!(hellos, 2);
+                                        assert!(rejection_at.unwrap().elapsed() >= REQUEST_RETRY_DELAY);
+                                        let (challenge, authenticated) = crate::pairing_code::answer_pairing_code_hello_v2_at(
+                                            &config, &code, &hello, sender,
+                                            crate::pairing::PairingOfferOptions { expires_in_seconds: 600, rendezvous_token: None },
+                                            current_unix_seconds(),
+                                        ).unwrap();
+                                        server_offer = Some(crate::pairing::export_code_pairing_offer_at(
+                                            &config, crate::pairing::PairingOfferOptions {
+                                                expires_in_seconds: 600,
+                                                rendezvous_token: Some(authenticated.rendezvous_token().to_owned()),
+                                            }, challenge.payload.issued_at_unix_seconds,
+                                        ).unwrap());
+                                        session = Some(authenticated);
+                                        PairingCodeV2Response::Challenge { challenge: Box::new(challenge) }
+                                    }
+                                }
+                                PairingCodeV2Request::Submit { request } => {
+                                    crate::pairing_code::verify_pairing_request_code_authentication(&request, session.as_ref().unwrap()).unwrap();
+                                    let offer = server_offer.as_ref().unwrap();
+                                    let records = [&inviter, &identity].into_iter().map(|member| {
+                                        issue_membership_record_for_subject_at(&inviter, MembershipRecordIssueOptions {
+                                            network_name: "lab".to_owned(), member: MembershipRecordSubject::from_identity(member).unwrap(),
+                                            membership_epoch: 1, sequence: 1, revoked: false,
+                                            roles: vec![MembershipRole::OverlayMember], route_grants: vec![], expires_at_unix_seconds: None,
+                                        }, current_unix_seconds()).unwrap()
+                                    }).collect();
+                                    let response = crate::pairing::build_pairing_response_at(&config, offer,
+                                        crate::pairing::PairingResponseOptions {
+                                            joiner_peer: sender.to_string(), assigned_vpn_ip: None,
+                                            membership_key: None, member_records: records, expires_in_seconds: 600,
+                                        }, current_unix_seconds(),
+                                    ).unwrap();
+                                    PairingCodeV2Response::Accepted { response: Box::new(response) }
+                                }
+                                PairingCodeV2Request::Poll { .. } => panic!("immediate acceptance needs no poll"),
+                            };
+                            server.behaviour_mut().pairing_code_v2.send_response(channel, reply).unwrap();
+                        }
+                    }
+                }
+            };
+            assert_eq!(hellos, 2);
+            assert!(state.requests.is_empty());
+            assert_eq!(enrollment.offer.payload.inviter_peer, peer.to_string());
+            enrollment.response.verify_for_offer_at(&enrollment.offer, &identity, current_unix_seconds()).unwrap();
+        }).await.expect("loopback V2 pairing deadline");
     }
 }

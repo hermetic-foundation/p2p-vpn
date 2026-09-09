@@ -172,6 +172,9 @@ neither full workstream completion nor new physical-platform acceptance.
 
 ### PS-1 Patch Verification
 
+Published as `578f6dc8`; `main` and `main@origin` matched after push and the
+working copy was clean. This completes PS-1, not the broader lifecycle goal.
+
 | Gate | Result | Log |
 | --- | --- | --- |
 | Android native | x86_64/API 26 passed in 37.22 s; four target warnings | `/tmp/p2p-vpn-ps1-android.log` |
@@ -202,3 +205,89 @@ artifacts and a 120-second outer watchdog; internal deadlines were unchanged.
 PS-1 changes neither configuration nor wire/persisted formats. It releases only
 matching peer/request state and never consumes the stale payload. The wider
 V2, shutdown, persistence and session review remains on the bounded checklist.
+
+### PS-2: Unauthenticated Candidate Rejection
+
+| Item | Evidence |
+| --- | --- |
+| Owner | V2 `BootstrapState.requests`; several Hello candidates may be outstanding before inviter selection |
+| Defect | InvalidRequest, UserRejected or Expired from a Hello candidate returned a terminal error for the whole join |
+| Reproduction | `hello_rejection_cannot_terminate_another_selected_inviter` fails with `Rejected(InvalidRequest)` |
+| Correction | Every Hello rejection releases only its candidate with existing retry delay; authenticated Submit/Poll rejection remains terminal |
+| Preservation | Selected inviter remains unchanged; retired request is removed; candidate can retry after selection is released and backoff expires |
+
+The request ID comes from the production Hello driver. The test models an earlier
+authenticated selection and injects its competing candidate's reply; it does not
+perform a PAKE exchange or claim a measured race over a physical network.
+
+| Gate | Result |
+| --- | --- |
+| Negative | `/tmp/p2p-vpn-ps2-hello-negative.log`: genuine assertion failure before correction |
+| Focused positive | `/tmp/p2p-vpn-ps2-bootstrap-fixed.log`: all 11 bootstrap tests pass |
+| Rejection control | Both selected Submit and Poll retain terminal UserRejected behavior |
+| Workspace | 1,479 passed; 36 opt-in exclusions; `/tmp/p2p-vpn-ps2-workspace.log` |
+| Static | Formatting and required Clippy groups pass; advisory warnings remain; `/tmp/p2p-vpn-ps2-clippy.log` |
+| Android native | x86_64/API 26 passed in 36.60 s; four target warnings; `/tmp/p2p-vpn-ps2-android.log` |
+| Live V2 integration | All 12 bootstrap tests pass, including loopback retry through authenticated acceptance; `/tmp/p2p-vpn-ps2-live-membership.log` |
+| Final static | Required Clippy groups and formatting passed; `/tmp/p2p-vpn-ps2-final-clippy.log` |
+| Final source parity | Cached sandboxed check passed; `/tmp/p2p-vpn-ps2-nix.log` |
+
+Unknown candidates cannot authenticate a refusal of the whole pairing operation.
+This matches the distinction already used by daemon code pairing and does not
+change codes, wire formats, admission policy, retry limits or configuration.
+
+These runs use the cached native commands above with 180-second focused/static
+and 300-second workspace watchdogs. No Lean project/model was found in the repo;
+the regressions are executable evidence, not a formal proof.
+
+#### Live V2 Boundary
+
+`rejected_hello_retries_over_loopback_and_completes_authenticated_pairing` uses
+two real TCP libp2p swarms and the production V2 Hello driver/response dispatcher.
+It removes seeded DHT state before polling, without public bootstrap traffic.
+
+| Stage | Assertion |
+| --- | --- |
+| First Hello | Server returns InvalidRequest; client continues rather than terminating |
+| Retry | Exactly one replacement Hello arrives after the existing retry delay |
+| Challenge / Submit | Real PAKE challenge and request confirmation verification succeed |
+| Acceptance | Signed inviter/root and joiner membership records pass response verification |
+| Completion | Enrollment is returned for the expected inviter and request owners are empty |
+
+The server is a test responder that approves immediately, not a daemon approval
+UI. The test does not install routes, persist an Android profile or test cellular
+recovery. Earlier V1 namespace results are not presented as V2 branch coverage.
+
+Earlier `ps2-live*` failures were fixture errors: a helper name, omitted offer
+retention and missing membership trust root. They remain preserved; only the
+original Hello-rejection regression is negative product-defect evidence.
+
+The 1,479-test workspace and Android-native results predate only the added
+`cfg(test)` loopback fixture. Production code is unchanged since those runs;
+final focused tests and static/source checks cover the additional test source.
+
+Source-parity output:
+`/nix/store/dg2hj6ylg911kqj48mp3y45qd4skzf7m-p2p-vpn-rust-test-sources`.
+Pre-build storage was 8,211,968 KiB, approximately 7.83 GiB. No task builds ran
+during live test execution; no dependency or flake-lock changes were needed.
+
+PS-2 is ready for atomic publication after these checks. Completion of the
+workstream still requires the remaining transition audit and evidence checklist.
+
+### File-Pairing Ordering Follow-Up
+
+`handle_pairing_request_event` submits its response before installing membership;
+durable code pairing has a different checkpoint sequence. Review actual transport
+delivery and route-failure behavior before asserting consistency or a defect.
+The source order alone does not prove delivery before local commitment.
+
+### Cross-Role Cancellation Follow-Up
+
+The owner retains separate inviter and joiner slots. `cancel` can revisit a
+terminal old slot while the opposite role has a newer operation, and
+`clear_transient_handshakes` currently clears shared request/session maps.
+
+Reproduce repeated old-role cancellation after starting the opposite role.
+Check pending approval, Hello/Submit/Poll ownership, retry and completion without
+weakening explicit cancellation of expired Prepared enrollment. No fix is made
+on this source observation alone.
