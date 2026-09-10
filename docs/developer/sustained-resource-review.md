@@ -19,6 +19,7 @@ No physical device or deployed host is authorized for this work.
 - [x] Complete the twelve-capture signed-ledger allocation matrix; packet/runtime attribution remains open.
 - [x] Attribute packet-queue payload/container ownership across 40 cycles; transport/runtime allocations remain open.
 - [x] Measure paired runtime teardown baselines; first-use allocation owners and connected transport attribution remain open.
+- [x] Attribute the isolated AutoNAT 224-byte teardown differential to global timer capacity through matched prewarm controls.
 - [x] Measure paired ten-cycle lifecycle churn; all recoveries pass without rescue.
 - [x] Measure repeated bounded Android multi-network resource isolation; allocation attribution remains open.
 - [ ] Measure Android background CPU/wakeup proxies on a cached emulator.

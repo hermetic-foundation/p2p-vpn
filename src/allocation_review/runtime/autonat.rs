@@ -43,6 +43,18 @@ fn measure_autonat_refusal_ownership() {
     };
     // Initialize the process-global timer separately, as in the runtime baseline.
     futures::executor::block_on(futures_timer::Delay::new(Duration::from_millis(1)));
+    let timer_prewarm = match std::env::var("P2P_VPN_REVIEW_AUTONAT_TIMER_PREWARM").as_deref() {
+        Err(std::env::VarError::NotPresent) | Ok("1") => 1,
+        Ok("4") => 4,
+        Ok("16") => 16,
+        other => panic!("expected timer prewarm 1, 4 or 16: {other:?}"),
+    };
+    if timer_prewarm > 1 {
+        futures::executor::block_on(futures::future::join_all(
+            (0..timer_prewarm).map(|_| futures_timer::Delay::new(Duration::from_millis(100))),
+        ));
+        std::thread::sleep(Duration::from_millis(100));
+    }
     let mut rows = Vec::with_capacity(16);
     let before = snapshot();
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -145,6 +157,7 @@ fn measure_autonat_refusal_ownership() {
         "autonat_ownership_sample {}",
         serde_json::json!({
             "schema_version":1,"mode":if probe {"probe"} else {"control"},
+            "timer_prewarm":timer_prewarm,
             "counts":counts,"rows":rows,"runtime_dropped":delta(before,dropped),
         })
     );

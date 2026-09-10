@@ -15,6 +15,7 @@ use std::{
 
 mod autonat;
 mod initialization;
+mod timer;
 
 struct IdleDevice;
 

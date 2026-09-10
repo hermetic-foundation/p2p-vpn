@@ -1,0 +1,2740 @@
+{
+  "schema_version": 1,
+  "baseline": "7f2b448f",
+  "executables": {
+    "timer": "a9dff189716ecdba25e5aa76eba1a366fe4dec280e8b735ad128a23dda00b65b",
+    "initial_intervention": "7e277647f534bc533559938295839847deff5db3255f43f6880806f64b8b3cba",
+    "settled_intervention": "bd3d2833b20278de61c7d446af5afdf062cd9ccafd2edee42afcd59b20e5a07a"
+  },
+  "timers": [
+    {
+      "path": "/tmp/p2p-vpn-global-timer-high-water-1.log",
+      "elapsed_millis": 2811,
+      "rows": [
+        {
+          "width": 1,
+          "completed": {
+            "allocations": 2,
+            "bytes_allocated": 136,
+            "bytes_deallocated": 136,
+            "bytes_reallocated": 0,
+            "deallocations": 2,
+            "live_blocks_delta": 0,
+            "live_bytes_delta": 0,
+            "reallocations": 0
+          },
+          "settled": {
+            "allocations": 2,
+            "bytes_allocated": 136,
+            "bytes_deallocated": 136,
+            "bytes_reallocated": 0,
+            "deallocations": 2,
+            "live_blocks_delta": 0,
+            "live_bytes_delta": 0,
+            "reallocations": 0
+          },
+          "since_baseline_bytes": 0
+        },
+        {
+          "width": 4,
+          "completed": {
+            "allocations": 5,
+            "bytes_allocated": 544,
+            "bytes_deallocated": 64,
+            "bytes_reallocated": 0,
+            "deallocations": 1,
+            "live_blocks_delta": 4,
+            "live_bytes_delta": 480,
+            "reallocations": 0
+          },
+          "settled": {
+            "allocations": 5,
+            "bytes_allocated": 544,
+            "bytes_deallocated": 544,
+            "bytes_reallocated": 0,
+            "deallocations": 5,
+            "live_blocks_delta": 0,
+            "live_bytes_delta": 0,
+            "reallocations": 0
+          },
+          "since_baseline_bytes": 0
+        },
+        {
+          "width": 5,
+          "completed": {
+            "allocations": 6,
+            "bytes_allocated": 904,
+            "bytes_deallocated": 80,
+            "bytes_reallocated": 224,
+            "deallocations": 1,
+            "live_blocks_delta": 5,
+            "live_bytes_delta": 824,
+            "reallocations": 2
+          },
+          "settled": {
+            "allocations": 6,
+            "bytes_allocated": 904,
+            "bytes_deallocated": 680,
+            "bytes_reallocated": 224,
+            "deallocations": 6,
+            "live_blocks_delta": 0,
+            "live_bytes_delta": 224,
+            "reallocations": 2
+          },
+          "since_baseline_bytes": 224
+        },
+        {
+          "width": 8,
+          "completed": {
+            "allocations": 9,
+            "bytes_allocated": 1088,
+            "bytes_deallocated": 1088,
+            "bytes_reallocated": 0,
+            "deallocations": 9,
+            "live_blocks_delta": 0,
+            "live_bytes_delta": 0,
+            "reallocations": 0
+          },
+          "settled": {
+            "allocations": 9,
+            "bytes_allocated": 1088,
+            "bytes_deallocated": 1088,
+            "bytes_reallocated": 0,
+            "deallocations": 9,
+            "live_blocks_delta": 0,
+            "live_bytes_delta": 0,
+            "reallocations": 0
+          },
+          "since_baseline_bytes": 224
+        },
+        {
+          "width": 9,
+          "completed": {
+            "allocations": 10,
+            "bytes_allocated": 1672,
+            "bytes_deallocated": 1224,
+            "bytes_reallocated": 448,
+            "deallocations": 10,
+            "live_blocks_delta": 0,
+            "live_bytes_delta": 448,
+            "reallocations": 2
+          },
+          "settled": {
+            "allocations": 10,
+            "bytes_allocated": 1672,
+            "bytes_deallocated": 1224,
+            "bytes_reallocated": 448,
+            "deallocations": 10,
+            "live_blocks_delta": 0,
+            "live_bytes_delta": 448,
+            "reallocations": 2
+          },
+          "since_baseline_bytes": 672
+        },
+        {
+          "width": 16,
+          "completed": {
+            "allocations": 17,
+            "bytes_allocated": 2176,
+            "bytes_deallocated": 256,
+            "bytes_reallocated": 0,
+            "deallocations": 1,
+            "live_blocks_delta": 16,
+            "live_bytes_delta": 1920,
+            "reallocations": 0
+          },
+          "settled": {
+            "allocations": 17,
+            "bytes_allocated": 2176,
+            "bytes_deallocated": 2176,
+            "bytes_reallocated": 0,
+            "deallocations": 17,
+            "live_blocks_delta": 0,
+            "live_bytes_delta": 0,
+            "reallocations": 0
+          },
+          "since_baseline_bytes": 672
+        },
+        {
+          "width": 1,
+          "completed": {
+            "allocations": 2,
+            "bytes_allocated": 136,
+            "bytes_deallocated": 16,
+            "bytes_reallocated": 0,
+            "deallocations": 1,
+            "live_blocks_delta": 1,
+            "live_bytes_delta": 120,
+            "reallocations": 0
+          },
+          "settled": {
+            "allocations": 2,
+            "bytes_allocated": 136,
+            "bytes_deallocated": 136,
+            "bytes_reallocated": 0,
+            "deallocations": 2,
+            "live_blocks_delta": 0,
+            "live_bytes_delta": 0,
+            "reallocations": 0
+          },
+          "since_baseline_bytes": 672
+        },
+        {
+          "width": 16,
+          "completed": {
+            "allocations": 17,
+            "bytes_allocated": 2176,
+            "bytes_deallocated": 2176,
+            "bytes_reallocated": 0,
+            "deallocations": 17,
+            "live_blocks_delta": 0,
+            "live_bytes_delta": 0,
+            "reallocations": 0
+          },
+          "settled": {
+            "allocations": 17,
+            "bytes_allocated": 2176,
+            "bytes_deallocated": 2176,
+            "bytes_reallocated": 0,
+            "deallocations": 17,
+            "live_blocks_delta": 0,
+            "live_bytes_delta": 0,
+            "reallocations": 0
+          },
+          "since_baseline_bytes": 672
+        },
+        {
+          "width": 1,
+          "completed": {
+            "allocations": 2,
+            "bytes_allocated": 136,
+            "bytes_deallocated": 16,
+            "bytes_reallocated": 0,
+            "deallocations": 1,
+            "live_blocks_delta": 1,
+            "live_bytes_delta": 120,
+            "reallocations": 0
+          },
+          "settled": {
+            "allocations": 2,
+            "bytes_allocated": 136,
+            "bytes_deallocated": 136,
+            "bytes_reallocated": 0,
+            "deallocations": 2,
+            "live_blocks_delta": 0,
+            "live_bytes_delta": 0,
+            "reallocations": 0
+          },
+          "since_baseline_bytes": 672
+        },
+        {
+          "width": 16,
+          "completed": {
+            "allocations": 17,
+            "bytes_allocated": 2176,
+            "bytes_deallocated": 2176,
+            "bytes_reallocated": 0,
+            "deallocations": 17,
+            "live_blocks_delta": 0,
+            "live_bytes_delta": 0,
+            "reallocations": 0
+          },
+          "settled": {
+            "allocations": 17,
+            "bytes_allocated": 2176,
+            "bytes_deallocated": 2176,
+            "bytes_reallocated": 0,
+            "deallocations": 17,
+            "live_blocks_delta": 0,
+            "live_bytes_delta": 0,
+            "reallocations": 0
+          },
+          "since_baseline_bytes": 672
+        },
+        {
+          "width": 1,
+          "completed": {
+            "allocations": 2,
+            "bytes_allocated": 136,
+            "bytes_deallocated": 16,
+            "bytes_reallocated": 0,
+            "deallocations": 1,
+            "live_blocks_delta": 1,
+            "live_bytes_delta": 120,
+            "reallocations": 0
+          },
+          "settled": {
+            "allocations": 2,
+            "bytes_allocated": 136,
+            "bytes_deallocated": 136,
+            "bytes_reallocated": 0,
+            "deallocations": 2,
+            "live_blocks_delta": 0,
+            "live_bytes_delta": 0,
+            "reallocations": 0
+          },
+          "since_baseline_bytes": 672
+        },
+        {
+          "width": 16,
+          "completed": {
+            "allocations": 17,
+            "bytes_allocated": 2176,
+            "bytes_deallocated": 2176,
+            "bytes_reallocated": 0,
+            "deallocations": 17,
+            "live_blocks_delta": 0,
+            "live_bytes_delta": 0,
+            "reallocations": 0
+          },
+          "settled": {
+            "allocations": 17,
+            "bytes_allocated": 2176,
+            "bytes_deallocated": 2176,
+            "bytes_reallocated": 0,
+            "deallocations": 17,
+            "live_blocks_delta": 0,
+            "live_bytes_delta": 0,
+            "reallocations": 0
+          },
+          "since_baseline_bytes": 672
+        },
+        {
+          "width": 1,
+          "completed": {
+            "allocations": 2,
+            "bytes_allocated": 136,
+            "bytes_deallocated": 16,
+            "bytes_reallocated": 0,
+            "deallocations": 1,
+            "live_blocks_delta": 1,
+            "live_bytes_delta": 120,
+            "reallocations": 0
+          },
+          "settled": {
+            "allocations": 2,
+            "bytes_allocated": 136,
+            "bytes_deallocated": 136,
+            "bytes_reallocated": 0,
+            "deallocations": 2,
+            "live_blocks_delta": 0,
+            "live_bytes_delta": 0,
+            "reallocations": 0
+          },
+          "since_baseline_bytes": 672
+        },
+        {
+          "width": 16,
+          "completed": {
+            "allocations": 17,
+            "bytes_allocated": 2176,
+            "bytes_deallocated": 2176,
+            "bytes_reallocated": 0,
+            "deallocations": 17,
+            "live_blocks_delta": 0,
+            "live_bytes_delta": 0,
+            "reallocations": 0
+          },
+          "settled": {
+            "allocations": 17,
+            "bytes_allocated": 2176,
+            "bytes_deallocated": 2176,
+            "bytes_reallocated": 0,
+            "deallocations": 17,
+            "live_blocks_delta": 0,
+            "live_bytes_delta": 0,
+            "reallocations": 0
+          },
+          "since_baseline_bytes": 672
+        }
+      ]
+    },
+    {
+      "path": "/tmp/p2p-vpn-global-timer-high-water-2.log",
+      "elapsed_millis": 2809,
+      "rows": [
+        {
+          "width": 1,
+          "completed": {
+            "allocations": 2,
+            "bytes_allocated": 136,
+            "bytes_deallocated": 136,
+            "bytes_reallocated": 0,
+            "deallocations": 2,
+            "live_blocks_delta": 0,
+            "live_bytes_delta": 0,
+            "reallocations": 0
+          },
+          "settled": {
+            "allocations": 2,
+            "bytes_allocated": 136,
+            "bytes_deallocated": 136,
+            "bytes_reallocated": 0,
+            "deallocations": 2,
+            "live_blocks_delta": 0,
+            "live_bytes_delta": 0,
+            "reallocations": 0
+          },
+          "since_baseline_bytes": 0
+        },
+        {
+          "width": 4,
+          "completed": {
+            "allocations": 5,
+            "bytes_allocated": 544,
+            "bytes_deallocated": 544,
+            "bytes_reallocated": 0,
+            "deallocations": 5,
+            "live_blocks_delta": 0,
+            "live_bytes_delta": 0,
+            "reallocations": 0
+          },
+          "settled": {
+            "allocations": 5,
+            "bytes_allocated": 544,
+            "bytes_deallocated": 544,
+            "bytes_reallocated": 0,
+            "deallocations": 5,
+            "live_blocks_delta": 0,
+            "live_bytes_delta": 0,
+            "reallocations": 0
+          },
+          "since_baseline_bytes": 0
+        },
+        {
+          "width": 5,
+          "completed": {
+            "allocations": 6,
+            "bytes_allocated": 904,
+            "bytes_deallocated": 80,
+            "bytes_reallocated": 224,
+            "deallocations": 1,
+            "live_blocks_delta": 5,
+            "live_bytes_delta": 824,
+            "reallocations": 2
+          },
+          "settled": {
+            "allocations": 6,
+            "bytes_allocated": 904,
+            "bytes_deallocated": 680,
+            "bytes_reallocated": 224,
+            "deallocations": 6,
+            "live_blocks_delta": 0,
+            "live_bytes_delta": 224,
+            "reallocations": 2
+          },
+          "since_baseline_bytes": 224
+        },
+        {
+          "width": 8,
+          "completed": {
+            "allocations": 9,
+            "bytes_allocated": 1088,
+            "bytes_deallocated": 1088,
+            "bytes_reallocated": 0,
+            "deallocations": 9,
+            "live_blocks_delta": 0,
+            "live_bytes_delta": 0,
+            "reallocations": 0
+          },
+          "settled": {
+            "allocations": 9,
+            "bytes_allocated": 1088,
+            "bytes_deallocated": 1088,
+            "bytes_reallocated": 0,
+            "deallocations": 9,
+            "live_blocks_delta": 0,
+            "live_bytes_delta": 0,
+            "reallocations": 0
+          },
+          "since_baseline_bytes": 224
+        },
+        {
+          "width": 9,
+          "completed": {
+            "allocations": 10,
+            "bytes_allocated": 1672,
+            "bytes_deallocated": 144,
+            "bytes_reallocated": 448,
+            "deallocations": 1,
+            "live_blocks_delta": 9,
+            "live_bytes_delta": 1528,
+            "reallocations": 2
+          },
+          "settled": {
+            "allocations": 10,
+            "bytes_allocated": 1672,
+            "bytes_deallocated": 1224,
+            "bytes_reallocated": 448,
+            "deallocations": 10,
+            "live_blocks_delta": 0,
+            "live_bytes_delta": 448,
+            "reallocations": 2
+          },
+          "since_baseline_bytes": 672
+        },
+        {
+          "width": 16,
+          "completed": {
+            "allocations": 17,
+            "bytes_allocated": 2176,
+            "bytes_deallocated": 2176,
+            "bytes_reallocated": 0,
+            "deallocations": 17,
+            "live_blocks_delta": 0,
+            "live_bytes_delta": 0,
+            "reallocations": 0
+          },
+          "settled": {
+            "allocations": 17,
+            "bytes_allocated": 2176,
+            "bytes_deallocated": 2176,
+            "bytes_reallocated": 0,
+            "deallocations": 17,
+            "live_blocks_delta": 0,
+            "live_bytes_delta": 0,
+            "reallocations": 0
+          },
+          "since_baseline_bytes": 672
+        },
+        {
+          "width": 1,
+          "completed": {
+            "allocations": 2,
+            "bytes_allocated": 136,
+            "bytes_deallocated": 16,
+            "bytes_reallocated": 0,
+            "deallocations": 1,
+            "live_blocks_delta": 1,
+            "live_bytes_delta": 120,
+            "reallocations": 0
+          },
+          "settled": {
+            "allocations": 2,
+            "bytes_allocated": 136,
+            "bytes_deallocated": 136,
+            "bytes_reallocated": 0,
+            "deallocations": 2,
+            "live_blocks_delta": 0,
+            "live_bytes_delta": 0,
+            "reallocations": 0
+          },
+          "since_baseline_bytes": 672
+        },
+        {
+          "width": 16,
+          "completed": {
+            "allocations": 17,
+            "bytes_allocated": 2176,
+            "bytes_deallocated": 2176,
+            "bytes_reallocated": 0,
+            "deallocations": 17,
+            "live_blocks_delta": 0,
+            "live_bytes_delta": 0,
+            "reallocations": 0
+          },
+          "settled": {
+            "allocations": 17,
+            "bytes_allocated": 2176,
+            "bytes_deallocated": 2176,
+            "bytes_reallocated": 0,
+            "deallocations": 17,
+            "live_blocks_delta": 0,
+            "live_bytes_delta": 0,
+            "reallocations": 0
+          },
+          "since_baseline_bytes": 672
+        },
+        {
+          "width": 1,
+          "completed": {
+            "allocations": 2,
+            "bytes_allocated": 136,
+            "bytes_deallocated": 16,
+            "bytes_reallocated": 0,
+            "deallocations": 1,
+            "live_blocks_delta": 1,
+            "live_bytes_delta": 120,
+            "reallocations": 0
+          },
+          "settled": {
+            "allocations": 2,
+            "bytes_allocated": 136,
+            "bytes_deallocated": 136,
+            "bytes_reallocated": 0,
+            "deallocations": 2,
+            "live_blocks_delta": 0,
+            "live_bytes_delta": 0,
+            "reallocations": 0
+          },
+          "since_baseline_bytes": 672
+        },
+        {
+          "width": 16,
+          "completed": {
+            "allocations": 17,
+            "bytes_allocated": 2176,
+            "bytes_deallocated": 2176,
+            "bytes_reallocated": 0,
+            "deallocations": 17,
+            "live_blocks_delta": 0,
+            "live_bytes_delta": 0,
+            "reallocations": 0
+          },
+          "settled": {
+            "allocations": 17,
+            "bytes_allocated": 2176,
+            "bytes_deallocated": 2176,
+            "bytes_reallocated": 0,
+            "deallocations": 17,
+            "live_blocks_delta": 0,
+            "live_bytes_delta": 0,
+            "reallocations": 0
+          },
+          "since_baseline_bytes": 672
+        },
+        {
+          "width": 1,
+          "completed": {
+            "allocations": 2,
+            "bytes_allocated": 136,
+            "bytes_deallocated": 16,
+            "bytes_reallocated": 0,
+            "deallocations": 1,
+            "live_blocks_delta": 1,
+            "live_bytes_delta": 120,
+            "reallocations": 0
+          },
+          "settled": {
+            "allocations": 2,
+            "bytes_allocated": 136,
+            "bytes_deallocated": 136,
+            "bytes_reallocated": 0,
+            "deallocations": 2,
+            "live_blocks_delta": 0,
+            "live_bytes_delta": 0,
+            "reallocations": 0
+          },
+          "since_baseline_bytes": 672
+        },
+        {
+          "width": 16,
+          "completed": {
+            "allocations": 17,
+            "bytes_allocated": 2176,
+            "bytes_deallocated": 256,
+            "bytes_reallocated": 0,
+            "deallocations": 1,
+            "live_blocks_delta": 16,
+            "live_bytes_delta": 1920,
+            "reallocations": 0
+          },
+          "settled": {
+            "allocations": 17,
+            "bytes_allocated": 2176,
+            "bytes_deallocated": 2176,
+            "bytes_reallocated": 0,
+            "deallocations": 17,
+            "live_blocks_delta": 0,
+            "live_bytes_delta": 0,
+            "reallocations": 0
+          },
+          "since_baseline_bytes": 672
+        },
+        {
+          "width": 1,
+          "completed": {
+            "allocations": 2,
+            "bytes_allocated": 136,
+            "bytes_deallocated": 16,
+            "bytes_reallocated": 0,
+            "deallocations": 1,
+            "live_blocks_delta": 1,
+            "live_bytes_delta": 120,
+            "reallocations": 0
+          },
+          "settled": {
+            "allocations": 2,
+            "bytes_allocated": 136,
+            "bytes_deallocated": 136,
+            "bytes_reallocated": 0,
+            "deallocations": 2,
+            "live_blocks_delta": 0,
+            "live_bytes_delta": 0,
+            "reallocations": 0
+          },
+          "since_baseline_bytes": 672
+        },
+        {
+          "width": 16,
+          "completed": {
+            "allocations": 17,
+            "bytes_allocated": 2176,
+            "bytes_deallocated": 256,
+            "bytes_reallocated": 0,
+            "deallocations": 1,
+            "live_blocks_delta": 16,
+            "live_bytes_delta": 1920,
+            "reallocations": 0
+          },
+          "settled": {
+            "allocations": 17,
+            "bytes_allocated": 2176,
+            "bytes_deallocated": 2176,
+            "bytes_reallocated": 0,
+            "deallocations": 17,
+            "live_blocks_delta": 0,
+            "live_bytes_delta": 0,
+            "reallocations": 0
+          },
+          "since_baseline_bytes": 672
+        }
+      ]
+    }
+  ],
+  "initial_intervention": [
+    {
+      "path": "/tmp/p2p-vpn-autonat-prewarm-1-control-1.log",
+      "mode": "control",
+      "warmup": 1,
+      "counts": [
+        0,
+        0,
+        0
+      ],
+      "runtime_dropped": {
+        "allocations": 464,
+        "bytes_allocated": 150927,
+        "bytes_deallocated": 125999,
+        "bytes_reallocated": 1137,
+        "deallocations": 395,
+        "live_blocks_delta": 69,
+        "live_bytes_delta": 24928,
+        "reallocations": 7
+      },
+      "rows": [
+        {
+          "stage": "connected",
+          "round": 0,
+          "elapsed_millis": 0,
+          "live_bytes": 123529,
+          "live_blocks": 272,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 1,
+          "elapsed_millis": 1103,
+          "live_bytes": 123339,
+          "live_blocks": 268,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 2,
+          "elapsed_millis": 2208,
+          "live_bytes": 123339,
+          "live_blocks": 268,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 3,
+          "elapsed_millis": 3310,
+          "live_bytes": 123339,
+          "live_blocks": 268,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 4,
+          "elapsed_millis": 4413,
+          "live_bytes": 123339,
+          "live_blocks": 268,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 5,
+          "elapsed_millis": 5516,
+          "live_bytes": 123339,
+          "live_blocks": 268,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 6,
+          "elapsed_millis": 6619,
+          "live_bytes": 123339,
+          "live_blocks": 268,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 7,
+          "elapsed_millis": 7722,
+          "live_bytes": 123339,
+          "live_blocks": 268,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 8,
+          "elapsed_millis": 8824,
+          "live_bytes": 123339,
+          "live_blocks": 268,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 9,
+          "elapsed_millis": 9927,
+          "live_bytes": 123339,
+          "live_blocks": 268,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 10,
+          "elapsed_millis": 11031,
+          "live_bytes": 123339,
+          "live_blocks": 268,
+          "reallocations": 7
+        },
+        {
+          "stage": "connections_closed",
+          "round": 10,
+          "elapsed_millis": 11032,
+          "live_bytes": 73073,
+          "live_blocks": 181,
+          "reallocations": 7
+        },
+        {
+          "stage": "swarms_dropped",
+          "round": 10,
+          "elapsed_millis": 11134,
+          "live_bytes": 56690,
+          "live_blocks": 108,
+          "reallocations": 7
+        }
+      ]
+    },
+    {
+      "path": "/tmp/p2p-vpn-autonat-prewarm-1-control-2.log",
+      "mode": "control",
+      "warmup": 1,
+      "counts": [
+        0,
+        0,
+        0
+      ],
+      "runtime_dropped": {
+        "allocations": 464,
+        "bytes_allocated": 150927,
+        "bytes_deallocated": 125999,
+        "bytes_reallocated": 1137,
+        "deallocations": 395,
+        "live_blocks_delta": 69,
+        "live_bytes_delta": 24928,
+        "reallocations": 7
+      },
+      "rows": [
+        {
+          "stage": "connected",
+          "round": 0,
+          "elapsed_millis": 0,
+          "live_bytes": 123861,
+          "live_blocks": 278,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 1,
+          "elapsed_millis": 1103,
+          "live_bytes": 123339,
+          "live_blocks": 268,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 2,
+          "elapsed_millis": 2206,
+          "live_bytes": 123339,
+          "live_blocks": 268,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 3,
+          "elapsed_millis": 3308,
+          "live_bytes": 123339,
+          "live_blocks": 268,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 4,
+          "elapsed_millis": 4410,
+          "live_bytes": 123339,
+          "live_blocks": 268,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 5,
+          "elapsed_millis": 5513,
+          "live_bytes": 123339,
+          "live_blocks": 268,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 6,
+          "elapsed_millis": 6616,
+          "live_bytes": 123339,
+          "live_blocks": 268,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 7,
+          "elapsed_millis": 7720,
+          "live_bytes": 123339,
+          "live_blocks": 268,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 8,
+          "elapsed_millis": 8824,
+          "live_bytes": 123339,
+          "live_blocks": 268,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 9,
+          "elapsed_millis": 9927,
+          "live_bytes": 123339,
+          "live_blocks": 268,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 10,
+          "elapsed_millis": 11030,
+          "live_bytes": 123339,
+          "live_blocks": 268,
+          "reallocations": 7
+        },
+        {
+          "stage": "connections_closed",
+          "round": 10,
+          "elapsed_millis": 11031,
+          "live_bytes": 73361,
+          "live_blocks": 183,
+          "reallocations": 7
+        },
+        {
+          "stage": "swarms_dropped",
+          "round": 10,
+          "elapsed_millis": 11134,
+          "live_bytes": 56690,
+          "live_blocks": 108,
+          "reallocations": 7
+        }
+      ]
+    },
+    {
+      "path": "/tmp/p2p-vpn-autonat-prewarm-1-probe-1.log",
+      "mode": "probe",
+      "warmup": 1,
+      "counts": [
+        10,
+        10,
+        10
+      ],
+      "runtime_dropped": {
+        "allocations": 1777,
+        "bytes_allocated": 599479,
+        "bytes_deallocated": 574207,
+        "bytes_reallocated": 3963,
+        "deallocations": 1707,
+        "live_blocks_delta": 70,
+        "live_bytes_delta": 25272,
+        "reallocations": 24
+      },
+      "rows": [
+        {
+          "stage": "connected",
+          "round": 0,
+          "elapsed_millis": 0,
+          "live_bytes": 123769,
+          "live_blocks": 274,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 1,
+          "elapsed_millis": 1090,
+          "live_bytes": 132681,
+          "live_blocks": 282,
+          "reallocations": 15
+        },
+        {
+          "stage": "round",
+          "round": 2,
+          "elapsed_millis": 2091,
+          "live_bytes": 132681,
+          "live_blocks": 282,
+          "reallocations": 16
+        },
+        {
+          "stage": "round",
+          "round": 3,
+          "elapsed_millis": 3091,
+          "live_bytes": 132681,
+          "live_blocks": 282,
+          "reallocations": 17
+        },
+        {
+          "stage": "round",
+          "round": 4,
+          "elapsed_millis": 4092,
+          "live_bytes": 132681,
+          "live_blocks": 282,
+          "reallocations": 18
+        },
+        {
+          "stage": "round",
+          "round": 5,
+          "elapsed_millis": 5092,
+          "live_bytes": 132681,
+          "live_blocks": 282,
+          "reallocations": 19
+        },
+        {
+          "stage": "round",
+          "round": 6,
+          "elapsed_millis": 6092,
+          "live_bytes": 132681,
+          "live_blocks": 282,
+          "reallocations": 20
+        },
+        {
+          "stage": "round",
+          "round": 7,
+          "elapsed_millis": 7092,
+          "live_bytes": 132681,
+          "live_blocks": 282,
+          "reallocations": 21
+        },
+        {
+          "stage": "round",
+          "round": 8,
+          "elapsed_millis": 8094,
+          "live_bytes": 132681,
+          "live_blocks": 282,
+          "reallocations": 22
+        },
+        {
+          "stage": "round",
+          "round": 9,
+          "elapsed_millis": 9094,
+          "live_bytes": 132681,
+          "live_blocks": 282,
+          "reallocations": 23
+        },
+        {
+          "stage": "round",
+          "round": 10,
+          "elapsed_millis": 10095,
+          "live_bytes": 132681,
+          "live_blocks": 282,
+          "reallocations": 24
+        },
+        {
+          "stage": "connections_closed",
+          "round": 10,
+          "elapsed_millis": 10096,
+          "live_bytes": 78773,
+          "live_blocks": 192,
+          "reallocations": 24
+        },
+        {
+          "stage": "swarms_dropped",
+          "round": 10,
+          "elapsed_millis": 10198,
+          "live_bytes": 57034,
+          "live_blocks": 109,
+          "reallocations": 24
+        }
+      ]
+    },
+    {
+      "path": "/tmp/p2p-vpn-autonat-prewarm-1-probe-2.log",
+      "mode": "probe",
+      "warmup": 1,
+      "counts": [
+        10,
+        10,
+        10
+      ],
+      "runtime_dropped": {
+        "allocations": 1777,
+        "bytes_allocated": 599479,
+        "bytes_deallocated": 574327,
+        "bytes_reallocated": 3963,
+        "deallocations": 1708,
+        "live_blocks_delta": 69,
+        "live_bytes_delta": 25152,
+        "reallocations": 24
+      },
+      "rows": [
+        {
+          "stage": "connected",
+          "round": 0,
+          "elapsed_millis": 0,
+          "live_bytes": 123529,
+          "live_blocks": 272,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 1,
+          "elapsed_millis": 1091,
+          "live_bytes": 132561,
+          "live_blocks": 281,
+          "reallocations": 15
+        },
+        {
+          "stage": "round",
+          "round": 2,
+          "elapsed_millis": 2092,
+          "live_bytes": 132561,
+          "live_blocks": 281,
+          "reallocations": 16
+        },
+        {
+          "stage": "round",
+          "round": 3,
+          "elapsed_millis": 3091,
+          "live_bytes": 132561,
+          "live_blocks": 281,
+          "reallocations": 17
+        },
+        {
+          "stage": "round",
+          "round": 4,
+          "elapsed_millis": 4092,
+          "live_bytes": 132561,
+          "live_blocks": 281,
+          "reallocations": 18
+        },
+        {
+          "stage": "round",
+          "round": 5,
+          "elapsed_millis": 5093,
+          "live_bytes": 132561,
+          "live_blocks": 281,
+          "reallocations": 19
+        },
+        {
+          "stage": "round",
+          "round": 6,
+          "elapsed_millis": 6093,
+          "live_bytes": 132561,
+          "live_blocks": 281,
+          "reallocations": 20
+        },
+        {
+          "stage": "round",
+          "round": 7,
+          "elapsed_millis": 7091,
+          "live_bytes": 132561,
+          "live_blocks": 281,
+          "reallocations": 21
+        },
+        {
+          "stage": "round",
+          "round": 8,
+          "elapsed_millis": 8094,
+          "live_bytes": 132561,
+          "live_blocks": 281,
+          "reallocations": 22
+        },
+        {
+          "stage": "round",
+          "round": 9,
+          "elapsed_millis": 9095,
+          "live_bytes": 132561,
+          "live_blocks": 281,
+          "reallocations": 23
+        },
+        {
+          "stage": "round",
+          "round": 10,
+          "elapsed_millis": 10096,
+          "live_bytes": 132561,
+          "live_blocks": 281,
+          "reallocations": 24
+        },
+        {
+          "stage": "connections_closed",
+          "round": 10,
+          "elapsed_millis": 10097,
+          "live_bytes": 78405,
+          "live_blocks": 189,
+          "reallocations": 24
+        },
+        {
+          "stage": "swarms_dropped",
+          "round": 10,
+          "elapsed_millis": 10199,
+          "live_bytes": 56914,
+          "live_blocks": 108,
+          "reallocations": 24
+        }
+      ]
+    },
+    {
+      "path": "/tmp/p2p-vpn-autonat-prewarm-16-control-1.log",
+      "mode": "control",
+      "warmup": 16,
+      "counts": [
+        0,
+        0,
+        0
+      ],
+      "runtime_dropped": {
+        "allocations": 464,
+        "bytes_allocated": 150927,
+        "bytes_deallocated": 125879,
+        "bytes_reallocated": 1137,
+        "deallocations": 394,
+        "live_blocks_delta": 70,
+        "live_bytes_delta": 25048,
+        "reallocations": 7
+      },
+      "rows": [
+        {
+          "stage": "connected",
+          "round": 0,
+          "elapsed_millis": 0,
+          "live_bytes": 123649,
+          "live_blocks": 273,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 1,
+          "elapsed_millis": 1103,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 2,
+          "elapsed_millis": 2206,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 3,
+          "elapsed_millis": 3308,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 4,
+          "elapsed_millis": 4412,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 5,
+          "elapsed_millis": 5515,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 6,
+          "elapsed_millis": 6617,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 7,
+          "elapsed_millis": 7719,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 8,
+          "elapsed_millis": 8821,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 9,
+          "elapsed_millis": 9925,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 10,
+          "elapsed_millis": 11028,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "connections_closed",
+          "round": 10,
+          "elapsed_millis": 11029,
+          "live_bytes": 73601,
+          "live_blocks": 186,
+          "reallocations": 7
+        },
+        {
+          "stage": "swarms_dropped",
+          "round": 10,
+          "elapsed_millis": 11131,
+          "live_bytes": 56810,
+          "live_blocks": 109,
+          "reallocations": 7
+        }
+      ]
+    },
+    {
+      "path": "/tmp/p2p-vpn-autonat-prewarm-16-control-2.log",
+      "mode": "control",
+      "warmup": 16,
+      "counts": [
+        0,
+        0,
+        0
+      ],
+      "runtime_dropped": {
+        "allocations": 464,
+        "bytes_allocated": 150927,
+        "bytes_deallocated": 125879,
+        "bytes_reallocated": 1137,
+        "deallocations": 394,
+        "live_blocks_delta": 70,
+        "live_bytes_delta": 25048,
+        "reallocations": 7
+      },
+      "rows": [
+        {
+          "stage": "connected",
+          "round": 0,
+          "elapsed_millis": 0,
+          "live_bytes": 123649,
+          "live_blocks": 273,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 1,
+          "elapsed_millis": 1101,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 2,
+          "elapsed_millis": 2205,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 3,
+          "elapsed_millis": 3309,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 4,
+          "elapsed_millis": 4412,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 5,
+          "elapsed_millis": 5514,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 6,
+          "elapsed_millis": 6618,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 7,
+          "elapsed_millis": 7722,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 8,
+          "elapsed_millis": 8824,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 9,
+          "elapsed_millis": 9927,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 10,
+          "elapsed_millis": 11030,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "connections_closed",
+          "round": 10,
+          "elapsed_millis": 11031,
+          "live_bytes": 73481,
+          "live_blocks": 184,
+          "reallocations": 7
+        },
+        {
+          "stage": "swarms_dropped",
+          "round": 10,
+          "elapsed_millis": 11133,
+          "live_bytes": 56810,
+          "live_blocks": 109,
+          "reallocations": 7
+        }
+      ]
+    },
+    {
+      "path": "/tmp/p2p-vpn-autonat-prewarm-16-probe-1.log",
+      "mode": "probe",
+      "warmup": 16,
+      "counts": [
+        10,
+        10,
+        10
+      ],
+      "runtime_dropped": {
+        "allocations": 1777,
+        "bytes_allocated": 599255,
+        "bytes_deallocated": 574207,
+        "bytes_reallocated": 3739,
+        "deallocations": 1707,
+        "live_blocks_delta": 70,
+        "live_bytes_delta": 25048,
+        "reallocations": 22
+      },
+      "rows": [
+        {
+          "stage": "connected",
+          "round": 0,
+          "elapsed_millis": 0,
+          "live_bytes": 123649,
+          "live_blocks": 273,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 1,
+          "elapsed_millis": 1084,
+          "live_bytes": 132457,
+          "live_blocks": 282,
+          "reallocations": 13
+        },
+        {
+          "stage": "round",
+          "round": 2,
+          "elapsed_millis": 2083,
+          "live_bytes": 132457,
+          "live_blocks": 282,
+          "reallocations": 14
+        },
+        {
+          "stage": "round",
+          "round": 3,
+          "elapsed_millis": 3083,
+          "live_bytes": 132457,
+          "live_blocks": 282,
+          "reallocations": 15
+        },
+        {
+          "stage": "round",
+          "round": 4,
+          "elapsed_millis": 4083,
+          "live_bytes": 132457,
+          "live_blocks": 282,
+          "reallocations": 16
+        },
+        {
+          "stage": "round",
+          "round": 5,
+          "elapsed_millis": 5083,
+          "live_bytes": 132457,
+          "live_blocks": 282,
+          "reallocations": 17
+        },
+        {
+          "stage": "round",
+          "round": 6,
+          "elapsed_millis": 6083,
+          "live_bytes": 132457,
+          "live_blocks": 282,
+          "reallocations": 18
+        },
+        {
+          "stage": "round",
+          "round": 7,
+          "elapsed_millis": 7083,
+          "live_bytes": 132457,
+          "live_blocks": 282,
+          "reallocations": 19
+        },
+        {
+          "stage": "round",
+          "round": 8,
+          "elapsed_millis": 8085,
+          "live_bytes": 132457,
+          "live_blocks": 282,
+          "reallocations": 20
+        },
+        {
+          "stage": "round",
+          "round": 9,
+          "elapsed_millis": 9084,
+          "live_bytes": 132457,
+          "live_blocks": 282,
+          "reallocations": 21
+        },
+        {
+          "stage": "round",
+          "round": 10,
+          "elapsed_millis": 10085,
+          "live_bytes": 132457,
+          "live_blocks": 282,
+          "reallocations": 22
+        },
+        {
+          "stage": "connections_closed",
+          "round": 10,
+          "elapsed_millis": 10086,
+          "live_bytes": 78301,
+          "live_blocks": 190,
+          "reallocations": 22
+        },
+        {
+          "stage": "swarms_dropped",
+          "round": 10,
+          "elapsed_millis": 10187,
+          "live_bytes": 56810,
+          "live_blocks": 109,
+          "reallocations": 22
+        }
+      ]
+    },
+    {
+      "path": "/tmp/p2p-vpn-autonat-prewarm-16-probe-2.log",
+      "mode": "probe",
+      "warmup": 16,
+      "counts": [
+        10,
+        10,
+        10
+      ],
+      "runtime_dropped": {
+        "allocations": 1777,
+        "bytes_allocated": 599255,
+        "bytes_deallocated": 574207,
+        "bytes_reallocated": 3739,
+        "deallocations": 1707,
+        "live_blocks_delta": 70,
+        "live_bytes_delta": 25048,
+        "reallocations": 22
+      },
+      "rows": [
+        {
+          "stage": "connected",
+          "round": 0,
+          "elapsed_millis": 0,
+          "live_bytes": 123649,
+          "live_blocks": 273,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 1,
+          "elapsed_millis": 1081,
+          "live_bytes": 132457,
+          "live_blocks": 282,
+          "reallocations": 13
+        },
+        {
+          "stage": "round",
+          "round": 2,
+          "elapsed_millis": 2080,
+          "live_bytes": 132457,
+          "live_blocks": 282,
+          "reallocations": 14
+        },
+        {
+          "stage": "round",
+          "round": 3,
+          "elapsed_millis": 3082,
+          "live_bytes": 132457,
+          "live_blocks": 282,
+          "reallocations": 15
+        },
+        {
+          "stage": "round",
+          "round": 4,
+          "elapsed_millis": 4083,
+          "live_bytes": 132457,
+          "live_blocks": 282,
+          "reallocations": 16
+        },
+        {
+          "stage": "round",
+          "round": 5,
+          "elapsed_millis": 5084,
+          "live_bytes": 132457,
+          "live_blocks": 282,
+          "reallocations": 17
+        },
+        {
+          "stage": "round",
+          "round": 6,
+          "elapsed_millis": 6084,
+          "live_bytes": 132457,
+          "live_blocks": 282,
+          "reallocations": 18
+        },
+        {
+          "stage": "round",
+          "round": 7,
+          "elapsed_millis": 7085,
+          "live_bytes": 132457,
+          "live_blocks": 282,
+          "reallocations": 19
+        },
+        {
+          "stage": "round",
+          "round": 8,
+          "elapsed_millis": 8086,
+          "live_bytes": 132457,
+          "live_blocks": 282,
+          "reallocations": 20
+        },
+        {
+          "stage": "round",
+          "round": 9,
+          "elapsed_millis": 9087,
+          "live_bytes": 132457,
+          "live_blocks": 282,
+          "reallocations": 21
+        },
+        {
+          "stage": "round",
+          "round": 10,
+          "elapsed_millis": 10087,
+          "live_bytes": 132457,
+          "live_blocks": 282,
+          "reallocations": 22
+        },
+        {
+          "stage": "connections_closed",
+          "round": 10,
+          "elapsed_millis": 10088,
+          "live_bytes": 78301,
+          "live_blocks": 190,
+          "reallocations": 22
+        },
+        {
+          "stage": "swarms_dropped",
+          "round": 10,
+          "elapsed_millis": 10190,
+          "live_bytes": 56810,
+          "live_blocks": 109,
+          "reallocations": 22
+        }
+      ]
+    }
+  ],
+  "settled_intervention": [
+    {
+      "path": "/tmp/p2p-vpn-autonat-settled-prewarm-4-control-1.log",
+      "mode": "control",
+      "warmup": 4,
+      "counts": [
+        0,
+        0,
+        0
+      ],
+      "runtime_dropped": {
+        "allocations": 464,
+        "bytes_allocated": 150927,
+        "bytes_deallocated": 125879,
+        "bytes_reallocated": 1137,
+        "deallocations": 394,
+        "live_blocks_delta": 70,
+        "live_bytes_delta": 25048,
+        "reallocations": 7
+      },
+      "rows": [
+        {
+          "stage": "connected",
+          "round": 0,
+          "elapsed_millis": 0,
+          "live_bytes": 123649,
+          "live_blocks": 273,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 1,
+          "elapsed_millis": 1102,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 2,
+          "elapsed_millis": 2205,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 3,
+          "elapsed_millis": 3307,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 4,
+          "elapsed_millis": 4410,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 5,
+          "elapsed_millis": 5513,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 6,
+          "elapsed_millis": 6616,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 7,
+          "elapsed_millis": 7718,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 8,
+          "elapsed_millis": 8821,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 9,
+          "elapsed_millis": 9924,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 10,
+          "elapsed_millis": 11028,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "connections_closed",
+          "round": 10,
+          "elapsed_millis": 11029,
+          "live_bytes": 73481,
+          "live_blocks": 184,
+          "reallocations": 7
+        },
+        {
+          "stage": "swarms_dropped",
+          "round": 10,
+          "elapsed_millis": 11131,
+          "live_bytes": 56810,
+          "live_blocks": 109,
+          "reallocations": 7
+        }
+      ]
+    },
+    {
+      "path": "/tmp/p2p-vpn-autonat-settled-prewarm-4-control-2.log",
+      "mode": "control",
+      "warmup": 4,
+      "counts": [
+        0,
+        0,
+        0
+      ],
+      "runtime_dropped": {
+        "allocations": 464,
+        "bytes_allocated": 150927,
+        "bytes_deallocated": 125879,
+        "bytes_reallocated": 1137,
+        "deallocations": 394,
+        "live_blocks_delta": 70,
+        "live_bytes_delta": 25048,
+        "reallocations": 7
+      },
+      "rows": [
+        {
+          "stage": "connected",
+          "round": 0,
+          "elapsed_millis": 0,
+          "live_bytes": 123649,
+          "live_blocks": 273,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 1,
+          "elapsed_millis": 1102,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 2,
+          "elapsed_millis": 2206,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 3,
+          "elapsed_millis": 3311,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 4,
+          "elapsed_millis": 4415,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 5,
+          "elapsed_millis": 5518,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 6,
+          "elapsed_millis": 6621,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 7,
+          "elapsed_millis": 7723,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 8,
+          "elapsed_millis": 8826,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 9,
+          "elapsed_millis": 9929,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 10,
+          "elapsed_millis": 11031,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "connections_closed",
+          "round": 10,
+          "elapsed_millis": 11032,
+          "live_bytes": 73889,
+          "live_blocks": 188,
+          "reallocations": 7
+        },
+        {
+          "stage": "swarms_dropped",
+          "round": 10,
+          "elapsed_millis": 11133,
+          "live_bytes": 56810,
+          "live_blocks": 109,
+          "reallocations": 7
+        }
+      ]
+    },
+    {
+      "path": "/tmp/p2p-vpn-autonat-settled-prewarm-4-probe-1.log",
+      "mode": "probe",
+      "warmup": 4,
+      "counts": [
+        10,
+        10,
+        10
+      ],
+      "runtime_dropped": {
+        "allocations": 1777,
+        "bytes_allocated": 599479,
+        "bytes_deallocated": 574207,
+        "bytes_reallocated": 3963,
+        "deallocations": 1707,
+        "live_blocks_delta": 70,
+        "live_bytes_delta": 25272,
+        "reallocations": 24
+      },
+      "rows": [
+        {
+          "stage": "connected",
+          "round": 0,
+          "elapsed_millis": 0,
+          "live_bytes": 123649,
+          "live_blocks": 273,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 1,
+          "elapsed_millis": 1077,
+          "live_bytes": 132681,
+          "live_blocks": 282,
+          "reallocations": 15
+        },
+        {
+          "stage": "round",
+          "round": 2,
+          "elapsed_millis": 2078,
+          "live_bytes": 132681,
+          "live_blocks": 282,
+          "reallocations": 16
+        },
+        {
+          "stage": "round",
+          "round": 3,
+          "elapsed_millis": 3080,
+          "live_bytes": 132681,
+          "live_blocks": 282,
+          "reallocations": 17
+        },
+        {
+          "stage": "round",
+          "round": 4,
+          "elapsed_millis": 4081,
+          "live_bytes": 132681,
+          "live_blocks": 282,
+          "reallocations": 18
+        },
+        {
+          "stage": "round",
+          "round": 5,
+          "elapsed_millis": 5080,
+          "live_bytes": 132681,
+          "live_blocks": 282,
+          "reallocations": 19
+        },
+        {
+          "stage": "round",
+          "round": 6,
+          "elapsed_millis": 6080,
+          "live_bytes": 132681,
+          "live_blocks": 282,
+          "reallocations": 20
+        },
+        {
+          "stage": "round",
+          "round": 7,
+          "elapsed_millis": 7081,
+          "live_bytes": 132681,
+          "live_blocks": 282,
+          "reallocations": 21
+        },
+        {
+          "stage": "round",
+          "round": 8,
+          "elapsed_millis": 8082,
+          "live_bytes": 132681,
+          "live_blocks": 282,
+          "reallocations": 22
+        },
+        {
+          "stage": "round",
+          "round": 9,
+          "elapsed_millis": 9083,
+          "live_bytes": 132681,
+          "live_blocks": 282,
+          "reallocations": 23
+        },
+        {
+          "stage": "round",
+          "round": 10,
+          "elapsed_millis": 10082,
+          "live_bytes": 132681,
+          "live_blocks": 282,
+          "reallocations": 24
+        },
+        {
+          "stage": "connections_closed",
+          "round": 10,
+          "elapsed_millis": 10083,
+          "live_bytes": 78525,
+          "live_blocks": 190,
+          "reallocations": 24
+        },
+        {
+          "stage": "swarms_dropped",
+          "round": 10,
+          "elapsed_millis": 10185,
+          "live_bytes": 57034,
+          "live_blocks": 109,
+          "reallocations": 24
+        }
+      ]
+    },
+    {
+      "path": "/tmp/p2p-vpn-autonat-settled-prewarm-4-probe-2.log",
+      "mode": "probe",
+      "warmup": 4,
+      "counts": [
+        10,
+        10,
+        10
+      ],
+      "runtime_dropped": {
+        "allocations": 1777,
+        "bytes_allocated": 599479,
+        "bytes_deallocated": 574207,
+        "bytes_reallocated": 3963,
+        "deallocations": 1707,
+        "live_blocks_delta": 70,
+        "live_bytes_delta": 25272,
+        "reallocations": 24
+      },
+      "rows": [
+        {
+          "stage": "connected",
+          "round": 0,
+          "elapsed_millis": 0,
+          "live_bytes": 123791,
+          "live_blocks": 276,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 1,
+          "elapsed_millis": 1080,
+          "live_bytes": 132681,
+          "live_blocks": 282,
+          "reallocations": 15
+        },
+        {
+          "stage": "round",
+          "round": 2,
+          "elapsed_millis": 2081,
+          "live_bytes": 132681,
+          "live_blocks": 282,
+          "reallocations": 16
+        },
+        {
+          "stage": "round",
+          "round": 3,
+          "elapsed_millis": 3081,
+          "live_bytes": 132681,
+          "live_blocks": 282,
+          "reallocations": 17
+        },
+        {
+          "stage": "round",
+          "round": 4,
+          "elapsed_millis": 4083,
+          "live_bytes": 132681,
+          "live_blocks": 282,
+          "reallocations": 18
+        },
+        {
+          "stage": "round",
+          "round": 5,
+          "elapsed_millis": 5083,
+          "live_bytes": 132681,
+          "live_blocks": 282,
+          "reallocations": 19
+        },
+        {
+          "stage": "round",
+          "round": 6,
+          "elapsed_millis": 6084,
+          "live_bytes": 132681,
+          "live_blocks": 282,
+          "reallocations": 20
+        },
+        {
+          "stage": "round",
+          "round": 7,
+          "elapsed_millis": 7083,
+          "live_bytes": 132681,
+          "live_blocks": 282,
+          "reallocations": 21
+        },
+        {
+          "stage": "round",
+          "round": 8,
+          "elapsed_millis": 8084,
+          "live_bytes": 132681,
+          "live_blocks": 282,
+          "reallocations": 22
+        },
+        {
+          "stage": "round",
+          "round": 9,
+          "elapsed_millis": 9084,
+          "live_bytes": 132681,
+          "live_blocks": 282,
+          "reallocations": 23
+        },
+        {
+          "stage": "round",
+          "round": 10,
+          "elapsed_millis": 10085,
+          "live_bytes": 132681,
+          "live_blocks": 282,
+          "reallocations": 24
+        },
+        {
+          "stage": "connections_closed",
+          "round": 10,
+          "elapsed_millis": 10086,
+          "live_bytes": 78525,
+          "live_blocks": 190,
+          "reallocations": 24
+        },
+        {
+          "stage": "swarms_dropped",
+          "round": 10,
+          "elapsed_millis": 10189,
+          "live_bytes": 57034,
+          "live_blocks": 109,
+          "reallocations": 24
+        }
+      ]
+    },
+    {
+      "path": "/tmp/p2p-vpn-autonat-settled-prewarm-16-control-1.log",
+      "mode": "control",
+      "warmup": 16,
+      "counts": [
+        0,
+        0,
+        0
+      ],
+      "runtime_dropped": {
+        "allocations": 464,
+        "bytes_allocated": 150927,
+        "bytes_deallocated": 125879,
+        "bytes_reallocated": 1137,
+        "deallocations": 394,
+        "live_blocks_delta": 70,
+        "live_bytes_delta": 25048,
+        "reallocations": 7
+      },
+      "rows": [
+        {
+          "stage": "connected",
+          "round": 0,
+          "elapsed_millis": 0,
+          "live_bytes": 123649,
+          "live_blocks": 273,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 1,
+          "elapsed_millis": 1103,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 2,
+          "elapsed_millis": 2207,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 3,
+          "elapsed_millis": 3313,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 4,
+          "elapsed_millis": 4414,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 5,
+          "elapsed_millis": 5518,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 6,
+          "elapsed_millis": 6621,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 7,
+          "elapsed_millis": 7723,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 8,
+          "elapsed_millis": 8826,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 9,
+          "elapsed_millis": 9930,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 10,
+          "elapsed_millis": 11034,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "connections_closed",
+          "round": 10,
+          "elapsed_millis": 11035,
+          "live_bytes": 73481,
+          "live_blocks": 184,
+          "reallocations": 7
+        },
+        {
+          "stage": "swarms_dropped",
+          "round": 10,
+          "elapsed_millis": 11137,
+          "live_bytes": 56810,
+          "live_blocks": 109,
+          "reallocations": 7
+        }
+      ]
+    },
+    {
+      "path": "/tmp/p2p-vpn-autonat-settled-prewarm-16-control-2.log",
+      "mode": "control",
+      "warmup": 16,
+      "counts": [
+        0,
+        0,
+        0
+      ],
+      "runtime_dropped": {
+        "allocations": 464,
+        "bytes_allocated": 150927,
+        "bytes_deallocated": 125879,
+        "bytes_reallocated": 1137,
+        "deallocations": 394,
+        "live_blocks_delta": 70,
+        "live_bytes_delta": 25048,
+        "reallocations": 7
+      },
+      "rows": [
+        {
+          "stage": "connected",
+          "round": 0,
+          "elapsed_millis": 0,
+          "live_bytes": 123649,
+          "live_blocks": 273,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 1,
+          "elapsed_millis": 1102,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 2,
+          "elapsed_millis": 2204,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 3,
+          "elapsed_millis": 3306,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 4,
+          "elapsed_millis": 4409,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 5,
+          "elapsed_millis": 5512,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 6,
+          "elapsed_millis": 6616,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 7,
+          "elapsed_millis": 7719,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 8,
+          "elapsed_millis": 8824,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 9,
+          "elapsed_millis": 9928,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 10,
+          "elapsed_millis": 11032,
+          "live_bytes": 123459,
+          "live_blocks": 269,
+          "reallocations": 7
+        },
+        {
+          "stage": "connections_closed",
+          "round": 10,
+          "elapsed_millis": 11032,
+          "live_bytes": 73601,
+          "live_blocks": 186,
+          "reallocations": 7
+        },
+        {
+          "stage": "swarms_dropped",
+          "round": 10,
+          "elapsed_millis": 11134,
+          "live_bytes": 56810,
+          "live_blocks": 109,
+          "reallocations": 7
+        }
+      ]
+    },
+    {
+      "path": "/tmp/p2p-vpn-autonat-settled-prewarm-16-probe-1.log",
+      "mode": "probe",
+      "warmup": 16,
+      "counts": [
+        10,
+        10,
+        10
+      ],
+      "runtime_dropped": {
+        "allocations": 1777,
+        "bytes_allocated": 599255,
+        "bytes_deallocated": 574207,
+        "bytes_reallocated": 3739,
+        "deallocations": 1707,
+        "live_blocks_delta": 70,
+        "live_bytes_delta": 25048,
+        "reallocations": 22
+      },
+      "rows": [
+        {
+          "stage": "connected",
+          "round": 0,
+          "elapsed_millis": 0,
+          "live_bytes": 123769,
+          "live_blocks": 274,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 1,
+          "elapsed_millis": 1080,
+          "live_bytes": 132457,
+          "live_blocks": 282,
+          "reallocations": 13
+        },
+        {
+          "stage": "round",
+          "round": 2,
+          "elapsed_millis": 2079,
+          "live_bytes": 132457,
+          "live_blocks": 282,
+          "reallocations": 14
+        },
+        {
+          "stage": "round",
+          "round": 3,
+          "elapsed_millis": 3082,
+          "live_bytes": 132457,
+          "live_blocks": 282,
+          "reallocations": 15
+        },
+        {
+          "stage": "round",
+          "round": 4,
+          "elapsed_millis": 4081,
+          "live_bytes": 132457,
+          "live_blocks": 282,
+          "reallocations": 16
+        },
+        {
+          "stage": "round",
+          "round": 5,
+          "elapsed_millis": 5083,
+          "live_bytes": 132457,
+          "live_blocks": 282,
+          "reallocations": 17
+        },
+        {
+          "stage": "round",
+          "round": 6,
+          "elapsed_millis": 6083,
+          "live_bytes": 132457,
+          "live_blocks": 282,
+          "reallocations": 18
+        },
+        {
+          "stage": "round",
+          "round": 7,
+          "elapsed_millis": 7084,
+          "live_bytes": 132457,
+          "live_blocks": 282,
+          "reallocations": 19
+        },
+        {
+          "stage": "round",
+          "round": 8,
+          "elapsed_millis": 8084,
+          "live_bytes": 132457,
+          "live_blocks": 282,
+          "reallocations": 20
+        },
+        {
+          "stage": "round",
+          "round": 9,
+          "elapsed_millis": 9085,
+          "live_bytes": 132457,
+          "live_blocks": 282,
+          "reallocations": 21
+        },
+        {
+          "stage": "round",
+          "round": 10,
+          "elapsed_millis": 10084,
+          "live_bytes": 132457,
+          "live_blocks": 282,
+          "reallocations": 22
+        },
+        {
+          "stage": "connections_closed",
+          "round": 10,
+          "elapsed_millis": 10085,
+          "live_bytes": 78301,
+          "live_blocks": 190,
+          "reallocations": 22
+        },
+        {
+          "stage": "swarms_dropped",
+          "round": 10,
+          "elapsed_millis": 10186,
+          "live_bytes": 56810,
+          "live_blocks": 109,
+          "reallocations": 22
+        }
+      ]
+    },
+    {
+      "path": "/tmp/p2p-vpn-autonat-settled-prewarm-16-probe-2.log",
+      "mode": "probe",
+      "warmup": 16,
+      "counts": [
+        10,
+        10,
+        10
+      ],
+      "runtime_dropped": {
+        "allocations": 1777,
+        "bytes_allocated": 599255,
+        "bytes_deallocated": 574207,
+        "bytes_reallocated": 3739,
+        "deallocations": 1707,
+        "live_blocks_delta": 70,
+        "live_bytes_delta": 25048,
+        "reallocations": 22
+      },
+      "rows": [
+        {
+          "stage": "connected",
+          "round": 0,
+          "elapsed_millis": 0,
+          "live_bytes": 123649,
+          "live_blocks": 273,
+          "reallocations": 7
+        },
+        {
+          "stage": "round",
+          "round": 1,
+          "elapsed_millis": 1078,
+          "live_bytes": 132457,
+          "live_blocks": 282,
+          "reallocations": 13
+        },
+        {
+          "stage": "round",
+          "round": 2,
+          "elapsed_millis": 2080,
+          "live_bytes": 132457,
+          "live_blocks": 282,
+          "reallocations": 14
+        },
+        {
+          "stage": "round",
+          "round": 3,
+          "elapsed_millis": 3080,
+          "live_bytes": 132457,
+          "live_blocks": 282,
+          "reallocations": 15
+        },
+        {
+          "stage": "round",
+          "round": 4,
+          "elapsed_millis": 4081,
+          "live_bytes": 132457,
+          "live_blocks": 282,
+          "reallocations": 16
+        },
+        {
+          "stage": "round",
+          "round": 5,
+          "elapsed_millis": 5081,
+          "live_bytes": 132457,
+          "live_blocks": 282,
+          "reallocations": 17
+        },
+        {
+          "stage": "round",
+          "round": 6,
+          "elapsed_millis": 6081,
+          "live_bytes": 132457,
+          "live_blocks": 282,
+          "reallocations": 18
+        },
+        {
+          "stage": "round",
+          "round": 7,
+          "elapsed_millis": 7081,
+          "live_bytes": 132457,
+          "live_blocks": 282,
+          "reallocations": 19
+        },
+        {
+          "stage": "round",
+          "round": 8,
+          "elapsed_millis": 8082,
+          "live_bytes": 132457,
+          "live_blocks": 282,
+          "reallocations": 20
+        },
+        {
+          "stage": "round",
+          "round": 9,
+          "elapsed_millis": 9082,
+          "live_bytes": 132457,
+          "live_blocks": 282,
+          "reallocations": 21
+        },
+        {
+          "stage": "round",
+          "round": 10,
+          "elapsed_millis": 10083,
+          "live_bytes": 132457,
+          "live_blocks": 282,
+          "reallocations": 22
+        },
+        {
+          "stage": "connections_closed",
+          "round": 10,
+          "elapsed_millis": 10083,
+          "live_bytes": 78301,
+          "live_blocks": 190,
+          "reallocations": 22
+        },
+        {
+          "stage": "swarms_dropped",
+          "round": 10,
+          "elapsed_millis": 10185,
+          "live_bytes": 56810,
+          "live_blocks": 109,
+          "reallocations": 22
+        }
+      ]
+    }
+  ],
+  "sha256": {
+    "/tmp/p2p-vpn-global-timer-high-water-1.log": "545186b64a493873ba57374fa4b6f2c57cc7bc69db04eb5e64760181b82392c2",
+    "/tmp/p2p-vpn-global-timer-high-water-2.log": "87ecf9777798b77ae12bbdf079856045d699cbe55fc29aa0ba4ca9010f1b2704",
+    "/tmp/p2p-vpn-autonat-prewarm-1-control-1.log": "3a0de126642005b0e8b669099abce95aa1434e15ff7394794b59e05bd8079981",
+    "/tmp/p2p-vpn-autonat-prewarm-1-control-2.log": "5c49186ecf51c19aa3187bddf19ba3c6765f00f07e46b0d772e8ec04213d09a9",
+    "/tmp/p2p-vpn-autonat-prewarm-1-probe-1.log": "9ec0987ca07d9aa490c703b644c084f8b4cec2eac77abf7ddf4c804e163538cd",
+    "/tmp/p2p-vpn-autonat-prewarm-1-probe-2.log": "f664133224ba25e0be171a529abe25103e551159186ba469dcbbb4e274c4734a",
+    "/tmp/p2p-vpn-autonat-prewarm-16-control-1.log": "a5ca00200696a40c403c9eae76978a2e7d69ebe8417e127ac2c4608a487219c1",
+    "/tmp/p2p-vpn-autonat-prewarm-16-control-2.log": "acf8430d598a9f3351cf382b2815edf5425a1013f07840d079cebd3037d5ec85",
+    "/tmp/p2p-vpn-autonat-prewarm-16-probe-1.log": "6bdee21002512d96eeee73c9996ff400f265551d426074ed519500f15b819359",
+    "/tmp/p2p-vpn-autonat-prewarm-16-probe-2.log": "d7146a2e7a942266bca7e26487508487214a263cd5b6a0311f6f665abdaee1f2",
+    "/tmp/p2p-vpn-autonat-settled-prewarm-4-control-1.log": "1d59e4e95dfb1c378959d0303af33c3cb4506b078d214e4f5ac7ef5dced62c3c",
+    "/tmp/p2p-vpn-autonat-settled-prewarm-4-control-2.log": "494b76d0ac9d066702024d98b028ae10693cf107b9db4c1c2026fead4dfdca73",
+    "/tmp/p2p-vpn-autonat-settled-prewarm-4-probe-1.log": "378cb39a871081b20a502aef74cb08e9a0d5c4d4f9f3895d714440ea787b443a",
+    "/tmp/p2p-vpn-autonat-settled-prewarm-4-probe-2.log": "b1e8eb972fd7386d72266c20ae842e223546bab76d0e705ab30a034314ec17ba",
+    "/tmp/p2p-vpn-autonat-settled-prewarm-16-control-1.log": "43c6d3b903ac4f707711a0af131ef214cd63f2c9ed04a33bf0ba5c013a792622",
+    "/tmp/p2p-vpn-autonat-settled-prewarm-16-control-2.log": "eb9bce2114fd53c10b47cc00346dc4585bb93f833380f1b497c6ce3073743d36",
+    "/tmp/p2p-vpn-autonat-settled-prewarm-16-probe-1.log": "c480e9ffdbb40985e4734de519404a4ea5d615a8cef9973df35b8834c36055e1",
+    "/tmp/p2p-vpn-autonat-settled-prewarm-16-probe-2.log": "2e976156356e19bbdb5c9dae32b05707e385a44da1c1f937f4ab267142e9d920",
+    "src/allocation_review/runtime/timer.rs": "32c23ff36bd59f70984e521817f1a5f887fd5644726762f56cf425a308ce30b8",
+    "src/allocation_review/runtime/autonat.rs": "26766398908e18d1963655c768bb1e92716201b0193998daaaa894ef30ea1286",
+    "/home/midischwarz12/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/futures-timer-3.0.4/src/native/heap.rs": "fd8d6751b3f581c7d8c1e8b1613048f6253b4d3c6a7aca63653c968d890c2047",
+    "/home/midischwarz12/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/futures-timer-3.0.4/src/native/heap_timer.rs": "2711f576fc68550464a7b8e7b994de94c1153220a64115cfdc06caeed24d1ee2",
+    "/home/midischwarz12/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/futures-timer-3.0.4/src/native/timer.rs": "eb08983776bbc0195fa5ab3809378738482cb40ea5c59e377a35de8b124d2bd4"
+  }
+}

@@ -3,8 +3,9 @@
 ## Status
 
 The final four-capture matrix passes. Repeated refusals on one connection plateau
-after first use in this isolated stack. A 224-byte post-runtime-drop difference
-remains unattributed; this does not close the full-daemon memory investigation.
+after first use in this isolated stack. The later [timer intervention](global-timer-allocation-review.md)
+attributes the 224-byte post-runtime-drop difference to process-global timer
+capacity. Full-daemon memory ownership remains a separate investigation.
 
 ## Frozen Workload
 
@@ -120,6 +121,6 @@ The isolated stack shows first-use retention rather than per-refusal growth on
 one connection. It does not identify the production daemon's exact 1,460-byte step:
 the complete stack, active protocols and preexisting capacities differ.
 
-Next, distinguish reconnect high-water storage from per-connection retained state
-and isolate the 224-byte teardown difference. Full-daemon churn and pressure
-attribution, multi-network isolation and Android measurements remain open.
+The [matched timer prewarm comparison](global-timer-allocation-review.md#matched-autonat-intervention)
+now explains the 224-byte teardown difference. Next, distinguish reconnect
+high-water storage from per-connection retained state in the full daemon.
