@@ -7745,6 +7745,7 @@ fn redial_known_addresses(
     relay_ready: impl FnMut(Libp2pPeerId) -> bool,
 ) {
     let local_peer = *swarm.local_peer_id();
+    let local_networks = local_interface_networks("");
     let overlay_peers = configured_peer_addresses
         .iter()
         .chain(discovered_peer_addresses.iter())
@@ -7768,7 +7769,7 @@ fn redial_known_addresses(
 
     for (peer, addresses) in group_peer_dial_targets(targets.addresses) {
         let now = Instant::now();
-        let ready_addresses = addresses
+        let mut ready_addresses = addresses
             .into_iter()
             .filter(|address| {
                 discovered_address_state.should_attempt_recovery_dial_at(peer, address, now)
@@ -7776,6 +7777,14 @@ fn redial_known_addresses(
             .collect::<Vec<_>>();
         if ready_addresses.is_empty() {
             continue;
+        }
+        if overlay_peers.contains(&peer) {
+            sort_peer_recovery_dial_addresses(
+                &mut ready_addresses,
+                peer,
+                configured_peer_addresses,
+                &local_networks,
+            );
         }
         metrics.record_redial_attempt();
         let condition = if overlay_peers.contains(&peer) {
@@ -7828,6 +7837,36 @@ fn group_peer_dial_targets(
         grouped[index].1.push(address);
     }
     grouped
+}
+
+fn sort_peer_recovery_dial_addresses(
+    addresses: &mut [Multiaddr],
+    peer: Libp2pPeerId,
+    configured_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
+    local_networks: &[LocalInterfaceNetwork],
+) {
+    let configured_direct = configured_peer_addresses
+        .iter()
+        .filter(|(configured_peer, address)| {
+            *configured_peer == peer && relayed_address_relay_peer(address).is_none()
+        })
+        .map(|(_, address)| peer_dial_address(peer, address.clone()))
+        .collect::<HashSet<_>>();
+    addresses.sort_by_key(|address| {
+        let address = peer_dial_address(peer, address.clone());
+        if configured_direct.contains(&address) {
+            return 0;
+        }
+        if relayed_address_relay_peer(&address).is_some() {
+            return 2;
+        }
+        if first_ip_in_multiaddr(&address)
+            .is_some_and(|ip| local_networks.iter().any(|network| network.contains(ip)))
+        {
+            return 1;
+        }
+        3
+    });
 }
 
 fn dial_known_peer_addresses(
@@ -9163,6 +9202,7 @@ fn redial_selected_addresses(
     metrics: &RuntimeMetrics,
 ) {
     let local_peer = *swarm.local_peer_id();
+    let local_networks = local_interface_networks("");
     let targets = pending_redial_targets(
         local_peer,
         |peer| selected_peers.contains(&peer),
@@ -9181,7 +9221,7 @@ fn redial_selected_addresses(
         .collect();
     for (peer, addresses) in group_peer_dial_targets(selected_targets) {
         let now = Instant::now();
-        let ready_addresses = addresses
+        let mut ready_addresses = addresses
             .into_iter()
             .filter(|address| {
                 discovered_address_state.should_attempt_recovery_dial_at(peer, address, now)
@@ -9190,6 +9230,12 @@ fn redial_selected_addresses(
         if ready_addresses.is_empty() {
             continue;
         }
+        sort_peer_recovery_dial_addresses(
+            &mut ready_addresses,
+            peer,
+            configured_peer_addresses,
+            &local_networks,
+        );
         metrics.record_redial_attempt();
         if let Err(error) = dial_known_peer_addresses(
             swarm,
@@ -9234,8 +9280,9 @@ fn redial_packet_plane_recovery_addresses(
 ) {
     let local_peer = *swarm.local_peer_id();
     let now = Instant::now();
+    let local_networks = local_interface_networks("");
     let ready_discovered_addresses = discovered_peer_addresses.redial_candidates_at(now);
-    let ready_addresses = packet_plane_recovery_targets(
+    let mut ready_addresses = packet_plane_recovery_targets(
         local_peer,
         peer,
         configured_peer_addresses,
@@ -9249,6 +9296,12 @@ fn redial_packet_plane_recovery_addresses(
     if ready_addresses.is_empty() {
         return;
     }
+    sort_peer_recovery_dial_addresses(
+        &mut ready_addresses,
+        peer,
+        configured_peer_addresses,
+        &local_networks,
+    );
     metrics.record_packet_plane_path_recovery_dial_attempt();
     if let Err(error) = dial_known_peer_addresses(
         swarm,
@@ -33662,6 +33715,72 @@ mod tests {
             targets,
             vec![(peer, discovered_lan_address), (peer, relayed_address)]
         );
+    }
+
+    #[test]
+    fn recovery_dials_try_current_lan_then_relay_before_stale_direct_addresses() {
+        let peer = peer_id();
+        let relay = peer_id();
+        let local_networks = [LocalInterfaceNetwork {
+            ip: IpAddr::V4(Ipv4Addr::new(192, 168, 51, 10)),
+            netmask: IpAddr::V4(Ipv4Addr::new(255, 255, 255, 0)),
+        }];
+        let current_lan: Multiaddr = format!("/ip4/192.168.51.20/tcp/4001/p2p/{peer}")
+            .parse()
+            .expect("current LAN address");
+        let stale_lan: Multiaddr = format!("/ip4/192.168.0.20/tcp/4001/p2p/{peer}")
+            .parse()
+            .expect("stale LAN address");
+        let public_direct: Multiaddr = format!("/ip4/203.0.113.20/tcp/4001/p2p/{peer}")
+            .parse()
+            .expect("public direct address");
+        let relayed: Multiaddr =
+            format!("/ip4/198.51.100.10/tcp/4001/p2p/{relay}/p2p-circuit/p2p/{peer}")
+                .parse()
+                .expect("relay address");
+        let mut addresses = vec![
+            stale_lan.clone(),
+            public_direct.clone(),
+            relayed.clone(),
+            current_lan.clone(),
+        ];
+
+        sort_peer_recovery_dial_addresses(&mut addresses, peer, &[], &local_networks);
+
+        assert_eq!(
+            addresses,
+            vec![current_lan, relayed, stale_lan, public_direct]
+        );
+    }
+
+    #[test]
+    fn recovery_dials_preserve_explicit_direct_endpoint_precedence() {
+        let peer = peer_id();
+        let relay = peer_id();
+        let local_networks = [LocalInterfaceNetwork {
+            ip: IpAddr::V4(Ipv4Addr::new(192, 168, 51, 10)),
+            netmask: IpAddr::V4(Ipv4Addr::new(255, 255, 255, 0)),
+        }];
+        let explicit: Multiaddr = format!("/ip4/203.0.113.20/tcp/4001/p2p/{peer}")
+            .parse()
+            .expect("explicit direct address");
+        let current_lan: Multiaddr = format!("/ip4/192.168.51.20/tcp/4001/p2p/{peer}")
+            .parse()
+            .expect("current LAN address");
+        let relayed: Multiaddr =
+            format!("/ip4/198.51.100.10/tcp/4001/p2p/{relay}/p2p-circuit/p2p/{peer}")
+                .parse()
+                .expect("relay address");
+        let mut addresses = vec![relayed.clone(), current_lan.clone(), explicit.clone()];
+
+        sort_peer_recovery_dial_addresses(
+            &mut addresses,
+            peer,
+            &[(peer, explicit.clone())],
+            &local_networks,
+        );
+
+        assert_eq!(addresses, vec![explicit, current_lan, relayed]);
     }
 
     #[test]
