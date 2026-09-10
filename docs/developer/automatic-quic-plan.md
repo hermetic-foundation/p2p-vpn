@@ -18,9 +18,40 @@ Acceptance remains incomplete. Local evidence does not certify physical Android 
 - Evidence: `/tmp/p2p-vpn-network-reset-capabilities-retry.log` and
   `/tmp/p2p-vpn-network-reset-core.log`; the initial test compilation error is retained separately.
 - Physical rejection excerpts: `/tmp/p2p-vpn-cellular-capability-rejection.log`.
-  Fresh native builds, deployment and physical recovery verification remain outstanding.
+  Fix published as `192e346f`; fresh native builds and authorized deployment completed below.
 - Formatting and required Clippy groups passed; existing non-fatal warnings remain.
   Clippy evidence: `/tmp/p2p-vpn-network-reset-clippy.log` (17.27 seconds).
+
+### Matched-Build Cellular Retest
+
+| Item | Result |
+| --- | --- |
+| Source | `192e346f`, Linux and Android |
+| Underlay | Validated cellular, USB management only |
+| Measurement | Three minutes, 13 windows, 1,200-byte IPv4 packets |
+| Linux to Pixel | 0/78 replies |
+| Pixel to Linux | 0/78 replies |
+| Actual QUIC payload | No growth; no owned QUIC session |
+| Linux cleanup | Original service restored, active, no temporary drop-ins |
+
+- Evidence: `/tmp/p2p-vpn-pixel-movement.2QESTM/`.
+  This was a static-cellular test after upgrade, not a successful network-movement test.
+- The matched Linux runtime had no selected Pixel path. One relay dial failed because
+  the destination had no reservation; this does not establish the sole failure cause.
+- Pixel logs show locally ready relays and public-routing capacity rejections.
+  A local reservation does not prove the destination has one on the same relay.
+- Follow-up excerpts: `/tmp/p2p-vpn-cellular-discovery-192e346f.log`.
+  Investigate destination-address discovery and publication before changing resource limits.
+- Native build logs: `/tmp/p2p-vpn-network-reset-{android,linux}.log`.
+  APK assembly and up-to-date JVM tasks: `/tmp/p2p-vpn-network-reset-apk.log`; 16 KiB alignment passed.
+- Latest source has not had a fresh full-workspace or Nix source-parity run.
+  The failed physical test remains an unresolved acceptance defect.
+
+| Artifact | SHA-256 |
+| --- | --- |
+| APK | `c1b9e25245c6523f40f07e5c6ea4eb13dfee772e41f9ec1dca987058dbb65df8` |
+| Android native library | `a23bcb99dc35c7e5ebf839a89663cfb093082c9fb339c1d04007181df1bc170b` |
+| Linux binary | `622d25ed948bbfbe54c707322a51280acb7fec43a9905901903cf9714acb8f09` |
 
 ## Acceptance Audit
 
