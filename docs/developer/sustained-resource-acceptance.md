@@ -12,7 +12,7 @@ not replace the original acceptance criteria with a smaller workload.
 | --- | --- | --- |
 | 1. Source, manifests, budgets, exclusions | [Measurement plan](sustained-resource-review.md), per-workload manifests, source history | Final runtime matches graceful-capture revision; earlier Linux/Android reuse still needs reconciliation |
 | 2. Sustained resource coverage | S1-S7 captures, process/runtime series, collector controls | Linux and Android capture integrity reconciled; final-code moderate-load/idle comparison remains unverified |
-| 3. Retention and teardown | Ledger/queue controls, pressure/churn, allocation-owner traces | Reconnect teardown evidence verified; residual scope and pressure ownership conclusions still need reconciliation |
+| 3. Retention and teardown | Ledger/queue controls, pressure/churn, allocation-owner traces | Ledger/queue invariants and epoch-control integrity revalidated; pressure-dependent residual remains unresolved |
 | 4. Android scheduling and background work | [Thread controls](android-thread-controls.md), load/profile/isolation reports | Five captures' raw artifacts and historical harness versions verified; shared shutdown reuse limit explicit below |
 | 5. Reproduction and minimal corrections | Capability retirement, connection retirement, Linux TUN cancellation | Production-fix inventory and guarded regression sources inspected; workload reconciliation remains |
 | 6. Verification and invariant preservation | Workspace, Clippy, source parity, Android-native logs, regression sources | Final runtime terminal logs verified; source-parity inventories match; instrumentation gates still need reconciliation |
@@ -239,6 +239,22 @@ needed; do not rebuild or repeat the completed ten-cycle campaign by default.
 
 ## Attribution Boundary
 
+### Revalidated Ownership Controls
+
+All sixteen ledger/queue log hashes and eleven epoch-control log hashes match.
+The structured results also pass explicit checks over every measured cycle:
+
+| Owner | Checked Invariant | Result |
+| --- | --- | --- |
+| Signed ledger | Twelve captures, ten cycles each; whole-cycle and initial-relative post-drop requested bytes/blocks zero | All 120 pass |
+| Packet queues | Four captures, ten cycles each; drain/expiry bytes equal admitted payload totals | All 40 pass |
+| Queue containers | Post-retirement storage 1368 bytes in every cycle; final whole-owner bytes/blocks zero | All four owners fully release |
+| Epoch reclamation | Eleven preserved executions; fixed control distinguishes payload destruction from deferred bookkeeping | Logs match; no daemon-wide bound inferred |
+
+These controls establish their named ownership boundaries. They do not transform
+RSS into exact allocation counts or retroactively identify all daemon allocations.
+The source-gated ledger and queue diagnostics remain unchanged in production.
+
 - Direct traces assign 40,067 of 40,801 residual requested bytes to specific
   owner classes; 734 bytes / 11 blocks remain unassigned.
 - Reconnect traces identify reusable channel storage and session/replay tables,
@@ -252,6 +268,22 @@ The goal requires investigating growth, bounding resource behavior and verifying
 release. It does not explicitly require naming every allocator byte. Whether
 remaining uncertainty prevents those conclusions is still an audit question,
 not permission to declare unexplained growth harmless.
+
+### Required Follow-Up Boundary
+
+1. Verify the full temporary-storage total before captures. A read-only elevated
+   total has been requested; do not delete evidence or alter directory permissions.
+2. Establish final-code moderate-load/drain comparison using the existing S3
+   workload, cached executable, original gates and two fresh repetitions.
+3. Investigate the distinct pressure residual with a bounded matched control or
+   owner inventory. Freeze its comparison and quotas before execution.
+4. Reconcile remaining diagnostic validation and update the review index only
+   after the evidence establishes the corresponding requirement.
+
+No new ten-cycle reconnect run is required by this audit. The unassigned 734
+direct bytes and 2088-byte reconnect bucket remain disclosed limitations; they
+are not automatically extra work merely because their stack names are unknown.
+Pressure's different residual still lacks sufficient comparison to close it.
 
 ## Storage Verification Limit
 

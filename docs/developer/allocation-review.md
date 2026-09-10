@@ -38,6 +38,10 @@ The vendored development dependency keeps subsequent review builds offline.
 Linux and Android source filters include its manifest/source so Cargo can
 resolve the workspace even when this test feature is disabled.
 
+The unmodified-source statement above describes the original import. The later
+[size-inventory diagnostic](allocation-size-review.md) adds opt-in accounting to
+the vendor source; current contents are not byte-identical to that archive.
+
 ## Frozen S6 Workload
 
 | Setting | Value |
