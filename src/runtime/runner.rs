@@ -10366,7 +10366,6 @@ async fn send_dequeued_packet_plane_datagram(
                     PacketPlaneFallbackAttempt {
                         packet,
                         peer_mtu,
-                        path,
                         failed_backend: backend,
                         frame: &frame,
                     },
@@ -10396,7 +10395,6 @@ async fn send_dequeued_packet_plane_datagram(
 struct PacketPlaneFallbackAttempt<'a> {
     packet: &'a crate::queue::Packet,
     peer_mtu: u16,
-    path: PathKind,
     failed_backend: PacketDatagramBackend,
     frame: &'a Frame,
 }
@@ -10407,6 +10405,7 @@ async fn send_dequeued_packet_plane_fallback(
     attempt: PacketPlaneFallbackAttempt<'_>,
     context: &mut QueueDrainContext<'_>,
 ) -> bool {
+    let mut fallback_error = None;
     if let Some(backend) = packet_plane_send_fallback_backend(
         attempt.failed_backend,
         context.peer_capabilities,
@@ -10450,7 +10449,7 @@ async fn send_dequeued_packet_plane_fallback(
                     context.paths,
                     context.metrics,
                     attempt.packet.peer(),
-                    attempt.path,
+                    packet_datagram_backend_path_kind(backend),
                     &error,
                 ) && let Some(peer) = forwarder.transport_peer_for_overlay(attempt.packet.peer())
                 {
@@ -10464,11 +10463,8 @@ async fn send_dequeued_packet_plane_fallback(
                         context.metrics,
                     );
                 }
-                context
-                    .metrics
-                    .record_outbound_drop(packet_plane_send_drop_reason(&error));
-                eprintln!("dropping queued packet-plane fallback outbound packet: {error:?}");
-                return true;
+                eprintln!("packet-plane fallback send failed; checking stream fallback: {error:?}");
+                fallback_error = Some(error);
             }
         }
     }
@@ -10495,6 +10491,13 @@ async fn send_dequeued_packet_plane_fallback(
             path,
             context,
         );
+        return true;
+    }
+
+    if let Some(error) = fallback_error {
+        context
+            .metrics
+            .record_outbound_drop(packet_plane_send_drop_reason(&error));
         return true;
     }
 
@@ -45384,6 +45387,111 @@ mod tests {
         assert_eq!(snapshot.outbound_path_probes_sent, 1);
         assert_eq!(snapshot.outbound_path_probe_failures, 0);
         assert_eq!(packet_in_flight.in_flight_for(remote_overlay), 1);
+    }
+
+    #[tokio::test]
+    async fn failed_udp_fallback_tries_available_stream_before_dropping() {
+        for stream_available in [true, false] {
+            let local = crate::identity::NodeIdentity::generate_ed25519().unwrap();
+            let remote = crate::identity::NodeIdentity::generate_ed25519().unwrap();
+            let remote_transport = remote.peer_id.parse::<Libp2pPeerId>().unwrap();
+            let peer = PeerId::from_libp2p(remote_transport);
+            let config = config_with_peer(&local, remote_transport);
+            let mut node = build_node(&HostConfig {
+                identity: local.clone(),
+                network_name: "lab".to_owned(),
+                membership_tag: None,
+                mtu: 1280,
+                max_concurrent_control_streams: 64,
+                max_concurrent_packet_streams: 256,
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                known_peers: Vec::new(),
+                relay_reservations: Vec::new(),
+                relay_server: false,
+                relay_resources: crate::config::RelayResourceConfig::default(),
+                resources: crate::config::ResourceConfig::default(),
+                discovery: DiscoveryConfig::default(),
+            })
+            .unwrap();
+            let mut udp = PacketPlaneRuntime::bind(vec!["127.0.0.1:0".parse().unwrap()])
+                .await
+                .unwrap();
+            let mut receiver = PacketPlaneRuntime::bind(vec!["127.0.0.1:0".parse().unwrap()])
+                .await
+                .unwrap();
+            // A stale UDP session limit is smaller than the queued IP packet.
+            establish_test_packet_plane_sessions(
+                &mut udp,
+                &mut receiver,
+                &local,
+                &remote,
+                &test_packet_plane_secret(7),
+                &test_packet_plane_secret(9),
+                1,
+            );
+            let mut forwarder = Forwarder::from_config(&config).unwrap();
+            let mut queues = PeerQueues::new(4, 4096);
+            forwarder
+                .enqueue_tun_packet(
+                    &mut queues,
+                    ipv4_packet(
+                        builtin_ipv4(config.local_peer_id().unwrap()),
+                        builtin_ipv4(peer),
+                    ),
+                )
+                .unwrap();
+            let packet = queues.dequeue().unwrap();
+            let mut paths = PathSet::new();
+            paths.record_established(peer, PathKind::DirectQuicDatagram);
+            paths.record_established(peer, PathKind::DirectUdpDatagram);
+            if stream_available {
+                paths.record_established_with_details(
+                    peer,
+                    PathKind::DirectTcpStream,
+                    None,
+                    Some(1280),
+                    PathOrigin::Configured,
+                    PathConnectionRole::Dialer,
+                    false,
+                    Some(ConnectionId::new_unchecked(42)),
+                    Some(1),
+                );
+            }
+            let mut capabilities = PeerCapabilities::default();
+            capabilities.record(
+                peer,
+                ControlCapabilities::local("lab", None, 1280).with_owned_udp_packet_plane(true),
+            );
+            let metrics = RuntimeMetrics::default();
+            let mut in_flight = PacketInFlight::new(256);
+            let mut context =
+                queue_drain_context(&mut paths, &capabilities, &mut in_flight, &metrics);
+            context.packet_plane = Some(&udp);
+            send_dequeued_packet_plane_datagram(
+                &mut node.swarm,
+                &forwarder,
+                &packet,
+                1280,
+                PathKind::DirectQuicDatagram,
+                PacketDatagramBackend::OwnedQuic,
+                &mut context,
+            )
+            .await;
+            let snapshot = metrics.snapshot(queues.total_stats());
+            assert_eq!(
+                snapshot.outbound_stream_fallback_packets,
+                u64::from(stream_available)
+            );
+            assert_eq!(snapshot.outbound_sent_packets, u64::from(stream_available));
+            assert_eq!(
+                snapshot.outbound_dropped_packets,
+                u64::from(!stream_available)
+            );
+            assert_eq!(snapshot.outbound_owned_udp_datagram_packets, 0);
+            assert_eq!(in_flight.in_flight_for(peer), usize::from(stream_available));
+        }
     }
 
     #[tokio::test]

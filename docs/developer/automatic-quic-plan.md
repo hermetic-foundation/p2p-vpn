@@ -155,6 +155,27 @@ This bounded OnePlus Wi-Fi pass does not resolve the earlier Pixel failure or ce
 sleep, cellular, physical fallback, movement or long-duration stability. No timing or
 transport fixes were inferred from a passing run; those acceptance gaps remain open.
 
+## Failed Datagram Fallback Review
+
+- Inspection found that a failed QUIC send could try UDP, then immediately drop on UDP failure
+  without checking a healthy stream. UDP failure also demoted the original QUIC path.
+- The queue-drain regression reproduces a missing QUIC runtime and a stale UDP session MTU
+  below the queued packet size. Before the fix, the stream-dispatch assertion failed: zero versus one.
+- Fallback now checks supported streams after UDP failure and demotes the backend that failed.
+  If no stream exists, the packet is dropped once with the UDP error's classification.
+- The regression covers stream-available and no-stream cases, payload/drop counters and in-flight
+  dispatch accounting. It does not prove remote stream delivery or identify the Pixel failure cause.
+- No wire format, authorization, configuration, probe deadline or transport preference changed.
+  No physical deployment was performed for this follow-up fix.
+
+- Core-library suite: 1,167 passed, eight ignored, zero failures in 46.51 seconds.
+- Required Clippy correctness, suspicious and perf groups passed in 16.45 seconds;
+  existing non-fatal lint warnings remain. Rustfmt and whitespace checks passed.
+- This follow-up did not rerun full workspace, privileged namespace, Nix realization or Android
+  builds. Their earlier evidence predates this fix; physical fallback validation remains required.
+
+No existing Lean/TLA+ model was found; this asynchronous fallback change has executable coverage only.
+
 ## Stream-Only Compatibility Check
 
 - Extend the isolated minimal-config mDNS fixture with one explicitly stream-only peer.

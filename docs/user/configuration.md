@@ -282,6 +282,9 @@ Default path preference:
 | Direct TCP stream | Lower direct stream fallback. |
 | Circuit relay stream | Public fallback, pinned to the selected relay connection. |
 
+If a QUIC datagram send and its UDP fallback both fail, the queued packet can still
+use an available supported stream. No additional configuration is needed.
+
 ## Membership Key
 
 `network.membership_key` is optional.
