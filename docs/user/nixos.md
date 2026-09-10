@@ -117,6 +117,7 @@ Defaults are assigned by the sorted native instance index `N`.
 | libp2p TCP | `0.0.0.0:4001+N` |
 | libp2p QUIC | `0.0.0.0:4001+N` |
 | UDP packet plane | `0.0.0.0:51820+N` |
+| QUIC datagram packet plane | `0.0.0.0:52820+N` |
 | Control socket | `/run/p2p-vpn-<instance>/control.sock` |
 | LAN discovery | mDNS |
 | Public discovery | IPFS-compatible Kademlia |
@@ -380,9 +381,11 @@ Tune automatic selection with `autoRelay`:
 
 ## Packet Plane
 
-The default packet plane uses owned UDP datagrams.
+The module automatically configures QUIC and UDP datagram listeners and their
+firewall ports. Healthy compatible QUIC datagram paths take priority over UDP.
+Stream and relay fallbacks remain available.
 
-QUIC DATAGRAM may be configured as an additional owned transport:
+Listener settings are optional overrides:
 
 ```nix
 {
@@ -395,7 +398,11 @@ QUIC DATAGRAM may be configured as an additional owned transport:
 
 Use `externalEndpoints` or `quicExternalEndpoints` only for known public mappings.
 
-An empty `listen` list disables the owned UDP listener.
+| Override | Effect |
+| --- | --- |
+| `quicListen = [];` | Disable QUIC datagrams; retain UDP and stream fallbacks |
+| `listen = [];` with no QUIC override | Stream-only operation |
+| Empty `listen` with explicit nonempty `quicListen` | QUIC datagrams without the UDP packet listener |
 
 ## Multiple Networks
 

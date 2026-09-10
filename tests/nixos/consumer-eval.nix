@@ -16,6 +16,8 @@ let
         "/ip4/0.0.0.0/udp/4001/quic-v1"
       ];
     packetListener = generated.network.packet_plane.listen == [ "0.0.0.0:51820" ];
+    quicPacketListener = generated.network.packet_plane.quic_listen == [ "0.0.0.0:52820" ];
+    quicFirewall = builtins.elem 52820 config.networking.firewall.allowedUDPPorts;
     interface =
       generated.interface == {
         mtu = 1280;

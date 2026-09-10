@@ -48,12 +48,14 @@ let
   instanceIndex = name: lib.lists.findFirstIndex (candidate: candidate == name) 0 nativeNames;
   instancePort = name: 4001 + instanceIndex name;
   instancePacketPort = name: 51820 + instanceIndex name;
+  instanceQuicPacketPort = name: 52820 + instanceIndex name;
   runtimeDirectory = name: "/run/p2p-vpn-${name}";
   runtimeConfigFile = name: "${runtimeDirectory name}/config.json";
   instanceStateDirectory = name: instance: "${instance.stateDirectory}/${name}";
   defaultPrivateKeyFile = name: instance: "${instanceStateDirectory name instance}/private.key";
   pairingStateFile = name: instance: "${instanceStateDirectory name instance}/pairing-state.json";
-  membershipStateFile = name: instance: "${instanceStateDirectory name instance}/membership-state.json";
+  membershipStateFile =
+    name: instance: "${instanceStateDirectory name instance}/membership-state.json";
   nixMode = instance: instance.configFile == null;
   automaticIdentity = instance: nixMode instance && instance.privateKeyFile == null;
   effectiveConfigFile =
@@ -82,6 +84,14 @@ let
       instance.packetPlane.listen
     else
       [ "0.0.0.0:${toString (instancePacketPort name)}" ];
+  effectiveQuicPacketPlaneListen =
+    name: instance:
+    if instance.packetPlane.quicListen != null then
+      instance.packetPlane.quicListen
+    else if effectivePacketPlaneListen name instance == [ ] then
+      [ ]
+    else
+      [ "0.0.0.0:${toString (instanceQuicPacketPort name)}" ];
   nativeListenAddresses = concatMap (
     name: effectiveListenAddresses name nativeInstances.${name}
   ) nativeNames;
@@ -90,8 +100,7 @@ let
     let
       instance = nativeInstances.${name};
     in
-    effectivePacketPlaneListen name instance
-    ++ optionals (instance.packetPlane.quicListen != null) instance.packetPlane.quicListen
+    effectivePacketPlaneListen name instance ++ effectiveQuicPacketPlaneListen name instance
   ) nativeNames;
   overlayHostAddresses =
     instance:
@@ -376,6 +385,7 @@ let
         // {
           packet_plane = packetPlaneSettings instance.packetPlane // {
             listen = effectivePacketPlaneListen name instance;
+            quic_listen = effectiveQuicPacketPlaneListen name instance;
           };
         }
       );
@@ -723,7 +733,12 @@ let
       type = types.nullOr (types.listOf types.str);
       default = null;
       example = [ "0.0.0.0:51821" ];
-      description = "Owned QUIC DATAGRAM packet-plane listener. At most one is supported.";
+      description = ''
+        Owned QUIC DATAGRAM packet-plane listener. At most one is supported.
+        Null selects a deterministic per-instance listener beginning at port
+        52820, unless packetPlane.listen is empty (stream-only). An empty list
+        explicitly disables QUIC datagrams. Explicit listeners override stream-only mode.
+      '';
     };
     quicExternalEndpoints = mkOption {
       type = types.nullOr (types.listOf types.str);
@@ -1274,10 +1289,7 @@ let
         packetUdpPorts =
           if nixMode instance then socketPorts (effectivePacketPlaneListen name instance) else [ ];
         packetQuicPorts =
-          if nixMode instance && instance.packetPlane.quicListen != null then
-            socketPorts instance.packetPlane.quicListen
-          else
-            [ ];
+          if nixMode instance then socketPorts (effectiveQuicPacketPlaneListen name instance) else [ ];
         mdnsEnabled = nixMode instance && (instance.discovery == null || instance.discovery.mdns);
       in
       transportPorts

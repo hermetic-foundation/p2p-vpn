@@ -6027,6 +6027,10 @@
             config = consumerEval.config;
             source = ./tests/nixos/consumer-flake/flake.nix;
           };
+          nixos-quic-defaults-eval = import ./tests/nixos/quic-defaults-eval.nix {
+            inherit pkgs lib system;
+            module = self.nixosModules.default;
+          };
           nixos-consumer-flake =
             pkgs.runCommand "p2p-vpn-nixos-consumer-flake"
               {
@@ -6062,6 +6066,7 @@
                     "/ip4/0.0.0.0/udp/4001/quic-v1"
                   ]
                   and .network.packet_plane.listen == ["0.0.0.0:51820"]
+                  and .network.packet_plane.quic_listen == ["0.0.0.0:52820"]
                   and .interface == {"mtu":1280,"name":"pv0"}
                   and .peers == []
                   and (.network | has("private_key") | not)
@@ -6424,7 +6429,7 @@
                 test "$systemCallArchitectures" = native
                 test "$umask" = 0077
                 test "$tcpPorts" = '[4001,4002,4003,4004,4005,4006]'
-                test "$udpPorts" = '[4001,4002,4003,4004,4005,4006,5353,51820,51821,51822,51823,51824,51825]'
+                test "$udpPorts" = '[4001,4002,4003,4004,4005,4006,5353,51820,51821,51822,51823,51824,51825,52820,52821,52822,52823,52824,52825]'
                 case "$kernelModules" in
                   *tun*) ;;
                   *) echo "tun kernel module not requested: $kernelModules" >&2; exit 1 ;;
