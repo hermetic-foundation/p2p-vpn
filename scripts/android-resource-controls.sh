@@ -116,6 +116,12 @@ run_android_resource_controls() {
   sleep 30
   adb_run shell dumpsys power >"$output_dir/resource-power.txt" || return 1
   resource_power_is_background "$output_dir/resource-power.txt" || return 1
+  if [[ "${scenario:-}" == multi-network-resource-idle ]]; then
+    record_step sustained_idle started "Two background networks; fixed 300-second idle window"
+    resource_control_window on "$output_dir/sustained-idle" 300 || return 1
+    record_step sustained_idle passed "300 process and 60 runtime observations verified"
+    return 0
+  fi
   for mode in off on on off; do
     index=$((index + 1))
     record_step "resource_control_$index" started "Collector $mode; fixed 60-second idle window"

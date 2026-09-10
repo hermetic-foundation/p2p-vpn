@@ -1,0 +1,821 @@
+{
+  "schema_version": 1,
+  "scope": "single_background_idle_capture_not_full_S7",
+  "raw_directory": "/tmp/p2p-vpn-android-sustained-idle-2",
+  "guest_clock_ticks_per_second": 100,
+  "host_clock_ticks_per_second": 100,
+  "endpoints": {
+    "app_before": {
+      "schema_version": 1,
+      "pid": 2232,
+      "start_ticks": 2005,
+      "started_uptime_seconds": 108.35,
+      "finished_uptime_seconds": 108.36,
+      "user_ticks": 341,
+      "system_ticks": 103,
+      "os_threads": 30,
+      "rss_kib": 207496,
+      "fds": 123,
+      "leader_voluntary_context_switches": 1289,
+      "leader_involuntary_context_switches": 543
+    },
+    "app_after": {
+      "schema_version": 1,
+      "pid": 2232,
+      "start_ticks": 2005,
+      "started_uptime_seconds": 411.53,
+      "finished_uptime_seconds": 411.53,
+      "user_ticks": 911,
+      "system_ticks": 191,
+      "os_threads": 30,
+      "rss_kib": 208692,
+      "fds": 121,
+      "leader_voluntary_context_switches": 1713,
+      "leader_involuntary_context_switches": 621
+    },
+    "emulator_before": {
+      "schema_version": 1,
+      "pid": 264,
+      "start_ticks": 88930933,
+      "started_uptime_seconds": 889421.47,
+      "finished_uptime_seconds": 889421.48,
+      "user_ticks": 6650,
+      "system_ticks": 1368,
+      "os_threads": 267,
+      "rss_kib": 3863244,
+      "fds": 150,
+      "leader_voluntary_context_switches": 41,
+      "leader_involuntary_context_switches": 8
+    },
+    "emulator_after": {
+      "schema_version": 1,
+      "pid": 264,
+      "start_ticks": 88930933,
+      "started_uptime_seconds": 889724.67,
+      "finished_uptime_seconds": 889724.67,
+      "user_ticks": 8571,
+      "system_ticks": 1717,
+      "os_threads": 250,
+      "rss_kib": 3863052,
+      "fds": 148,
+      "leader_voluntary_context_switches": 41,
+      "leader_involuntary_context_switches": 8
+    }
+  },
+  "runtime_owner_metrics": [
+    {
+      "id": "46ef4f7d-9b62-4424-891c-3d312bf5d11f",
+      "samples": 60,
+      "metrics": [
+        {
+          "name": "kad_pairing_background_bounded_jobs",
+          "first": "2",
+          "last": "2",
+          "min": 2,
+          "max": 2
+        },
+        {
+          "name": "kad_pairing_background_cursor_bytes",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_pairing_background_pending_key_bytes",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_pairing_background_pending_keys",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_pairing_background_rejected_inputs",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_pairing_background_rejected_skips",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_pairing_background_skipped_key_bytes",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_pairing_background_skipped_keys",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_pairing_dial_intents_attempted",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_pairing_handler_peak_pending_bytes",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_pairing_handler_peak_pending_negotiations",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_pairing_handler_peak_pending_requests",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_pairing_handler_peak_queued_rejections",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_pairing_handler_pending_bytes",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_pairing_handler_pending_negotiations",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_pairing_handler_pending_requests",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_pairing_handler_queued_rejections",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_pairing_pending_rpc_byte_rejections",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_pairing_pending_rpc_bytes",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_pairing_pending_rpc_count_rejections",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_pairing_pending_rpc_requests",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_primary_background_bounded_jobs",
+          "first": "2",
+          "last": "2",
+          "min": 2,
+          "max": 2
+        },
+        {
+          "name": "kad_primary_background_cursor_bytes",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_primary_background_pending_key_bytes",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_primary_background_pending_keys",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_primary_background_rejected_inputs",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_primary_background_rejected_skips",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_primary_background_skipped_key_bytes",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_primary_background_skipped_keys",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_primary_dial_intents_attempted",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_primary_handler_peak_pending_bytes",
+          "first": "861",
+          "last": "861",
+          "min": 861,
+          "max": 861
+        },
+        {
+          "name": "kad_primary_handler_peak_pending_negotiations",
+          "first": "2",
+          "last": "2",
+          "min": 2,
+          "max": 2
+        },
+        {
+          "name": "kad_primary_handler_peak_pending_requests",
+          "first": "2",
+          "last": "2",
+          "min": 2,
+          "max": 2
+        },
+        {
+          "name": "kad_primary_handler_peak_queued_rejections",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_primary_handler_pending_bytes",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_primary_handler_pending_negotiations",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_primary_handler_pending_requests",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_primary_handler_queued_rejections",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_primary_pending_rpc_byte_rejections",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_primary_pending_rpc_bytes",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_primary_pending_rpc_count_rejections",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_primary_pending_rpc_requests",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kademlia_provider_dial_attempts",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "packet_plane_path_recovery_dial_attempts",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "queue_queued_bytes",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "queue_queued_packets",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        }
+      ]
+    },
+    {
+      "id": "f2d17c9c-970c-3f83-9371-c3de6baaf929",
+      "samples": 60,
+      "metrics": [
+        {
+          "name": "kad_pairing_background_bounded_jobs",
+          "first": "2",
+          "last": "2",
+          "min": 2,
+          "max": 2
+        },
+        {
+          "name": "kad_pairing_background_cursor_bytes",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_pairing_background_pending_key_bytes",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_pairing_background_pending_keys",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_pairing_background_rejected_inputs",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_pairing_background_rejected_skips",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_pairing_background_skipped_key_bytes",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_pairing_background_skipped_keys",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_pairing_dial_intents_attempted",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_pairing_handler_peak_pending_bytes",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_pairing_handler_peak_pending_negotiations",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_pairing_handler_peak_pending_requests",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_pairing_handler_peak_queued_rejections",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_pairing_handler_pending_bytes",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_pairing_handler_pending_negotiations",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_pairing_handler_pending_requests",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_pairing_handler_queued_rejections",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_pairing_pending_rpc_byte_rejections",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_pairing_pending_rpc_bytes",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_pairing_pending_rpc_count_rejections",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_pairing_pending_rpc_requests",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_primary_background_bounded_jobs",
+          "first": "2",
+          "last": "2",
+          "min": 2,
+          "max": 2
+        },
+        {
+          "name": "kad_primary_background_cursor_bytes",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_primary_background_pending_key_bytes",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_primary_background_pending_keys",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_primary_background_rejected_inputs",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_primary_background_rejected_skips",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_primary_background_skipped_key_bytes",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_primary_background_skipped_keys",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_primary_dial_intents_attempted",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_primary_handler_peak_pending_bytes",
+          "first": "866",
+          "last": "866",
+          "min": 866,
+          "max": 866
+        },
+        {
+          "name": "kad_primary_handler_peak_pending_negotiations",
+          "first": "2",
+          "last": "2",
+          "min": 2,
+          "max": 2
+        },
+        {
+          "name": "kad_primary_handler_peak_pending_requests",
+          "first": "2",
+          "last": "2",
+          "min": 2,
+          "max": 2
+        },
+        {
+          "name": "kad_primary_handler_peak_queued_rejections",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_primary_handler_pending_bytes",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_primary_handler_pending_negotiations",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_primary_handler_pending_requests",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_primary_handler_queued_rejections",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_primary_pending_rpc_byte_rejections",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_primary_pending_rpc_bytes",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_primary_pending_rpc_count_rejections",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kad_primary_pending_rpc_requests",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "kademlia_provider_dial_attempts",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "packet_plane_path_recovery_dial_attempts",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "queue_queued_bytes",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        },
+        {
+          "name": "queue_queued_packets",
+          "first": "0",
+          "last": "0",
+          "min": 0,
+          "max": 0
+        }
+      ]
+    }
+  ],
+  "quality": {
+    "process_samples": 300,
+    "runtime_samples": 60,
+    "max_process_gap_seconds": 1.02,
+    "max_process_duration_seconds": 0.01,
+    "max_runtime_gap_millis": 5020,
+    "max_runtime_duration_millis": 80
+  },
+  "raw_sha256": [
+    {
+      "sha256": "bbedba364ff3bd2fb20e2e22b0671177814cd71b93ad2c800953beca07860413",
+      "path": "/tmp/p2p-vpn-android-sustained-idle-2/android.log"
+    },
+    {
+      "sha256": "6a59f3a5613b36d92b871c3715163d391791f39bd2fe470ff14ba907de879faf",
+      "path": "/tmp/p2p-vpn-android-sustained-idle-2/emulator.log"
+    },
+    {
+      "sha256": "2f19d7f0f8cab0b6bedf4001b314fc59c70c17973f6a3afdf6823911b68bd6b9",
+      "path": "/tmp/p2p-vpn-android-sustained-idle-2/evidence.json"
+    },
+    {
+      "sha256": "1009e16552df120eda3c6335ff136302b5f832d17b4ae56d8f4da951a197d800",
+      "path": "/tmp/p2p-vpn-android-sustained-idle-2/fixture-secondary.log"
+    },
+    {
+      "sha256": "6102c9c3055de2dda823b63cc220ca381560cbd2a1198e1499b33b509e5f856f",
+      "path": "/tmp/p2p-vpn-android-sustained-idle-2/fixture.log"
+    },
+    {
+      "sha256": "5dc0e1dc010b7baf71294278c079b3a8afb95835745ac71bdbe76a2ff9983e3e",
+      "path": "/tmp/p2p-vpn-android-sustained-idle-2/resource-admission.json"
+    },
+    {
+      "sha256": "92cd559a375c3871f5f710b25cc2f47a9bf230feb5b60f6883e4873a74b66985",
+      "path": "/tmp/p2p-vpn-android-sustained-idle-2/resource-counters.json"
+    },
+    {
+      "sha256": "eea8254c7500ba3de996aa8ad6af399183f04e17d4a8102fde539dbc93a90012",
+      "path": "/tmp/p2p-vpn-android-sustained-idle-2/resource-guest-clock.txt"
+    },
+    {
+      "sha256": "eea8254c7500ba3de996aa8ad6af399183f04e17d4a8102fde539dbc93a90012",
+      "path": "/tmp/p2p-vpn-android-sustained-idle-2/resource-host-clock.txt"
+    },
+    {
+      "sha256": "99a13fbba8be3f18b686174c7e64220c3802cfe6d3d0c53112b333369b07f596",
+      "path": "/tmp/p2p-vpn-android-sustained-idle-2/resource-power.txt"
+    },
+    {
+      "sha256": "cbfc5f4f46947a84c46216ae8ee0bfaebce09bbac37337972e033b39056106eb",
+      "path": "/tmp/p2p-vpn-android-sustained-idle-2/resource-root.txt"
+    },
+    {
+      "sha256": "f8c71df8716f064ebc529ada9f54dae4803bbe8fcd3d8ea5fc2870f6fd5f2931",
+      "path": "/tmp/p2p-vpn-android-sustained-idle-2/sustained-idle-boundary-after.jsonl"
+    },
+    {
+      "sha256": "a0ba0f8e14bc2afe8b8fac65d1861c7c1a6307173855382c79b2f4743d1b03d2",
+      "path": "/tmp/p2p-vpn-android-sustained-idle-2/sustained-idle-boundary-before.jsonl"
+    },
+    {
+      "sha256": "24251e67c7997e311a23be6c5e99031770b42b94b8f8dec79bc44f6cc780f45b",
+      "path": "/tmp/p2p-vpn-android-sustained-idle-2/sustained-idle-emulator-after.jsonl"
+    },
+    {
+      "sha256": "ce5b137f38978bd910e2de15cf133202d3c0d530858a97daf8c1a0f8db22d82d",
+      "path": "/tmp/p2p-vpn-android-sustained-idle-2/sustained-idle-emulator-before.jsonl"
+    },
+    {
+      "sha256": "fb14b72ca6cdcb08dae2fe8c73c56935b5413629509aa093b8b5a6af38bfbd15",
+      "path": "/tmp/p2p-vpn-android-sustained-idle-2/sustained-idle-host-load-after.txt"
+    },
+    {
+      "sha256": "9a972d706a071eed3d3465d6863fb425a76bc9fa2b62aad464050ab97f7f7cd3",
+      "path": "/tmp/p2p-vpn-android-sustained-idle-2/sustained-idle-host-load-before.txt"
+    },
+    {
+      "sha256": "2f9c2ff22b183b6cfeb9777bac39a52af115161c5be988ca9737253b640bf78c",
+      "path": "/tmp/p2p-vpn-android-sustained-idle-2/sustained-idle-process-after.jsonl"
+    },
+    {
+      "sha256": "682e50b913620dd7994e9afc2cb15b081681bcd0153232c772b2ff8f0918d279",
+      "path": "/tmp/p2p-vpn-android-sustained-idle-2/sustained-idle-process-before.jsonl"
+    },
+    {
+      "sha256": "fb05fc1ae1a6edb8ad8b4fc136452a5da6aa47a8f8f8e892124b01e65289f3a8",
+      "path": "/tmp/p2p-vpn-android-sustained-idle-2/sustained-idle-process.jsonl"
+    },
+    {
+      "sha256": "6cc39cf3050523e470a58befbde101a6314db457f67591825970907303b0934c",
+      "path": "/tmp/p2p-vpn-android-sustained-idle-2/sustained-idle-runtime.jsonl"
+    },
+    {
+      "sha256": "db9fe62341d93d9db58bee9a1b5d983868d99242861255f576488a2ba14d6f85",
+      "path": "/tmp/p2p-vpn-android-sustained-idle-2/sustained-idle-window.json"
+    }
+  ]
+}

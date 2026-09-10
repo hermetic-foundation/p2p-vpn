@@ -46,6 +46,7 @@ No physical device or deployed host is authorized for this work.
 | [Android lifecycle](android-lifecycle-audit.md) | Ownership regressions and multi-network restoration | Sustained CPU/memory and physical battery behavior |
 | [Android resource preflight](sustained-android-review.md) | Refreshed APK, process/per-network sampling and two-network QUIC-stream admission pass | Run sustained S7 and scheduling/wakeup attribution |
 | [Android collector controls](android-resource-controls.md) | Off/on/on/off idle windows pass; app and emulator observer cost quantified separately | One boot only; retain measured interference and extend to sustained workloads |
+| [Android sustained idle](android-sustained-idle.md) | First 300-second idle phase passes: 300 process/60 runtime samples, stable identity, empty sampled queues | Repeat/load/isolation/wakeup evidence; mixed transport limits comparisons; one setup failure unexplained |
 
 Retain historical failures, censoring and sampling gaps. Missing observations
 are not zero activity. Reopen completed ownership/enforcement work only with

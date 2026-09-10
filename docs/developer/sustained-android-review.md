@@ -5,7 +5,8 @@
 Cached capability preflight passes. The APK and Linux fixture have now been
 refreshed, and the packaged JNI matches the selected native build. Isolated cached
 emulator boot, process collection and two-network traffic admission pass.
-No physical device was used; sustained capture has not begun.
+No physical device was used. The [first sustained idle capture](android-sustained-idle.md) passes;
+load, independent transitions and an unexplained setup failure remain open.
 
 ## Capability Evidence
 

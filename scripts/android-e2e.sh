@@ -62,6 +62,7 @@ Options:
   --scenario NAME        Select boot-smoke, profile-persistence, always-on,
                          pairing-traffic, underlay-recovery, network-workflow,
                          multi-network, multi-network-resource-admission, multi-network-resource-controls,
+                         multi-network-resource-idle,
                          or process-sample-smoke.
   --path-mode MODE       Select automatic, quic-stream, tcp-stream, owned-quic, relay-only,
                          or relay-to-direct.
@@ -140,7 +141,7 @@ done
 pairing_scenario=0
 case "$scenario" in
   boot-smoke|profile-persistence|always-on|process-sample-smoke) ;;
-  pairing-traffic|underlay-recovery|network-workflow|multi-network|multi-network-resource-admission|multi-network-resource-controls) pairing_scenario=1 ;;
+  pairing-traffic|underlay-recovery|network-workflow|multi-network|multi-network-resource-admission|multi-network-resource-controls|multi-network-resource-idle) pairing_scenario=1 ;;
   *)
     echo "unsupported Android E2E scenario: $scenario" >&2
     exit 2
@@ -1980,6 +1981,13 @@ run_multi_network_scenario() {
       .[0].value.snapshot.networks[0].hostname == .[1].value.snapshot.networks[0].hostname and
       .[0].value.snapshot.networks[0].addresses == .[1].value.snapshot.networks[0].addresses
     ' "$alpha_created" "$alpha_migrated" >/dev/null; then
+    jq -s 'map({schema_version,ok,error,service_ready:.value.service_ready,
+      snapshot:(.value.snapshot | if . == null then null else
+        {has_profile,profile_stored,profile_unreadable,busy,connected,runtime_generation,
+         networks:[.networks[]? | {id,name,hostname,peer_id,addresses,selected,enabled,phase}]} end)})' \
+      "$alpha_created" "$alpha_migrated" > "$output_dir/legacy-migration-failure.json" || true
+    timeout --signal=TERM --kill-after=2s 10 "${adb[@]}" logcat -d -t 200 \
+      -s AndroidRuntime:E ActivityManager:E > "$output_dir/legacy-migration-errors.txt" 2>&1 || true
     outcome=failed
     outcome_detail="Legacy profile migration did not preserve the alpha identity"
     record_step legacy_collection_migration failed "$outcome_detail"
@@ -2216,7 +2224,7 @@ run_multi_network_scenario() {
     outcome=passed
     outcome_detail="Two isolated networks admitted; sustained measurements have not run"
     record_step resource_admission passed "$outcome_detail"
-    if [[ "$scenario" == multi-network-resource-controls ]]; then
+    if [[ "$scenario" == multi-network-resource-controls || "$scenario" == multi-network-resource-idle ]]; then
       # shellcheck disable=SC1090
       source "${P2P_VPN_ANDROID_RESOURCE_CONTROLS:-$(dirname "$0")/android-resource-controls.sh}"
       if ! run_android_resource_controls; then
@@ -2226,6 +2234,9 @@ run_multi_network_scenario() {
         return 1
       fi
       outcome_detail="Collector overhead controls captured; sustained S7 remains open"
+      if [[ "$scenario" == multi-network-resource-idle ]]; then
+        outcome_detail="300-second Android idle captured; sustained load and isolation remain open"
+      fi
     fi
     return 0
   fi
