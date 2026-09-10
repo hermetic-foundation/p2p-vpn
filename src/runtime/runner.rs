@@ -7061,12 +7061,11 @@ fn refresh_kademlia_rendezvous(
                 .ok()?
             }
             KademliaMaintenanceTask::AdvertiseProvider => {
-                match swarm
-                    .behaviour_mut()
-                    .kad
-                    .try_start_providing(context.advertise_key.clone())
-                    .ok()?
-                {
+                let key = crate::runtime::p2p::kademlia_provider_wire_key(
+                    &swarm.behaviour().kad,
+                    context.advertise_key,
+                );
+                match swarm.behaviour_mut().kad.try_start_providing(key).ok()? {
                     Ok(query) => {
                         context.metrics.record_kademlia_provider_advertisement();
                         Some(query)
@@ -7085,11 +7084,9 @@ fn refresh_kademlia_rendezvous(
                 }
             }
             KademliaMaintenanceTask::LookupProvider(key) => {
-                let query = swarm
-                    .behaviour_mut()
-                    .kad
-                    .try_get_providers(key.clone())
-                    .ok()?;
+                let key =
+                    crate::runtime::p2p::kademlia_provider_wire_key(&swarm.behaviour().kad, key);
+                let query = swarm.behaviour_mut().kad.try_get_providers(key).ok()?;
                 context.metrics.record_kademlia_provider_lookup();
                 Some(query)
             }
@@ -7690,7 +7687,8 @@ fn reconcile_runtime_kademlia_scope(
         return;
     }
     if let Some(key) = rendezvous_key.as_ref() {
-        node.swarm.behaviour_mut().kad.stop_providing(key);
+        let key = crate::runtime::p2p::kademlia_provider_wire_key(&node.swarm.behaviour().kad, key);
+        node.swarm.behaviour_mut().kad.stop_providing(&key);
     }
     if let Some(key) = membership_records_key.as_ref() {
         node.swarm.behaviour_mut().kad.stop_providing(key);

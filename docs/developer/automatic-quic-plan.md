@@ -105,6 +105,18 @@ Acceptance remains incomplete. Local evidence does not certify physical Android 
   plus a server fixture enforcing public key-size and value-namespace restrictions.
 - This is a separate unresolved defect; peer-ID lookup alone does not fix provider advertisement.
   No rollout or successful public-network result is implied by this review.
+- Implemented a public-protocol wire mapping for keys above 80 bytes: SHA-256 multihash (34 bytes).
+  Short public keys and all private-protocol keys remain unchanged; logical membership scopes are unchanged.
+- Publication, lookup (including previous tags) and scope-change withdrawal share this mapping.
+  An older peer's oversized public key is not a usable rendezvous alias on standard Go servers.
+- Added boundary, real-tag, network-isolation and Kad publication/lookup/withdrawal tests.
+  Strict public-server fixture coverage and fresh physical verification remain outstanding.
+- Both focused tests passed; core suite: 1,172 passed, eight ignored, zero failures (47.34s).
+  Evidence: `/tmp/p2p-vpn-provider-wire-key-{tests,core}.log`.
+- Formatting and required Clippy groups passed; existing warnings remain.
+  Evidence: `/tmp/p2p-vpn-provider-wire-key-clippy.log` (17.40s).
+- Previously prepared APK/Linux artifacts do not contain this provider-key correction.
+  No configuration, deployment or on-device pairing changes were made for this fix.
 
 ### Requirement Status
 

@@ -523,6 +523,27 @@ pub fn kademlia_rendezvous_key(network_name: &str, membership_tag: Option<&str>)
     kad::RecordKey::new(&key)
 }
 
+pub(crate) fn kademlia_provider_wire_key(
+    behaviour: &kad::Behaviour<kad::store::MemoryStore>,
+    key: &kad::RecordKey,
+) -> kad::RecordKey {
+    use sha2::{Digest, Sha256};
+
+    if key.as_ref().len() <= 80
+        || !behaviour
+            .protocol_names()
+            .iter()
+            .any(|protocol| protocol.as_ref() == PUBLIC_IPFS_KADEMLIA_PROTOCOL)
+    {
+        return key.clone();
+    }
+    // Keep legacy keys where supported; public servers reject longer provider keys.
+    let digest = Sha256::digest(key.as_ref());
+    let mut multihash = vec![0x12, 0x20];
+    multihash.extend_from_slice(&digest);
+    kad::RecordKey::new(&multihash)
+}
+
 #[must_use]
 pub fn kademlia_membership_records_key(
     network_name: &str,
@@ -1467,6 +1488,78 @@ mod tests {
             kademlia_rendezvous_key("lab", Some(tag)).to_vec(),
             kademlia_rendezvous_key("lab", None).to_vec()
         );
+    }
+
+    #[tokio::test]
+    async fn provider_wire_keys_bound_public_keys_and_preserve_private_compatibility() {
+        let peer = Keypair::generate_ed25519().public().to_peer_id();
+        let public = kad::Behaviour::with_config(
+            peer,
+            kad::store::MemoryStore::new(peer),
+            controlled_kademlia_config(StreamProtocol::new(PUBLIC_IPFS_KADEMLIA_PROTOCOL)),
+        );
+        let private = kad::Behaviour::with_config(
+            peer,
+            kad::store::MemoryStore::new(peer),
+            controlled_kademlia_config(StreamProtocol::new("/p2p-vpn/kad/1")),
+        );
+        for len in [1, 79, 80, 81, 256] {
+            let key = kad::RecordKey::new(&vec![b'x'; len]);
+            assert_eq!(kademlia_provider_wire_key(&private, &key), key);
+            let wire = kademlia_provider_wire_key(&public, &key);
+            if len <= 80 {
+                assert_eq!(wire, key);
+            } else {
+                assert_eq!(wire.as_ref().len(), 34);
+                assert_eq!(&wire.as_ref()[..2], &[0x12, 0x20]);
+                assert_eq!(kademlia_provider_wire_key(&public, &wire), wire);
+            }
+        }
+        let mut keys = HashSet::new();
+        for network in ["personal-devices".to_owned(), "n".repeat(128)] {
+            for secret in [b"old".as_slice(), b"new".as_slice()] {
+                let tag = crate::config::membership_tag(&network, secret);
+                assert_eq!(tag.len(), 44);
+                let key = kademlia_rendezvous_key(&network, Some(&tag));
+                assert!(key.as_ref().len() > 80);
+                let wire = kademlia_provider_wire_key(&public, &key);
+                assert_eq!(wire.as_ref().len(), 34);
+                assert!(keys.insert(wire));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn provider_wire_key_is_shared_by_publication_lookup_and_withdrawal() {
+        use libp2p::kad::store::RecordStore as _;
+
+        let peer = Keypair::generate_ed25519().public().to_peer_id();
+        let mut kad = kad::Behaviour::with_config(
+            peer,
+            kad::store::MemoryStore::new(peer),
+            controlled_kademlia_config(StreamProtocol::new(PUBLIC_IPFS_KADEMLIA_PROTOCOL)),
+        );
+        let tag = crate::config::membership_tag("personal-devices", b"fixture");
+        let logical = kademlia_rendezvous_key("personal-devices", Some(&tag));
+        assert_eq!(logical.as_ref().len(), 90);
+        let published = kademlia_provider_wire_key(&kad, &logical);
+        let publish = kad.try_start_providing(published.clone()).unwrap().unwrap();
+        assert!(
+            matches!(kad.query(&publish).unwrap().info(), kad::QueryInfo::AddProvider { key, .. } if key == &published)
+        );
+        assert!(
+            kad.store_mut()
+                .provided()
+                .any(|record| record.key == published)
+        );
+        let lookup_key = kademlia_provider_wire_key(&kad, &logical);
+        let lookup = kad.try_get_providers(lookup_key).unwrap();
+        assert!(
+            matches!(kad.query(&lookup).unwrap().info(), kad::QueryInfo::GetProviders { key, .. } if key == &published)
+        );
+        let withdraw = kademlia_provider_wire_key(&kad, &logical);
+        kad.stop_providing(&withdraw);
+        assert_eq!(kad.store_mut().provided().count(), 0);
     }
 
     #[tokio::test]
