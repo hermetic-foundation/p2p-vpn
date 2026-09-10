@@ -2,11 +2,11 @@
 
 ## Status
 
-The first full ten-cycle capture passes the frozen traffic and sampling gates.
-Requested allocations grow across recoveries. The independent repeat and owner
-attribution remain open; this is not a bounded-memory or leak-freedom claim.
+Both full ten-cycle captures pass the frozen traffic and sampling gates.
+Requested allocations grow across recoveries in both. Owner attribution remains
+open; this is not a bounded-memory or leak-freedom claim.
 
-## Capture Identity
+## First Capture
 
 | Property | Value |
 | --- | --- |
@@ -106,12 +106,68 @@ connection-attempt, retiring-connection, packet-task and pending-query owners dr
 Final traffic follows settling. A's final process snapshot is 35,948 KiB,
 four KiB above the settle value; B remains 35,972 KiB. Do not conflate those windows.
 
+## Independent Repeat
+
+The repeat used the same calibrated executable, workload and watchdogs. No build
+overlapped the run. Storage before capture was 9,016,812 KiB, below 10 GiB.
+Original process identities survived all ten cycles; final traffic passed both ways.
+
+| Property | Result |
+| --- | --- |
+| Total duration / exit | 881.29 seconds / zero |
+| Allocation rows | 176 per daemon |
+| Maximum row gap / clock disagreement | 5,003 ms / 1 ms, both daemons |
+| Phase coverage | All 21 complete; original cadence and boundary gates pass |
+| Recovery-window samples | Eight per daemon, except A cycle ten has nine |
+| Runtime samples / metric series | 152 / 332 per daemon; no errors or missing values |
+| Combined JSON / node logs | 6,540,561 / 1,724,781 bytes; original caps pass |
+| Final descriptors / sockets / threads | A: 21 / 14 / 6; B: 19 / 12 / 6 |
+| Final checked pending owners | Zero, with healthy direct UDP paths on both nodes |
+| Cleanup | Runner exited; no matching namespace test process remained |
+| Evidence | [Repeat samples and 35 artifact hashes](connected-allocation-repeat.json) |
+
+Outer log: `/tmp/p2p-vpn-connected-allocation-full-2.log`.
+Evidence directory:
+`/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.ef4010ec157a6c00`.
+Reproduce with the same command above and a distinct output log.
+
+| Cycle | Recovery, seconds | A live bytes | B live bytes | A RSS, KiB | B RSS, KiB |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 1 | 3.155 | 2,535,193 | 2,533,185 | 35,780 | 36,216 |
+| 2 | 13.020 | 2,535,245 | 2,538,197 | 35,840 | 36,264 |
+| 3 | 15.675 | 2,535,431 | 2,537,372 | 35,864 | 36,280 |
+| 4 | 0.252 | 2,534,877 | 2,535,852 | 35,888 | 36,320 |
+| 5 | 18.828 | 2,534,118 | 2,548,904 | 35,904 | 36,340 |
+| 6 | 2.755 | 2,557,485 | 2,549,092 | 35,936 | 36,352 |
+| 7 | 12.570 | 2,555,988 | 2,549,897 | 35,956 | 36,364 |
+| 8 | 0.302 | 2,557,082 | 2,550,552 | 35,968 | 36,376 |
+| 9 | 15.024 | 2,554,689 | 2,549,833 | 35,972 | 36,400 |
+| 10 | 0.352 | 2,555,731 | 2,549,040 | 35,976 | 36,420 |
+| Final settle | n/a | 2,557,243 | 2,550,552 | 35,976 | 36,420 |
+
+The same periodic-snapshot interpretation applies to this table. All ten recovery
+checks pass strict 5/5 traffic in both directions. B's process snapshot after final
+traffic is 36,424 KiB, four KiB above its settling value; A remains 35,976 KiB.
+
+### Paired Retention Summary
+
+| First recovered window to final settle | First A | First B | Repeat A | Repeat B |
+| --- | ---: | ---: | ---: | ---: |
+| Live-byte increase | 20,837 | 23,856 | 22,050 | 17,367 |
+| Live-block increase | 14 | 5 | 21 | 8 |
+| RSS increase, KiB | 180 | 220 | 196 | 204 |
+
+Unlike the first capture, the repeat gains 1,512 bytes and four blocks per node
+during its final minute. Both RSS series remain flat during that minute. The
+repeat therefore confirms that RSS settling is not sufficient allocation evidence.
+
 ## Interpretation and Next Gates
 
 - Both nodes' final three recovered RSS checkpoints increase; final-minute flatness does not resolve that growth.
 - Live requested bytes also grow overall, so RSS allocator high-water behavior alone is not a sufficient explanation.
 - Step-like increases might reflect retained capacity, but no specific owner is causally established yet.
-- Repeat with the same executable and frozen controls before selecting ownership experiments.
+- Paired captures reproduce overall retention without establishing an exact per-cycle slope or a leak.
+- Next, isolate retained application and transport capacities from active session allocations using bounded ownership measurements.
 - Attribute connected transport retention and S4 pressure growth; keep the first-use initialization gap separate.
 - Complete multi-network and Android background measurements before the final resource-review audit.
 

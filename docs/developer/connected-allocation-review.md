@@ -3,8 +3,8 @@
 ## Status
 
 Test-only connected allocation instrumentation passes calibration, a connected
-one-cycle recovery smoke and the first full ten-cycle capture. The independent
-repeat and retained-allocation attribution remain pending.
+one-cycle recovery smoke and two full ten-cycle captures. Both full captures
+show retained-allocation growth; owner attribution remains pending.
 
 It extends the existing namespace workload rather than substituting constructors
 or synthetic packet devices for connected peers.
