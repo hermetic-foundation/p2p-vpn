@@ -159,6 +159,38 @@ Acceptance remains incomplete. Local evidence does not certify physical Android 
 | ARM64 library inside APK | `5cdfdf633c05a02082bd8305d352f63804f54ec6c2e34a59c5ccc597db3b270f` |
 | Linux binary | `a763cf82d95d48cdc155e26b5e17b807fb0ff4243ff5e296f55ff17bad0842a3` |
 
+### Authorized Matched-Build Cellular Retest
+
+- Pixel upgraded in place to APK `95330992...`; installed APK SHA-256 matched the prepared artifact.
+  Peer ID and hostname were unchanged. No pairing reset or phone underlay change was performed.
+- With explicit approval, Linux temporarily used binary `a763cf82...` and its unchanged minimal config.
+  Personal flake was untouched. Measurement: three minutes, 15 windows, 1,200-byte IPv4 packets.
+- Evidence: `/tmp/p2p-vpn-pixel-movement.ux5uA2/`.
+  Per-window phone logs and path snapshots were retained; no builds or manual recovery during measurement.
+
+| Measurement | Result |
+| --- | --- |
+| Initial Linux window | TUN not yet present; ping could not start |
+| Initial phone window | 0/6 replies during Linux startup |
+| Subsequent Linux-to-phone windows | 70/71 replies |
+| Subsequent phone-to-Linux windows | 70/71 replies |
+| Phone total including startup | 70/77 replies |
+| Selected Pixel path | Authenticated circuit-relay stream, effective MTU 1,200 |
+| Linux relay payload counter | 10 at window 3 to 131 at window 15 |
+| Phone relay payload counter | Read-only intermediate snapshot: 81 |
+| Owned QUIC sessions/payload | Zero |
+| Phone underlay/runtime | Validated cellular throughout; generation 1, no selection changes |
+| Cleanup | Original Linux service active, no drop-ins; temporary binary removed |
+
+- Relay connection 27 closed at 18:33:46.543 and replacement 208 established at 18:33:46.990.
+  Connection 208 closed at 18:35:11.424 and replacement 341 established at 18:35:12.012.
+- Loss windows 8 and 15 overlap those replacements; this correlation does not establish the closure cause.
+  Traffic resumed without intervention; retain both losses and the initial startup failure in the result.
+- This demonstrates automatic relay fallback and connection replacement on static cellular.
+  It does not prove QUIC payload on cellular, loss-free stability, or Wi-Fi/cellular movement.
+- Next physical checkpoint: coordinated Wi-Fi/cellular/Wi-Fi transitions with matching runtimes,
+  actual payload counters, fixed deadlines and no app restart or manual path rescue during transitions.
+
 ### Requirement Status
 
 | Requirement | Verified evidence | Remaining work |
