@@ -62,7 +62,7 @@ Options:
   --scenario NAME        Select boot-smoke, profile-persistence, always-on,
                          pairing-traffic, underlay-recovery, network-workflow,
                          multi-network, multi-network-resource-admission, multi-network-resource-controls,
-                         multi-network-resource-idle, multi-network-resource-thread-controls,
+                         multi-network-resource-idle, multi-network-resource-thread-controls, multi-network-resource-isolation,
                          multi-network-resource-load, multi-network-resource-load-smoke,
                          process-sample-smoke, or process-thread-sample-smoke.
   --path-mode MODE       Select automatic, quic-stream, tcp-stream, owned-quic, relay-only,
@@ -142,7 +142,7 @@ done
 pairing_scenario=0
 case "$scenario" in
   boot-smoke|profile-persistence|always-on|process-sample-smoke|process-thread-sample-smoke) ;;
-  pairing-traffic|underlay-recovery|network-workflow|multi-network|multi-network-resource-admission|multi-network-resource-controls|multi-network-resource-idle|multi-network-resource-load|multi-network-resource-load-smoke|multi-network-resource-thread-controls) pairing_scenario=1 ;;
+  pairing-traffic|underlay-recovery|network-workflow|multi-network|multi-network-resource-admission|multi-network-resource-controls|multi-network-resource-idle|multi-network-resource-load|multi-network-resource-load-smoke|multi-network-resource-thread-controls|multi-network-resource-isolation) pairing_scenario=1 ;;
   *)
     echo "unsupported Android E2E scenario: $scenario" >&2
     exit 2
@@ -2248,6 +2248,9 @@ run_multi_network_scenario() {
       fi
       if [[ "$scenario" == multi-network-resource-load* ]]; then
         outcome_detail="$scenario captured; audit workload evidence before accepting S7"
+      fi
+      if [[ "$scenario" == multi-network-resource-isolation ]]; then
+        outcome_detail="Five independent network cycles captured; audit resource and traffic evidence"
       fi
     fi
     return 0

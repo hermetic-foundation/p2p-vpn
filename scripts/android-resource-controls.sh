@@ -76,6 +76,169 @@ resource_ping_leg() (
     (.finished_millis-.started_millis) <= (($duration+10)*1000)' "$prefix.json" >/dev/null
 )
 
+resource_isolation_state_valid() {
+  jq -e --arg alpha "$alpha_id" --arg beta "$beta_id" --argjson enabled "$2" '
+    .schema_version == 1 and .ok and .value.service_ready and
+    .value.snapshot.connected and (.value.snapshot.busy | not) and
+    ([.value.snapshot.networks[].id]|sort) == ([$alpha,$beta]|sort) and
+    all(.value.snapshot.networks[];
+      if .id == $alpha then .enabled == $enabled and .phase == (if $enabled then "running" else "disabled" end)
+      else .enabled and .phase == "running" end)
+  ' "$1" >/dev/null
+}
+
+resource_isolation_observation() {
+  local destination="$1" started finished
+  local control="$state_dir/isolation-observer-control.json"
+  local native="$state_dir/isolation-observer-native.json"
+  local diagnostic="$state_dir/isolation-observer-diagnostic.json"
+  started="$(monotonic_millis)"
+  android_automation status >"$control" || return 1
+  android_automation resource-status >"$native" || return 1
+  android_automation diagnostics >"$diagnostic" || return 1
+  finished="$(monotonic_millis)"
+  jq -nc --argjson started "$started" --argjson finished "$finished" --arg alpha "$alpha_id" --arg beta "$beta_id" \
+    --slurpfile control "$control" --slurpfile native "$native" --slurpfile diagnostic "$diagnostic" '
+    (all([$control[0],$native[0],$diagnostic[0]][]; .schema_version == 1 and .ok == true) and
+      $control[0].value.service_ready and $diagnostic[0].value.report.resources.total_pss_kib != null and
+      ([$control[0].value.snapshot.networks[]?.id]|sort)==([$alpha,$beta]|sort) and
+      any($control[0].value.snapshot.networks[]?; .id==$beta and .enabled) and
+      ($native[0].value.networks|type)=="array" and
+      all($native[0].value.networks[]?; .id==$alpha or .id==$beta) and
+      ([$native[0].value.networks[]?.id]|unique|length)==($native[0].value.networks|length) and
+      (if $native[0].value.phase=="stopped" then ($native[0].value.networks|length)==0
+       elif $native[0].value.phase=="starting" then
+         all($native[0].value.networks[]?; .phase=="starting" or .phase=="running")
+       elif $native[0].value.phase=="running" then
+         ([$native[0].value.networks[]? | select(.id==$beta and .phase=="running" and
+           any(.counters[]?; startswith("queue_queued_packets ")) and
+           any(.counters[]?; startswith("path_peers_with_supported_path ")))]|length)==1
+       else false end)) as $valid |
+    {valid:$valid,started_millis:$started,finished_millis:$finished,
+      control:($control[0].value.snapshot | {connected,busy,runtime_generation,paths,
+        networks:[.networks[]? | {id,name,hostname,peer_id,addresses,enabled,phase}]}),
+      native:$native[0].value,
+      diagnostic:($diagnostic[0].value.report | {resources,lifecycle,paths,queue,drops,underlay})}
+  ' >"$state_dir/isolation-observer-row.json" || return 1
+  cat "$state_dir/isolation-observer-row.json" >>"$destination" || return 1
+  jq -e '.valid' "$state_dir/isolation-observer-row.json" >/dev/null
+}
+
+resource_isolation_set_alpha() {
+  local enabled="$1" prefix="$2" attempts="$3"
+  local command="$state_dir/isolation-command.json" status="$state_dir/isolation-status.json"
+  android_automation set-network-enabled --es network_id "$alpha_id" --ez enabled "$enabled" >"$command" || return 1
+  jq -e '.schema_version == 1 and .ok and .value.accepted and .value.command == "set-network-enabled"' "$command" >/dev/null || return 1
+  local attempt
+  for ((attempt = 0; attempt < attempts; attempt++)); do
+    if android_automation status >"$status" && resource_isolation_state_valid "$status" "$enabled"; then
+      network_identity_signature_matches "$status" || return 1
+      jq '.value.snapshot | {connected,runtime_generation,networks:[.networks[] | {id,name,hostname,peer_id,addresses,enabled,phase}]}' \
+        "$status" >"$prefix-state.json" || return 1
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+run_android_resource_isolation_cycles() (
+  local sampler="" observer="" worker cycle prefix family source destination command result started duration file
+  trap 'for worker in "$sampler" "$observer"; do [[ -z "$worker" ]] || { kill "$worker" 2>/dev/null || true; wait "$worker" 2>/dev/null || true; }; done' EXIT
+  jq '.value.snapshot.networks | map({id,name,hostname,peer_id,addresses}) | sort_by(.id)' \
+    "$both_running" >"$state_dir/multi-network-identity-signature.json" || exit 1
+  adb_run shell -T sh -s -- "$resource_app_pid" 1 <"$resource_collector" >"$output_dir/isolation-process-before.jsonl" || exit 1
+  sh "$resource_collector" "$resource_emulator_pid" 1 >"$output_dir/isolation-emulator-before.jsonl" || exit 1
+  timeout --signal=TERM --kill-after=2s 900 "${adb[@]}" shell -T sh -s -- "$resource_app_pid" 900 \
+    <"$resource_collector" >"$output_dir/isolation-process.jsonl" &
+  sampler=$!
+  (
+    first="$(monotonic_millis)"
+    for sample in $(seq 0 179); do
+      resource_sleep_until "$((first + sample * 5000))"
+      [[ ! -e "$state_dir/isolation-observer-stop" ]] || exit 0
+      resource_isolation_observation "$output_dir/isolation-runtime.jsonl" || exit 1
+    done
+  ) &
+  observer=$!
+  for cycle in $(seq 1 5); do
+    prefix="$output_dir/isolation-$cycle"
+    record_step "isolation_$cycle" started "Disable alpha, retain beta, reject disabled traffic, restore alpha"
+    record_step "isolation_${cycle}_disable" started "Shared runtime reconfiguration requested"
+    resource_isolation_set_alpha false "$prefix-disabled" 120 || exit 1
+    wait_for_transition_traffic_ready "isolation-$cycle-beta" "after disabling alpha" \
+      "$fixture_secondary_packet_socket" "$fixture_secondary_ipv4" "$fixture_secondary_ipv6" \
+      "$android_secondary_ipv4" "$android_secondary_ipv6" || exit 1
+    record_step "isolation_${cycle}_disable" passed "Disabled state and surviving beta traffic readiness verified"
+    result=0
+    measure_bidirectional_traffic "isolation-$cycle-beta" "while alpha is disabled" \
+      "$fixture_secondary_packet_socket" "$fixture_secondary_ipv4" "$fixture_secondary_ipv6" \
+      "$android_secondary_ipv4" "$android_secondary_ipv6" || result=$?
+    for file in "$state_dir/isolation-$cycle-beta-"*; do
+      [[ ! -f "$file" ]] || cp -- "$file" "$output_dir/" || exit 1
+    done
+    [[ "$result" == 0 ]] || exit 1
+    for family in ipv4 ipv6; do
+      source="$fixture_ipv4" destination="$android_primary_ipv4" command=ping
+      [[ "$family" != ipv6 ]] || { source="$fixture_ipv6" destination="$android_primary_ipv6" command=ping6; }
+      result=0
+      "$fixture_command" probe --socket "$fixture_packet_socket" --source "$source" --destination "$destination" \
+        --count 1 --timeout-millis 2000 >"$prefix-disabled-$family-inbound.json" 2>"$prefix-disabled-$family-inbound-error.txt" || result=$?
+      [[ "$result" != 0 ]] || exit 1
+      jq -e --arg family "$family" '.schema_version==1 and (.ok|not) and .family==$family and .sent==1 and .received==0' \
+        "$prefix-disabled-$family-inbound.json" >/dev/null || exit 1
+      if adb_run shell "$command" -c 1 -W 2 "$source" >"$prefix-disabled-$family-outbound.txt" 2>&1; then exit 1; fi
+      grep -Eq 'Network is unreachable|1 packets transmitted, 0 (packets )?received' "$prefix-disabled-$family-outbound.txt" || exit 1
+    done
+    record_step "isolation_${cycle}_enable" started "Shared runtime reconfiguration requested"
+    resource_isolation_set_alpha true "$prefix-enabled" 180 || exit 1
+    wait_for_multi_network_transition_traffic_ready "isolation-$cycle-restored" "after alpha re-enabled" || exit 1
+    record_step "isolation_${cycle}_enable" passed "Enabled state and both networks traffic readiness verified"
+    result=0
+    measure_concurrent_multi_network_traffic "isolation-$cycle-restored" "after alpha re-enabled" started duration || result=$?
+    for file in "$state_dir/isolation-$cycle-restored-"*; do
+      [[ ! -f "$file" ]] || cp -- "$file" "$output_dir/" || exit 1
+    done
+    [[ "$result" == 0 ]] || exit 1
+    kill -0 "$sampler" && kill -0 "$observer" || exit 1
+    record_step "isolation_$cycle" passed "Both families isolated; beta and restored alpha passed measured traffic"
+  done
+  record_step isolation_settle started "60-second settling with existing collectors and no deliberate traffic"
+  resource_sleep_until "$(($(monotonic_millis) + 60000))"
+  record_step isolation_settle passed "Fixed settling interval finished"
+  kill -0 "$sampler" && kill -0 "$observer" || exit 1
+  : >"$state_dir/isolation-observer-stop"
+  wait "$observer" || exit 1
+  observer=""
+  kill -0 "$sampler" || exit 1
+  kill "$sampler" || exit 1
+  wait "$sampler" 2>/dev/null || true
+  sampler=""
+  adb_run shell -T sh -s -- "$resource_app_pid" 1 <"$resource_collector" >"$output_dir/isolation-process-after.jsonl" || exit 1
+  sh "$resource_collector" "$resource_emulator_pid" 1 >"$output_dir/isolation-emulator-after.jsonl" || exit 1
+  jq -es 'length>=2 and ([.[].pid]|unique|length)==1 and ([.[].start_ticks]|unique|length)==1 and
+    (. as $r | all(range(1;length); ($r[.].started_uptime_seconds-$r[.-1].started_uptime_seconds)>=1 and
+      ($r[.].started_uptime_seconds-$r[.-1].started_uptime_seconds)<=1.5))' "$output_dir/isolation-process.jsonl" >/dev/null || exit 1
+  jq -es 'length>=2 and all(.[]; .valid and (.finished_millis-.started_millis)<=2000) and
+    (. as $r | all(range(1;length); ($r[.].started_millis-$r[.-1].started_millis)>=4500 and
+      ($r[.].started_millis-$r[.-1].started_millis)<=5500))' "$output_dir/isolation-runtime.jsonl" >/dev/null || exit 1
+  jq -es --arg beta "$beta_id" --slurpfile signature "$state_dir/multi-network-identity-signature.json" '
+    all(.[];
+      (.control.networks|map({id,name,hostname,peer_id,addresses})|sort_by(.id))==$signature[0] and
+      any(.control.networks[]; .id==$beta and .enabled))
+  ' "$output_dir/isolation-runtime.jsonl" >/dev/null || exit 1
+  jq -nes --slurpfile before "$output_dir/isolation-process-before.jsonl" \
+    --slurpfile after "$output_dir/isolation-process-after.jsonl" \
+    --slurpfile samples "$output_dir/isolation-process.jsonl" '
+    $before[0].pid==$after[0].pid and $before[0].start_ticks==$after[0].start_ticks and
+    all($samples[]; .pid==$before[0].pid and .start_ticks==$before[0].start_ticks) and
+    ($samples[0].started_uptime_seconds-$before[0].started_uptime_seconds)>=0 and
+    ($samples[0].started_uptime_seconds-$before[0].started_uptime_seconds)<=2 and
+    ($after[0].started_uptime_seconds-$samples[-1].started_uptime_seconds)>=0 and
+    ($after[0].started_uptime_seconds-$samples[-1].started_uptime_seconds)<=2
+  ' >/dev/null || exit 1
+)
+
 resource_thread_samples_valid() {
   jq -es 'length > 0 and all(.[];
     .thread_scan.listed >= 1 and .thread_scan.listed <= 256 and
@@ -188,6 +351,10 @@ run_android_resource_controls() {
   sleep 30
   adb_run shell dumpsys power >"$output_dir/resource-power.txt" || return 1
   resource_power_is_background "$output_dir/resource-power.txt" || return 1
+  if [[ "${scenario:-}" == multi-network-resource-isolation ]]; then
+    run_android_resource_isolation_cycles
+    return $?
+  fi
   if [[ "${scenario:-}" == multi-network-resource-thread-controls ]]; then
     for detail in process threads threads process; do
       index=$((index + 1))
