@@ -17,6 +17,7 @@ exclude = ["vendor/libp2p-kad-0.48.0", "vendor/stats_alloc-0.1.10"]
 
 [features]
 allocation-review = []
+allocation-sizes = ["allocation-review", "stats_alloc/size-inventory"]
 
 [patch.crates-io]
 libp2p-kad = { path = "vendor/libp2p-kad-0.48.0" }

@@ -43,10 +43,17 @@ use std::{
     sync::atomic::{AtomicIsize, AtomicUsize, Ordering},
 };
 
+#[cfg(feature = "size-inventory")]
+mod size_inventory;
+#[cfg(feature = "size-inventory")]
+pub use size_inventory::SizeInventory;
+
 /// An instrumenting middleware which keeps track of allocation, deallocation,
 /// and reallocation requests to the underlying global allocator.
 #[derive(Default, Debug)]
 pub struct StatsAlloc<T: GlobalAlloc> {
+    #[cfg(feature = "size-inventory")]
+    sizes: SizeInventory,
     allocations: AtomicUsize,
     deallocations: AtomicUsize,
     reallocations: AtomicUsize,
@@ -91,6 +98,8 @@ pub struct Stats {
 
 /// An instrumented instance of the system allocator.
 pub static INSTRUMENTED_SYSTEM: StatsAlloc<System> = StatsAlloc {
+    #[cfg(feature = "size-inventory")]
+    sizes: SizeInventory::new(),
     allocations: AtomicUsize::new(0),
     deallocations: AtomicUsize::new(0),
     reallocations: AtomicUsize::new(0),
@@ -104,6 +113,8 @@ impl StatsAlloc<System> {
     /// Provides access to an instrumented instance of the system allocator.
     pub const fn system() -> Self {
         StatsAlloc {
+            #[cfg(feature = "size-inventory")]
+            sizes: SizeInventory::new(),
             allocations: AtomicUsize::new(0),
             deallocations: AtomicUsize::new(0),
             reallocations: AtomicUsize::new(0),
@@ -121,6 +132,8 @@ impl<T: GlobalAlloc> StatsAlloc<T> {
     #[cfg(feature = "nightly")]
     pub const fn new(inner: T) -> Self {
         StatsAlloc {
+            #[cfg(feature = "size-inventory")]
+            sizes: SizeInventory::new(),
             allocations: AtomicUsize::new(0),
             deallocations: AtomicUsize::new(0),
             reallocations: AtomicUsize::new(0),
@@ -136,6 +149,8 @@ impl<T: GlobalAlloc> StatsAlloc<T> {
     #[cfg(not(feature = "nightly"))]
     pub fn new(inner: T) -> Self {
         StatsAlloc {
+            #[cfg(feature = "size-inventory")]
+            sizes: SizeInventory::new(),
             allocations: AtomicUsize::new(0),
             deallocations: AtomicUsize::new(0),
             reallocations: AtomicUsize::new(0),
@@ -156,6 +171,12 @@ impl<T: GlobalAlloc> StatsAlloc<T> {
             bytes_deallocated: self.bytes_deallocated.load(Ordering::SeqCst),
             bytes_reallocated: self.bytes_reallocated.load(Ordering::SeqCst),
         }
+    }
+
+    /// Successful allocation sizes; snapshots are not transactional across threads.
+    #[cfg(feature = "size-inventory")]
+    pub fn size_inventory(&self) -> &SizeInventory {
+        &self.sizes
     }
 }
 
@@ -252,10 +273,15 @@ unsafe impl<T: GlobalAlloc> GlobalAlloc for StatsAlloc<T> {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         self.allocations.fetch_add(1, Ordering::SeqCst);
         self.bytes_allocated.fetch_add(layout.size(), Ordering::SeqCst);
-        self.inner.alloc(layout)
+        let ptr = self.inner.alloc(layout);
+        #[cfg(feature = "size-inventory")]
+        self.sizes.allocated(layout.size(), !ptr.is_null());
+        ptr
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        #[cfg(feature = "size-inventory")]
+        self.sizes.released(layout.size());
         self.deallocations.fetch_add(1, Ordering::SeqCst);
         self.bytes_deallocated.fetch_add(layout.size(), Ordering::SeqCst);
         self.inner.dealloc(ptr, layout)
@@ -264,7 +290,10 @@ unsafe impl<T: GlobalAlloc> GlobalAlloc for StatsAlloc<T> {
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
         self.allocations.fetch_add(1, Ordering::SeqCst);
         self.bytes_allocated.fetch_add(layout.size(), Ordering::SeqCst);
-        self.inner.alloc_zeroed(layout)
+        let ptr = self.inner.alloc_zeroed(layout);
+        #[cfg(feature = "size-inventory")]
+        self.sizes.allocated(layout.size(), !ptr.is_null());
+        ptr
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
@@ -278,6 +307,9 @@ unsafe impl<T: GlobalAlloc> GlobalAlloc for StatsAlloc<T> {
         }
         self.bytes_reallocated
             .fetch_add(new_size.wrapping_sub(layout.size()) as isize, Ordering::SeqCst);
-        self.inner.realloc(ptr, layout, new_size)
+        let result = self.inner.realloc(ptr, layout, new_size);
+        #[cfg(feature = "size-inventory")]
+        self.sizes.resized(layout.size(), new_size, !result.is_null());
+        result
     }
 }

@@ -19,6 +19,7 @@ exclude = [
 [features]
 default = []
 nightly = []
+size-inventory = []
 
 [package.metadata.docs.rs]
 all-features = true

@@ -46,6 +46,7 @@ No physical device or deployed host is authorized for this work.
 | [Graceful allocation review](graceful-allocation-review.md) | Blocked Linux TUN reader reproduced and corrected; real direct teardown and shared-Rust checks pass | Sustained reconnect teardown and residual attribution |
 | [Graceful pressure captures](graceful-pressure-results.md) | Both five-round profiles pass; four normal daemon exits and matching post-child heap totals | Sustained reconnect teardown and residual owner attribution |
 | [Graceful reconnect captures](graceful-churn-results.md) | Both ten-cycle captures pass; all four post-child residuals match the short direct-UDP admission | Live retention and residual ownership |
+| [Allocation size inventory](allocation-size-review.md) | Four direct daemons reproduce the original residual as the same 17 allocation sizes | Allocating-stack ownership and live retention |
 | [Sustained traffic fixture](sustained-traffic-review.md) | Two full captures: 30000/30000, stable descriptors, CPU settles below 0.2% per node after load | Broader allocation attribution and multi-network workloads remain open |
 | [Capability retirement](capability-retirement-review.md) | Retry gap reproduced; guarded correction and dispatch regressions pass | Live follow-ups pass but did not exercise the retry branch |
 | [Lifecycle churn results](lifecycle-churn-results.md) | Both ten-cycle captures pass; queues drain and recovery descriptor counts stay stable | RSS attribution and multi-network isolation remain open |
