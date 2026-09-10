@@ -89,6 +89,7 @@ public final class DebugAutomationReceiver extends BroadcastReceiver {
         } catch (IllegalArgumentException error) {
             respond(false, null, error.getMessage());
         } catch (RuntimeException | JSONException error) {
+            android.util.Log.e("P2pVpnAutomation", DebugAutomationFailure.describe(error));
             respond(false, null, "automation_internal_error");
         }
     }
