@@ -3,7 +3,7 @@
 ## Status
 
 Core implementation published as `8690bce2`; NixOS wiring published as `43345ef1`.
-The goal remains active. Local evidence does not certify physical Android or public-network recovery.
+Acceptance remains incomplete. Local evidence does not certify physical Android or public-network recovery.
 
 ## Acceptance Audit
 
@@ -193,6 +193,24 @@ No existing Lean/TLA+ model was found; this asynchronous fallback change has exe
 Physical fault injection remains pending authorization: upgrade the OnePlus, temporarily
 run the laptop test binary, block only their owned QUIC packet traffic, then remove the
 block and observe autonomous recovery. Restore the Nix-managed service afterward.
+
+### Workspace And Recovery Follow-Up
+
+- Current fallback-fix workspace run: 1,529 passed, 46 ignored, zero failures.
+  Command: `cargo test --offline --locked --workspace --all-targets -- --test-threads=2 --quiet`.
+- Separately ran ignored `tun_namespace_minimal_quic_recovers_after_packet_block`:
+  passed in 74.75 seconds, with the existing deadlines and a 250-second outer watchdog.
+- Blocked QUIC delivered five small and five 1,280-byte IPv4 packets through UDP fallback.
+  After removing the block, autonomous QUIC promotion delivered all ten packets again.
+- The fixture asserted backend-specific payload-counter growth at both stages.
+  No physical service, phone, firewall or underlay was changed; all namespace processes exited.
+- Retained evidence: `/tmp/p2p-vpn-mdns-tun-e2e-1.494ccd7159c2147b`;
+  workspace and scenario logs are `/tmp/p2p-vpn-fallback-chain-{workspace,namespace}.log`.
+- Harness SHA-256: `709a490f175b0ad84e60b86751e37f62be69f18265706482330b17da4b01b2e1`.
+  Storage during validation measured 9,780,592 KiB, below 10 GiB.
+
+These checks cover the shared fallback fix, not physical Android recovery or the unresolved
+Pixel loss. Physical fault injection still requires the requested explicit authorization.
 
 ## Stream-Only Compatibility Check
 
