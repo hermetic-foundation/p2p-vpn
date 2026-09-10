@@ -3544,6 +3544,81 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn quic_peer_datagram_limit_rejects_overlay_mtu_without_destroying_session() {
+        let mut sender = PacketPlaneQuicRuntime::bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let (server, certificate) = quic_server_config().unwrap();
+        let mut endpoint_config = quinn::EndpointConfig::default();
+        endpoint_config.max_udp_payload_size(1200).unwrap();
+        let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let endpoint = Endpoint::new(
+            endpoint_config,
+            Some(server),
+            socket,
+            Arc::new(quinn::TokioRuntime),
+        )
+        .unwrap();
+        let mut receiver = PacketPlaneQuicRuntime {
+            local_addr: endpoint.local_addr().unwrap(),
+            endpoint,
+            server_certificate: certificate.clone(),
+            connections: HashMap::new(),
+            sessions: HashMap::new(),
+            max_replay_windows_per_session: 16,
+        };
+        let (initiator_secret, responder_secret, hello, accept) =
+            verified_session_pair_with_endpoints(sender.local_addr(), receiver.local_addr(), 1280);
+        let (connect, accepted) = timeout(Duration::from_secs(3), async {
+            tokio::join!(
+                sender.connect_peer(accept.peer, receiver.local_addr(), certificate),
+                receiver.accept_peer(hello.peer),
+            )
+        })
+        .await
+        .expect("bounded QUIC handshake");
+        connect.unwrap();
+        accepted.unwrap();
+        sender
+            .establish_session(
+                PacketPlaneSessionRole::Initiator,
+                &initiator_secret,
+                &hello,
+                &accept,
+            )
+            .unwrap();
+        receiver
+            .establish_session(
+                PacketPlaneSessionRole::Responder,
+                &responder_secret,
+                &accept,
+                &hello,
+            )
+            .unwrap();
+        assert_eq!(sender.session_mtu_for(accept.peer), Some(1280));
+        assert!(
+            sender.connections[&accept.peer]
+                .max_datagram_size()
+                .unwrap()
+                < 1200
+        );
+        let oversized = Frame::packet(77, 42, vec![0x45; 1280]).unwrap();
+        assert!(matches!(
+            sender.send_frame_to_peer(accept.peer, &oversized),
+            Err(PacketPlaneQuicError::SendDatagram(
+                quinn::SendDatagramError::TooLarge
+            ))
+        ));
+        let small = Frame::packet(77, 43, vec![0x45; 20]).unwrap();
+        sender.send_frame_to_peer(accept.peer, &small).unwrap();
+        let received = timeout(Duration::from_secs(2), receiver.recv_frame_from_session())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(received.frame, small);
+        assert_eq!(received.peer, Some(hello.peer));
+        assert!(sender.has_session(accept.peer));
+    }
+
+    #[tokio::test]
     async fn quic_client_migration_preserves_session_but_changes_live_endpoint() {
         let mut sender = PacketPlaneQuicRuntime::bind("127.0.0.1:0".parse().unwrap()).unwrap();
         let mut receiver = PacketPlaneQuicRuntime::bind("127.0.0.1:0".parse().unwrap()).unwrap();

@@ -219,6 +219,10 @@ Useful packet-path counters:
 | `outbound_direct_tcp_stream_fallback_packets` | Packets sent over direct TCP stream fallback. |
 | `outbound_relay_stream_fallback_packets` | Packets sent over relay stream fallback. |
 
+QUIC can reject a packet below the overlay MTU when its transport datagram limit is smaller.
+If fallback also fails, this counts as `PacketTooLarge`, not `NoTransportPeer`.
+A successful payload submission counter alone does not prove delivery.
+
 Useful membership counters:
 
 | Counter | Meaning |

@@ -141,6 +141,35 @@ The offline `rust-test-sources` build plan requires 704 derivations and was not 
 The comparisons above used cached host tools against Nix-evaluated source paths.
 They do not certify full package builds, Android Nix cross-builds or system activation.
 
+## QUIC Datagram Size Boundary
+
+- Test a real loopback QUIC receiver advertising a 1,200-byte UDP payload limit.
+- Negotiate a 1,280-byte overlay MTU; require oversized submission to fail explicitly.
+- Verify a later small authenticated packet still arrives on the same session.
+- Classify Quinn `TooLarge` as a size drop, not a missing transport peer; test other errors unchanged.
+- Keep fallback, demotion and timeout policy unchanged; this is not a physical-loss root-cause claim.
+
+The loopback test confirms that negotiated overlay MTU can exceed Quinn's datagram allowance.
+An oversized submission fails with `SendDatagramError::TooLarge`; a subsequent small frame arrives
+without reconnecting or replacing the authenticated packet session.
+
+The diagnostic regression failed before the fix: actual `NoTransportPeer`, expected `PacketTooLarge`.
+The fix changes only the final-drop category for this error. It does not change path selection,
+fallback, retry deadlines or MTU discovery and does not resolve the physical stability finding.
+
+| Validation | Result |
+| --- | --- |
+| Rust library suite | 1,166 passed, eight ignored, zero failed; 46.77 seconds |
+| Required Clippy groups, library and tests | Passed; existing nonfatal warnings remain |
+| Android ARM64 native compilation | Passed using cached toolchain; 39.02 seconds |
+| Debug APK assembly | Passed; JVM tests reused their previously passing cached results |
+| APK alignment and formatting | Passed |
+| Temporary storage before APK repack | 9,778,824 KiB, below 10 GiB |
+
+Latest built APK SHA-256: `cf0921ff4e015d86d6a94c24c5d339974642017adfe25d01e84db44d98ce7cac`.
+Native library SHA-256: `a4f115c5d18320d470cb865c72fadbc6188ade7db9deef92effe25112d26f02e`.
+Neither artifact was deployed. Full Nix realization and physical MTU recovery remain unverified.
+
 ## Historical Implementation Progress
 
 The chronological notes below preserve earlier results and failures. Their pending-work statements

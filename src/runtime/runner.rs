@@ -22125,6 +22125,9 @@ fn packet_plane_drop_reason(error: &PacketPlaneIoError) -> PacketDropReason {
 fn packet_plane_send_drop_reason(error: &PacketPlaneSendError) -> PacketDropReason {
     match error {
         PacketPlaneSendError::Udp(error) => packet_plane_drop_reason(error),
+        PacketPlaneSendError::Quic(PacketPlaneQuicError::SendDatagram(
+            quinn::SendDatagramError::TooLarge,
+        )) => PacketDropReason::PacketTooLarge,
         PacketPlaneSendError::Quic(PacketPlaneQuicError::Datagram(
             crate::runtime::packet_plane::PacketPlaneDatagramError::PayloadTooLarge { .. },
         )) => PacketDropReason::PacketTooLarge,
@@ -36490,6 +36493,22 @@ mod tests {
         assert_eq!(
             packet_rejection_drop_reason(PacketRejectionReason::RateLimited),
             PacketDropReason::RateLimited
+        );
+    }
+
+    #[test]
+    fn quic_transport_size_failure_is_not_a_missing_peer() {
+        assert_eq!(
+            packet_plane_send_drop_reason(&PacketPlaneSendError::Quic(
+                PacketPlaneQuicError::SendDatagram(quinn::SendDatagramError::TooLarge),
+            )),
+            PacketDropReason::PacketTooLarge,
+        );
+        assert_eq!(
+            packet_plane_send_drop_reason(&PacketPlaneSendError::Quic(
+                PacketPlaneQuicError::SendDatagram(quinn::SendDatagramError::UnsupportedByPeer),
+            )),
+            PacketDropReason::NoTransportPeer,
         );
     }
 
