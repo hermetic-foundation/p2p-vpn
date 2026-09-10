@@ -2,8 +2,10 @@
 
 ## Status
 
-S7a is a test-only whole-runtime teardown fixture. Calibration and isolated
-two-second smoke pass; both ten-cycle captures remain pending.
+Both S7a ten-cycle captures pass on fixture `5a9cab0f`.
+After first-use retention, every subsequent runtime teardown has zero additional
+retained requested Rust bytes/blocks. Initial allocation owners remain unattributed.
+
 It establishes a no-overlay-traffic baseline; it does not explain the connected
 S1/S4/S5 RSS growth or replace connected transport attribution.
 
@@ -110,7 +112,72 @@ Logs use `/tmp/p2p-vpn-runtime-allocation-` with suffixes
 
 ## Remaining Work
 
-1. Validate isolation, shutdown and allocator calibration in the smoke.
-2. Capture the paired baseline and attribute retained initialization.
-3. Extend attribution to connected transport, pressure and repeated recovery owners.
-4. Reconcile those findings with the observed RSS series and final resource audit.
+1. Attribute the bounded first-use retention to its allocating owners.
+2. Extend attribution to connected transport, pressure and repeated recovery owners.
+3. Reconcile those findings with the observed RSS series and final resource audit.
+
+## Paired Baseline Results
+
+Both captures used the frozen 30-second dwell, ten cycles and 360-second watchdog.
+No builds, manual cleanup, runtime changes or deadline adjustments overlapped
+either capture. Both processes terminated and no matching test process remained.
+
+| Observation | Run 1 | Run 2 |
+| --- | ---: | ---: |
+| Exit / elapsed seconds | 0 / 300.08 | 0 / 300.09 |
+| Completed runtime cycles | 10 | 10 |
+| First runtime post-drop bytes / blocks | 30,752 / 75 | 30,752 / 75 |
+| Added retained bytes / blocks, each cycle 2-10 | 0 / 0 | 0 / 0 |
+| Global timer initialization bytes / blocks | 659 / 11 | 659 / 11 |
+| Threads after every runtime teardown | 3 | 3 |
+| First post-drop RSS, KiB | 36,308 | 35,932 |
+| Final post-drop RSS, KiB | 36,492 | 36,112 |
+| Log bytes, 2 MiB cap | 104,660 | 104,660 |
+
+The three remaining threads are the harness, selected test and global timer.
+Runtime workers and the synthetic packet-reader thread retire in each cycle.
+This is the synthetic reader's shutdown contract, not physical TUN certification.
+
+| Cycle | Run 1 Post-Drop RSS, KiB | Run 2 Post-Drop RSS, KiB |
+| --- | ---: | ---: |
+| 1 | 36,308 | 35,932 |
+| 2 | 36,452 | 36,080 |
+| 3 | 36,460 | 36,084 |
+| 4 | 36,472 | 36,084 |
+| 5 | 36,484 | 36,100 |
+| 6 | 36,492 | 36,112 |
+| 7 | 36,492 | 36,112 |
+| 8 | 36,492 | 36,112 |
+| 9 | 36,492 | 36,112 |
+| 10 | 36,492 | 36,112 |
+
+RSS rises early despite zero net added requested Rust allocation in cycles 2-10,
+then plateaus over the final five checkpoints. This separates requested live
+allocation from resident pages; it does not identify native allocator ownership.
+
+### Interpretation Limits
+
+- No accumulating post-teardown Rust allocation was observed after the first cycle.
+- The initial 30,752 bytes / 75 blocks are repeatable, but their precise owners remain open.
+- The separately measured timer initialization is not subtracted from or hidden inside the runtime residual.
+- Runner-return snapshots still include Tokio; only the later post-drop checkpoints support the teardown comparison.
+- The global timer remains concurrent, so allocator counters are not transactional snapshots.
+- Thirty-second runtime lifetimes do not exercise the default sixty-second public-discovery holdoff.
+
+Default bootstrap records are retained, but infrastructure retry behavior and
+connected packet paths require the other workloads. This baseline cannot close
+S1/S4/S5 memory attribution, multi-network isolation or Android resource acceptance.
+
+### Artifacts
+
+[Portable samples](runtime-allocation-samples.json) retain every allocation phase,
+RSS checkpoint, remaining thread name, runtime revision and log fingerprint.
+Executable SHA-256 is the same as the validated smoke above.
+
+| Log | SHA-256 |
+| --- | --- |
+| `/tmp/p2p-vpn-runtime-allocation-full-1.log` | `1334acdfca6ac8899749d64a0a329e30f8b00c148f943e9bcd3331395cf05151` |
+| `/tmp/p2p-vpn-runtime-allocation-full-2.log` | `a4e669ebdff0dd060df77f1b5d4996eabe720dc0a85193f7e7fd1e630d6b335f` |
+
+Both JSON summaries are complete and proof eligible for this baseline.
+Publication is documentation-only; prior fixture validation is unchanged.
