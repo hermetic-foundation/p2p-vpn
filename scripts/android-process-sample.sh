@@ -105,6 +105,23 @@ sample() {
     "$before_threads" "$rss" "$fds" "$voluntary" "$involuntary" "$thread_json"
 }
 
+uptime_centiseconds() {
+  seconds=${1%.*} fraction=${1#*.}
+  unsigned "$seconds" && unsigned "$fraction" && [ "${#fraction}" -eq 2 ] || return 1
+  # Prefix the fractional part to avoid interpreting 08/09 as octal.
+  centiseconds=$((seconds * 100 + 1$fraction - 100))
+}
+
+thread_sample_sleep() {
+  uptime_centiseconds "$started" || return 1
+  next_sample=$((centiseconds + 100))
+  read -r now _ <"$proc/uptime" || return 1
+  uptime_centiseconds "$now" || return 1
+  remaining=$((next_sample - centiseconds))
+  [ "$remaining" -gt 0 ] && [ "$remaining" -le 100 ] || return 1
+  sleep "$(printf '%d.%02d' "$((remaining / 100))" "$((remaining % 100))")"
+}
+
 if { [ "$#" -ne 2 ] && [ "$#" -ne 3 ]; } || ! unsigned "$1" || ! unsigned "$2"; then
   printf 'Usage: sh android-process-sample.sh PID SAMPLE_COUNT (1..900) [--threads]\n' >&2
   exit 2
@@ -127,5 +144,14 @@ while [ "$index" -lt "$count" ]; do
     exit 1
   fi
   index=$((index + 1))
-  [ "$index" -eq "$count" ] || sleep 1
+  if [ "$index" -lt "$count" ]; then
+    if "$include_threads"; then
+      thread_sample_sleep || {
+        printf 'Thread sample exceeded its one-second interval or clock was invalid.\n' >&2
+        exit 1
+      }
+    else
+      sleep 1
+    fi
+  fi
 done

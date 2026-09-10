@@ -181,3 +181,37 @@ switches are scheduling proxies, not physical wakeups or battery measurements.
 - Independent instance transitions: [two five-cycle captures](android-resource-isolation-cycles.md) passed.
 - Sustained load repetition and CPU/thread attribution: pending the capture above.
 - This harness change modifies neither production runtime behavior nor the APK.
+
+### Capture Preflight
+
+- Published source: `06615d80`; pre-run storage 8,236,792 KiB.
+- APK and fixture hashes match the manifest; no emulator, fixture or build process running.
+- Resource helper SHA-256: `bb52a474a399bf4f9e72bc6d7d4540778ae235493ce092f762f5243ddb4d1261`.
+- Process sampler SHA-256: `bdebe1c834a5f21cad746eb33c679625082755152b2fc50a566906ac2359b011`.
+
+### Thread Attempt 1 Failure
+
+Admission passed on the first measured batch. The idle phase failed its unchanged
+310-second endpoint limit; load and drain did not run. All six cleanup flags
+passed. No measurement was retried or deadline extended.
+
+| Observation | Result |
+| --- | --- |
+| Process endpoint elapsed | 311.14 seconds |
+| Process samples retained | 300 |
+| First / last sample uptime | 107.41 / 418.47 seconds |
+| Per-scan time | 20-40 ms; 9.52 seconds total |
+| Sample-start gaps | 1.03-1.05 seconds |
+| Evidence SHA-256 | `11c9e023bce3ff7056d67423befd2af1127b20394a3f23f7b43ec5b528bca2a5` |
+| Process rows SHA-256 | `e0d2b64618469e18f1132ec010d499038dda2926717047da7ab4881d8698c921` |
+| Window SHA-256 | `14c214bfa8cd21f58acc4bf57c3de5a62e8547c522cfa58db71583b30bb2e81d` |
+
+The sampler slept one second after each scan, accumulating scan cost over the
+window. This is a collector scheduling defect, not evidence of VPN overload.
+The shorter thread-control windows did not exceed their endpoint allowance.
+
+- Correction: thread mode waits until one second after the preceding sample start.
+- Process-only behavior remains unchanged; scan overruns and invalid clocks fail explicitly.
+- Tests cover scan-cost subtraction, second-boundary rollover, default live sampling and invalid clocks.
+- Existing timing/count/traffic limits remain unchanged; a fresh sustained capture is still required.
+- Do not relabel the retained failed capture as a successful idle or load result.

@@ -95,3 +95,26 @@ printf 'Thread collector identity fields, missing counters, skips, privacy and b
 printf '42 (short) S 1 2\n' >"$fixture/42/stat"
 expect_status 1 env P2P_VPN_SAMPLE_PROC_ROOT="$fixture" sh "$collector" 42 1
 printf 'Process collector comm parsing, missing fields and malformed stat checks passed.\n'
+
+# Load only the timing helpers; do not invoke the collector entry point.
+eval "$(sed -n '/^unsigned() {/,/^}/p' "$collector")"
+eval "$(sed -n '/^uptime_centiseconds() {/,/^if { /p' "$collector" | sed '$d')"
+# Timing helpers read these globals through the extracted definitions.
+# shellcheck disable=SC2034
+proc="$fixture"
+slept=""
+sleep() { slept="$1"; }
+for timing in '123.45 123.45 1.00' '123.45 123.48 0.97' \
+  '123.99 124.08 0.91' '123.45 124.44 0.01'; do
+  read -r started now expected <<<"$timing"
+  printf '%s 0.00\n' "$now" >"$fixture/uptime"
+  thread_sample_sleep
+  [[ "$slept" == "$expected" ]]
+done
+for now in 124.45 124.46 123.44 invalid 124.4; do
+  # shellcheck disable=SC2034
+  started=123.45
+  printf '%s 0.00\n' "$now" >"$fixture/uptime"
+  expect_status 1 thread_sample_sleep
+done
+printf 'Thread timing subtracts scan work and rejects overruns or invalid clocks.\n'
