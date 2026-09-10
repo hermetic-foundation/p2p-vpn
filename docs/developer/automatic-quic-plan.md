@@ -355,7 +355,45 @@ Keep public merge helpers validating arbitrary caller-supplied histories.
 
 Regression coverage must compare cached and full evaluation across expiry, future grants,
 clock rollback, revocation, changed signatures, conflicting versions and pending authorization
-updates. This optimization is planned, not implemented by the diagnostic change.
+updates. The diagnostic commit itself did not implement this optimization.
+
+### Exact Duplicate Membership Fast Path
+
+- `Forwarder::merge_membership_records` now recognizes exact retained signed records
+  inside its existing time-valid authorization window, including empty and duplicate batches.
+- It returns the same ignored-record count without signature revalidation, ledger cloning
+  or authorization reconstruction. Record equality includes the signature and full payload.
+- New or altered records, activation/expiry boundaries and clock rollback use the original
+  full merge. Public membership helpers and persisted-state restoration remain unchanged.
+- No additional cache or unbounded allocation was introduced. Existing record limits bound
+  retained-state comparison; pending authorization updates are not consumed by this fast path.
+
+The differential regression exercises future grants, a future revocation, expiry, repeated
+timestamps and rollback against full evaluation. Negative coverage checks changed signatures
+and changed payloads; duplicate batches preserve revisions and pending authorization changes.
+
+| Unoptimized host diagnostic | Before, three duplicate merges | After, three duplicate merges |
+| --- | --- | --- |
+| Eight records, same fixture fingerprint | 1,025,475 microseconds | 5 microseconds |
+| 128 records, same fixture fingerprint | 16,247,999 microseconds | 414 microseconds |
+
+No build ran during either post-change diagnostic. These measure the duplicate fast path,
+not new-record validation, hostname handling, throughput or end-to-end network latency.
+
+- Workspace/all-target tests passed: 1,529 passed, 46 ignored, zero failures.
+  Core tests took 47.77 seconds; evidence: `/tmp/p2p-vpn-duplicate-merge-workspace.log`.
+- Both resource diagnostic sizes passed their correctness assertions. Formatting and
+  whitespace checks passed; no Lean/TLA/Lake sources were found in the repository scan.
+
+- Required Clippy groups passed in 16.64 seconds; existing non-fatal warnings remain.
+  Evidence: `/tmp/p2p-vpn-duplicate-merge-clippy.log`.
+- Cached offline Android ARM64 compilation passed in 40.01 seconds with four existing
+  platform dead-code warnings; no Java or JNI contract changed.
+- Offline Nix evaluation produced `/nix/store/wmw28ms4m8pxxabcvfmylzz0yil083lp-source`;
+  its Rust `src` tree matches the tested worktree. This is not full Nix package realization.
+
+APK packaging and physical remeasurement remain pending for this implementation.
+This does not claim to resolve the earlier physical packet loss.
 
 ## Failed Datagram Fallback Review
 

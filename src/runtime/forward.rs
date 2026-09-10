@@ -341,6 +341,17 @@ impl Forwarder {
         records: &[SignedMembershipRecord],
         now_unix_seconds: u64,
     ) -> Result<MembershipRecordMergeStats, ForwardError> {
+        // Exact retained records are already validated; time-dependent authority must still refresh.
+        if self.membership_refresh_window.contains(now_unix_seconds)
+            && records
+                .iter()
+                .all(|record| self.member_records.contains(record))
+        {
+            return Ok(MembershipRecordMergeStats {
+                ignored_stale_or_equal: records.len(),
+                ..MembershipRecordMergeStats::default()
+            });
+        }
         let trusted_issuers = self.live_membership_trust_anchors()?;
         self.merge_membership_records_with_trusted_issuers(
             records,
@@ -1767,6 +1778,21 @@ mod tests {
         config.network.member_records = vec![
             grant(&issuer, 900, Some(1_200)),
             grant(&remote, 1_001, Some(1_100)),
+            issue_membership_record_for_subject_at(
+                &issuer,
+                MembershipRecordIssueOptions {
+                    network_name: "lab".to_owned(),
+                    member: MembershipRecordSubject::from_identity(&remote).unwrap(),
+                    membership_epoch: 1,
+                    sequence: 2,
+                    revoked: true,
+                    roles: Vec::new(),
+                    route_grants: Vec::new(),
+                    expires_at_unix_seconds: None,
+                },
+                1_050,
+            )
+            .unwrap(),
         ];
         let mut forwarder = Forwarder::from_config(&config).unwrap();
         forwarder.commit_reconfigure(
@@ -1777,6 +1803,12 @@ mod tests {
         assert_eq!(
             forwarder.membership_refresh_window.next_transition,
             Some(1_001)
+        );
+        let mut duplicate_forwarder = Forwarder::from_config(&config).unwrap();
+        duplicate_forwarder.commit_reconfigure(
+            duplicate_forwarder
+                .prepare_reconfigure(config.clone(), 1_000)
+                .unwrap(),
         );
         for now in [
             1_000,
@@ -1803,6 +1835,33 @@ mod tests {
             assert_eq!(reported_changed, changed, "time {now}");
             assert_eq!(forwarder.authorization, expected, "time {now}");
             assert_eq!(forwarder.effective_membership, membership, "time {now}");
+            let duplicate_window = duplicate_forwarder.membership_refresh_window;
+            let stats = duplicate_forwarder
+                .merge_membership_records(&config.network.member_records, now)
+                .unwrap();
+            assert_eq!(stats.accepted, 0);
+            assert_eq!(
+                stats.ignored_stale_or_equal,
+                config.network.member_records.len()
+            );
+            assert_eq!(
+                duplicate_forwarder.authorization, expected,
+                "duplicate time {now}"
+            );
+            assert_eq!(duplicate_forwarder.effective_membership, membership);
+            assert_eq!(
+                duplicate_forwarder.take_membership_effective_refresh_pending(),
+                changed,
+                "duplicate time {now}"
+            );
+            assert_eq!(
+                duplicate_forwarder.membership_refresh_window.evaluated_at,
+                if duplicate_window.contains(now) {
+                    duplicate_window.evaluated_at
+                } else {
+                    now
+                }
+            );
             assert_eq!(forwarder.member_records(), config.network.member_records);
             assert_eq!(
                 forwarder.membership_refresh_window.evaluated_at,
@@ -1844,6 +1903,20 @@ mod tests {
             .unwrap();
         let before = forwarder.membership_refresh_window;
         let revision = forwarder.membership_revision();
+        let stats = forwarder
+            .merge_membership_records(&[record.clone(), record.clone()], 1_050)
+            .unwrap();
+        assert_eq!(stats.ignored_stale_or_equal, 2);
+        assert_eq!(forwarder.membership_refresh_window, before);
+        assert_eq!(forwarder.membership_revision(), revision);
+        assert!(forwarder.membership_effective_refresh_pending);
+        let mut invalid_signature = record.clone();
+        invalid_signature.signature.push('!');
+        assert!(
+            forwarder
+                .merge_membership_records(&[invalid_signature], 1_050)
+                .is_err()
+        );
         let mut invalid = record.clone();
         invalid.payload.sequence += 1;
         assert!(
