@@ -51,6 +51,7 @@ No physical device or deployed host is authorized for this work.
 | [Daemon 336-byte correspondence](daemon-336-review.md) | Two direct fixtures trace the same registry/RNG owners through graceful shutdown | Remaining 18961 bytes / 25 blocks and live reconnect growth |
 | [Large daemon owners](daemon-large-review.md) | Two traces identify signal-array, timer-capacity and Crossbeam epoch-storage residuals | Remaining 2505 bytes / 16 blocks, bounded reclamation and live reconnect growth |
 | [Small allocation observer](daemon-small-review.md) | Single-thread calibration passes; three invalid daemon traces preserved | Quota/missed-return failures prevent further small-size attribution |
+| [Explicit allocator returns](explicit-return-review.md) | Calibration and two direct fixtures pass; five additional retained owners identified | Remaining 734 bytes / 11 blocks, bounded reclamation and reconnect growth |
 | [Sustained traffic fixture](sustained-traffic-review.md) | Two full captures: 30000/30000, stable descriptors, CPU settles below 0.2% per node after load | Broader allocation attribution and multi-network workloads remain open |
 | [Capability retirement](capability-retirement-review.md) | Retry gap reproduced; guarded correction and dispatch regressions pass | Live follow-ups pass but did not exercise the retry branch |
 | [Lifecycle churn results](lifecycle-churn-results.md) | Both ten-cycle captures pass; queues drain and recovery descriptor counts stay stable | RSS attribution and multi-network isolation remain open |

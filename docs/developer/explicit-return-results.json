@@ -1,0 +1,654 @@
+{
+  "schema_version": 1,
+  "baseline": "aa116658",
+  "command": "env -u P2P_VPN_TUN_E2E_IDLE_SECONDS -u P2P_VPN_TUN_E2E_ORCHESTRATOR_TIMEOUT_SECONDS -u P2P_VPN_TUN_E2E_WAIT_SCALE PATH=/tmp/p2p-vpn-explicit-return-wrapper:$PATH RUST_MIN_STACK=8388608 P2P_VPN_REVIEW_GRACEFUL_SHUTDOWN=1 P2P_VPN_TUN_E2E_KEEP_TEMP=1 TOKIO_WORKER_THREADS=2 timeout --signal=TERM --kill-after=2s 100 prlimit --fsize=1048576:1048576 -- /tmp/p2p-vpn-review-target/debug/deps/tun_namespace-92e26a895f071361 tun_namespace_ping_crosses_two_node_overlay --ignored --exact --nocapture --test-threads=1",
+  "wrapper": "#!/bin/sh\nset -eu\nif [ \"${P2P_VPN_TUN_E2E_MODE-}\" = node ] && [ \"${P2P_VPN_TUN_E2E_ROLE-}\" = a ]; then\n    test \"$1\" = --net\n    shift\n    exec /run/current-system/sw/bin/unshare --net prlimit --fsize=1048576:1048576 -- /nix/store/bg2bp1zmii5spb2hkgv5xn6mzva7nx9r-gdb-17.2/bin/gdb -q -nx -batch -x /tmp/p2p-vpn-explicit-return.gdb --args \"$@\"\nfi\nexec /run/current-system/sw/bin/unshare \"$@\"\n",
+  "gdb_script": "set pagination off\nset confirm off\nset debuginfod enabled off\nset auto-load off\nset print frame-arguments none\nset print address off\ntbreak tun_namespace::run_node_child\nrun\nset language c\npython\nimport gdb, json\nlive = {}\nsites = []\nallocated = 0\nfreed = 0\nsnapshots = 0\nfailures = []\nexit_code = None\nselected = {13, 14, 352, 368, 1024}\nsizes = set(selected)\ndef fail(message):\n    failures.append(message)\n    raise gdb.GdbError(message)\ndef filters():\n    free_bp.condition = \" || \".join(\"$rsi == %d\" % s for s in sorted(sizes))\n    resize_bp.condition = \"(\" + free_bp.condition + \") || \" + \" || \".join(\"$rcx == %d\" % s for s in sorted(selected))\npending = {}\nreturn_calls = 0\ndef Returned(owner, old=None):\n    global return_calls\n    return_calls += 1\n    if return_calls > 16384 or len(pending) >= 128:\n        fail(\"return tracking quota exceeded\")\n    ident = return_calls\n    sp = int(gdb.parse_and_eval(\"$rsp\"))\n    address = int(gdb.parse_and_eval(\"*(unsigned long long*)$rsp\"))\n    bp = gdb.Breakpoint(\"*%d\" % address, internal=True)\n    bp.thread = gdb.selected_thread().global_num\n    bp.condition = \"$rsp == %d\" % (sp + 8)\n    pending[ident] = (bp, owner, old)\n    bp.commands = \"silent\\npython returned(%d)\\ncontinue\\n\" % ident\ndef returned(ident):\n    bp, owner, old = pending.pop(ident)\n    bp.delete()\n    address = int(gdb.parse_and_eval(\"$rax\"))\n    if not address:\n        fail(\"allocation or resize failed; old owner retained\")\n    if old is not None:\n        live.pop(old, None)\n    if address in live:\n        fail(\"duplicate live allocation address\")\n    live[address] = owner\ndef stack_site():\n    frames = []\n    frame = gdb.newest_frame()\n    for _ in range(24):\n        if frame is None:\n            break\n        frames.append((frame.name() or \"?\")[:240])\n        frame = frame.older()\n    if frames not in sites:\n        if len(sites) >= 64:\n            fail(\"site quota exceeded\")\n        sites.append(frames)\n        print(\"SITE\", json.dumps({\"id\": len(sites), \"frames\": frames}))\n    return sites.index(frames) + 1\ndef new_owner(size):\n    global allocated\n    allocated += 1\n    if allocated > 4096:\n        fail(\"allocation quota exceeded\")\n    return (allocated, size, stack_site())\ndef allocate():\n    size = int(gdb.parse_and_eval(\"$rdi\"))\n    if size not in selected:\n        fail(\"allocation filter mismatch\")\n    Returned(new_owner(size))\ndef deallocate():\n    global freed\n    address = int(gdb.parse_and_eval(\"$rdi\"))\n    if address in live:\n        freed += 1\n        live.pop(address)\ndef resize():\n    address = int(gdb.parse_and_eval(\"$rdi\"))\n    size = int(gdb.parse_and_eval(\"$rcx\"))\n    if address in live:\n        ident, _, site = live[address]\n        if size not in sizes:\n            sizes.add(size)\n            filters()\n        Returned((ident, size, site), address)\n    elif size in selected:\n        Returned(new_owner(size))\ndef checkpoint():\n    global snapshots\n    snapshots += 1\n    print(\"CHECKPOINT\", json.dumps({\"index\": snapshots, \"live\": sorted(live.values())}))\nfor symbol in (\"__rust_alloc\", \"__rust_alloc_zeroed\"):\n    bp = gdb.Breakpoint(\"*'__rustc::\" + symbol + \"'\", internal=True)\n    bp.condition = \" || \".join(\"$rdi == %d\" % s for s in sorted(selected))\n    bp.commands = \"silent\\npython allocate()\\ncontinue\\n\"\nfree_bp = gdb.Breakpoint(\"*'__rustc::__rust_dealloc'\", internal=True)\nfree_bp.commands = \"silent\\npython deallocate()\\ncontinue\\n\"\nresize_bp = gdb.Breakpoint(\"*'__rustc::__rust_realloc'\", internal=True)\nresize_bp.commands = \"silent\\npython resize()\\ncontinue\\n\"\nfilters()\nbp = gdb.Breakpoint(\"tun_namespace::allocation_sample::emit_sizes\", internal=True)\nbp.commands = \"silent\\npython checkpoint()\\ncontinue\\n\"\ndef ended(event):\n    global exit_code\n    exit_code = getattr(event, \"exit_code\", None)\n    print(\"TRACE_SUMMARY\", json.dumps({\"allocated\": allocated, \"freed\": freed, \"live\": sorted(live.values()), \"snapshots\": snapshots, \"sites\": len(sites), \"failures\": failures, \"exit_code\": exit_code, \"pending_returns\": len(pending), \"return_calls\": return_calls}))\ngdb.events.exited.connect(ended)\n\nend\ncontinue\npython assert exit_code == 0 and snapshots == 3 and not failures and not pending, \"incomplete trace\"\nquit\n",
+  "calibration_script": "set pagination off\nset confirm off\nset debuginfod enabled off\nset auto-load off\nset print frame-arguments none\nset print address off\ntbreak tun_namespace::allocation_sample::allocator_calibration\nrun\nset language c\npython\nimport gdb, json\nlive = {}\nsites = []\nallocated = 0\nfreed = 0\nsnapshots = 0\nfailures = []\nexit_code = None\nselected = {13, 14, 352, 368, 1024}\nsizes = set(selected)\ndef fail(message):\n    failures.append(message)\n    raise gdb.GdbError(message)\ndef filters():\n    free_bp.condition = \" || \".join(\"$rsi == %d\" % s for s in sorted(sizes))\n    resize_bp.condition = \"(\" + free_bp.condition + \") || \" + \" || \".join(\"$rcx == %d\" % s for s in sorted(selected))\npending = {}\nreturn_calls = 0\ndef Returned(owner, old=None):\n    global return_calls\n    return_calls += 1\n    if return_calls > 16384 or len(pending) >= 128:\n        fail(\"return tracking quota exceeded\")\n    ident = return_calls\n    sp = int(gdb.parse_and_eval(\"$rsp\"))\n    address = int(gdb.parse_and_eval(\"*(unsigned long long*)$rsp\"))\n    bp = gdb.Breakpoint(\"*%d\" % address, internal=True)\n    bp.thread = gdb.selected_thread().global_num\n    bp.condition = \"$rsp == %d\" % (sp + 8)\n    pending[ident] = (bp, owner, old)\n    bp.commands = \"silent\\npython returned(%d)\\ncontinue\\n\" % ident\ndef returned(ident):\n    bp, owner, old = pending.pop(ident)\n    bp.delete()\n    address = int(gdb.parse_and_eval(\"$rax\"))\n    if not address:\n        fail(\"allocation or resize failed; old owner retained\")\n    if old is not None:\n        live.pop(old, None)\n    if address in live:\n        fail(\"duplicate live allocation address\")\n    live[address] = owner\ndef stack_site():\n    frames = []\n    frame = gdb.newest_frame()\n    for _ in range(24):\n        if frame is None:\n            break\n        frames.append((frame.name() or \"?\")[:240])\n        frame = frame.older()\n    if frames not in sites:\n        if len(sites) >= 64:\n            fail(\"site quota exceeded\")\n        sites.append(frames)\n        print(\"SITE\", json.dumps({\"id\": len(sites), \"frames\": frames}))\n    return sites.index(frames) + 1\ndef new_owner(size):\n    global allocated\n    allocated += 1\n    if allocated > 4096:\n        fail(\"allocation quota exceeded\")\n    return (allocated, size, stack_site())\ndef allocate():\n    size = int(gdb.parse_and_eval(\"$rdi\"))\n    if size not in selected:\n        fail(\"allocation filter mismatch\")\n    Returned(new_owner(size))\ndef deallocate():\n    global freed\n    address = int(gdb.parse_and_eval(\"$rdi\"))\n    if address in live:\n        freed += 1\n        live.pop(address)\ndef resize():\n    address = int(gdb.parse_and_eval(\"$rdi\"))\n    size = int(gdb.parse_and_eval(\"$rcx\"))\n    if address in live:\n        ident, _, site = live[address]\n        if size not in sizes:\n            sizes.add(size)\n            filters()\n        Returned((ident, size, site), address)\n    elif size in selected:\n        Returned(new_owner(size))\ndef checkpoint():\n    global snapshots\n    snapshots += 1\n    print(\"CHECKPOINT\", json.dumps({\"index\": snapshots, \"live\": sorted(live.values())}))\nfor symbol in (\"__rust_alloc\", \"__rust_alloc_zeroed\"):\n    bp = gdb.Breakpoint(\"*'__rustc::\" + symbol + \"'\", internal=True)\n    bp.condition = \" || \".join(\"$rdi == %d\" % s for s in sorted(selected))\n    bp.commands = \"silent\\npython allocate()\\ncontinue\\n\"\nfree_bp = gdb.Breakpoint(\"*'__rustc::__rust_dealloc'\", internal=True)\nfree_bp.commands = \"silent\\npython deallocate()\\ncontinue\\n\"\nresize_bp = gdb.Breakpoint(\"*'__rustc::__rust_realloc'\", internal=True)\nresize_bp.commands = \"silent\\npython resize()\\ncontinue\\n\"\nfilters()\nbp = gdb.Breakpoint(\"tun_namespace::allocation_sample::emit_sizes\", internal=True)\nbp.commands = \"silent\\npython checkpoint()\\ncontinue\\n\"\ndef ended(event):\n    global exit_code\n    exit_code = getattr(event, \"exit_code\", None)\n    print(\"TRACE_SUMMARY\", json.dumps({\"allocated\": allocated, \"freed\": freed, \"live\": sorted(live.values()), \"snapshots\": snapshots, \"sites\": len(sites), \"failures\": failures, \"exit_code\": exit_code, \"pending_returns\": len(pending), \"return_calls\": return_calls}))\ngdb.events.exited.connect(ended)\n\nend\ncontinue\npython assert exit_code == 0 and snapshots == 0 and not failures and not pending, \"incomplete trace\"\nquit\n",
+  "calibration": {
+    "log": "/tmp/p2p-vpn-explicit-return-cal.log",
+    "sha256": "24ba04ded309718a4c6554fed60e7fbef5251f17224111523699f311dc86deb7",
+    "test_seconds": 0.02,
+    "allocated": 1,
+    "freed": 1,
+    "return_calls": 3,
+    "pending_returns": 0,
+    "failures": [],
+    "exit_code": 0
+  },
+  "repetitions": [
+    {
+      "dir": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.16a7d21197d4dfe8",
+      "checkpoints": [
+        {
+          "index": 1,
+          "live": []
+        },
+        {
+          "index": 2,
+          "live": [
+            [
+              3,
+              1024,
+              3
+            ],
+            [
+              6,
+              368,
+              6
+            ],
+            [
+              11,
+              352,
+              10
+            ],
+            [
+              15,
+              14,
+              14
+            ],
+            [
+              16,
+              13,
+              15
+            ]
+          ]
+        },
+        {
+          "index": 3,
+          "live": [
+            [
+              3,
+              1024,
+              3
+            ],
+            [
+              6,
+              368,
+              6
+            ],
+            [
+              11,
+              352,
+              10
+            ],
+            [
+              15,
+              14,
+              14
+            ],
+            [
+              16,
+              13,
+              15
+            ]
+          ]
+        }
+      ],
+      "retained_sites": [
+        {
+          "id": 3,
+          "frames": [
+            "__rustc::__rust_alloc",
+            "<alloc::raw_vec::RawVecInner>::try_allocate_in",
+            "<alloc::raw_vec::RawVecInner>::with_capacity_in",
+            "<alloc::vec::Vec<parking_lot_core::parking_lot::Bucket>>::with_capacity",
+            "<parking_lot_core::parking_lot::HashTable>::new",
+            "parking_lot_core::parking_lot::create_hashtable",
+            "parking_lot_core::parking_lot::get_hashtable",
+            "parking_lot_core::parking_lot::grow_hashtable",
+            "<parking_lot_core::parking_lot::ThreadData>::new",
+            "parking_lot_core::parking_lot::with_thread_data::THREAD_DATA::__rust_std_internal_init_fn",
+            "<parking_lot_core::parking_lot::with_thread_data::THREAD_DATA::__rust_std_internal_init_fn as core::ops::function::FnOnce<()>>::call_once",
+            "<std::sys::thread_local::native::lazy::Storage<parking_lot_core::parking_lot::ThreadData, ()>>::get_or_init_slow::<parking_lot_core::parking_lot::with_thread_data::THREAD_DATA::__rust_std_internal_init_fn>",
+            "<std::sys::thread_local::native::lazy::Storage<parking_lot_core::parking_lot::ThreadData, ()>>::get_or_init::<parking_lot_core::parking_lot::with_thread_data::THREAD_DATA::__rust_std_internal_init_fn>",
+            "parking_lot_core::parking_lot::with_thread_data::THREAD_DATA::{K#0}::{closure#0}",
+            "<parking_lot_core::parking_lot::with_thread_data::THREAD_DATA::{K#0}::{closure#0} as core::ops::function::FnOnce<(core::option::Option<&mut core::option::Option<parking_lot_core::parking_lot::ThreadData>>,)>>::call_once",
+            "<std::thread::local::LocalKey<parking_lot_core::parking_lot::ThreadData>>::try_with::<parking_lot_core::parking_lot::with_thread_data<parking_lot_core::parking_lot::ParkResult, parking_lot_core::parking_lot::park<<parking_lot::condvar::Cond",
+            "parking_lot_core::parking_lot::park::<<parking_lot::condvar::Condvar>::wait_until_internal::{closure#0}, <parking_lot::condvar::Condvar>::wait_until_internal::{closure#1}, <parking_lot::condvar::Condvar>::wait_until_internal::{closure#2}>",
+            "<parking_lot::condvar::Condvar>::wait_until_internal",
+            "<parking_lot::condvar::Condvar>::wait::<()>",
+            "<tokio::loom::std::parking_lot::Condvar>::wait::<()>",
+            "<tokio::runtime::scheduler::multi_thread::park::Inner>::park_condvar",
+            "<tokio::runtime::scheduler::multi_thread::park::Inner>::park",
+            "<tokio::runtime::scheduler::multi_thread::park::Parker>::park",
+            "<tokio::runtime::scheduler::multi_thread::worker::Context>::park_internal"
+          ]
+        },
+        {
+          "id": 6,
+          "frames": [
+            "__rustc::__rust_alloc",
+            "<alloc::alloc::Global>::alloc_impl_runtime",
+            "alloc::boxed::box_new_uninit",
+            "<alloc::rc::Rc<core::cell::UnsafeCell<rand::rngs::adapter::reseeding::ReseedingRng<rand_chacha::chacha::ChaCha12Core, rand_core::os::OsRng>>>>::new",
+            "rand::rngs::thread::THREAD_RNG_KEY::__rust_std_internal_init_fn",
+            "<rand::rngs::thread::THREAD_RNG_KEY::__rust_std_internal_init_fn as core::ops::function::FnOnce<()>>::call_once",
+            "<std::sys::thread_local::native::lazy::Storage<alloc::rc::Rc<core::cell::UnsafeCell<rand::rngs::adapter::reseeding::ReseedingRng<rand_chacha::chacha::ChaCha12Core, rand_core::os::OsRng>>>, ()>>::get_or_init_slow::<rand::rngs::thread::THREAD",
+            "<std::sys::thread_local::native::lazy::Storage<alloc::rc::Rc<core::cell::UnsafeCell<rand::rngs::adapter::reseeding::ReseedingRng<rand_chacha::chacha::ChaCha12Core, rand_core::os::OsRng>>>, ()>>::get_or_init::<rand::rngs::thread::THREAD_RNG_",
+            "rand::rngs::thread::THREAD_RNG_KEY::{K#0}::{closure#0}",
+            "<rand::rngs::thread::THREAD_RNG_KEY::{K#0}::{closure#0} as core::ops::function::FnOnce<(core::option::Option<&mut core::option::Option<alloc::rc::Rc<core::cell::UnsafeCell<rand::rngs::adapter::reseeding::ReseedingRng<rand_chacha::chacha::Ch",
+            "<std::thread::local::LocalKey<alloc::rc::Rc<core::cell::UnsafeCell<rand::rngs::adapter::reseeding::ReseedingRng<rand_chacha::chacha::ChaCha12Core, rand_core::os::OsRng>>>>>::try_with::<rand::rngs::thread::thread_rng::{closure#0}, alloc::rc:",
+            "<std::thread::local::LocalKey<alloc::rc::Rc<core::cell::UnsafeCell<rand::rngs::adapter::reseeding::ReseedingRng<rand_chacha::chacha::ChaCha12Core, rand_core::os::OsRng>>>>>::with::<rand::rngs::thread::thread_rng::{closure#0}, alloc::rc::Rc<",
+            "rand::rngs::thread::thread_rng",
+            "<libp2p_noise::protocol::Keypair>::new",
+            "<libp2p_noise::Config>::new",
+            "<<libp2p_noise::Config>::new as core::ops::function::FnOnce<(&libp2p_identity::keypair::Keypair,)>>::call_once",
+            "<<libp2p_noise::Config>::new as libp2p::builder::phase::IntoSecurityUpgrade<libp2p_tcp::provider::tokio::TcpStream>>::into_security_upgrade",
+            "<libp2p::builder::SwarmBuilder<libp2p::builder::phase::provider::Tokio, libp2p::builder::phase::tcp::TcpPhase>>::with_tcp::<<libp2p_noise::Config>::new, libp2p_noise::io::Output<multistream_select::negotiated::Negotiated<libp2p_tcp::provide",
+            "p2p_vpn::runtime::p2p::build_node_with_dial_observer::<p2p_vpn::runtime::p2p::build_node::{closure#0}>",
+            "p2p_vpn::runtime::p2p::build_node",
+            "tun_namespace::run_ready_node::{closure#0}",
+            "<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>> as core::future::future::Future>::poll",
+            "<tokio::runtime::park::CachedParkThread>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>::{closure#0}",
+            "<tokio::runtime::park::CachedParkThread>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>"
+          ]
+        },
+        {
+          "id": 10,
+          "frames": [
+            "__rustc::__rust_alloc",
+            "<alloc::alloc::Global>::alloc_impl_runtime",
+            "alloc::boxed::box_new_uninit",
+            "<alloc::rc::Rc<core::cell::UnsafeCell<rand::rngs::reseeding::ReseedingRng<rand_chacha::chacha::ChaCha12Core, rand_core::os::OsRng>>>>::new",
+            "rand::rngs::thread::THREAD_RNG_KEY::__rust_std_internal_init_fn",
+            "<rand::rngs::thread::THREAD_RNG_KEY::__rust_std_internal_init_fn as core::ops::function::FnOnce<()>>::call_once",
+            "<std::sys::thread_local::native::lazy::Storage<alloc::rc::Rc<core::cell::UnsafeCell<rand::rngs::reseeding::ReseedingRng<rand_chacha::chacha::ChaCha12Core, rand_core::os::OsRng>>>, ()>>::get_or_init_slow::<rand::rngs::thread::THREAD_RNG_KEY:",
+            "<std::sys::thread_local::native::lazy::Storage<alloc::rc::Rc<core::cell::UnsafeCell<rand::rngs::reseeding::ReseedingRng<rand_chacha::chacha::ChaCha12Core, rand_core::os::OsRng>>>, ()>>::get_or_init::<rand::rngs::thread::THREAD_RNG_KEY::__ru",
+            "rand::rngs::thread::THREAD_RNG_KEY::{K#0}::{closure#0}",
+            "<rand::rngs::thread::THREAD_RNG_KEY::{K#0}::{closure#0} as core::ops::function::FnOnce<(core::option::Option<&mut core::option::Option<alloc::rc::Rc<core::cell::UnsafeCell<rand::rngs::reseeding::ReseedingRng<rand_chacha::chacha::ChaCha12Cor",
+            "<std::thread::local::LocalKey<alloc::rc::Rc<core::cell::UnsafeCell<rand::rngs::reseeding::ReseedingRng<rand_chacha::chacha::ChaCha12Core, rand_core::os::OsRng>>>>>::try_with::<rand::rngs::thread::rng::{closure#0}, alloc::rc::Rc<core::cell::",
+            "<std::thread::local::LocalKey<alloc::rc::Rc<core::cell::UnsafeCell<rand::rngs::reseeding::ReseedingRng<rand_chacha::chacha::ChaCha12Core, rand_core::os::OsRng>>>>>::with::<rand::rngs::thread::rng::{closure#0}, alloc::rc::Rc<core::cell::Unsa",
+            "rand::rngs::thread::rng",
+            "rand::random_range::<u64, core::ops::range::Range<u64>>",
+            "<hickory_resolver::name_server::name_server_stats::NameServerStats as core::default::Default>::default",
+            "<hickory_resolver::name_server::name_server::NameServer<hickory_resolver::name_server::connection_provider::GenericConnector<hickory_proto::runtime::tokio_runtime::TokioRuntimeProvider>>>::new",
+            "<hickory_resolver::name_server::name_server_pool::NameServerPool<hickory_resolver::name_server::connection_provider::GenericConnector<hickory_proto::runtime::tokio_runtime::TokioRuntimeProvider>>>::from_config_with_provider::{closure#1}",
+            "<core::iter::adapters::map::Map<core::iter::adapters::filter::Filter<core::slice::iter::Iter<hickory_resolver::config::NameServerConfig>, <hickory_resolver::name_server::name_server_pool::NameServerPool<hickory_resolver::name_server::connec",
+            "<alloc::vec::Vec<hickory_resolver::name_server::name_server::NameServer<hickory_resolver::name_server::connection_provider::GenericConnector<hickory_proto::runtime::tokio_runtime::TokioRuntimeProvider>>> as alloc::vec::spec_from_iter_nested",
+            "<alloc::vec::Vec<hickory_resolver::name_server::name_server::NameServer<hickory_resolver::name_server::connection_provider::GenericConnector<hickory_proto::runtime::tokio_runtime::TokioRuntimeProvider>>> as alloc::vec::spec_from_iter::SpecF",
+            "<alloc::vec::Vec<hickory_resolver::name_server::name_server::NameServer<hickory_resolver::name_server::connection_provider::GenericConnector<hickory_proto::runtime::tokio_runtime::TokioRuntimeProvider>>> as core::iter::traits::collect::From",
+            "<core::iter::adapters::map::Map<core::iter::adapters::filter::Filter<core::slice::iter::Iter<hickory_resolver::config::NameServerConfig>, <hickory_resolver::name_server::name_server_pool::NameServerPool<hickory_resolver::name_server::connec",
+            "<core::iter::adapters::map::Map<core::iter::adapters::filter::Filter<core::slice::iter::Iter<hickory_resolver::config::NameServerConfig>, <hickory_resolver::name_server::name_server_pool::NameServerPool<hickory_resolver::name_server::connec",
+            "<alloc::sync::Arc<[hickory_resolver::name_server::name_server::NameServer<hickory_resolver::name_server::connection_provider::GenericConnector<hickory_proto::runtime::tokio_runtime::TokioRuntimeProvider>>]> as core::iter::traits::collect::F"
+          ]
+        },
+        {
+          "id": 14,
+          "frames": [
+            "__rustc::__rust_alloc",
+            "<alloc::raw_vec::RawVecInner>::try_allocate_in",
+            "<alloc::raw_vec::RawVecInner>::with_capacity_in",
+            "<u8 as <[_]>::to_vec_in::ConvertVec>::to_vec::<alloc::alloc::Global>",
+            "<str as alloc::borrow::ToOwned>::to_owned",
+            "<futures_timer::native::global::HelperThread>::new",
+            "<futures_timer::native::timer::TimerHandle as core::default::Default>::default",
+            "<futures_timer::native::delay::Delay>::new",
+            "<libp2p_kad::jobs::PutRecordJob>::new",
+            "<libp2p_kad::behaviour::Behaviour<libp2p_kad::record::store::memory::MemoryStore>>::with_config::{closure#0}",
+            "<core::option::Option<core::time::Duration>>::map::<libp2p_kad::jobs::PutRecordJob, <libp2p_kad::behaviour::Behaviour<libp2p_kad::record::store::memory::MemoryStore>>::with_config::{closure#0}>",
+            "<libp2p_kad::behaviour::Behaviour<libp2p_kad::record::store::memory::MemoryStore>>::with_config",
+            "p2p_vpn::runtime::p2p::build_node_with_dial_observer::<p2p_vpn::runtime::p2p::build_node::{closure#0}>::{closure#0}",
+            "<libp2p::builder::SwarmBuilder<libp2p::builder::phase::provider::Tokio, libp2p::builder::phase::behaviour::BehaviourPhase<libp2p_core::transport::map::Map<libp2p_core::transport::choice::OrTransport<libp2p_core::transport::map::Map<libp2p_c",
+            "<libp2p::builder::SwarmBuilder<libp2p::builder::phase::provider::Tokio, libp2p::builder::phase::bandwidth_metrics::BandwidthMetricsPhase<libp2p_core::transport::map::Map<libp2p_core::transport::choice::OrTransport<libp2p_core::transport::ma",
+            "p2p_vpn::runtime::p2p::build_node_with_dial_observer::<p2p_vpn::runtime::p2p::build_node::{closure#0}>",
+            "p2p_vpn::runtime::p2p::build_node",
+            "tun_namespace::run_ready_node::{closure#0}",
+            "<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>> as core::future::future::Future>::poll",
+            "<tokio::runtime::park::CachedParkThread>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>::{closure#0}",
+            "<tokio::runtime::park::CachedParkThread>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>",
+            "<tokio::runtime::context::blocking::BlockingRegionGuard>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>",
+            "<tokio::runtime::scheduler::multi_thread::MultiThread>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>::{closure#0}",
+            "tokio::runtime::context::runtime::enter_runtime::<<tokio::runtime::scheduler::multi_thread::MultiThread>::block_on<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>::{closure#0}, core::result::Result<(), p2p_vpn"
+          ]
+        },
+        {
+          "id": 15,
+          "frames": [
+            "__rustc::__rust_alloc",
+            "std::thread::current::try_with_current::<std::thread::current::with_current_name<std::sys::pal::unix::stack_overflow::thread_info::set_current_info::{closure#0}, core::option::Option<alloc::boxed::Box<str>>>::{closure#0}, core::option::Opti",
+            "std::sys::pal::unix::stack_overflow::thread_info::set_current_info",
+            "std::sys::pal::unix::stack_overflow::imp::make_handler",
+            "<std::sys::thread::unix::Thread>::new::thread_start",
+            "start_thread",
+            "__clone3"
+          ]
+        }
+      ],
+      "summary": [
+        {
+          "allocated": 109,
+          "freed": 106,
+          "live": [
+            [
+              3,
+              1024,
+              3
+            ],
+            [
+              15,
+              14,
+              14
+            ],
+            [
+              16,
+              13,
+              15
+            ]
+          ],
+          "snapshots": 3,
+          "sites": 59,
+          "failures": [],
+          "exit_code": 0,
+          "pending_returns": 0,
+          "return_calls": 128
+        }
+      ],
+      "lifecycle": [
+        {
+          "stage": "before_child",
+          "pid": 48,
+          "unix_millis": 1789040400674,
+          "elapsed_millis": 0,
+          "allocations": 618,
+          "deallocations": 195,
+          "reallocations": 22,
+          "bytes_allocated": 74274,
+          "bytes_deallocated": 52675,
+          "bytes_reallocated": 6366,
+          "live_bytes": 21599,
+          "live_blocks": 423
+        },
+        {
+          "stage": "child_returned",
+          "pid": 48,
+          "unix_millis": 1789040416436,
+          "elapsed_millis": 15761,
+          "allocations": 14456,
+          "deallocations": 13943,
+          "reallocations": 4895,
+          "bytes_allocated": 4634193,
+          "bytes_deallocated": 4571793,
+          "bytes_reallocated": 633277,
+          "live_bytes": 62400,
+          "live_blocks": 513
+        },
+        {
+          "stage": "child_settled",
+          "pid": 48,
+          "unix_millis": 1789040416537,
+          "elapsed_millis": 15863,
+          "allocations": 14456,
+          "deallocations": 13943,
+          "reallocations": 4895,
+          "bytes_allocated": 4634193,
+          "bytes_deallocated": 4571793,
+          "bytes_reallocated": 633277,
+          "live_bytes": 62400,
+          "live_blocks": 513
+        }
+      ],
+      "artifacts": [
+        {
+          "sha256": "6131faa26a308a83e458c22dd0f1e472232ef5419a071e4e919bb780d1048ab5",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.16a7d21197d4dfe8/node-a.log"
+        },
+        {
+          "sha256": "b24d6d33736ecd5604a4b17bc9c6481039fac362bb7df044ef1c10a2bfd21db6",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.16a7d21197d4dfe8/ready-b"
+        },
+        {
+          "sha256": "2f54a9b8495d815270d4847f1762f28a239051d87b83900937f7e203ed534ea0",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.16a7d21197d4dfe8/repro-metadata.txt"
+        },
+        {
+          "sha256": "cced28c6dc3f99c2396a5eaad732bf6b28142335892b1cd0e6af6cdb53f5ccfa",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.16a7d21197d4dfe8/start-a"
+        },
+        {
+          "sha256": "b24d6d33736ecd5604a4b17bc9c6481039fac362bb7df044ef1c10a2bfd21db6",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.16a7d21197d4dfe8/ready-a"
+        },
+        {
+          "sha256": "cced28c6dc3f99c2396a5eaad732bf6b28142335892b1cd0e6af6cdb53f5ccfa",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.16a7d21197d4dfe8/start-b"
+        },
+        {
+          "sha256": "eb686d7bad1c34aa0d8005a59f36c9d409d4981b2f9975719bfad25d6e7650cf",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.16a7d21197d4dfe8/node-b.log"
+        },
+        {
+          "sha256": "0afa06e140e42a6d436d3861c92e819f36ca2888fcfbb178409805bada095e41",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.16a7d21197d4dfe8/repro-commands.sh"
+        },
+        {
+          "sha256": "b2b752803cbc5a95eeb5b9061eff14013a36dbc9be1e1afd458563714961e3a5",
+          "path": "/tmp/p2p-vpn-explicit-return-1.log"
+        }
+      ]
+    },
+    {
+      "dir": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.23df9c0fd7c8ce29",
+      "checkpoints": [
+        {
+          "index": 1,
+          "live": []
+        },
+        {
+          "index": 2,
+          "live": [
+            [
+              2,
+              1024,
+              2
+            ],
+            [
+              5,
+              368,
+              5
+            ],
+            [
+              10,
+              352,
+              9
+            ],
+            [
+              14,
+              14,
+              13
+            ],
+            [
+              15,
+              13,
+              14
+            ]
+          ]
+        },
+        {
+          "index": 3,
+          "live": [
+            [
+              2,
+              1024,
+              2
+            ],
+            [
+              5,
+              368,
+              5
+            ],
+            [
+              10,
+              352,
+              9
+            ],
+            [
+              14,
+              14,
+              13
+            ],
+            [
+              15,
+              13,
+              14
+            ]
+          ]
+        }
+      ],
+      "retained_sites": [
+        {
+          "id": 2,
+          "frames": [
+            "__rustc::__rust_alloc",
+            "<alloc::raw_vec::RawVecInner>::try_allocate_in",
+            "<alloc::raw_vec::RawVecInner>::with_capacity_in",
+            "<alloc::vec::Vec<parking_lot_core::parking_lot::Bucket>>::with_capacity",
+            "<parking_lot_core::parking_lot::HashTable>::new",
+            "parking_lot_core::parking_lot::create_hashtable",
+            "parking_lot_core::parking_lot::get_hashtable",
+            "parking_lot_core::parking_lot::grow_hashtable",
+            "<parking_lot_core::parking_lot::ThreadData>::new",
+            "parking_lot_core::parking_lot::with_thread_data::THREAD_DATA::__rust_std_internal_init_fn",
+            "<parking_lot_core::parking_lot::with_thread_data::THREAD_DATA::__rust_std_internal_init_fn as core::ops::function::FnOnce<()>>::call_once",
+            "<std::sys::thread_local::native::lazy::Storage<parking_lot_core::parking_lot::ThreadData, ()>>::get_or_init_slow::<parking_lot_core::parking_lot::with_thread_data::THREAD_DATA::__rust_std_internal_init_fn>",
+            "<std::sys::thread_local::native::lazy::Storage<parking_lot_core::parking_lot::ThreadData, ()>>::get_or_init::<parking_lot_core::parking_lot::with_thread_data::THREAD_DATA::__rust_std_internal_init_fn>",
+            "parking_lot_core::parking_lot::with_thread_data::THREAD_DATA::{K#0}::{closure#0}",
+            "<parking_lot_core::parking_lot::with_thread_data::THREAD_DATA::{K#0}::{closure#0} as core::ops::function::FnOnce<(core::option::Option<&mut core::option::Option<parking_lot_core::parking_lot::ThreadData>>,)>>::call_once",
+            "<std::thread::local::LocalKey<parking_lot_core::parking_lot::ThreadData>>::try_with::<parking_lot_core::parking_lot::with_thread_data<parking_lot_core::parking_lot::ParkResult, parking_lot_core::parking_lot::park<<parking_lot::raw_mutex::Ra",
+            "parking_lot_core::parking_lot::park::<<parking_lot::raw_mutex::RawMutex>::lock_slow::{closure#0}, <parking_lot::raw_mutex::RawMutex>::lock_slow::{closure#1}, <parking_lot::raw_mutex::RawMutex>::lock_slow::{closure#2}>",
+            "<parking_lot::raw_mutex::RawMutex>::lock_slow",
+            "<parking_lot::raw_mutex::RawMutex as lock_api::mutex::RawMutex>::lock",
+            "<lock_api::mutex::Mutex<parking_lot::raw_mutex::RawMutex, tokio::runtime::blocking::pool::Shared>>::lock",
+            "<tokio::loom::std::parking_lot::Mutex<tokio::runtime::blocking::pool::Shared>>::lock",
+            "<tokio::runtime::blocking::pool::Inner>::run",
+            "<tokio::runtime::blocking::pool::Spawner>::spawn_thread::{closure#0}",
+            "std::sys::backtrace::__rust_begin_short_backtrace::<<tokio::runtime::blocking::pool::Spawner>::spawn_thread::{closure#0}, ()>"
+          ]
+        },
+        {
+          "id": 5,
+          "frames": [
+            "__rustc::__rust_alloc",
+            "<alloc::alloc::Global>::alloc_impl_runtime",
+            "alloc::boxed::box_new_uninit",
+            "<alloc::rc::Rc<core::cell::UnsafeCell<rand::rngs::adapter::reseeding::ReseedingRng<rand_chacha::chacha::ChaCha12Core, rand_core::os::OsRng>>>>::new",
+            "rand::rngs::thread::THREAD_RNG_KEY::__rust_std_internal_init_fn",
+            "<rand::rngs::thread::THREAD_RNG_KEY::__rust_std_internal_init_fn as core::ops::function::FnOnce<()>>::call_once",
+            "<std::sys::thread_local::native::lazy::Storage<alloc::rc::Rc<core::cell::UnsafeCell<rand::rngs::adapter::reseeding::ReseedingRng<rand_chacha::chacha::ChaCha12Core, rand_core::os::OsRng>>>, ()>>::get_or_init_slow::<rand::rngs::thread::THREAD",
+            "<std::sys::thread_local::native::lazy::Storage<alloc::rc::Rc<core::cell::UnsafeCell<rand::rngs::adapter::reseeding::ReseedingRng<rand_chacha::chacha::ChaCha12Core, rand_core::os::OsRng>>>, ()>>::get_or_init::<rand::rngs::thread::THREAD_RNG_",
+            "rand::rngs::thread::THREAD_RNG_KEY::{K#0}::{closure#0}",
+            "<rand::rngs::thread::THREAD_RNG_KEY::{K#0}::{closure#0} as core::ops::function::FnOnce<(core::option::Option<&mut core::option::Option<alloc::rc::Rc<core::cell::UnsafeCell<rand::rngs::adapter::reseeding::ReseedingRng<rand_chacha::chacha::Ch",
+            "<std::thread::local::LocalKey<alloc::rc::Rc<core::cell::UnsafeCell<rand::rngs::adapter::reseeding::ReseedingRng<rand_chacha::chacha::ChaCha12Core, rand_core::os::OsRng>>>>>::try_with::<rand::rngs::thread::thread_rng::{closure#0}, alloc::rc:",
+            "<std::thread::local::LocalKey<alloc::rc::Rc<core::cell::UnsafeCell<rand::rngs::adapter::reseeding::ReseedingRng<rand_chacha::chacha::ChaCha12Core, rand_core::os::OsRng>>>>>::with::<rand::rngs::thread::thread_rng::{closure#0}, alloc::rc::Rc<",
+            "rand::rngs::thread::thread_rng",
+            "<libp2p_noise::protocol::Keypair>::new",
+            "<libp2p_noise::Config>::new",
+            "<<libp2p_noise::Config>::new as core::ops::function::FnOnce<(&libp2p_identity::keypair::Keypair,)>>::call_once",
+            "<<libp2p_noise::Config>::new as libp2p::builder::phase::IntoSecurityUpgrade<libp2p_tcp::provider::tokio::TcpStream>>::into_security_upgrade",
+            "<libp2p::builder::SwarmBuilder<libp2p::builder::phase::provider::Tokio, libp2p::builder::phase::tcp::TcpPhase>>::with_tcp::<<libp2p_noise::Config>::new, libp2p_noise::io::Output<multistream_select::negotiated::Negotiated<libp2p_tcp::provide",
+            "p2p_vpn::runtime::p2p::build_node_with_dial_observer::<p2p_vpn::runtime::p2p::build_node::{closure#0}>",
+            "p2p_vpn::runtime::p2p::build_node",
+            "tun_namespace::run_ready_node::{closure#0}",
+            "<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>> as core::future::future::Future>::poll",
+            "<tokio::runtime::park::CachedParkThread>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>::{closure#0}",
+            "<tokio::runtime::park::CachedParkThread>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>"
+          ]
+        },
+        {
+          "id": 9,
+          "frames": [
+            "__rustc::__rust_alloc",
+            "<alloc::alloc::Global>::alloc_impl_runtime",
+            "alloc::boxed::box_new_uninit",
+            "<alloc::rc::Rc<core::cell::UnsafeCell<rand::rngs::reseeding::ReseedingRng<rand_chacha::chacha::ChaCha12Core, rand_core::os::OsRng>>>>::new",
+            "rand::rngs::thread::THREAD_RNG_KEY::__rust_std_internal_init_fn",
+            "<rand::rngs::thread::THREAD_RNG_KEY::__rust_std_internal_init_fn as core::ops::function::FnOnce<()>>::call_once",
+            "<std::sys::thread_local::native::lazy::Storage<alloc::rc::Rc<core::cell::UnsafeCell<rand::rngs::reseeding::ReseedingRng<rand_chacha::chacha::ChaCha12Core, rand_core::os::OsRng>>>, ()>>::get_or_init_slow::<rand::rngs::thread::THREAD_RNG_KEY:",
+            "<std::sys::thread_local::native::lazy::Storage<alloc::rc::Rc<core::cell::UnsafeCell<rand::rngs::reseeding::ReseedingRng<rand_chacha::chacha::ChaCha12Core, rand_core::os::OsRng>>>, ()>>::get_or_init::<rand::rngs::thread::THREAD_RNG_KEY::__ru",
+            "rand::rngs::thread::THREAD_RNG_KEY::{K#0}::{closure#0}",
+            "<rand::rngs::thread::THREAD_RNG_KEY::{K#0}::{closure#0} as core::ops::function::FnOnce<(core::option::Option<&mut core::option::Option<alloc::rc::Rc<core::cell::UnsafeCell<rand::rngs::reseeding::ReseedingRng<rand_chacha::chacha::ChaCha12Cor",
+            "<std::thread::local::LocalKey<alloc::rc::Rc<core::cell::UnsafeCell<rand::rngs::reseeding::ReseedingRng<rand_chacha::chacha::ChaCha12Core, rand_core::os::OsRng>>>>>::try_with::<rand::rngs::thread::rng::{closure#0}, alloc::rc::Rc<core::cell::",
+            "<std::thread::local::LocalKey<alloc::rc::Rc<core::cell::UnsafeCell<rand::rngs::reseeding::ReseedingRng<rand_chacha::chacha::ChaCha12Core, rand_core::os::OsRng>>>>>::with::<rand::rngs::thread::rng::{closure#0}, alloc::rc::Rc<core::cell::Unsa",
+            "rand::rngs::thread::rng",
+            "rand::random_range::<u64, core::ops::range::Range<u64>>",
+            "<hickory_resolver::name_server::name_server_stats::NameServerStats as core::default::Default>::default",
+            "<hickory_resolver::name_server::name_server::NameServer<hickory_resolver::name_server::connection_provider::GenericConnector<hickory_proto::runtime::tokio_runtime::TokioRuntimeProvider>>>::new",
+            "<hickory_resolver::name_server::name_server_pool::NameServerPool<hickory_resolver::name_server::connection_provider::GenericConnector<hickory_proto::runtime::tokio_runtime::TokioRuntimeProvider>>>::from_config_with_provider::{closure#1}",
+            "<core::iter::adapters::map::Map<core::iter::adapters::filter::Filter<core::slice::iter::Iter<hickory_resolver::config::NameServerConfig>, <hickory_resolver::name_server::name_server_pool::NameServerPool<hickory_resolver::name_server::connec",
+            "<alloc::vec::Vec<hickory_resolver::name_server::name_server::NameServer<hickory_resolver::name_server::connection_provider::GenericConnector<hickory_proto::runtime::tokio_runtime::TokioRuntimeProvider>>> as alloc::vec::spec_from_iter_nested",
+            "<alloc::vec::Vec<hickory_resolver::name_server::name_server::NameServer<hickory_resolver::name_server::connection_provider::GenericConnector<hickory_proto::runtime::tokio_runtime::TokioRuntimeProvider>>> as alloc::vec::spec_from_iter::SpecF",
+            "<alloc::vec::Vec<hickory_resolver::name_server::name_server::NameServer<hickory_resolver::name_server::connection_provider::GenericConnector<hickory_proto::runtime::tokio_runtime::TokioRuntimeProvider>>> as core::iter::traits::collect::From",
+            "<core::iter::adapters::map::Map<core::iter::adapters::filter::Filter<core::slice::iter::Iter<hickory_resolver::config::NameServerConfig>, <hickory_resolver::name_server::name_server_pool::NameServerPool<hickory_resolver::name_server::connec",
+            "<core::iter::adapters::map::Map<core::iter::adapters::filter::Filter<core::slice::iter::Iter<hickory_resolver::config::NameServerConfig>, <hickory_resolver::name_server::name_server_pool::NameServerPool<hickory_resolver::name_server::connec",
+            "<alloc::sync::Arc<[hickory_resolver::name_server::name_server::NameServer<hickory_resolver::name_server::connection_provider::GenericConnector<hickory_proto::runtime::tokio_runtime::TokioRuntimeProvider>>]> as core::iter::traits::collect::F"
+          ]
+        },
+        {
+          "id": 13,
+          "frames": [
+            "__rustc::__rust_alloc",
+            "<alloc::raw_vec::RawVecInner>::try_allocate_in",
+            "<alloc::raw_vec::RawVecInner>::with_capacity_in",
+            "<u8 as <[_]>::to_vec_in::ConvertVec>::to_vec::<alloc::alloc::Global>",
+            "<str as alloc::borrow::ToOwned>::to_owned",
+            "<futures_timer::native::global::HelperThread>::new",
+            "<futures_timer::native::timer::TimerHandle as core::default::Default>::default",
+            "<futures_timer::native::delay::Delay>::new",
+            "<libp2p_kad::jobs::PutRecordJob>::new",
+            "<libp2p_kad::behaviour::Behaviour<libp2p_kad::record::store::memory::MemoryStore>>::with_config::{closure#0}",
+            "<core::option::Option<core::time::Duration>>::map::<libp2p_kad::jobs::PutRecordJob, <libp2p_kad::behaviour::Behaviour<libp2p_kad::record::store::memory::MemoryStore>>::with_config::{closure#0}>",
+            "<libp2p_kad::behaviour::Behaviour<libp2p_kad::record::store::memory::MemoryStore>>::with_config",
+            "p2p_vpn::runtime::p2p::build_node_with_dial_observer::<p2p_vpn::runtime::p2p::build_node::{closure#0}>::{closure#0}",
+            "<libp2p::builder::SwarmBuilder<libp2p::builder::phase::provider::Tokio, libp2p::builder::phase::behaviour::BehaviourPhase<libp2p_core::transport::map::Map<libp2p_core::transport::choice::OrTransport<libp2p_core::transport::map::Map<libp2p_c",
+            "<libp2p::builder::SwarmBuilder<libp2p::builder::phase::provider::Tokio, libp2p::builder::phase::bandwidth_metrics::BandwidthMetricsPhase<libp2p_core::transport::map::Map<libp2p_core::transport::choice::OrTransport<libp2p_core::transport::ma",
+            "p2p_vpn::runtime::p2p::build_node_with_dial_observer::<p2p_vpn::runtime::p2p::build_node::{closure#0}>",
+            "p2p_vpn::runtime::p2p::build_node",
+            "tun_namespace::run_ready_node::{closure#0}",
+            "<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>> as core::future::future::Future>::poll",
+            "<tokio::runtime::park::CachedParkThread>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>::{closure#0}",
+            "<tokio::runtime::park::CachedParkThread>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>",
+            "<tokio::runtime::context::blocking::BlockingRegionGuard>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>",
+            "<tokio::runtime::scheduler::multi_thread::MultiThread>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>::{closure#0}",
+            "tokio::runtime::context::runtime::enter_runtime::<<tokio::runtime::scheduler::multi_thread::MultiThread>::block_on<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>::{closure#0}, core::result::Result<(), p2p_vpn"
+          ]
+        },
+        {
+          "id": 14,
+          "frames": [
+            "__rustc::__rust_alloc",
+            "std::thread::current::try_with_current::<std::thread::current::with_current_name<std::sys::pal::unix::stack_overflow::thread_info::set_current_info::{closure#0}, core::option::Option<alloc::boxed::Box<str>>>::{closure#0}, core::option::Opti",
+            "std::sys::pal::unix::stack_overflow::thread_info::set_current_info",
+            "std::sys::pal::unix::stack_overflow::imp::make_handler",
+            "<std::sys::thread::unix::Thread>::new::thread_start",
+            "start_thread",
+            "__clone3"
+          ]
+        }
+      ],
+      "summary": [
+        {
+          "allocated": 200,
+          "freed": 197,
+          "live": [
+            [
+              2,
+              1024,
+              2
+            ],
+            [
+              14,
+              14,
+              13
+            ],
+            [
+              15,
+              13,
+              14
+            ]
+          ],
+          "snapshots": 3,
+          "sites": 60,
+          "failures": [],
+          "exit_code": 0,
+          "pending_returns": 0,
+          "return_calls": 220
+        }
+      ],
+      "lifecycle": [
+        {
+          "stage": "before_child",
+          "pid": 51,
+          "unix_millis": 1789040436986,
+          "elapsed_millis": 0,
+          "allocations": 618,
+          "deallocations": 195,
+          "reallocations": 22,
+          "bytes_allocated": 74274,
+          "bytes_deallocated": 52675,
+          "bytes_reallocated": 6366,
+          "live_bytes": 21599,
+          "live_blocks": 423
+        },
+        {
+          "stage": "child_returned",
+          "pid": 51,
+          "unix_millis": 1789040491954,
+          "elapsed_millis": 54967,
+          "allocations": 38494,
+          "deallocations": 37981,
+          "reallocations": 20557,
+          "bytes_allocated": 7885438,
+          "bytes_deallocated": 7823038,
+          "bytes_reallocated": 2386460,
+          "live_bytes": 62400,
+          "live_blocks": 513
+        },
+        {
+          "stage": "child_settled",
+          "pid": 51,
+          "unix_millis": 1789040492055,
+          "elapsed_millis": 55069,
+          "allocations": 38494,
+          "deallocations": 37981,
+          "reallocations": 20557,
+          "bytes_allocated": 7885438,
+          "bytes_deallocated": 7823038,
+          "bytes_reallocated": 2386460,
+          "live_bytes": 62400,
+          "live_blocks": 513
+        }
+      ],
+      "artifacts": [
+        {
+          "sha256": "0da7726fba2142006391e501a3fcf27f8fbecc6aadcf782693c9f913b1508a1c",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.23df9c0fd7c8ce29/node-a.log"
+        },
+        {
+          "sha256": "b24d6d33736ecd5604a4b17bc9c6481039fac362bb7df044ef1c10a2bfd21db6",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.23df9c0fd7c8ce29/ready-b"
+        },
+        {
+          "sha256": "89f24c5b3111527281d78fcb4602a4064d190c65988c24f6bd4d301a74f194c3",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.23df9c0fd7c8ce29/repro-metadata.txt"
+        },
+        {
+          "sha256": "cced28c6dc3f99c2396a5eaad732bf6b28142335892b1cd0e6af6cdb53f5ccfa",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.23df9c0fd7c8ce29/start-a"
+        },
+        {
+          "sha256": "b24d6d33736ecd5604a4b17bc9c6481039fac362bb7df044ef1c10a2bfd21db6",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.23df9c0fd7c8ce29/ready-a"
+        },
+        {
+          "sha256": "cced28c6dc3f99c2396a5eaad732bf6b28142335892b1cd0e6af6cdb53f5ccfa",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.23df9c0fd7c8ce29/start-b"
+        },
+        {
+          "sha256": "783aae760298b4d7c8334578db6c4c2a36de87e541d7d6ea1a502bd31b9d9f04",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.23df9c0fd7c8ce29/node-b.log"
+        },
+        {
+          "sha256": "46139a8fa48fb0192dcc8f440aa9d4e09783d18eb20fd7a9d859ce3763b17de9",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.23df9c0fd7c8ce29/repro-commands.sh"
+        },
+        {
+          "sha256": "03a636643b26983b8bd365670925151a1cd41987d2189a5161100e2703012630",
+          "path": "/tmp/p2p-vpn-explicit-return-2.log"
+        }
+      ]
+    }
+  ],
+  "test_seconds": [
+    16.88,
+    56.09
+  ],
+  "source": {
+    "path": "/home/midischwarz12/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/parking_lot_core-0.9.12/src/parking_lot.rs",
+    "sha256": "ead11d575a1930c241aeec20f0e5e504bcdad637e284449ef4efcb9f9f175777"
+  },
+  "remaining_unattributed": {
+    "bytes": 734,
+    "blocks": 11
+  },
+  "limitation": "The explicit observer passes these workloads; the precise cause of GDB FinishBreakpoint failures is not established. No production code changed."
+}
