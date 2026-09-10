@@ -327,6 +327,36 @@ Next: measure control-handler duration and packet dispatch independently of QUIC
 Both physical artifacts were debug builds, so account for optimization before attributing
 timing to release behavior. Do not weaken authorization or probe deadlines based on this correlation.
 
+### Duplicate Membership Merge Diagnostic
+
+Extended `measure_forwarder_signed_membership_resources` to time three unchanged
+membership merges after its existing construction/refresh checks. Each merge must
+accept zero records, count every duplicate and preserve records and revision counters.
+
+| Records | Three duplicate merges | Mean per merge | Evidence |
+| --- | --- | --- | --- |
+| 8 | 1,029,053 microseconds | 343.018 ms | Initial diagnostic |
+| 8 | 1,025,475 microseconds | 341.825 ms | Fresh-process repeat |
+| 128 | 16,247,999 microseconds | 5,416.000 ms | Fresh-process run without concurrent build |
+
+- These are unoptimized Rust 1.97.1 host measurements, without a phone or network.
+  They reproduce synchronous merge cost, not physical loss or release-build latency.
+- An earlier 128-record run overlapped Clippy and took 16,779,426 microseconds for
+  three merges. Exclude it from clean timing evidence; all its correctness assertions passed.
+- Reproduce with `P2P_VPN_REVIEW_LEDGER_RECORDS=8` or `128`, running only
+  `runtime::forward::tests::measure_forwarder_signed_membership_resources` with `--ignored --nocapture`.
+- Required Clippy groups and Rust formatting passed. No production behavior changed;
+  Android packaging, physical tests and full workspace tests were not rerun for this diagnostic.
+
+Next implementation boundary: avoid repeated validation only for exact signed records
+already held in validated forwarder state, inside the existing membership refresh window.
+New, modified, expired or time-transitioning input must retain the full validation path.
+Keep public merge helpers validating arbitrary caller-supplied histories.
+
+Regression coverage must compare cached and full evaluation across expiry, future grants,
+clock rollback, revocation, changed signatures, conflicting versions and pending authorization
+updates. This optimization is planned, not implemented by the diagnostic change.
+
 ## Failed Datagram Fallback Review
 
 - Inspection found that a failed QUIC send could try UDP, then immediately drop on UDP failure

@@ -1261,6 +1261,15 @@ mod tests {
             forwarder.refresh_membership_records(now).unwrap();
         }
         let refresh_us = started.elapsed().as_micros();
+        let started = Instant::now();
+        for _ in 0..3 {
+            let stats = forwarder
+                .merge_membership_records(&config.network.member_records, 1_003)
+                .unwrap();
+            assert_eq!(stats.accepted, 0);
+            assert_eq!(stats.ignored_stale_or_equal, count);
+        }
+        let duplicate_merge_us = started.elapsed().as_micros();
         assert_eq!(forwarder.member_records(), config.network.member_records);
         assert_eq!(forwarder.membership_revision(), 0);
         assert_eq!(forwarder.authorization_revision(), 0);
@@ -1270,6 +1279,7 @@ mod tests {
             "records": count, "ledger_sha256_base64": fingerprint, "refreshes": 3,
                 "fixture": fixture_memory, "constructed": constructed_memory,
                 "refreshed": memory(), "build_us": build_us, "refresh_us": refresh_us,
+                "duplicate_merges": 3, "duplicate_merge_us": duplicate_merge_us,
             })
         );
     }
