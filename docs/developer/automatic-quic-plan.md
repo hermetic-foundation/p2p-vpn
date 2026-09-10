@@ -206,6 +206,31 @@ This demonstrates bounded physical fallback and re-promotion, not lossless recov
 settled stability. The OnePlus residual loss and earlier Pixel failure remain unresolved;
 physical underlay movement and sleep behavior were not tested in this run.
 
+### Probe Correlation Follow-Up
+
+- Retained Android logs show a UDP timeout at 13:52:17.361, payload-based path refresh
+  at 13:52:17.477 and an RTT confirmation at 13:52:17.479. Proximity alone does not identify a probe.
+- The old logs omitted probe tokens. Add `probe_token` to existing RTT confirmation events
+  and emit `path_probe_expired` with peer, path, token, elapsed age and timeout threshold.
+- Only expiry adds an event; normal probe/packet send frequency and all deadlines are unchanged.
+  Tokens are correlation identifiers, not keys; packet contents are not logged.
+- The tracker regression now verifies that expiration preserves the token and send timestamp.
+  Late acknowledgements for already-removed tokens are still ignored, not newly logged.
+- Journal inspection found no matching rejection/drop events during the bounded test window.
+  Android's rolling buffer no longer covers the full window; absence is not proof of no rejection.
+
+Next physical capture must include both owned UDP and QUIC endpoints plus only the test
+ICMP flow on the TUN interface. Keep capture running through the final stability check;
+the previous QUIC-only capture cannot localize a packet using UDP fallback.
+
+This is diagnostic work, not a transport fix or evidence that the residual loss is resolved.
+No redeployment, firewall mutation or underlay change was performed during this inspection.
+
+- Validation: 15 probe-focused tests passed; the full core suite passed 1,167 tests with eight
+  ignored in 46.48 seconds. Required Clippy groups passed in 16.41 seconds with existing warnings.
+- Rustfmt and whitespace checks passed. Workspace integration, Android rebuild and physical
+  testing have not been rerun for these diagnostic fields; previous artifacts lack them.
+
 ## Failed Datagram Fallback Review
 
 - Inspection found that a failed QUIC send could try UDP, then immediately drop on UDP failure

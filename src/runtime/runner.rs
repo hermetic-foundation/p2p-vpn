@@ -3805,6 +3805,22 @@ fn expire_unconfirmed_path_probes(
 ) {
     for probe in path_probe_tracker.expire_unconfirmed(now, PATH_PROBE_TIMEOUT) {
         metrics.record_outbound_path_probe_failure();
+        log_runtime_event(
+            LogLevel::Warn,
+            "path_probe_expired",
+            &[
+                ("peer", &probe.peer.to_string()),
+                ("path", probe.path.wire_name()),
+                ("probe_token", &probe.token.to_string()),
+                (
+                    "age_ms",
+                    &now.saturating_duration_since(probe.sent_at)
+                        .as_millis()
+                        .to_string(),
+                ),
+                ("timeout_ms", &PATH_PROBE_TIMEOUT.as_millis().to_string()),
+            ],
+        );
         if !demote_packet_plane_path_probe_timeout(paths, metrics, probe.peer, probe.path) {
             continue;
         }
@@ -3907,6 +3923,7 @@ fn fresh_path_probe_token() -> u64 {
 struct PendingPathProbe {
     peer: PeerId,
     path: PathKind,
+    token: u64,
     sent_at: Instant,
 }
 
@@ -3939,6 +3956,7 @@ impl PathProbeTracker {
             PendingPathProbe {
                 peer,
                 path,
+                token,
                 sent_at: now,
             },
         );
@@ -13698,6 +13716,7 @@ async fn handle_packet_plane_path_probe(
                 &[
                     ("peer", &overlay_peer.to_string()),
                     ("path", path.wire_name()),
+                    ("probe_token", &token.to_string()),
                     ("rtt_ms", &rtt_ms.to_string()),
                 ],
             );
@@ -42443,6 +42462,8 @@ mod tests {
             PATH_PROBE_TIMEOUT,
         );
         assert_eq!(expired.len(), 1);
+        assert_eq!(expired[0].token, 7);
+        assert_eq!(expired[0].sent_at, start);
         metrics.record_outbound_path_probe_failure();
         assert!(demote_packet_plane_path_probe_timeout(
             &mut paths,
