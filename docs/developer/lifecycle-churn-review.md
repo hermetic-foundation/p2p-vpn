@@ -2,8 +2,9 @@
 
 ## Status
 
-S5 fixture validated. The first full capture failed on cycle three; both successful
-ten-cycle captures remain pending. See [connection retirement investigation](churn-connection-retirement.md).
+Both corrected ten-cycle captures pass; see [paired results](lifecycle-churn-results.md).
+The first full capture failed on cycle three; retain the
+[connection retirement investigation](churn-connection-retirement.md).
 Fixture validation below used production runtime `11416a8d`.
 
 ## Frozen Capture Manifest

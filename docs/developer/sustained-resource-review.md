@@ -18,7 +18,8 @@ No physical device or deployed host is authorized for this work.
 - [ ] Attribute retained allocations, including signed-ledger refreshes.
 - [x] Complete the twelve-capture signed-ledger allocation matrix; packet/runtime attribution remains open.
 - [x] Attribute packet-queue payload/container ownership across 40 cycles; transport/runtime allocations remain open.
-- [ ] Measure lifecycle churn and multi-network isolation.
+- [x] Measure paired ten-cycle lifecycle churn; all recoveries pass without rescue.
+- [ ] Measure multi-network resource isolation.
 - [ ] Measure Android background CPU/wakeup proxies on a cached emulator.
 - [ ] Reproduce and correct defects; validate before/after behavior.
 - [ ] Publish results, cleanup evidence and a requirement-by-requirement audit.
@@ -32,10 +33,10 @@ No physical device or deployed host is authorized for this work.
 | [Queue pressure](sustained-pressure-results.md) | Corrected S4: 20 TCP pressure/recovery rounds; probe rejection/owner regression passes | RSS allocation attribution and broader workload coverage |
 | [Ledger allocations](allocation-review.md) | Twelve captures, 120 teardowns; zero retained requested Rust bytes/blocks | Whole-runtime/native allocation attribution |
 | [Queue allocations](queue-allocation-review.md) | Four captures, 40 cycles; exact payload release, stable container storage, full owner release | Transport buffers and full-process pressure retention |
-| [Sustained traffic fixture](sustained-traffic-review.md) | Two full captures: 30000/30000, stable descriptors, CPU settles below 0.2% per node after load | Broader allocation attribution, churn and multi-network workloads remain open |
+| [Sustained traffic fixture](sustained-traffic-review.md) | Two full captures: 30000/30000, stable descriptors, CPU settles below 0.2% per node after load | Broader allocation attribution and multi-network workloads remain open |
 | [Capability retirement](capability-retirement-review.md) | Retry gap reproduced; guarded correction and dispatch regressions pass | Live follow-ups pass but did not exercise the retry branch |
-| [Lifecycle churn fixture](lifecycle-churn-review.md) | Fixed manifest; one-cycle demotion/recovery/settling smoke passes | Both sustained ten-cycle captures and multi-network isolation pending |
-| [Churn retirement investigation](churn-connection-retirement.md) | Cycle-three failure reproduced; targeted retirement fix, guarded dispatch tests and live smoke pass | Both corrected ten-cycle repetitions remain pending |
+| [Lifecycle churn results](lifecycle-churn-results.md) | Both ten-cycle captures pass; queues drain and recovery descriptor counts stay stable | RSS attribution and multi-network isolation remain open |
+| [Churn retirement investigation](churn-connection-retirement.md) | Cycle-three failure reproduced; fix, dispatch regressions, smoke and paired full captures pass | Whole-runtime resource attribution and other workloads remain open |
 | [Kademlia acceptance](kademlia-workstream-acceptance.md) | Enforcement and scoped recovery fixes | RM-2 sampling, RM-3 unequal work, RM-4 backend confounding, RM-5 allocation attribution |
 | [Android lifecycle](android-lifecycle-audit.md) | Ownership regressions and multi-network restoration | Sustained CPU/memory and physical battery behavior |
 

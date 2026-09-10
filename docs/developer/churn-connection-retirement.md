@@ -5,7 +5,8 @@
 The first full S5 capture failed in cycle three. A deterministic dispatch
 regression reproduces a failed packet connection vetoing a fresh replacement.
 The targeted correction passes dispatch regressions and an isolated live smoke.
-Both full ten-cycle repetitions are still required; S5 acceptance remains open.
+Both corrected ten-cycle repetitions now pass on runtime `7b59625f`;
+see [paired results](lifecycle-churn-results.md). RSS attribution remains open.
 
 ## Frozen Failure Evidence
 
