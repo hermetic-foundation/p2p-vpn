@@ -1,0 +1,370 @@
+{
+  "schema_version": 1,
+  "baseline_revision": "b7fa6c5e",
+  "status": "Passing one-cycle ownership diagnostic; not sustained or whole-heap acceptance",
+  "binary_sha256": "7bd693606049cc7df7de8d5294ab91fe2bab8dca81fdbfdd4b3c77c747a5ad04",
+  "library_binary_sha256": "bd3d2833b20278de61c7d446af5afdf062cd9ccafd2edee42afcd59b20e5a07a",
+  "gdb_sha256": "14ae77aa8ba582c60c780eae47a99e4539725bc5f3d8973e09b7faed761c2a79",
+  "handler_source_sha256": "d2c2cd81f97ba3d3d61ad5ec5c74f3c54a729e5f8b96092494a2adccb62b5117",
+  "storage_preflight_kib": 8262100,
+  "fixture_directory": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.0184278ce72b8c23",
+  "fixture_command_reference": "connected-allocation-sites.json:fixture_command",
+  "trace_command_historical": "timeout --signal=TERM --kill-after=2s 240 prlimit --fsize=1048576:1048576 -- 'nsenter' '--target' '1510694' '--user' '--net' '--mount' '--pid' '--preserve-credentials' '--' '/nix/store/bg2bp1zmii5spb2hkgv5xn6mzva7nx9r-gdb-17.2/bin/gdb' '-q' '-nx' '-batch' '-ex' 'set pagination off' '-ex' 'set confirm off' '-ex' 'set debuginfod enabled off' '-ex' 'set auto-load off' '-ex' 'set print frame-arguments none' '-ex' 'attach 18' '-ex' 'set language c' '-ex' 'python exec(\"import gdb, time\\nlive = {}\\nsites = {}\\nserial = 0\\nsizes = {52, 704}\\nstarted = time.monotonic()\\ndef stamp():\\n    return round(time.monotonic() - started, 3)\\nclass Returned(gdb.FinishBreakpoint):\\n    def __init__(self, ident, size):\\n        super().__init__(gdb.newest_frame(), internal=True)\\n        self.ident, self.size = ident, size\\n    def stop(self):\\n        address = int(gdb.parse_and_eval(\\\"$rax\\\"))\\n        if address:\\n            live[address] = (self.ident, self.size)\\n        else:\\n            print(\\\"NULL_RETURN\\\", stamp(), self.ident)\\n        return False\\ndef allocated_site():\\n    global serial\\n    size = int(gdb.parse_and_eval(\\\"$rdi\\\"))\\n    if size not in (52, 704):\\n        raise gdb.GdbError(\\\"native filter failed\\\")\\n    serial += 1\\n    if serial > 4096:\\n        raise gdb.GdbError(\\\"allocation quota exceeded\\\")\\n    frame = gdb.newest_frame()\\n    frames = []\\n    for index in range(24):\\n        if frame is None:\\n            break\\n        frames.append((frame.name() or \\\"?\\\")[:240])\\n        frame = frame.older()\\n    key = tuple(frames[:12])\\n    if key not in sites:\\n        if len(sites) >= 64:\\n            raise gdb.GdbError(\\\"site quota exceeded\\\")\\n        sites[key] = len(sites) + 1\\n        print(\\\"SITE\\\", sites[key])\\n        for name in frames:\\n            print(name)\\n    print(\\\"ALLOC\\\", stamp(), serial, size, \\\"SITE\\\", sites[key])\\n    Returned(serial, size)\\ndef deallocated_site():\\n    address = int(gdb.parse_and_eval(\\\"$rdi\\\"))\\n    if address in live:\\n        ident, size = live.pop(address)\\n        print(\\\"FREE\\\", stamp(), ident, size, int(gdb.parse_and_eval(\\\"$rsi\\\")))\\ndef reallocated_site():\\n    address = int(gdb.parse_and_eval(\\\"$rdi\\\"))\\n    if address in live:\\n        ident, old = live.pop(address)\\n        size = int(gdb.parse_and_eval(\\\"$rcx\\\"))\\n        print(\\\"REALLOC\\\", stamp(), ident, old, size)\\n        if size not in sizes:\\n            if len(sizes) >= 64:\\n                raise gdb.GdbError(\\\"size quota exceeded\\\")\\n            sizes.add(size)\\n            condition = \\\" || \\\".join(\\\"$rsi == \\\" + str(value) for value in sorted(sizes))\\n            freebp.condition = condition\\n            reallocbp.condition = condition\\n        Returned(ident, size)\\nclass Sample(gdb.Breakpoint):\\n    def stop(self):\\n        print(\\\"LIVE\\\", stamp(), sorted(live.values()), \\\"BREAKPOINTS\\\", len(gdb.breakpoints() or []))\\n        return False\\nallocbp = gdb.Breakpoint(\\\"__rustc::__rust_alloc\\\", internal=True)\\nallocbp.condition = \\\"$rdi == 52 || $rdi == 704\\\"\\nallocbp.commands = \\\"silent\\\\npython allocated_site()\\\\ncontinue\\\\n\\\"\\nfreebp = gdb.Breakpoint(\\\"__rustc::__rust_dealloc\\\", internal=True)\\nfreebp.condition = \\\"$rsi == 52 || $rsi == 704\\\"\\nfreebp.commands = \\\"silent\\\\npython deallocated_site()\\\\ncontinue\\\\n\\\"\\nreallocbp = gdb.Breakpoint(\\\"__rustc::__rust_realloc\\\", internal=True)\\nreallocbp.condition = freebp.condition\\nreallocbp.commands = \\\"silent\\\\npython reallocated_site()\\\\ncontinue\\\\n\\\"\\nSample(\\\"tun_namespace::allocation_sample::emit\\\", internal=True)\\ndef ended(event):\\n    print(\\\"END\\\", stamp(), sorted(live.values()))\\ngdb.events.exited.connect(ended)\\nprint(\\\"TRACE_READY\\\", time.time())\\n\")' '-ex' 'continue' '-ex' 'quit'",
+  "pid_warning": "Historical PIDs only. Launch a fresh owned fixture and verify role, executable, start identity and namespace-local PID before replacing targets.",
+  "isolated_704_command": "env P2P_VPN_REVIEW_AUTONAT_MODE=probe timeout --signal=TERM --kill-after=2s 15 prlimit --fsize=131072:131072 -- unshare --user --map-root-user --net sh -c 'ip link set lo up && exec \"$@\"' sh '/nix/store/bg2bp1zmii5spb2hkgv5xn6mzva7nx9r-gdb-17.2/bin/gdb' '-q' '-nx' '-batch' '-ex' 'set pagination off' '-ex' 'set confirm off' '-ex' 'set debuginfod enabled off' '-ex' 'set auto-load off' '-ex' 'set print frame-arguments none' '-ex' 'tbreak p2p_vpn::allocation_review::runtime::autonat::measure_autonat_refusal_ownership' '-ex' 'run' '-ex' 'set language c' '-ex' 'python exec(\"import gdb\\nlive = {}\\nallocated = 0\\nfreed = 0\\nclass Returned(gdb.FinishBreakpoint):\\n    def __init__(self, ident):\\n        super().__init__(gdb.newest_frame(), internal=True)\\n        self.ident = ident\\n    def stop(self):\\n        address = int(gdb.parse_and_eval(\\\"$rax\\\"))\\n        if address:\\n            live[address] = self.ident\\n        return False\\ndef allocated_site():\\n    global allocated\\n    size = int(gdb.parse_and_eval(\\\"$rdi\\\"))\\n    if size not in (52, 704):\\n        raise gdb.GdbError(\\\"native size filter failed\\\")\\n    allocated += 1\\n    if allocated > 16:\\n        raise gdb.GdbError(\\\"allocation quota exceeded\\\")\\n    print(\\\"ALLOC\\\", allocated, size)\\n    if size == 704:\\n        frame = gdb.newest_frame()\\n        for index in range(16):\\n            if frame is None:\\n                break\\n            print((frame.name() or \\\"?\\\")[:240])\\n            frame = frame.older()\\n    Returned(allocated)\\ndef deallocated_site():\\n    global freed\\n    if int(gdb.parse_and_eval(\\\"$rsi\\\")) not in (52, 704):\\n        raise gdb.GdbError(\\\"native deallocation filter failed\\\")\\n    address = int(gdb.parse_and_eval(\\\"$rdi\\\"))\\n    if address in live:\\n        freed += 1\\n        print(\\\"FREE\\\", live.pop(address))\\nbp = gdb.Breakpoint(\\\"__rustc::__rust_alloc\\\", internal=True)\\nbp.condition = \\\"$rdi == 52 || $rdi == 704\\\"\\nbp.commands = \\\"silent\\\\npython allocated_site()\\\\ncontinue\\\\n\\\"\\nbp = gdb.Breakpoint(\\\"__rustc::__rust_dealloc\\\", internal=True)\\nbp.condition = \\\"$rsi == 52 || $rsi == 704\\\"\\nbp.commands = \\\"silent\\\\npython deallocated_site()\\\\ncontinue\\\\n\\\"\\ndef ended(event):\\n    print(\\\"FILTER_SUMMARY\\\", allocated, freed, sorted(live.values()))\\ngdb.events.exited.connect(ended)\\n\")' '-ex' 'continue' '-ex' 'quit' '--args' '/tmp/p2p-vpn-review-target/debug/deps/p2p_vpn-6f23156eeddc81b5' 'allocation_review::runtime::autonat::measure_autonat_refusal_ownership' '--ignored' '--exact' '--nocapture' '--test-threads=1'",
+  "limits": {
+    "allocation_sizes": [
+      52,
+      704
+    ],
+    "fixture_internal_seconds": 240,
+    "fixture_external_seconds": 250,
+    "trace_seconds": 240,
+    "trace_bytes": 1048576,
+    "allocation_quota": 4096,
+    "site_quota": 64,
+    "frame_limit": 24,
+    "site_key_frames": 12
+  },
+  "captures": [
+    {
+      "path": "/tmp/p2p-vpn-gdb-native-filter-1.log",
+      "sha256": "b5fb02cb6ff4d43d3809e98593520dc36d1421e353356c22a8aeb1f0734daaca",
+      "sizes": [
+        52
+      ],
+      "allocations": 7,
+      "frees": 7,
+      "seconds": 10.4,
+      "exit_code": 0
+    },
+    {
+      "path": "/tmp/p2p-vpn-gdb-native-filter-1408-1.log",
+      "sha256": "93644ebca75367956025cd215fdf0099c19ac5cf00703243c92d014b1faab978",
+      "sizes": [
+        52,
+        1408
+      ],
+      "allocations": 7,
+      "frees": 7,
+      "larger_size_hits": 0,
+      "seconds": 10.41,
+      "exit_code": 0
+    },
+    {
+      "path": "/tmp/p2p-vpn-gdb-native-filter-704-1.log",
+      "sha256": "ea5b93ad489ff2661987f3d57c1dfb7f5ff6ec1c4e6f7050c50780fd3b5a726a",
+      "sizes": [
+        52,
+        704
+      ],
+      "allocations": 9,
+      "frees": 9,
+      "larger_size_hits": 2,
+      "seconds": 10.43,
+      "exit_code": 0
+    },
+    {
+      "path": "/tmp/p2p-vpn-connected-gdb-smoke-3.log",
+      "sha256": "b7ece045cfb5eda2b1619b94dec9a4d9966ab60f40e4ae9d3c1d446957cbff52",
+      "seconds": 189.4,
+      "exit_code": 0
+    },
+    {
+      "path": "/tmp/p2p-vpn-connected-gdb-native-1.log",
+      "sha256": "e6348a989a888b99ca0cef056fed0db04cb79de0a73394719417ef7ffebe5a30",
+      "exit_code": 0
+    }
+  ],
+  "fixture_sha256": {
+    "churn-01-outage.json": "e68dadc532f79cf1a973b11216d846b105ab135fc6b4f1634d49a30864ebd393",
+    "churn-01-recovery-sample.json": "880b82fe0d2dda802dc6f1187f9cb2d99bcee6d2f44f2e602138e8ade4b57c5b",
+    "churn-01-recovery.json": "d6be9251e2b4c01d4eab9bf680ca415754181ba152012dc5d4fe64821a4745f5",
+    "churn-settle.json": "ce8b3837d64a14950a009d84b61d523999c026aeb5d65dfb4a0258c1a556e6c8",
+    "lifecycle-churn.json": "37f425f4c3890c4014ea8d918c90e34d081a3291a4856dc5bdbd9d682cf1a79a",
+    "node-a.log": "d8ae2930e1e3feebe4980c96c3000e5f592027434f75ef56629ef9bc4121c00a",
+    "node-b.log": "2e69d0793676dfd95530454752f12116e362bf1121ebf9a27f9aa4300982b4cd"
+  },
+  "runtime_reports": [
+    {
+      "workload": "lifecycle_churn_unavailable",
+      "runtime_samples_complete": true,
+      "rows": 12,
+      "errors": [],
+      "max_query_seconds": 0.125983791
+    },
+    {
+      "workload": "lifecycle_churn_recovery",
+      "runtime_samples_complete": true,
+      "rows": 16,
+      "errors": [],
+      "max_query_seconds": 0.118440442
+    },
+    {
+      "workload": "lifecycle_churn_settle",
+      "runtime_samples_complete": true,
+      "rows": 24,
+      "errors": [],
+      "max_query_seconds": 0.116862118
+    }
+  ],
+  "trace_start_unix_seconds": 1789030702.8091733,
+  "allocations": 1004,
+  "frees": 992,
+  "sites": 44,
+  "live_snapshots": 29,
+  "selected_allocations": [
+    {
+      "seconds": 63.652,
+      "id": 495,
+      "bytes": 52,
+      "site": 41
+    },
+    {
+      "seconds": 63.89,
+      "id": 496,
+      "bytes": 52,
+      "site": 42
+    },
+    {
+      "seconds": 63.896,
+      "id": 497,
+      "bytes": 704,
+      "site": 43
+    },
+    {
+      "seconds": 63.897,
+      "id": 498,
+      "bytes": 704,
+      "site": 44
+    }
+  ],
+  "selected_sites": {
+    "41": [
+      "__rustc::__rust_alloc",
+      "<alloc::alloc::Global>::alloc_impl_runtime",
+      "<alloc::alloc::Global as core::alloc::Allocator>::allocate",
+      "<hashbrown::raw::RawTableInner>::new_uninitialized::<alloc::alloc::Global>",
+      "<hashbrown::raw::RawTableInner>::fallible_with_capacity::<alloc::alloc::Global>",
+      "<hashbrown::raw::RawTable<(libp2p_request_response::InboundRequestId, ())>>::reserve_rehash::<hashbrown::map::make_hasher<libp2p_request_response::InboundRequestId, (), std::hash::random::RandomState>::{closure#0}>",
+      "<hashbrown::raw::RawTable<(libp2p_request_response::InboundRequestId, ())>>::reserve::<hashbrown::map::make_hasher<libp2p_request_response::InboundRequestId, (), std::hash::random::RandomState>::{closure#0}>",
+      "<hashbrown::raw::RawTable<(libp2p_request_response::InboundRequestId, ())>>::find_or_find_insert_index::<hashbrown::map::equivalent_key<libp2p_request_response::InboundRequestId, libp2p_request_response::InboundRequestId, ()>::{closure#0}, ",
+      "<hashbrown::map::HashMap<libp2p_request_response::InboundRequestId, (), std::hash::random::RandomState>>::insert",
+      "<std::collections::hash::set::HashSet<libp2p_request_response::InboundRequestId>>::insert",
+      "<libp2p_request_response::Behaviour<libp2p_autonat::v1::protocol::AutoNatCodec> as libp2p_swarm::behaviour::NetworkBehaviour>::on_connection_handler_event",
+      "<libp2p_autonat::v1::behaviour::Behaviour as libp2p_swarm::behaviour::NetworkBehaviour>::on_connection_handler_event",
+      "<libp2p_swarm::behaviour::toggle::Toggle<libp2p_autonat::v1::behaviour::Behaviour> as libp2p_swarm::behaviour::NetworkBehaviour>::on_connection_handler_event",
+      "<p2p_vpn::runtime::p2p::Behaviour as libp2p_swarm::behaviour::NetworkBehaviour>::on_connection_handler_event",
+      "<libp2p_swarm::Swarm<p2p_vpn::runtime::p2p::Behaviour>>::handle_pool_event",
+      "<libp2p_swarm::Swarm<p2p_vpn::runtime::p2p::Behaviour>>::poll_next_event"
+    ],
+    "42": [
+      "__rustc::__rust_alloc",
+      "<alloc::alloc::Global>::alloc_impl_runtime",
+      "<alloc::alloc::Global as core::alloc::Allocator>::allocate",
+      "<hashbrown::raw::RawTableInner>::new_uninitialized::<alloc::alloc::Global>",
+      "<hashbrown::raw::RawTableInner>::fallible_with_capacity::<alloc::alloc::Global>",
+      "<hashbrown::raw::RawTable<(libp2p_request_response::OutboundRequestId, ())>>::reserve_rehash::<hashbrown::map::make_hasher<libp2p_request_response::OutboundRequestId, (), std::hash::random::RandomState>::{closure#0}>",
+      "<hashbrown::raw::RawTable<(libp2p_request_response::OutboundRequestId, ())>>::reserve::<hashbrown::map::make_hasher<libp2p_request_response::OutboundRequestId, (), std::hash::random::RandomState>::{closure#0}>",
+      "<hashbrown::raw::RawTable<(libp2p_request_response::OutboundRequestId, ())>>::find_or_find_insert_index::<hashbrown::map::equivalent_key<libp2p_request_response::OutboundRequestId, libp2p_request_response::OutboundRequestId, ()>::{closure#0",
+      "<hashbrown::map::HashMap<libp2p_request_response::OutboundRequestId, (), std::hash::random::RandomState>>::insert",
+      "<std::collections::hash::set::HashSet<libp2p_request_response::OutboundRequestId>>::insert",
+      "<libp2p_request_response::Behaviour<libp2p_autonat::v1::protocol::AutoNatCodec>>::try_send_request",
+      "<libp2p_request_response::Behaviour<libp2p_autonat::v1::protocol::AutoNatCodec>>::send_request_with_addresses",
+      "<libp2p_request_response::Behaviour<libp2p_autonat::v1::protocol::AutoNatCodec>>::send_request",
+      "<libp2p_autonat::v1::behaviour::as_client::AsClient>::do_probe",
+      "<libp2p_autonat::v1::behaviour::as_client::AsClient>::poll_auto_probe",
+      "<libp2p_autonat::v1::behaviour::Behaviour as libp2p_swarm::behaviour::NetworkBehaviour>::poll"
+    ],
+    "43": [
+      "__rustc::__rust_alloc",
+      "<alloc::raw_vec::RawVecInner>::finish_grow",
+      "<alloc::raw_vec::RawVecInner>::grow_amortized",
+      "<alloc::raw_vec::RawVec<libp2p_request_response::handler::OutboundMessage<libp2p_autonat::v1::protocol::AutoNatCodec>>>::grow_one",
+      "<alloc::collections::vec_deque::VecDeque<libp2p_request_response::handler::OutboundMessage<libp2p_autonat::v1::protocol::AutoNatCodec>>>::grow",
+      "<alloc::collections::vec_deque::VecDeque<libp2p_request_response::handler::OutboundMessage<libp2p_autonat::v1::protocol::AutoNatCodec>>>::push_back_mut",
+      "<alloc::collections::vec_deque::VecDeque<libp2p_request_response::handler::OutboundMessage<libp2p_autonat::v1::protocol::AutoNatCodec>>>::push_back",
+      "<libp2p_request_response::handler::Handler<libp2p_autonat::v1::protocol::AutoNatCodec> as libp2p_swarm::handler::ConnectionHandler>::on_behaviour_event",
+      "<libp2p_swarm::behaviour::toggle::ToggleConnectionHandler<libp2p_request_response::handler::Handler<libp2p_autonat::v1::protocol::AutoNatCodec>> as libp2p_swarm::handler::ConnectionHandler>::on_behaviour_event",
+      "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+      "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+      "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+      "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+      "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+      "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+      "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl"
+    ],
+    "44": [
+      "__rustc::__rust_alloc",
+      "<alloc::raw_vec::RawVecInner>::finish_grow",
+      "<alloc::raw_vec::RawVecInner>::grow_amortized",
+      "<alloc::raw_vec::RawVec<libp2p_request_response::handler::OutboundMessage<libp2p_autonat::v1::protocol::AutoNatCodec>>>::grow_one",
+      "<alloc::collections::vec_deque::VecDeque<libp2p_request_response::handler::OutboundMessage<libp2p_autonat::v1::protocol::AutoNatCodec>>>::grow",
+      "<alloc::collections::vec_deque::VecDeque<libp2p_request_response::handler::OutboundMessage<libp2p_autonat::v1::protocol::AutoNatCodec>>>::push_back_mut",
+      "<alloc::collections::vec_deque::VecDeque<libp2p_request_response::handler::OutboundMessage<libp2p_autonat::v1::protocol::AutoNatCodec>>>::push_back",
+      "<libp2p_request_response::handler::Handler<libp2p_autonat::v1::protocol::AutoNatCodec> as libp2p_swarm::handler::ConnectionHandler>::poll",
+      "<libp2p_swarm::behaviour::toggle::ToggleConnectionHandler<libp2p_request_response::handler::Handler<libp2p_autonat::v1::protocol::AutoNatCodec>> as libp2p_swarm::handler::ConnectionHandler>::poll",
+      "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+      "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+      "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+      "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+      "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+      "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+      "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl"
+    ]
+  },
+  "last_live_sample": {
+    "seconds": 143.901,
+    "live": [
+      [
+        224,
+        52
+      ],
+      [
+        333,
+        52
+      ],
+      [
+        334,
+        52
+      ],
+      [
+        335,
+        52
+      ],
+      [
+        337,
+        52
+      ],
+      [
+        348,
+        52
+      ],
+      [
+        357,
+        52
+      ],
+      [
+        360,
+        52
+      ],
+      [
+        495,
+        52
+      ],
+      [
+        496,
+        52
+      ],
+      [
+        497,
+        704
+      ],
+      [
+        498,
+        704
+      ]
+    ],
+    "breakpoints": 4
+  },
+  "trace_end_seconds": 146.685,
+  "unfreed_at_daemon_kill": [
+    {
+      "seconds": 33.905,
+      "id": 224,
+      "bytes": 52,
+      "site": 25
+    },
+    {
+      "seconds": 43.766,
+      "id": 333,
+      "bytes": 52,
+      "site": 26
+    },
+    {
+      "seconds": 43.796,
+      "id": 334,
+      "bytes": 52,
+      "site": 27
+    },
+    {
+      "seconds": 43.797,
+      "id": 335,
+      "bytes": 52,
+      "site": 28
+    },
+    {
+      "seconds": 43.879,
+      "id": 337,
+      "bytes": 52,
+      "site": 29
+    },
+    {
+      "seconds": 43.953,
+      "id": 348,
+      "bytes": 52,
+      "site": 34
+    },
+    {
+      "seconds": 43.983,
+      "id": 357,
+      "bytes": 52,
+      "site": 38
+    },
+    {
+      "seconds": 44.039,
+      "id": 360,
+      "bytes": 52,
+      "site": 40
+    },
+    {
+      "seconds": 63.652,
+      "id": 495,
+      "bytes": 52,
+      "site": 41
+    },
+    {
+      "seconds": 63.89,
+      "id": 496,
+      "bytes": 52,
+      "site": 42
+    },
+    {
+      "seconds": 63.896,
+      "id": 497,
+      "bytes": 704,
+      "site": 43
+    },
+    {
+      "seconds": 63.897,
+      "id": 498,
+      "bytes": 704,
+      "site": 44
+    }
+  ],
+  "accounting_window": [
+    {
+      "elapsed_millis": 100087,
+      "live_bytes": 2533180,
+      "live_blocks": 1539
+    },
+    {
+      "elapsed_millis": 105023,
+      "live_bytes": 2535683,
+      "live_blocks": 1554
+    },
+    {
+      "elapsed_millis": 110086,
+      "live_bytes": 2534692,
+      "live_blocks": 1543
+    }
+  ],
+  "cleanup": "Recorded owned runner/orchestrator/daemon host PIDs absent; all exec sessions terminal.",
+  "limits_of_claim": [
+    "Only selected sizes allocated after attachment are traced; not a whole-heap profile.",
+    "No tracked reallocations or null allocation returns occurred; reallocation handling was not exercised.",
+    "Final daemon SIGKILL is normal fixture cleanup, not graceful runtime teardown.",
+    "One cycle does not establish sustained reconnect or packet-pressure bounds.",
+    "No runtime, dependency, allocator, protocol or production configuration was modified."
+  ]
+}

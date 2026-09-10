@@ -6,6 +6,10 @@ The full-daemon debugger trace identifies connection-scoped 52-byte request sets
 The resource capture failed during settling. These are partial ownership findings,
 not a passing sustained-resource result or proof that all growth is bounded.
 
+The later [native-filtered capture](connected-allocation-native-review.md) passes
+the original smoke gates and identifies the two 704-byte handler deques.
+The failures below remain part of the evidence history.
+
 ## Captures
 
 | Run | Workload result | Debugger coverage |
