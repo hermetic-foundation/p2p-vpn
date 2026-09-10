@@ -12,7 +12,7 @@ Acceptance remains incomplete. Local evidence does not certify physical Android 
 | Defaults and overrides | Shared config and Android profile regressions; 26 NixOS contracts; Pixel profile upgrade | Native NixOS activation |
 | QUIC payload preference | Minimal TUN fixture; physical Pixel/Linux traffic; OnePlus bidirectional backend counters | Longer physical stability and unresolved Pixel loss |
 | Compatibility | Explicit UDP-only and stream-only current peers; override round trips; isolated relay payloads | Archived-release compatibility is not established |
-| Autonomous recovery | Four initiator orderings; startup and established QUIC blocking | Physical movement and sustained settling evidence |
+| Autonomous recovery | Four initiator orderings; namespace blocking; OnePlus QUIC block/re-promotion | Physical movement, residual loss and sustained settling |
 | MTU and isolation | 1,280-byte IPv4 fallback/recovery traffic; Android supervisor tests | Smaller-underlay MTU boundaries and physical multi-network behavior |
 | Verification | 1,526 workspace tests; required root Clippy groups; ARM64 build; fresh JVM tests; cached source parity | Full Nix package realization and remaining targeted scenarios |
 | Deployment | Verified debug APK upgrades on Pixel and OnePlus preserving profiles | Physical stability, fallback and recovery checks |
@@ -154,6 +154,57 @@ Temporary project storage measured 9,780,196 KiB, below the 10 GiB limit.
 This bounded OnePlus Wi-Fi pass does not resolve the earlier Pixel failure or certify
 sleep, cellular, physical fallback, movement or long-duration stability. No timing or
 transport fixes were inferred from a passing run; those acceptance gaps remain open.
+
+## Physical OnePlus Block Check
+
+Authorized deployment used the prepared fallback-fix APK and temporarily replaced the
+laptop's `personal-devices` service binary. Existing identity, pairing and minimal config
+were preserved. The phone stayed on validated Wi-Fi, awake and USB-powered.
+
+| Artifact | SHA-256 |
+| --- | --- |
+| Installed APK | `1d71d2cad8c4c1cfaaa532589461368a69c72574c00fbdfe929df470d963e6f7` |
+| Linux binary | `5b5c00c18a1db243403b5bb91b6910c05c775f7fec77fb2e33a6f5fdebda18b9` |
+
+### Procedure And Results
+
+- On September 10, blocked laptop input/output UDP matching phone `192.168.0.229:40402`
+  from 13:51:18 to 13:52:45 CDT. The dedicated chain counted 65 dropped packets.
+- A 120-second automatic flush timer protected against a stranded block.
+  Explicit unblock occurred first; the timer, jumps and dedicated chain were removed/stopped.
+- No VPN runtime restart, manual endpoint update or pairing change occurred between block
+  and recovery. The laptop process stayed `2438821`; Android reported generation one.
+
+| Stage | Result |
+| --- | --- |
+| Baseline, 1,280-byte IPv4, DF | 5/5 each direction; QUIC payload counters increased |
+| Block transition, small packets | 21/45; first reply at sequence 25, about 26 seconds after blocking |
+| QUIC blocked, full MTU | 5/5 each direction on fallback |
+| Unblock transition, full MTU | 44/45; autonomous QUIC session establishment at 13:52:56 |
+| Post-recovery, phone to laptop, full MTU | 10/10 |
+| Post-recovery, laptop to phone, full MTU | 9/10; stability acceptance remains incomplete |
+| Original Nix Linux service restored, full MTU | 5/5 |
+
+- At unblock, Linux owned-QUIC/UDP counters were 20/44; Android reported 16/26.
+  These are runtime-wide counters, not per-peer counters or delivery acknowledgements.
+- After the transition, Linux selected QUIC with counters 32/77; Android reported 30/56.
+  After the final tests, Linux reached 52/77 and Android 48/57: do not call this QUIC-only delivery.
+- Linux logged QUIC timeout at 13:51:34 and UDP timeouts at 13:51:54 and 13:53:54.
+  UDP was not firewall-blocked; these events require investigation, not a deadline workaround.
+- The 180-second endpoint-scoped capture retained 230 packets with zero capture drops.
+  It ended before the last post-recovery loss, so it cannot locate that packet's loss point.
+
+### Evidence And Cleanup
+
+- Capture: `/tmp/p2p-vpn-oneplus-block-20260910.pcapng`.
+- Logs and snapshots: `/tmp/p2p-vpn-block-*` and `/tmp/p2p-vpn-unblock-*`.
+- The updated APK remains installed. The temporary Linux override/binary and firewall rules
+  were removed; the original Nix-store service was verified active with no drop-ins.
+- Temporary project storage measured 9,782,132 KiB, below 10 GiB.
+
+This demonstrates bounded physical fallback and re-promotion, not lossless recovery or
+settled stability. The OnePlus residual loss and earlier Pixel failure remain unresolved;
+physical underlay movement and sleep behavior were not tested in this run.
 
 ## Failed Datagram Fallback Review
 
