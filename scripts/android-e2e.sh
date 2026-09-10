@@ -55,7 +55,7 @@ Usage: p2p-vpn-android-e2e [OPTIONS]
 Options:
   --scenario NAME        Select boot-smoke, profile-persistence, always-on,
                          pairing-traffic, underlay-recovery, network-workflow,
-                         or multi-network.
+                         multi-network, or process-sample-smoke.
   --path-mode MODE       Select automatic, quic-stream, tcp-stream, owned-quic, relay-only,
                          or relay-to-direct.
   --preflight            Check requirements without starting an emulator.
@@ -70,6 +70,8 @@ Environment:
                          Runtime growth limit; defaults to 8 GiB and cannot exceed 32 GiB.
   P2P_VPN_ANDROID_E2E_ADB_TIMEOUT_SECONDS
                          Per-command ADB limit; defaults to 120 seconds.
+  P2P_VPN_ANDROID_PROCESS_COLLECTOR
+                         Process sampler path for the root-capable emulator smoke check.
 
 Exit codes:
   0   Scenario passed.
@@ -128,7 +130,7 @@ done
 
 pairing_scenario=0
 case "$scenario" in
-  boot-smoke|profile-persistence|always-on) ;;
+  boot-smoke|profile-persistence|always-on|process-sample-smoke) ;;
   pairing-traffic|underlay-recovery|network-workflow|multi-network) pairing_scenario=1 ;;
   *)
     echo "unsupported Android E2E scenario: $scenario" >&2
@@ -3487,6 +3489,40 @@ record_step debug_automation passed "ADB-authorized structured status is availab
 if [[ "$scenario" == boot-smoke ]]; then
   outcome=passed
   outcome_detail="Clean emulator boot and application smoke test passed"
+  exit 0
+fi
+
+if [[ "$scenario" == process-sample-smoke ]]; then
+  collector="${P2P_VPN_ANDROID_PROCESS_COLLECTOR:-$(dirname "$0")/android-process-sample.sh}"
+  if ! adb_run root > "$output_dir/collector-root.txt" \
+    || ! adb_run wait-for-device \
+    || [[ "$(adb_run shell id -u | tr -d '\r')" != 0 ]]; then
+    outcome=failed
+    outcome_detail="Process collector requires the owned root-capable emulator"
+    record_step process_collector failed "$outcome_detail"
+    exit 1
+  fi
+  app_pid="$(adb_run shell pidof org.hermeticfoundation.p2pvpn.debug | tr -d '\r')"
+  if [[ ! "$app_pid" =~ ^[1-9][0-9]*$ ]] \
+    || ! adb_run shell -T \
+      sh -s -- "$app_pid" 10 < "$collector" > "$output_dir/process-samples.jsonl" \
+    || ! jq -es --argjson pid "$app_pid" '
+      length == 10 and ([.[].start_ticks] | unique | length) == 1 and
+      all(.[]; .pid == $pid and .start_ticks > 0 and .os_threads >= 1 and
+        .fds != null and .fds >= 1 and .rss_kib != null and .rss_kib > 0 and
+        .finished_uptime_seconds >= .started_uptime_seconds) and
+      (. as $rows | all(range(1; length);
+        $rows[.].started_uptime_seconds >= ($rows[. - 1].started_uptime_seconds + 1)))
+    ' "$output_dir/process-samples.jsonl" >/dev/null; then
+    outcome=failed
+    outcome_detail="Android process collector compatibility check failed"
+    record_step process_collector failed "$outcome_detail"
+    exit 1
+  fi
+  adb_run shell getconf CLK_TCK > "$output_dir/clock-ticks.txt"
+  outcome=passed
+  outcome_detail="Ten Android process samples captured; not sustained resource acceptance"
+  record_step process_collector passed "$outcome_detail"
   exit 0
 fi
 

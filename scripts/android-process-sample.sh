@@ -1,5 +1,5 @@
 #!/bin/sh
-# Run through the debug application's run-as identity on an owned emulator.
+# Run from a privileged ADB shell on an owned root-capable emulator.
 set -eu
 set -f
 

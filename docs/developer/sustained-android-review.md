@@ -150,7 +150,7 @@ so their build/test suites were not repeated for this shell-only addition.
 ## Next Work
 
 1. Preserve refreshed artifact hashes and verify them again before emulator admission.
-2. Validate the process collector on the emulator; integrate runtime sampling and collector-on/off controls.
+2. Integrate runtime sampling and collector-on/off controls with the emulator-tested process collector.
 3. Freeze S7's 30-second warmup, 300-second idle/load windows, five independent transitions, actual offered load and watchdogs.
 4. Require healthy sibling traffic and identity continuity while the other network is disabled or unavailable.
 5. Run paired captures; audit cadence, recovery, teardown and storage cleanup before accepting results.
@@ -212,8 +212,8 @@ does not require repeating unchanged Rust/Android builds or device lifecycle tes
 ## Process Collector
 
 `scripts/android-process-sample.sh` emits one JSON object per observation. Run it
-through the debug app's `run-as` identity inside the isolated emulator. Local
-shell tests pass; emulator permissions and overhead are not verified yet.
+from a privileged ADB shell inside the isolated root-capable emulator. Local
+shell tests and emulator compatibility pass; collector overhead is not verified yet.
 
 | Field | Meaning / Limit |
 | --- | --- |
@@ -229,7 +229,7 @@ shell tests pass; emulator permissions and overhead are not verified yet.
 
 ```sh
 # Only inside the isolated wrapper, with an explicitly selected owned emulator.
-adb -s "$serial" exec-out run-as org.hermeticfoundation.p2pvpn.debug \
+adb -s "$serial" shell -T \
   sh -s -- "$app_pid" 300 < scripts/android-process-sample.sh
 ```
 
@@ -248,3 +248,36 @@ malformed stat records and argument bounds. ShellCheck and shfmt pass.
 Both scripts are included in the Nix Android structure lint check. No production
 code changed; unchanged Rust and Android builds were not repeated. This collector
 alone does not satisfy S7 or measure scheduled work, PSS, queues or network isolation.
+
+## Collector Emulator Results
+
+The `process-sample-smoke` scenario installs the selected refreshed APK, obtains
+privileged ADB on the owned emulator, verifies UID zero, and checks ten samples.
+It does not configure or connect a VPN network.
+
+| Attempt | Result | Evidence SHA-256 |
+| --- | --- | --- |
+| 1: `exec-out`, run-as | Shell prompt instead of JSON; original command timeout fired | `85bd7a1eb7c3365499cd19b9beb6444270af81dbeea85d1d0b5d9a028714f64e` |
+| 2: `shell -T`, run-as | `/proc/uptime` permission denied; failed without samples | `1d7d854893485af1672a1931d62ee9a30b07668c8a31fa059fc6820159c510f8` |
+| 3: `shell -T`, privileged | Ten samples pass; device `CLK_TCK` is 100 | `f242d52541b86381fd84c0ba8b9c83b51275150653b72f9376fd7e69ec1dbfa4` |
+
+Raw directories: `/tmp/p2p-vpn-android-process-smoke-{1,2,3}`; outer logs use
+the same paths with `.log`. Sample JSONL SHA-256:
+`d64bd7d7496e69fe9d2cfef2bfad794e573a2f89a32884c29b58b4c8ffe62699`.
+[Portable samples](android-process-smoke-samples.json) retain all ten observations.
+
+### Controls and Scope
+
+- Same refreshed APK hash recorded above; API 35 x86_64; no builds or public route.
+- Fixed 200-second inner and 240-second outer watchdogs, with 15/20-second kill grace.
+- Same 1,258,291,200-byte runtime growth cap; no deadline extensions or manual rescue.
+- Initial storage: 9,118,916 KiB; before attempt 3: 9,118,988 KiB. In-run audit: 9,623,624 KiB.
+- Every attempt reports all six cleanup checks passing; no matching emulator remains.
+
+Samples span uptime 26.24 to 35.35 seconds with stable PID/start identity,
+20 threads and 125 descriptors. RSS changes from 153,064 to 153,448 KiB.
+This boot-adjacent interval is compatibility evidence, not a plateau or CPU baseline.
+
+ShellCheck passes. The large existing harness does not match current shfmt output;
+no whole-file formatting rewrite was applied. The small collector tests remain
+the local parsing gate; S7 and collector overhead controls are still outstanding.

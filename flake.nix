@@ -371,6 +371,7 @@
                 export P2P_VPN_ANDROID_EMULATOR=${android.androidEmulator}/bin/run-test-emulator
                 export P2P_VPN_ADB=${android.androidSdk}/bin/adb
                 export P2P_VPN_ANDROID_APK=${android.androidDebugApk}/p2p-vpn-debug.apk
+                export P2P_VPN_ANDROID_PROCESS_COLLECTOR=${./scripts/android-process-sample.sh}
                 export P2P_VPN_ANDROID_E2E_FIXTURE=${androidE2eFixture}/bin/p2p-vpn-android-e2e-fixture
                 export P2P_VPN_BIN=${package}/bin/p2p-vpn
                 exec bash ${./scripts/android-e2e.sh} "$@"
