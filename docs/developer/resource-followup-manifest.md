@@ -2,8 +2,8 @@
 
 ## Status
 
-Frozen at `489da6b5`. The first S3 capture has started after authorized cache
-cleanup and a complete elevated storage total of 9,598,300 KiB.
+Frozen at `489da6b5`. Both S3 captures pass after authorized cache cleanup and
+a complete elevated pre-campaign storage total of 9,598,300 KiB.
 This closes specific gaps from the [acceptance audit](sustained-resource-acceptance.md),
 not a new review or a repeat of the completed ten-cycle reconnect campaign.
 
@@ -60,7 +60,7 @@ graceful pressure and reconnect captures cover that distinct requirement.
 First S3 result: [structured evidence](final-s3-results.json). The original
 fixture passed in 416.15 seconds with 15,000/15,000 replies, no skipped/invalid/
 duplicate packets, fixed transport and unchanged processes. No matching fixture
-process remained after normal test completion. The independent repeat is pending.
+process remained after normal test completion. The independent repeat follows below.
 
 | Phase | A CPU, % One Core | B CPU, % One Core | OS Rows Per Node | Runtime Rows Per Node |
 | --- | ---: | ---: | ---: | ---: |
@@ -71,6 +71,27 @@ CPU uses actual first/last sample timestamps and 100 Hz ticks. Each node retaine
 six threads and its fixed descriptor count (A 24, B 22). RSS endpoints were
 unchanged during drain. These observations include allocation-review overhead;
 do not interpret the historical S3 difference as a measured TUN regression.
+
+## S3 Independent Repeat
+
+The repeat passed in 416.17 seconds using the same executable and limits.
+Both runs are retained in [structured evidence](final-s3-results.json), including
+18 artifact hashes, process endpoints, traffic outcomes and phase summaries.
+
+| Phase | A CPU, % One Core | B CPU, % One Core | OS Rows Per Node | Runtime Rows Per Node |
+| --- | ---: | ---: | ---: | ---: |
+| Load | 8.297 | 7.443 | 299 | 60 |
+| Drain | 0.200 | 0.217 | 61 | 12 |
+
+- Repeat traffic: 15,000/15,000 replies, no skipped/invalid/duplicate packets.
+- Fixed transport, original process identities and final strict pings pass.
+- Six threads and fixed descriptors (A 24, B 22) throughout sampled phases.
+- Both RSS endpoint pairs are unchanged during drain; runtime series are complete.
+- No matching fixture process remains. No build, debugger or runtime rescue ran.
+
+Together these establish repeated final-code moderate-load/drain behavior, with
+CPU returning near idle and 30,000/30,000 replies. They do not claim zero retained
+heap, a release throughput ceiling or an instrumentation-matched historical speedup.
 
 ## Pressure Residual Inventory
 

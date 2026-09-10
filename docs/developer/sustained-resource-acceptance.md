@@ -11,7 +11,7 @@ not replace the original acceptance criteria with a smaller workload.
 | Criterion | Evidence To Reconcile | Current Audit Result |
 | --- | --- | --- |
 | 1. Source, manifests, budgets, exclusions | [Measurement plan](sustained-resource-review.md), per-workload manifests, source history | Final runtime matches graceful-capture revision; earlier Linux/Android reuse still needs reconciliation |
-| 2. Sustained resource coverage | S1-S7 captures, process/runtime series, collector controls | Linux and Android capture integrity reconciled; final-code moderate-load/idle comparison remains unverified |
+| 2. Sustained resource coverage | S1-S7 captures, process/runtime series, collector controls | Linux/Android evidence reconciled; paired final-code S3 now passes with the documented instrumentation limits |
 | 3. Retention and teardown | Ledger/queue controls, pressure/churn, allocation-owner traces | Ledger/queue invariants and epoch-control integrity revalidated; pressure-dependent residual remains unresolved |
 | 4. Android scheduling and background work | [Thread controls](android-thread-controls.md), load/profile/isolation reports | Five captures' raw artifacts and historical harness versions verified; shared shutdown reuse limit explicit below |
 | 5. Reproduction and minimal corrections | Capability retirement, connection retirement, Linux TUN cancellation | Production-fix inventory and guarded regression sources inspected; workload reconciliation remains |
@@ -230,8 +230,10 @@ pressure, recovery, settling and teardown, not the same moderate paced workload.
 
 The new implementation adds three Linux descriptors and no recurring idle timer.
 That source inspection explains descriptor cost; it does not prove unchanged
-CPU or throughput. Final-code comparable idle/moderate-load evidence remains
-unverified and must not be substituted with older results or a pressure-only pass.
+CPU or throughput. The subsequent [paired final-code S3 captures](resource-followup-manifest.md#s3-independent-repeat)
+now establish moderate-load/drain comparison on the cached instrumented runtime.
+Their 30,000/30,000 replies and near-idle drain CPU are new evidence, not reuse of
+older results or a pressure-only pass.
 
 The complete storage total must be established before a new capture. Reuse the
 cached final-runtime executable and original workload gates if follow-up is
@@ -276,8 +278,8 @@ commands, comparison controls and budgets before the remaining captures.
 
 1. Verify the full temporary-storage total before captures. A read-only elevated
    total has been requested; do not delete evidence or alter directory permissions.
-2. Establish final-code moderate-load/drain comparison using the existing S3
-   workload, cached executable, original gates and two fresh repetitions.
+2. Final-code moderate-load/drain comparison is complete: existing S3 workload,
+   cached executable, original gates and two fresh repetitions pass.
 3. Investigate the distinct pressure residual with a bounded matched control or
    owner inventory. Freeze its comparison and quotas before execution.
 4. Reconcile remaining diagnostic validation and update the review index only
