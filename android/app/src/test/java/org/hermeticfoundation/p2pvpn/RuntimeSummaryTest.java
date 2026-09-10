@@ -8,6 +8,50 @@ import java.util.Arrays;
 
 public final class RuntimeSummaryTest {
     @Test
+    public void separatesOwnedPayloadBackendsAcrossNetworks() {
+        RuntimeSummary summary = RuntimeSummary.fromLines(Arrays.asList(
+                "outbound_quic_datagram_packets 100",
+                "outbound_owned_quic_datagram_packets 7",
+                "outbound_owned_quic_datagram_packets 3",
+                "outbound_owned_udp_datagram_packets 11",
+                "outbound_owned_udp_datagram_packets 5"));
+
+        assertEquals(100, summary.outboundQuicDatagramPackets);
+        assertEquals(10, summary.outboundOwnedQuicDatagramPackets);
+        assertEquals(16, summary.outboundOwnedUdpDatagramPackets);
+    }
+
+    @Test
+    public void ownedPayloadCountersRejectInvalidInputAndSaturateIndependently() {
+        RuntimeSummary malformed = RuntimeSummary.fromLines(Arrays.asList(
+                "outbound_owned_quic_datagram_packets -1",
+                "outbound_owned_quic_datagram_packets invalid",
+                "outbound_owned_udp_datagram_packets -2",
+                "outbound_owned_udp_datagram_packets 18446744073709551615"));
+        assertEquals(0, malformed.outboundOwnedQuicDatagramPackets);
+        assertEquals(0, malformed.outboundOwnedUdpDatagramPackets);
+
+        RuntimeSummary saturated = RuntimeSummary.fromLines(Arrays.asList(
+                "outbound_owned_quic_datagram_packets " + Long.MAX_VALUE,
+                "outbound_owned_quic_datagram_packets 1",
+                "outbound_owned_udp_datagram_packets " + Long.MAX_VALUE,
+                "outbound_owned_udp_datagram_packets 2"));
+        assertEquals(Long.MAX_VALUE, saturated.outboundOwnedQuicDatagramPackets);
+        assertEquals(Long.MAX_VALUE, saturated.outboundOwnedUdpDatagramPackets);
+    }
+
+    @Test
+    public void legacyCombinedCounterDoesNotImplyQuicPayloads() {
+        RuntimeSummary legacy = RuntimeSummary.fromLines(Arrays.asList(
+                "outbound_quic_datagram_packets 50",
+                "packet_plane_quic_sessions 1"));
+        assertEquals(0, legacy.outboundOwnedQuicDatagramPackets);
+        assertEquals(0, legacy.outboundOwnedUdpDatagramPackets);
+        assertEquals(0, RuntimeSummary.empty().outboundOwnedQuicDatagramPackets);
+        assertEquals(0, RuntimeSummary.empty().outboundOwnedUdpDatagramPackets);
+    }
+
+    @Test
     public void parsesPeerAndPathMetrics() {
         RuntimeSummary summary =
                 RuntimeSummary.fromLines(

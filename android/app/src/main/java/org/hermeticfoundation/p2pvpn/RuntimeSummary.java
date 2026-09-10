@@ -13,6 +13,8 @@ final class RuntimeSummary {
     final long publicRoutingPeers;
     final long packetPlaneQuicSessions;
     final long outboundQuicDatagramPackets;
+    final long outboundOwnedQuicDatagramPackets;
+    final long outboundOwnedUdpDatagramPackets;
     final long outboundDirectTcpStreamPackets;
     final long pathPromotionsToDirect;
 
@@ -26,6 +28,8 @@ final class RuntimeSummary {
             long publicRoutingPeers,
             long packetPlaneQuicSessions,
             long outboundQuicDatagramPackets,
+            long outboundOwnedQuicDatagramPackets,
+            long outboundOwnedUdpDatagramPackets,
             long outboundDirectTcpStreamPackets,
             long pathPromotionsToDirect) {
         this.connectedPeers = connectedPeers;
@@ -41,12 +45,14 @@ final class RuntimeSummary {
         this.publicRoutingPeers = publicRoutingPeers;
         this.packetPlaneQuicSessions = packetPlaneQuicSessions;
         this.outboundQuicDatagramPackets = outboundQuicDatagramPackets;
+        this.outboundOwnedQuicDatagramPackets = outboundOwnedQuicDatagramPackets;
+        this.outboundOwnedUdpDatagramPackets = outboundOwnedUdpDatagramPackets;
         this.outboundDirectTcpStreamPackets = outboundDirectTcpStreamPackets;
         this.pathPromotionsToDirect = pathPromotionsToDirect;
     }
 
     static RuntimeSummary empty() {
-        return new RuntimeSummary(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        return new RuntimeSummary(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
     }
 
     RuntimeSummary withOutboundQuicDatagramPackets(long packets) {
@@ -60,6 +66,8 @@ final class RuntimeSummary {
                 publicRoutingPeers,
                 packetPlaneQuicSessions,
                 packets,
+                outboundOwnedQuicDatagramPackets,
+                outboundOwnedUdpDatagramPackets,
                 outboundDirectTcpStreamPackets,
                 pathPromotionsToDirect);
     }
@@ -74,6 +82,8 @@ final class RuntimeSummary {
         long publicRoutingPeers = 0;
         long packetPlaneQuicSessions = 0;
         long outboundQuicDatagramPackets = 0;
+        long outboundOwnedQuicDatagramPackets = 0;
+        long outboundOwnedUdpDatagramPackets = 0;
         long outboundDirectTcpStreamPackets = 0;
         long pathPromotionsToDirect = 0;
         for (String line : lines) {
@@ -119,6 +129,14 @@ final class RuntimeSummary {
                     outboundQuicDatagramPackets =
                             saturatingAdd(outboundQuicDatagramPackets, value);
                     break;
+                case "outbound_owned_quic_datagram_packets":
+                    outboundOwnedQuicDatagramPackets =
+                            saturatingAdd(outboundOwnedQuicDatagramPackets, value);
+                    break;
+                case "outbound_owned_udp_datagram_packets":
+                    outboundOwnedUdpDatagramPackets =
+                            saturatingAdd(outboundOwnedUdpDatagramPackets, value);
+                    break;
                 case "outbound_direct_tcp_stream_fallback_packets":
                     outboundDirectTcpStreamPackets =
                             saturatingAdd(outboundDirectTcpStreamPackets, value);
@@ -140,6 +158,8 @@ final class RuntimeSummary {
                 publicRoutingPeers,
                 packetPlaneQuicSessions,
                 outboundQuicDatagramPackets,
+                outboundOwnedQuicDatagramPackets,
+                outboundOwnedUdpDatagramPackets,
                 outboundDirectTcpStreamPackets,
                 pathPromotionsToDirect);
     }

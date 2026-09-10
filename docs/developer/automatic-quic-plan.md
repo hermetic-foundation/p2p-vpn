@@ -79,6 +79,23 @@ Keep profiles, endpoints, firewall and underlay unchanged; restore the Nix-manag
 Collect bounded outer-packet metadata and timed path/counter snapshots alongside full-size pings.
 Do not change probe deadlines, replay checks or MTU until the failure is isolated.
 
+### Android Counter Plan
+
+1. Parse existing native owned-QUIC and owned-UDP payload counters into `RuntimeSummary`.
+2. Expose additive debug status fields; preserve the legacy cumulative combined counter.
+3. Keep new fields scoped to current native runtimes; compare deltas only without intervening restarts.
+4. Test mixed backends, network aggregation, malformed input, saturation and restart reset.
+5. Run cached JVM tests and debug APK assembly without redeploying or rebuilding native code.
+
+These observations do not change transport selection and do not resolve the physical loss defect.
+
+Implemented and locally verified: all JVM tests and debug APK assembly passed using cached tools.
+The two affected summary suites passed 12 tests, including four new regressions.
+APK alignment passed; native library hash is unchanged from the physical run.
+
+New APK SHA-256: `2be7a7d92012e45ff1f51a5220c6df8d730ab22acffac1c5ef7a52a5ece1aee8`.
+This diagnostics APK has not been deployed. Rust/Nix checks were not rerun for this Java-only change.
+
 ## Historical Implementation Progress
 
 The chronological notes below preserve earlier results and failures. Their pending-work statements

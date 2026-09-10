@@ -326,6 +326,8 @@ public final class DebugAutomationReceiver extends BroadcastReceiver {
         paths.put("public_routing_peers", summary.publicRoutingPeers);
         paths.put("packet_plane_quic_sessions", summary.packetPlaneQuicSessions);
         paths.put("outbound_quic_datagram_packets", summary.outboundQuicDatagramPackets);
+        paths.put("outbound_owned_quic_datagram_packets", summary.outboundOwnedQuicDatagramPackets);
+        paths.put("outbound_owned_udp_datagram_packets", summary.outboundOwnedUdpDatagramPackets);
         paths.put("outbound_direct_tcp_stream_packets", summary.outboundDirectTcpStreamPackets);
         paths.put("promotions_to_direct", summary.pathPromotionsToDirect);
         value.put("paths", paths);

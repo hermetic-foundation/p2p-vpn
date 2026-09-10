@@ -7,6 +7,33 @@ import org.junit.Test;
 
 public final class RuntimeSummaryAccumulatorTest {
     @Test
+    public void ownedBackendCountersDescribeCurrentRuntimeNotLifetimeTotals() {
+        RuntimeSummaryAccumulator accumulator = new RuntimeSummaryAccumulator();
+        RuntimeSummary current = RuntimeSummary.fromLines(Arrays.asList(
+                "outbound_quic_datagram_packets 12",
+                "outbound_owned_quic_datagram_packets 5",
+                "outbound_owned_udp_datagram_packets 7"));
+        RuntimeSummary observed = accumulator.observe(current);
+        assertEquals(5, observed.outboundOwnedQuicDatagramPackets);
+        assertEquals(7, observed.outboundOwnedUdpDatagramPackets);
+
+        RuntimeSummary stopped = accumulator.finishRuntime();
+        assertEquals(12, stopped.outboundQuicDatagramPackets);
+        assertEquals(0, stopped.outboundOwnedQuicDatagramPackets);
+        assertEquals(0, stopped.outboundOwnedUdpDatagramPackets);
+
+        RuntimeSummary restarted = accumulator.observe(current);
+        assertEquals(24, restarted.outboundQuicDatagramPackets);
+        assertEquals(5, restarted.outboundOwnedQuicDatagramPackets);
+        assertEquals(7, restarted.outboundOwnedUdpDatagramPackets);
+
+        RuntimeSummary implicitReset = accumulator.observe(summary(1));
+        assertEquals(25, implicitReset.outboundQuicDatagramPackets);
+        assertEquals(0, implicitReset.outboundOwnedQuicDatagramPackets);
+        assertEquals(0, implicitReset.outboundOwnedUdpDatagramPackets);
+    }
+
+    @Test
     public void preservesCountersAcrossExplicitRuntimeRestart() {
         RuntimeSummaryAccumulator accumulator = new RuntimeSummaryAccumulator();
 

@@ -1181,6 +1181,23 @@ scenarios. The production UI exposes only per-network switches.
 
 Responses are schema-versioned JSON encoded as base64 in broadcast result data.
 
+### Datagram Payload Evidence
+
+The debug `status` response exposes these fields under `value.snapshot.paths`:
+
+| Field | Meaning |
+| --- | --- |
+| `outbound_owned_quic_datagram_packets` | Successful QUIC payload submissions in the current native runtimes |
+| `outbound_owned_udp_datagram_packets` | Successful UDP payload submissions in the current native runtimes |
+| `outbound_quic_datagram_packets` | Legacy combined datagram total, accumulated across observed runtime restarts |
+| `packet_plane_quic_sessions` | Session count, not proof of payload delivery |
+
+- Backend-specific counts exclude path probes; confirm delivery with traffic tests.
+- Counts aggregate enabled networks; use a single network or per-network native lines for attribution.
+- The new counters reset with native runtimes and clear when the service stops.
+- Compare deltas only within uninterrupted runtimes; an internal restart need not change the service generation.
+- Older native builds lacking these fields yield zero; the legacy total must not be treated as QUIC-only.
+
 Status never includes config JSON, private keys, membership keys, or receipts.
 It can include an active pairing code; the harness keeps that in private state.
 
