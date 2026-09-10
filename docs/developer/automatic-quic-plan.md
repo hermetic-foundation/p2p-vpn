@@ -191,6 +191,37 @@ Acceptance remains incomplete. Local evidence does not certify physical Android 
 - Next physical checkpoint: coordinated Wi-Fi/cellular/Wi-Fi transitions with matching runtimes,
   actual payload counters, fixed deadlines and no app restart or manual path rescue during transitions.
 
+### Authorized Wi-Fi And Cellular Movement Retest
+
+- Source `648d0943` ran on the Pixel and Linux peer with their preserved identities and minimal profiles.
+  USB provided management and observation only; overlay traffic used Wi-Fi or cellular.
+- The Pixel runtime remained generation one. No app restart, endpoint update, route change,
+  pairing change or manual path rescue occurred during the fixed movement window.
+- Evidence: `/tmp/p2p-vpn-pixel-movement.2PPCoU/`.
+  Samples contain bidirectional pings, Linux state, Android status and Android logs.
+
+| Phase | Linux to Pixel | Pixel to Linux | Payload path |
+| --- | ---: | ---: | --- |
+| Settled Wi-Fi baseline, windows 3-16 | 70/70 | 70/70 | Owned QUIC datagram |
+| Cellular, windows 18-29 | 35/66 | 40/64 | Recovery, then circuit relay |
+| Wi-Fi return, windows 30-41 | 60/60 | 55/55 | TCP bridge, then owned QUIC datagram |
+
+- At baseline, Linux and Android owned-QUIC counters grew from 10/7 to 145/146.
+  Window 17 overlapped the cellular switch and delivered 4/6 and 0/6 replies.
+- Android requested recovery at 18:44:40.350 CDT. The first bidirectional successful sample
+  was window 22 at 18:45:51.651, about 71 seconds later.
+- The Linux relay payload counter grew from zero to 66 by cellular window 29.
+  Window 24 remained asymmetric: Pixel sent 5/5 replies while Linux received 0/6.
+- The first Wi-Fi-return sample used direct TCP and delivered 5/5 each direction.
+  By the next sample, 12.7 seconds later, Linux selected owned QUIC again.
+- Return-phase owned-QUIC counters grew from Linux/Android 167/164 to 275/277.
+  Every completed return-phase ping sample passed.
+- The temporary Linux unit stopped at its deadline. The original Nix service is active,
+  has no drop-in, and the temporary binary and override are absent.
+
+This proves autonomous physical underlay movement, relay fallback and promotion back to QUIC.
+It is not a loss-free cellular stability pass; the recovery outage and asymmetric loss remain in scope.
+
 ### Requirement Status
 
 | Requirement | Verified evidence | Remaining work |
