@@ -4,7 +4,8 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use libp2p::{PeerId as Libp2pPeerId, Swarm, identity::Keypair as Libp2pKeypair, request_response};
+use libp2p::{PeerId as Libp2pPeerId, Swarm, request_response};
+use rand_core::{OsRng, RngCore as _};
 
 use crate::{
     PeerId, Sequence, SessionId,
@@ -227,7 +228,7 @@ impl Forwarder {
             replay_windows: HashMap::new(),
             replay_session_ttl: DEFAULT_REPLAY_SESSION_TTL,
             max_replay_windows: MAX_REPLAY_WINDOWS,
-            session_id: fresh_session_id_for_peer(local_peer),
+            session_id: fresh_session_id(),
             next_sequence: 0,
             mtu: usize::from(config.effective_packet_mtu()),
         })
@@ -1001,16 +1002,13 @@ pub fn session_id_for_peer(peer: PeerId) -> SessionId {
     session_id.max(1)
 }
 
-fn fresh_session_id_for_peer(peer: PeerId) -> SessionId {
-    let entropy = Libp2pKeypair::generate_ed25519()
-        .public()
-        .to_peer_id()
-        .to_bytes();
-    let mut bytes = [0; 4];
-    for (index, byte) in bytes.iter_mut().enumerate() {
-        *byte = peer.as_bytes()[index] ^ entropy[index % entropy.len()];
+fn fresh_session_id() -> SessionId {
+    loop {
+        let id = OsRng.next_u32();
+        if id != 0 {
+            return id;
+        }
     }
-    SessionId::from_be_bytes(bytes).max(1)
 }
 
 pub fn packet_source(packet: &[u8]) -> Result<IpAddr, ForwardError> {
@@ -1178,6 +1176,17 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn fresh_session_ids_do_not_repeat_for_a_fixed_peer() {
+        let remote = Keypair::generate_ed25519().public().to_peer_id();
+        let config = config_for(remote);
+        let ids: std::collections::HashSet<_> = (0..8)
+            .map(|_| Forwarder::from_config(&config).unwrap().session_id)
+            .collect();
+        assert!(!ids.contains(&0));
+        assert!(ids.len() > 1, "fresh sessions reused the same identifier");
+    }
 
     #[cfg(target_os = "linux")]
     fn signed_membership_resource_config(count: usize) -> Config {

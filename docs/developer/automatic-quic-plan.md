@@ -478,6 +478,65 @@ This does not support attributing these four losses to a long laptop dispatch st
 This verifies another autonomous fallback/re-promotion cycle and bounded settling, with
 documented recovery-window loss. Physical movement and the earlier loss investigation remain open.
 
+### Underlay And Counter Repeat
+
+Repeated the same deployed `fb47a4cc` binaries with numeric Android resource snapshots
+and a simultaneous full-size LAN ping. Evidence: `/tmp/p2p-vpn-fastpath-physical.b6ymTF/`.
+No build ran during measurement; the existing profiles and Wi-Fi selection were unchanged.
+
+| Stage | Replies |
+| --- | --- |
+| Separate full-size LAN check before this repeat | 120/120 |
+| Overlay baseline | 6/10; first four requests lost |
+| QUIC block transition | 30/45 |
+| Phone to laptop while blocked | 5/5 |
+| Overlay after unblock | 45/45 |
+| Settled laptop to phone / phone to laptop | 60/60 / 30/30 |
+| Simultaneous LAN check across stages | 193/194; sequence 34 lost |
+
+- The LAN loss did not coincide with the initial four overlay losses. Neither this nor
+  the separate clean ICMP run proves absence of underlay UDP loss.
+- Android packet-plane framing/decryption/replay-drop counters stayed zero at every stage.
+  General inbound replay drops changed from five to six around baseline, then remained six.
+- These aggregate, asynchronous counters are not per-request attribution. No retained
+  `packet_rejected` event ties the four baseline losses to replay rejection.
+- Settled Linux QUIC/UDP counters changed `45/60` to `135/60`; Android snapshots changed
+  `124/161` to `213/161`. Keep the snapshot boundary limitation rather than claim exact parity.
+- Capture: 1,406 underlay packets and 371 TUN packets, zero reported capture drops.
+  Linux stayed process `2499870` during measurement; original Nix service restored as `2503709`.
+
+### Restart Session Entropy Defect
+
+Code inspection found that `fresh_session_id_for_peer` XORed the local peer prefix with
+the first four bytes of a newly generated Ed25519 libp2p peer ID. Those bytes encode the
+identity-multihash/protobuf prefix, not fresh key entropy, so a fixed peer reused its session ID.
+
+- A regression generated eight sessions for one fixed peer and failed because all IDs
+  were equal. Evidence: `/tmp/p2p-vpn-session-entropy-before.log`.
+- The replacement draws a nonzero `u32` directly from `OsRng`, matching the existing
+  packet-plane handshake pattern. The public deterministic `session_id_for_peer` helper is unchanged.
+- The regression now exercises repeated forwarder construction with the same config.
+  Replay enforcement, session width, peer identity, keys and wire format are unchanged.
+
+This fixes deterministic restart reuse, not the inherent collision probability of a
+32-bit random ID. Owned datagram handshake IDs already used OS randomness; this finding
+does not establish that the four observed datagram losses were caused by session reuse.
+
+- Core tests passed: 1,168 passed, eight ignored, zero failures in 47.63 seconds.
+  Evidence: `/tmp/p2p-vpn-session-entropy-core.log`; the new regression is included.
+- Required Clippy groups passed in 16.79 seconds with existing non-fatal warnings.
+  Formatting and whitespace checks passed; no dependency or wire-format change was needed.
+- Offline Nix source `/nix/store/6cynx1rgg7x19b7ri14z063q62xdw5a4-source/src`
+  matches the tested Rust tree. Full Nix package realization was not repeated.
+
+- Cached Android ARM64 compilation passed in 39.87 seconds with four existing platform
+  dead-code warnings. No Java/JNI contract changed; JVM tests were not rerun for this Rust change.
+- Prepared native SHA-256: `7d1bcc739ed998cd71ef5b6fffd27b26721c095fa87e65982457174c8621458b`.
+  The dedicated physical-test firewall chain is absent; five post-restoration pings passed.
+
+Packaging and deployment of the entropy fix remain pending. The preceding physical
+measurements used the old session-ID derivation and are not verification of this fix.
+
 ## Failed Datagram Fallback Review
 
 - Inspection found that a failed QUIC send could try UDP, then immediately drop on UDP failure
