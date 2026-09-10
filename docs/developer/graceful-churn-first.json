@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "status": "first_capture_passed_repeat_pending",
+  "status": "first_capture_passed",
   "binary_sha256": "6516ee1bcb7b227fac264fabfd6e7a47a86d0f9fdba93e15819bea32953fa6ab",
   "dir": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591",
   "phases": [

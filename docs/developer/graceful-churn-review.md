@@ -57,6 +57,6 @@ env -u P2P_VPN_REVIEW_CHURN_SMOKE \
 
 ## Status
 
-Manifest frozen before execution. The [first ten-cycle capture](graceful-churn-results.md)
-passes its workload, teardown and sampling gates. The independent repetition and
-residual attribution remain pending; the two-run campaign is not complete.
+Manifest frozen before execution. Both [ten-cycle captures](graceful-churn-results.md)
+pass workload, teardown and sampling gates with the same executable. The two-run
+campaign is complete; live-retention and residual owner attribution remain open.
