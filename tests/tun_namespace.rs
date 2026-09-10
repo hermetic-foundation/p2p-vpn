@@ -63,6 +63,7 @@ mod unavailable_peer;
 const KEEP_TEMP_ENV: &str = "P2P_VPN_TUN_E2E_KEEP_TEMP";
 const ORCHESTRATOR_TIMEOUT_ENV: &str = "P2P_VPN_TUN_E2E_ORCHESTRATOR_TIMEOUT_SECONDS";
 const WAIT_TIMEOUT_SCALE_ENV: &str = "P2P_VPN_TUN_E2E_WAIT_SCALE";
+const GRACEFUL_SHUTDOWN_ENV: &str = "P2P_VPN_REVIEW_GRACEFUL_SHUTDOWN";
 const DIRECT_TEST_NAME: &str = "tun_namespace_ping_crosses_two_node_overlay";
 const QUEUE_PRESSURE_TEST_NAME: &str = "tun_namespace_recovers_after_tcp_queue_pressure";
 const DIRECT_QUIC_TEST_NAME: &str = "tun_namespace_ping_crosses_owned_quic_packet_plane";
@@ -480,6 +481,21 @@ outbound_quic_datagram_packets 1\n";
 
 fn reexec_orchestrator(test_name: &str) {
     let current_exe = env::current_exe().expect("current test binary");
+    if graceful_shutdown_requested() {
+        assert!(
+            keep_temp_artifacts(),
+            "graceful review requires retained evidence"
+        );
+        assert!(
+            [
+                DIRECT_TEST_NAME,
+                QUEUE_PRESSURE_TEST_NAME,
+                lifecycle_churn::TEST_NAME
+            ]
+            .contains(&test_name),
+            "graceful review requires a direct, pressure or churn fixture"
+        );
+    }
     if [sustained_traffic::TEST_NAME, lifecycle_churn::TEST_NAME].contains(&test_name) {
         assert!(
             keep_temp_artifacts(),
@@ -664,8 +680,13 @@ fn run_direct_orchestrator(test_name: &str) {
     } else {
         idle_sample::capture(&temp_dir, &[("a", node_a.id()), ("b", node_b.id())]);
     }
-    stop_child(&mut node_a);
-    stop_child(&mut node_b);
+    if graceful_shutdown_requested() {
+        graceful_stop_child(&mut node_a, &temp_dir, "a");
+        graceful_stop_child(&mut node_b, &temp_dir, "b");
+    } else {
+        stop_child(&mut node_a);
+        stop_child(&mut node_b);
+    }
     assert_ping_success(
         "overlay host ping",
         &host_ping,
@@ -2138,6 +2159,7 @@ fn namespace_replay_env_exports() -> String {
         [
             ORCHESTRATOR_TIMEOUT_ENV,
             WAIT_TIMEOUT_SCALE_ENV,
+            GRACEFUL_SHUTDOWN_ENV,
             idle_sample::SAMPLE_ENV,
             idle_sample::RUNTIME_SAMPLING_ENV,
             sustained_traffic::SMOKE_ENV,
@@ -3040,6 +3062,15 @@ fn configure_tun_sysctls(interface: &str) {
 }
 
 fn run_node_child() {
+    #[cfg(feature = "allocation-review")]
+    if graceful_shutdown_requested() {
+        allocation_sample::observe_child(run_node_child_inner);
+        return;
+    }
+    run_node_child_inner();
+}
+
+fn run_node_child_inner() {
     let role = required_env("P2P_VPN_TUN_E2E_ROLE");
     let local = NodeIdentity {
         peer_id: required_env("P2P_VPN_TUN_E2E_LOCAL_PEER"),
@@ -3145,6 +3176,16 @@ fn run_node_child() {
             node_control_socket(&temp_dir, &role),
         ))
         .expect("node runtime");
+    if graceful_shutdown_requested() {
+        let output = command_output("ip", &["-j", "link", "show"], &[], Duration::from_secs(2))
+            .expect("inspect interfaces after runtime drop");
+        assert_output_success("post-runtime interfaces", &output);
+        let links: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+        assert!(
+            !links.iter().any(|link| link["ifname"] == interface),
+            "TUN interface survived runtime drop"
+        );
+    }
 }
 
 fn direct_overlay_config(role: &str, local: &NodeIdentity, remote: &NodeIdentity) -> Config {
@@ -4280,6 +4321,103 @@ fn required_env(name: &str) -> String {
 fn stop_child(child: &mut NamespaceChild) {
     let _ = child.child.kill();
     let _ = child.child.wait();
+}
+
+fn graceful_shutdown_value(value: Option<&str>, allocation_review: bool) -> bool {
+    match value {
+        None => false,
+        Some("1") if allocation_review => true,
+        _ => panic!("graceful review requires allocation-review and value 1"),
+    }
+}
+
+fn graceful_shutdown_requested() -> bool {
+    let value = env::var(GRACEFUL_SHUTDOWN_ENV);
+    match value {
+        Ok(value) => graceful_shutdown_value(Some(&value), cfg!(feature = "allocation-review")),
+        Err(env::VarError::NotPresent) => false,
+        Err(error) => panic!("invalid {GRACEFUL_SHUTDOWN_ENV}: {error}"),
+    }
+}
+
+fn wait_for_child_exit(
+    child: &mut Child,
+    timeout: Duration,
+) -> io::Result<std::process::ExitStatus> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(status);
+        }
+        if Instant::now() >= deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "child did not exit",
+            ));
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn graceful_stop_child(child: &mut NamespaceChild, temp: &Path, role: &str) {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("shutdown query runtime");
+    let socket = node_control_socket(temp, role);
+    let response = runtime
+        .block_on(p2p_vpn::runtime::control_socket::query_shutdown(
+            &socket,
+            Duration::from_secs(2),
+        ))
+        .expect("graceful shutdown acknowledgement");
+    assert_eq!(response, ["shutdown accepted"]);
+    let status = wait_for_child_exit(&mut child.child, Duration::from_secs(5))
+        .expect("graceful child exit deadline");
+    assert!(status.success(), "graceful child exit failed: {status}");
+    assert!(
+        !socket.exists(),
+        "control socket survived graceful child exit"
+    );
+}
+
+#[test]
+fn graceful_review_is_explicit_and_requires_allocation_instrumentation() {
+    assert!(!graceful_shutdown_value(None, false));
+    assert!(!graceful_shutdown_value(None, true));
+    assert!(graceful_shutdown_value(Some("1"), true));
+    for (value, enabled) in [("1", false), ("0", true), ("true", true), ("", true)] {
+        assert!(
+            std::panic::catch_unwind(|| graceful_shutdown_value(Some(value), enabled)).is_err()
+        );
+    }
+}
+
+#[test]
+fn graceful_exit_wait_reports_success_failure_and_timeout() {
+    for code in [0, 7] {
+        let mut child = NamespaceChild {
+            child: Command::new("sh")
+                .args(["-c", &format!("exit {code}")])
+                .spawn()
+                .unwrap(),
+        };
+        assert_eq!(
+            wait_for_child_exit(&mut child.child, Duration::from_secs(2))
+                .unwrap()
+                .code(),
+            Some(code)
+        );
+    }
+    let mut child = NamespaceChild {
+        child: Command::new("sleep").arg("10").spawn().unwrap(),
+    };
+    assert_eq!(
+        wait_for_child_exit(&mut child.child, Duration::ZERO)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::TimedOut
+    );
 }
 
 fn read_log(path: &Path) -> String {

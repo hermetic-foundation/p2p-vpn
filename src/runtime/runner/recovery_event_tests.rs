@@ -3,6 +3,62 @@
 use super::tests::{config_with_peer, membership_sync_test_node};
 use super::*;
 
+#[test]
+fn tun_worker_drop_releases_reader_and_metrics_with_a_full_channel() {
+    use crate::runtime::tun::{PacketIo, PacketRead, PacketWrite};
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc as sync_channel,
+    };
+
+    struct Reader {
+        reads: usize,
+        full: sync_channel::Sender<()>,
+        dropped: Arc<AtomicBool>,
+    }
+    impl Drop for Reader {
+        fn drop(&mut self) {
+            self.dropped.store(true, Ordering::Release);
+        }
+    }
+    impl PacketRead for Reader {
+        fn read_packet(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            self.reads += 1;
+            if self.reads == TUN_READ_CHANNEL + 1 {
+                self.full.send(()).unwrap();
+            }
+            buffer[0] = 1;
+            Ok(1)
+        }
+        fn cancellation(&self) -> Option<Box<dyn FnOnce() + Send>> {
+            Some(Box::new(|| {}))
+        }
+    }
+    struct Writer;
+    impl PacketWrite for Writer {
+        fn write_packet(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            unreachable!()
+        }
+    }
+    let dropped = Arc::new(AtomicBool::new(false));
+    let (full, filled) = sync_channel::channel();
+    let (reader, _) = PacketIo::new(
+        Reader {
+            reads: 0,
+            full,
+            dropped: Arc::clone(&dropped),
+        },
+        Writer,
+    )
+    .split();
+    let metrics = Arc::new(RuntimeMetrics::default());
+    let worker = spawn_tun_reader(reader, Arc::clone(&metrics), 1280);
+    filled.recv_timeout(Duration::from_secs(2)).unwrap();
+    drop(worker);
+    assert!(dropped.load(Ordering::Acquire));
+    assert_eq!(Arc::strong_count(&metrics), 1);
+}
+
 #[tokio::test]
 async fn failed_packet_connection_cannot_veto_fresh_opposite_role_connection() {
     let peer = NodeIdentity::generate_ed25519()

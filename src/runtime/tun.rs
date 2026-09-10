@@ -8,6 +8,9 @@ use std::{
 #[cfg(target_os = "linux")]
 use std::io::{Read as _, Write as _};
 
+#[cfg(target_os = "linux")]
+mod readiness;
+
 use crate::{
     PeerId,
     config::{Config, RouteConfig, effective_packet_mtu, vpn_ip_host_route},
@@ -16,10 +19,16 @@ use crate::{
 
 /// Blocking packet source used by the platform-neutral runtime.
 ///
-/// Implementations should arrange for a blocked read to wake periodically so
-/// the owning runtime can shut down without leaking a worker thread.
+/// Implementations must arrange for blocked reads to exit on platform shutdown.
+/// A cancellation callback lets the runtime wake and join the reader itself.
 pub trait PacketRead: Send + 'static {
     fn read_packet(&mut self, buffer: &mut [u8]) -> io::Result<usize>;
+
+    /// Wake a blocked read and make subsequent reads terminate. The callback
+    /// must not block or panic. Backends without one own their shutdown wakeup.
+    fn cancellation(&self) -> Option<Box<dyn FnOnce() + Send>> {
+        None
+    }
 }
 
 /// Blocking packet sink used by the platform-neutral runtime.
@@ -61,6 +70,10 @@ impl PacketIo {
 }
 
 impl PacketReader {
+    pub(crate) fn cancellation(&self) -> Option<Box<dyn FnOnce() + Send>> {
+        self.inner.cancellation()
+    }
+
     pub fn read_packet(&mut self, buffer: &mut [u8]) -> Result<usize, TunRuntimeError> {
         let length = self
             .inner
@@ -994,16 +1007,20 @@ fn internet_checksum(bytes: &[u8]) -> u16 {
 #[cfg(target_os = "linux")]
 pub struct TunDevice {
     device: tun::Device,
+    read_ready: readiness::Readiness,
+    write_ready: readiness::Readiness,
 }
 
 #[cfg(target_os = "linux")]
 pub struct TunReader {
     reader: tun::Reader,
+    ready: readiness::Readiness,
 }
 
 #[cfg(target_os = "linux")]
 pub struct TunWriter {
     writer: tun::Writer,
+    ready: readiness::Readiness,
 }
 
 #[cfg(target_os = "linux")]
@@ -1019,7 +1036,14 @@ impl TunDevice {
             .layer(tun::Layer::L3);
 
         let device = tun::create(&tun_config)?;
-        Ok(Self { device })
+        device.set_nonblock()?;
+        let read_ready = readiness::Readiness::new(&device, mio::Interest::READABLE, true)?;
+        let write_ready = readiness::Readiness::new(&device, mio::Interest::WRITABLE, false)?;
+        Ok(Self {
+            device,
+            read_ready,
+            write_ready,
+        })
     }
 
     pub fn name(&self) -> Result<String, TunRuntimeError> {
@@ -1029,7 +1053,16 @@ impl TunDevice {
     #[must_use]
     pub fn split(self) -> (TunReader, TunWriter) {
         let (reader, writer) = self.device.split();
-        (TunReader { reader }, TunWriter { writer })
+        (
+            TunReader {
+                reader,
+                ready: self.read_ready,
+            },
+            TunWriter {
+                writer,
+                ready: self.write_ready,
+            },
+        )
     }
 
     #[must_use]
@@ -1042,30 +1075,38 @@ impl TunDevice {
 #[cfg(target_os = "linux")]
 impl TunReader {
     pub fn read_packet(&mut self, buffer: &mut [u8]) -> Result<usize, TunRuntimeError> {
-        Ok(self.reader.read(buffer)?)
+        Ok(PacketRead::read_packet(self, buffer)?)
     }
 }
 
 #[cfg(target_os = "linux")]
 impl PacketRead for TunReader {
     fn read_packet(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        self.reader.read(buffer)
+        self.ready.perform(|| self.reader.read(buffer))
+    }
+
+    fn cancellation(&self) -> Option<Box<dyn FnOnce() + Send>> {
+        self.ready.cancellation()
     }
 }
 
 #[cfg(target_os = "linux")]
 impl TunWriter {
     pub fn write_packet(&mut self, packet: &[u8]) -> Result<usize, TunRuntimeError> {
-        self.writer.write_all(packet)?;
-        Ok(packet.len())
+        let length = PacketWrite::write_packet(self, packet)?;
+        if length != packet.len() {
+            return Err(
+                io::Error::new(io::ErrorKind::WriteZero, "incomplete TUN packet write").into(),
+            );
+        }
+        Ok(length)
     }
 }
 
 #[cfg(target_os = "linux")]
 impl PacketWrite for TunWriter {
     fn write_packet(&mut self, packet: &[u8]) -> io::Result<usize> {
-        self.writer.write_all(packet)?;
-        Ok(packet.len())
+        self.ready.perform(|| self.writer.write(packet))
     }
 }
 

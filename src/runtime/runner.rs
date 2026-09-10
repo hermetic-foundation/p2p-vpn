@@ -9991,13 +9991,39 @@ fn relay_peer_from_relayed_address(address: &Multiaddr) -> Option<Libp2pPeerId> 
     None
 }
 
+struct TunReadWorker {
+    receiver: mpsc::Receiver<Vec<u8>>,
+    cancellation: Option<Box<dyn FnOnce() + Send>>,
+    worker: Option<std::thread::JoinHandle<()>>,
+}
+
+impl TunReadWorker {
+    async fn recv(&mut self) -> Option<Vec<u8>> {
+        self.receiver.recv().await
+    }
+}
+
+impl Drop for TunReadWorker {
+    fn drop(&mut self) {
+        // Unblock both possible waits: a full packet channel and an idle device.
+        self.receiver.close();
+        if let Some(cancel) = self.cancellation.take() {
+            cancel();
+            if let Some(worker) = self.worker.take() {
+                let _ = worker.join();
+            }
+        }
+    }
+}
+
 fn spawn_tun_reader(
     mut reader: PacketReader,
     metrics: Arc<RuntimeMetrics>,
     mtu: u16,
-) -> mpsc::Receiver<Vec<u8>> {
+) -> TunReadWorker {
+    let cancellation = reader.cancellation();
     let (tx, rx) = mpsc::channel(TUN_READ_CHANNEL);
-    std::thread::spawn(move || {
+    let worker = std::thread::spawn(move || {
         let mut buffer = vec![0; usize::from(mtu)];
         loop {
             match reader.read_packet(&mut buffer) {
@@ -10008,6 +10034,9 @@ fn spawn_tun_reader(
                     }
                 }
                 Err(error) => {
+                    if tx.is_closed() {
+                        return;
+                    }
                     log_runtime_event(
                         LogLevel::Error,
                         "tun_read_failed",
@@ -10018,7 +10047,11 @@ fn spawn_tun_reader(
             }
         }
     });
-    rx
+    TunReadWorker {
+        receiver: rx,
+        cancellation,
+        worker: Some(worker),
+    }
 }
 
 struct RuntimeOutboundDrain<'a> {

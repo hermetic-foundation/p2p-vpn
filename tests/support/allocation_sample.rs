@@ -49,9 +49,13 @@ impl Sample {
 }
 
 fn emit(stage: &'static str, started: Instant) {
+    emit_record(b"allocation_sample ", stage, started);
+}
+
+fn emit_record(prefix: &[u8], stage: &'static str, started: Instant) {
     let sample = Sample::new(stage, started, ALLOCATOR.stats());
     let mut writer = std::io::stderr().lock();
-    writer.write_all(b"allocation_sample ").unwrap();
+    writer.write_all(prefix).unwrap();
     serde_json::to_writer(&mut writer, &sample).unwrap();
     writer.write_all(b"\n").unwrap();
 }
@@ -72,6 +76,24 @@ pub async fn observe<F: Future>(future: F) -> F::Output {
             _ = interval.tick() => emit("periodic", started),
         }
     }
+}
+
+// The callback's entire runtime/configuration scope must end before it returns.
+pub fn observe_child(run: impl FnOnce()) {
+    let started = Instant::now();
+    let prefix = b"allocation_lifecycle_sample ";
+    emit_record(prefix, "before_child", started);
+    run();
+    emit_record(prefix, "child_returned", started);
+    std::thread::sleep(Duration::from_millis(100));
+    emit_record(prefix, "child_settled", started);
+}
+
+#[test]
+fn child_observation_runs_the_callback_once() {
+    let calls = std::cell::Cell::new(0);
+    observe_child(|| calls.set(calls.get() + 1));
+    assert_eq!(calls.get(), 1);
 }
 
 #[test]
