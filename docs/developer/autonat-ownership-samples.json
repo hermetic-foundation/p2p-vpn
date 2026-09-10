@@ -1,0 +1,899 @@
+{
+  "schema_version": 1,
+  "status": "isolated_plateau_established_residual_and_daemon_attribution_open",
+  "binary_sha256": "295187d82d65abb9ee739dcf108ec6b79c90c680f2adeb88d8d5c9d132ccdf1a",
+  "source_sha256": {
+    "src/allocation_review/runtime/autonat.rs": "3f5488cf8f86d65e20cb9553fec9e1d7f3afc694b01a3ddb96c0fd6a9ec71f99",
+    "src/allocation_review/runtime.rs": "f7f5da1dc961431f5f3eb2810093ed8f9e824607c2cd31cbc0613b2ab5a02d40"
+  },
+  "captures": [
+    {
+      "key": "control-1",
+      "path": "/tmp/p2p-vpn-autonat-ownership-final-control-1.log",
+      "sha256": "3047b6cedef29fb47dbb6e3c492543992c1a5b95547f67ede05709d9835e3ff3",
+      "bytes": 3740,
+      "data": {
+        "counts": [
+          0,
+          0,
+          0
+        ],
+        "mode": "control",
+        "rows": [
+          {
+            "elapsed_millis": 0,
+            "round": 0,
+            "since_start": {
+              "allocations": 444,
+              "bytes_allocated": 149439,
+              "bytes_deallocated": 25790,
+              "bytes_reallocated": 1137,
+              "deallocations": 171,
+              "live_blocks_delta": 273,
+              "live_bytes_delta": 123649,
+              "reallocations": 7
+            },
+            "stage": "connected"
+          },
+          {
+            "elapsed_millis": 1101,
+            "round": 1,
+            "since_start": {
+              "allocations": 451,
+              "bytes_allocated": 149763,
+              "bytes_deallocated": 26304,
+              "bytes_reallocated": 1137,
+              "deallocations": 182,
+              "live_blocks_delta": 269,
+              "live_bytes_delta": 123459,
+              "reallocations": 7
+            },
+            "stage": "round"
+          },
+          {
+            "elapsed_millis": 2203,
+            "round": 2,
+            "since_start": {
+              "allocations": 451,
+              "bytes_allocated": 149763,
+              "bytes_deallocated": 26304,
+              "bytes_reallocated": 1137,
+              "deallocations": 182,
+              "live_blocks_delta": 269,
+              "live_bytes_delta": 123459,
+              "reallocations": 7
+            },
+            "stage": "round"
+          },
+          {
+            "elapsed_millis": 3306,
+            "round": 3,
+            "since_start": {
+              "allocations": 451,
+              "bytes_allocated": 149763,
+              "bytes_deallocated": 26304,
+              "bytes_reallocated": 1137,
+              "deallocations": 182,
+              "live_blocks_delta": 269,
+              "live_bytes_delta": 123459,
+              "reallocations": 7
+            },
+            "stage": "round"
+          },
+          {
+            "elapsed_millis": 4408,
+            "round": 4,
+            "since_start": {
+              "allocations": 451,
+              "bytes_allocated": 149763,
+              "bytes_deallocated": 26304,
+              "bytes_reallocated": 1137,
+              "deallocations": 182,
+              "live_blocks_delta": 269,
+              "live_bytes_delta": 123459,
+              "reallocations": 7
+            },
+            "stage": "round"
+          },
+          {
+            "elapsed_millis": 5511,
+            "round": 5,
+            "since_start": {
+              "allocations": 451,
+              "bytes_allocated": 149763,
+              "bytes_deallocated": 26304,
+              "bytes_reallocated": 1137,
+              "deallocations": 182,
+              "live_blocks_delta": 269,
+              "live_bytes_delta": 123459,
+              "reallocations": 7
+            },
+            "stage": "round"
+          },
+          {
+            "elapsed_millis": 6613,
+            "round": 6,
+            "since_start": {
+              "allocations": 451,
+              "bytes_allocated": 149763,
+              "bytes_deallocated": 26304,
+              "bytes_reallocated": 1137,
+              "deallocations": 182,
+              "live_blocks_delta": 269,
+              "live_bytes_delta": 123459,
+              "reallocations": 7
+            },
+            "stage": "round"
+          },
+          {
+            "elapsed_millis": 7716,
+            "round": 7,
+            "since_start": {
+              "allocations": 451,
+              "bytes_allocated": 149763,
+              "bytes_deallocated": 26304,
+              "bytes_reallocated": 1137,
+              "deallocations": 182,
+              "live_blocks_delta": 269,
+              "live_bytes_delta": 123459,
+              "reallocations": 7
+            },
+            "stage": "round"
+          },
+          {
+            "elapsed_millis": 8818,
+            "round": 8,
+            "since_start": {
+              "allocations": 451,
+              "bytes_allocated": 149763,
+              "bytes_deallocated": 26304,
+              "bytes_reallocated": 1137,
+              "deallocations": 182,
+              "live_blocks_delta": 269,
+              "live_bytes_delta": 123459,
+              "reallocations": 7
+            },
+            "stage": "round"
+          },
+          {
+            "elapsed_millis": 9920,
+            "round": 9,
+            "since_start": {
+              "allocations": 451,
+              "bytes_allocated": 149763,
+              "bytes_deallocated": 26304,
+              "bytes_reallocated": 1137,
+              "deallocations": 182,
+              "live_blocks_delta": 269,
+              "live_bytes_delta": 123459,
+              "reallocations": 7
+            },
+            "stage": "round"
+          },
+          {
+            "elapsed_millis": 11022,
+            "round": 10,
+            "since_start": {
+              "allocations": 451,
+              "bytes_allocated": 149763,
+              "bytes_deallocated": 26304,
+              "bytes_reallocated": 1137,
+              "deallocations": 182,
+              "live_blocks_delta": 269,
+              "live_bytes_delta": 123459,
+              "reallocations": 7
+            },
+            "stage": "round"
+          },
+          {
+            "elapsed_millis": 11023,
+            "round": 10,
+            "since_start": {
+              "allocations": 463,
+              "bytes_allocated": 150895,
+              "bytes_deallocated": 77414,
+              "bytes_reallocated": 1137,
+              "deallocations": 279,
+              "live_blocks_delta": 184,
+              "live_bytes_delta": 73481,
+              "reallocations": 7
+            },
+            "stage": "connections_closed"
+          },
+          {
+            "elapsed_millis": 11124,
+            "round": 10,
+            "since_start": {
+              "allocations": 463,
+              "bytes_allocated": 150895,
+              "bytes_deallocated": 94085,
+              "bytes_reallocated": 1137,
+              "deallocations": 354,
+              "live_blocks_delta": 109,
+              "live_bytes_delta": 56810,
+              "reallocations": 7
+            },
+            "stage": "swarms_dropped"
+          }
+        ],
+        "runtime_dropped": {
+          "allocations": 464,
+          "bytes_allocated": 150927,
+          "bytes_deallocated": 125879,
+          "bytes_reallocated": 1137,
+          "deallocations": 394,
+          "live_blocks_delta": 70,
+          "live_bytes_delta": 25048,
+          "reallocations": 7
+        },
+        "schema_version": 1
+      }
+    },
+    {
+      "key": "probe-1",
+      "path": "/tmp/p2p-vpn-autonat-ownership-final-probe-1.log",
+      "sha256": "5cbcb81de85551aa8edd356d3e9e0e5dc9787a3d54d6708cfd77379511147138",
+      "bytes": 3781,
+      "data": {
+        "counts": [
+          10,
+          10,
+          10
+        ],
+        "mode": "probe",
+        "rows": [
+          {
+            "elapsed_millis": 0,
+            "round": 0,
+            "since_start": {
+              "allocations": 445,
+              "bytes_allocated": 149559,
+              "bytes_deallocated": 25790,
+              "bytes_reallocated": 1137,
+              "deallocations": 171,
+              "live_blocks_delta": 274,
+              "live_bytes_delta": 123769,
+              "reallocations": 7
+            },
+            "stage": "connected"
+          },
+          {
+            "elapsed_millis": 1079,
+            "round": 1,
+            "since_start": {
+              "allocations": 594,
+              "bytes_allocated": 202918,
+              "bytes_deallocated": 70237,
+              "bytes_reallocated": 3639,
+              "deallocations": 312,
+              "live_blocks_delta": 282,
+              "live_bytes_delta": 132681,
+              "reallocations": 15
+            },
+            "stage": "round"
+          },
+          {
+            "elapsed_millis": 2078,
+            "round": 2,
+            "since_start": {
+              "allocations": 724,
+              "bytes_allocated": 246851,
+              "bytes_deallocated": 114170,
+              "bytes_reallocated": 3675,
+              "deallocations": 442,
+              "live_blocks_delta": 282,
+              "live_bytes_delta": 132681,
+              "reallocations": 16
+            },
+            "stage": "round"
+          },
+          {
+            "elapsed_millis": 3079,
+            "round": 3,
+            "since_start": {
+              "allocations": 854,
+              "bytes_allocated": 290784,
+              "bytes_deallocated": 158103,
+              "bytes_reallocated": 3711,
+              "deallocations": 572,
+              "live_blocks_delta": 282,
+              "live_bytes_delta": 132681,
+              "reallocations": 17
+            },
+            "stage": "round"
+          },
+          {
+            "elapsed_millis": 4078,
+            "round": 4,
+            "since_start": {
+              "allocations": 984,
+              "bytes_allocated": 334717,
+              "bytes_deallocated": 202036,
+              "bytes_reallocated": 3747,
+              "deallocations": 702,
+              "live_blocks_delta": 282,
+              "live_bytes_delta": 132681,
+              "reallocations": 18
+            },
+            "stage": "round"
+          },
+          {
+            "elapsed_millis": 5079,
+            "round": 5,
+            "since_start": {
+              "allocations": 1114,
+              "bytes_allocated": 378650,
+              "bytes_deallocated": 245969,
+              "bytes_reallocated": 3783,
+              "deallocations": 832,
+              "live_blocks_delta": 282,
+              "live_bytes_delta": 132681,
+              "reallocations": 19
+            },
+            "stage": "round"
+          },
+          {
+            "elapsed_millis": 6079,
+            "round": 6,
+            "since_start": {
+              "allocations": 1244,
+              "bytes_allocated": 422583,
+              "bytes_deallocated": 289902,
+              "bytes_reallocated": 3819,
+              "deallocations": 962,
+              "live_blocks_delta": 282,
+              "live_bytes_delta": 132681,
+              "reallocations": 20
+            },
+            "stage": "round"
+          },
+          {
+            "elapsed_millis": 7079,
+            "round": 7,
+            "since_start": {
+              "allocations": 1374,
+              "bytes_allocated": 466516,
+              "bytes_deallocated": 333835,
+              "bytes_reallocated": 3855,
+              "deallocations": 1092,
+              "live_blocks_delta": 282,
+              "live_bytes_delta": 132681,
+              "reallocations": 21
+            },
+            "stage": "round"
+          },
+          {
+            "elapsed_millis": 8079,
+            "round": 8,
+            "since_start": {
+              "allocations": 1504,
+              "bytes_allocated": 510449,
+              "bytes_deallocated": 377768,
+              "bytes_reallocated": 3891,
+              "deallocations": 1222,
+              "live_blocks_delta": 282,
+              "live_bytes_delta": 132681,
+              "reallocations": 22
+            },
+            "stage": "round"
+          },
+          {
+            "elapsed_millis": 9079,
+            "round": 9,
+            "since_start": {
+              "allocations": 1634,
+              "bytes_allocated": 554382,
+              "bytes_deallocated": 421701,
+              "bytes_reallocated": 3927,
+              "deallocations": 1352,
+              "live_blocks_delta": 282,
+              "live_bytes_delta": 132681,
+              "reallocations": 23
+            },
+            "stage": "round"
+          },
+          {
+            "elapsed_millis": 10079,
+            "round": 10,
+            "since_start": {
+              "allocations": 1764,
+              "bytes_allocated": 598315,
+              "bytes_deallocated": 465634,
+              "bytes_reallocated": 3963,
+              "deallocations": 1482,
+              "live_blocks_delta": 282,
+              "live_bytes_delta": 132681,
+              "reallocations": 24
+            },
+            "stage": "round"
+          },
+          {
+            "elapsed_millis": 10080,
+            "round": 10,
+            "since_start": {
+              "allocations": 1776,
+              "bytes_allocated": 599447,
+              "bytes_deallocated": 520922,
+              "bytes_reallocated": 3963,
+              "deallocations": 1586,
+              "live_blocks_delta": 190,
+              "live_bytes_delta": 78525,
+              "reallocations": 24
+            },
+            "stage": "connections_closed"
+          },
+          {
+            "elapsed_millis": 10181,
+            "round": 10,
+            "since_start": {
+              "allocations": 1776,
+              "bytes_allocated": 599447,
+              "bytes_deallocated": 542413,
+              "bytes_reallocated": 3963,
+              "deallocations": 1667,
+              "live_blocks_delta": 109,
+              "live_bytes_delta": 57034,
+              "reallocations": 24
+            },
+            "stage": "swarms_dropped"
+          }
+        ],
+        "runtime_dropped": {
+          "allocations": 1777,
+          "bytes_allocated": 599479,
+          "bytes_deallocated": 574207,
+          "bytes_reallocated": 3963,
+          "deallocations": 1707,
+          "live_blocks_delta": 70,
+          "live_bytes_delta": 25272,
+          "reallocations": 24
+        },
+        "schema_version": 1
+      }
+    },
+    {
+      "key": "probe-2",
+      "path": "/tmp/p2p-vpn-autonat-ownership-final-probe-2.log",
+      "sha256": "1547173699e6f653e21355b7804c6d9508817500af5f333f8c61cd710533c69b",
+      "bytes": 3781,
+      "data": {
+        "counts": [
+          10,
+          10,
+          10
+        ],
+        "mode": "probe",
+        "rows": [
+          {
+            "elapsed_millis": 0,
+            "round": 0,
+            "since_start": {
+              "allocations": 444,
+              "bytes_allocated": 149439,
+              "bytes_deallocated": 25790,
+              "bytes_reallocated": 1137,
+              "deallocations": 171,
+              "live_blocks_delta": 273,
+              "live_bytes_delta": 123649,
+              "reallocations": 7
+            },
+            "stage": "connected"
+          },
+          {
+            "elapsed_millis": 1089,
+            "round": 1,
+            "since_start": {
+              "allocations": 594,
+              "bytes_allocated": 202918,
+              "bytes_deallocated": 70237,
+              "bytes_reallocated": 3639,
+              "deallocations": 312,
+              "live_blocks_delta": 282,
+              "live_bytes_delta": 132681,
+              "reallocations": 15
+            },
+            "stage": "round"
+          },
+          {
+            "elapsed_millis": 2088,
+            "round": 2,
+            "since_start": {
+              "allocations": 724,
+              "bytes_allocated": 246851,
+              "bytes_deallocated": 114170,
+              "bytes_reallocated": 3675,
+              "deallocations": 442,
+              "live_blocks_delta": 282,
+              "live_bytes_delta": 132681,
+              "reallocations": 16
+            },
+            "stage": "round"
+          },
+          {
+            "elapsed_millis": 3088,
+            "round": 3,
+            "since_start": {
+              "allocations": 854,
+              "bytes_allocated": 290784,
+              "bytes_deallocated": 158103,
+              "bytes_reallocated": 3711,
+              "deallocations": 572,
+              "live_blocks_delta": 282,
+              "live_bytes_delta": 132681,
+              "reallocations": 17
+            },
+            "stage": "round"
+          },
+          {
+            "elapsed_millis": 4089,
+            "round": 4,
+            "since_start": {
+              "allocations": 984,
+              "bytes_allocated": 334717,
+              "bytes_deallocated": 202036,
+              "bytes_reallocated": 3747,
+              "deallocations": 702,
+              "live_blocks_delta": 282,
+              "live_bytes_delta": 132681,
+              "reallocations": 18
+            },
+            "stage": "round"
+          },
+          {
+            "elapsed_millis": 5088,
+            "round": 5,
+            "since_start": {
+              "allocations": 1114,
+              "bytes_allocated": 378650,
+              "bytes_deallocated": 245969,
+              "bytes_reallocated": 3783,
+              "deallocations": 832,
+              "live_blocks_delta": 282,
+              "live_bytes_delta": 132681,
+              "reallocations": 19
+            },
+            "stage": "round"
+          },
+          {
+            "elapsed_millis": 6089,
+            "round": 6,
+            "since_start": {
+              "allocations": 1244,
+              "bytes_allocated": 422583,
+              "bytes_deallocated": 289902,
+              "bytes_reallocated": 3819,
+              "deallocations": 962,
+              "live_blocks_delta": 282,
+              "live_bytes_delta": 132681,
+              "reallocations": 20
+            },
+            "stage": "round"
+          },
+          {
+            "elapsed_millis": 7089,
+            "round": 7,
+            "since_start": {
+              "allocations": 1374,
+              "bytes_allocated": 466516,
+              "bytes_deallocated": 333835,
+              "bytes_reallocated": 3855,
+              "deallocations": 1092,
+              "live_blocks_delta": 282,
+              "live_bytes_delta": 132681,
+              "reallocations": 21
+            },
+            "stage": "round"
+          },
+          {
+            "elapsed_millis": 8090,
+            "round": 8,
+            "since_start": {
+              "allocations": 1504,
+              "bytes_allocated": 510449,
+              "bytes_deallocated": 377768,
+              "bytes_reallocated": 3891,
+              "deallocations": 1222,
+              "live_blocks_delta": 282,
+              "live_bytes_delta": 132681,
+              "reallocations": 22
+            },
+            "stage": "round"
+          },
+          {
+            "elapsed_millis": 9089,
+            "round": 9,
+            "since_start": {
+              "allocations": 1634,
+              "bytes_allocated": 554382,
+              "bytes_deallocated": 421701,
+              "bytes_reallocated": 3927,
+              "deallocations": 1352,
+              "live_blocks_delta": 282,
+              "live_bytes_delta": 132681,
+              "reallocations": 23
+            },
+            "stage": "round"
+          },
+          {
+            "elapsed_millis": 10090,
+            "round": 10,
+            "since_start": {
+              "allocations": 1764,
+              "bytes_allocated": 598315,
+              "bytes_deallocated": 465634,
+              "bytes_reallocated": 3963,
+              "deallocations": 1482,
+              "live_blocks_delta": 282,
+              "live_bytes_delta": 132681,
+              "reallocations": 24
+            },
+            "stage": "round"
+          },
+          {
+            "elapsed_millis": 10091,
+            "round": 10,
+            "since_start": {
+              "allocations": 1776,
+              "bytes_allocated": 599447,
+              "bytes_deallocated": 520922,
+              "bytes_reallocated": 3963,
+              "deallocations": 1586,
+              "live_blocks_delta": 190,
+              "live_bytes_delta": 78525,
+              "reallocations": 24
+            },
+            "stage": "connections_closed"
+          },
+          {
+            "elapsed_millis": 10192,
+            "round": 10,
+            "since_start": {
+              "allocations": 1776,
+              "bytes_allocated": 599447,
+              "bytes_deallocated": 542413,
+              "bytes_reallocated": 3963,
+              "deallocations": 1667,
+              "live_blocks_delta": 109,
+              "live_bytes_delta": 57034,
+              "reallocations": 24
+            },
+            "stage": "swarms_dropped"
+          }
+        ],
+        "runtime_dropped": {
+          "allocations": 1777,
+          "bytes_allocated": 599479,
+          "bytes_deallocated": 574207,
+          "bytes_reallocated": 3963,
+          "deallocations": 1707,
+          "live_blocks_delta": 70,
+          "live_bytes_delta": 25272,
+          "reallocations": 24
+        },
+        "schema_version": 1
+      }
+    },
+    {
+      "key": "control-2",
+      "path": "/tmp/p2p-vpn-autonat-ownership-final-control-2.log",
+      "sha256": "3938cfc4111fda7070a83ec26fb929125c67feb4629d6dc11750abff00373af5",
+      "bytes": 3740,
+      "data": {
+        "counts": [
+          0,
+          0,
+          0
+        ],
+        "mode": "control",
+        "rows": [
+          {
+            "elapsed_millis": 0,
+            "round": 0,
+            "since_start": {
+              "allocations": 444,
+              "bytes_allocated": 149439,
+              "bytes_deallocated": 25790,
+              "bytes_reallocated": 1137,
+              "deallocations": 171,
+              "live_blocks_delta": 273,
+              "live_bytes_delta": 123649,
+              "reallocations": 7
+            },
+            "stage": "connected"
+          },
+          {
+            "elapsed_millis": 1102,
+            "round": 1,
+            "since_start": {
+              "allocations": 451,
+              "bytes_allocated": 149763,
+              "bytes_deallocated": 26304,
+              "bytes_reallocated": 1137,
+              "deallocations": 182,
+              "live_blocks_delta": 269,
+              "live_bytes_delta": 123459,
+              "reallocations": 7
+            },
+            "stage": "round"
+          },
+          {
+            "elapsed_millis": 2204,
+            "round": 2,
+            "since_start": {
+              "allocations": 451,
+              "bytes_allocated": 149763,
+              "bytes_deallocated": 26304,
+              "bytes_reallocated": 1137,
+              "deallocations": 182,
+              "live_blocks_delta": 269,
+              "live_bytes_delta": 123459,
+              "reallocations": 7
+            },
+            "stage": "round"
+          },
+          {
+            "elapsed_millis": 3306,
+            "round": 3,
+            "since_start": {
+              "allocations": 451,
+              "bytes_allocated": 149763,
+              "bytes_deallocated": 26304,
+              "bytes_reallocated": 1137,
+              "deallocations": 182,
+              "live_blocks_delta": 269,
+              "live_bytes_delta": 123459,
+              "reallocations": 7
+            },
+            "stage": "round"
+          },
+          {
+            "elapsed_millis": 4408,
+            "round": 4,
+            "since_start": {
+              "allocations": 451,
+              "bytes_allocated": 149763,
+              "bytes_deallocated": 26304,
+              "bytes_reallocated": 1137,
+              "deallocations": 182,
+              "live_blocks_delta": 269,
+              "live_bytes_delta": 123459,
+              "reallocations": 7
+            },
+            "stage": "round"
+          },
+          {
+            "elapsed_millis": 5511,
+            "round": 5,
+            "since_start": {
+              "allocations": 451,
+              "bytes_allocated": 149763,
+              "bytes_deallocated": 26304,
+              "bytes_reallocated": 1137,
+              "deallocations": 182,
+              "live_blocks_delta": 269,
+              "live_bytes_delta": 123459,
+              "reallocations": 7
+            },
+            "stage": "round"
+          },
+          {
+            "elapsed_millis": 6613,
+            "round": 6,
+            "since_start": {
+              "allocations": 451,
+              "bytes_allocated": 149763,
+              "bytes_deallocated": 26304,
+              "bytes_reallocated": 1137,
+              "deallocations": 182,
+              "live_blocks_delta": 269,
+              "live_bytes_delta": 123459,
+              "reallocations": 7
+            },
+            "stage": "round"
+          },
+          {
+            "elapsed_millis": 7715,
+            "round": 7,
+            "since_start": {
+              "allocations": 451,
+              "bytes_allocated": 149763,
+              "bytes_deallocated": 26304,
+              "bytes_reallocated": 1137,
+              "deallocations": 182,
+              "live_blocks_delta": 269,
+              "live_bytes_delta": 123459,
+              "reallocations": 7
+            },
+            "stage": "round"
+          },
+          {
+            "elapsed_millis": 8817,
+            "round": 8,
+            "since_start": {
+              "allocations": 451,
+              "bytes_allocated": 149763,
+              "bytes_deallocated": 26304,
+              "bytes_reallocated": 1137,
+              "deallocations": 182,
+              "live_blocks_delta": 269,
+              "live_bytes_delta": 123459,
+              "reallocations": 7
+            },
+            "stage": "round"
+          },
+          {
+            "elapsed_millis": 9918,
+            "round": 9,
+            "since_start": {
+              "allocations": 451,
+              "bytes_allocated": 149763,
+              "bytes_deallocated": 26304,
+              "bytes_reallocated": 1137,
+              "deallocations": 182,
+              "live_blocks_delta": 269,
+              "live_bytes_delta": 123459,
+              "reallocations": 7
+            },
+            "stage": "round"
+          },
+          {
+            "elapsed_millis": 11021,
+            "round": 10,
+            "since_start": {
+              "allocations": 451,
+              "bytes_allocated": 149763,
+              "bytes_deallocated": 26304,
+              "bytes_reallocated": 1137,
+              "deallocations": 182,
+              "live_blocks_delta": 269,
+              "live_bytes_delta": 123459,
+              "reallocations": 7
+            },
+            "stage": "round"
+          },
+          {
+            "elapsed_millis": 11021,
+            "round": 10,
+            "since_start": {
+              "allocations": 463,
+              "bytes_allocated": 150895,
+              "bytes_deallocated": 77414,
+              "bytes_reallocated": 1137,
+              "deallocations": 279,
+              "live_blocks_delta": 184,
+              "live_bytes_delta": 73481,
+              "reallocations": 7
+            },
+            "stage": "connections_closed"
+          },
+          {
+            "elapsed_millis": 11123,
+            "round": 10,
+            "since_start": {
+              "allocations": 463,
+              "bytes_allocated": 150895,
+              "bytes_deallocated": 94085,
+              "bytes_reallocated": 1137,
+              "deallocations": 354,
+              "live_blocks_delta": 109,
+              "live_bytes_delta": 56810,
+              "reallocations": 7
+            },
+            "stage": "swarms_dropped"
+          }
+        ],
+        "runtime_dropped": {
+          "allocations": 464,
+          "bytes_allocated": 150927,
+          "bytes_deallocated": 125879,
+          "bytes_reallocated": 1137,
+          "deallocations": 394,
+          "live_blocks_delta": 70,
+          "live_bytes_delta": 25048,
+          "reallocations": 7
+        },
+        "schema_version": 1
+      }
+    }
+  ]
+}

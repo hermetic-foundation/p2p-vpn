@@ -13,6 +13,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod autonat;
 mod initialization;
 
 struct IdleDevice;

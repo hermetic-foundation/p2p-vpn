@@ -77,6 +77,6 @@ The original sampler's concurrent counter-load limitations still apply.
 - Distinguish behaviour storage from handler/transport storage before proposing a capacity or cleanup change.
 - Freeze event counts, budgets and teardown assertions before the diagnostic capture; preserve normal security defaults in production.
 
-These measurements remain pending. The 17-24 KiB whole-capture growth, packet
-pressure attribution, multi-network isolation and Android background review
-remain open independently of this narrower correlation.
+The [isolated ownership matrix](autonat-ownership-review.md) now shows a plateau
+after first use on one connection. Exact daemon owners and a 224-byte diagnostic
+teardown residual remain open, along with pressure and broader platform coverage.
