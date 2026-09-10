@@ -84,6 +84,10 @@ streams with resource sampling. One full idle/load/drain sequence also passed,
 with 60000/60000 replies and CPU returning to idle. Repetition, independent
 transitions, CPU attribution and the [setup failure](android-migration-resource-investigation.md) remain open.
 
+Optional [thread sampling](android-thread-sampling.md) passed Android compatibility,
+including thread identity and scheduling counters. Its observer cost and sustained
+connected attribution remain open; main-thread counters are not process-wide wakeups.
+
 Freeze packet size/rate, transition schedules and transport settings in each
 fixture manifest before its first capture. Select supported controls from source
 and configured limits, not observed results. Record actual delivered work.

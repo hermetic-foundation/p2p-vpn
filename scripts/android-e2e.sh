@@ -64,7 +64,7 @@ Options:
                          multi-network, multi-network-resource-admission, multi-network-resource-controls,
                          multi-network-resource-idle,
                          multi-network-resource-load, multi-network-resource-load-smoke,
-                         or process-sample-smoke.
+                         process-sample-smoke, or process-thread-sample-smoke.
   --path-mode MODE       Select automatic, quic-stream, tcp-stream, owned-quic, relay-only,
                          or relay-to-direct.
   --preflight            Check requirements without starting an emulator.
@@ -141,7 +141,7 @@ done
 
 pairing_scenario=0
 case "$scenario" in
-  boot-smoke|profile-persistence|always-on|process-sample-smoke) ;;
+  boot-smoke|profile-persistence|always-on|process-sample-smoke|process-thread-sample-smoke) ;;
   pairing-traffic|underlay-recovery|network-workflow|multi-network|multi-network-resource-admission|multi-network-resource-controls|multi-network-resource-idle|multi-network-resource-load|multi-network-resource-load-smoke) pairing_scenario=1 ;;
   *)
     echo "unsupported Android E2E scenario: $scenario" >&2
@@ -3565,8 +3565,10 @@ if [[ "$scenario" == boot-smoke ]]; then
   exit 0
 fi
 
-if [[ "$scenario" == process-sample-smoke ]]; then
+if [[ "$scenario" == process-sample-smoke || "$scenario" == process-thread-sample-smoke ]]; then
   collector="${P2P_VPN_ANDROID_PROCESS_COLLECTOR:-$(dirname "$0")/android-process-sample.sh}"
+  collector_arguments=()
+  [[ "$scenario" != process-thread-sample-smoke ]] || collector_arguments+=(--threads)
   if ! adb_run root > "$output_dir/collector-root.txt" \
     || ! adb_run wait-for-device \
     || [[ "$(adb_run shell id -u | tr -d '\r')" != 0 ]]; then
@@ -3578,7 +3580,7 @@ if [[ "$scenario" == process-sample-smoke ]]; then
   app_pid="$(adb_run shell pidof org.hermeticfoundation.p2pvpn.debug | tr -d '\r')"
   if [[ ! "$app_pid" =~ ^[1-9][0-9]*$ ]] \
     || ! adb_run shell -T \
-      sh -s -- "$app_pid" 10 < "$collector" > "$output_dir/process-samples.jsonl" \
+      sh -s -- "$app_pid" 10 "${collector_arguments[@]}" < "$collector" > "$output_dir/process-samples.jsonl" \
     || ! jq -es --argjson pid "$app_pid" '
       length == 10 and ([.[].start_ticks] | unique | length) == 1 and
       all(.[]; .pid == $pid and .start_ticks > 0 and .os_threads >= 1 and
@@ -3589,6 +3591,19 @@ if [[ "$scenario" == process-sample-smoke ]]; then
     ' "$output_dir/process-samples.jsonl" >/dev/null; then
     outcome=failed
     outcome_detail="Android process collector compatibility check failed"
+    record_step process_collector failed "$outcome_detail"
+    exit 1
+  fi
+  if [[ "$scenario" == process-thread-sample-smoke ]] && ! jq -es '
+    all(.[]; .thread_scan.listed >= 1 and .thread_scan.listed <= 256 and
+      .thread_scan.skipped == 0 and .thread_scan.observed == .thread_scan.listed and
+      .thread_scan.observed == (.thread_scan.threads | length) and
+      all(.thread_scan.threads[]; .tid > 0 and .start_ticks > 0 and
+        .user_ticks >= 0 and .system_ticks >= 0 and
+        .voluntary_context_switches != null and .involuntary_context_switches != null))
+  ' "$output_dir/process-samples.jsonl" >/dev/null; then
+    outcome=failed
+    outcome_detail="Android thread collector had missing or invalid observations"
     record_step process_collector failed "$outcome_detail"
     exit 1
   fi
