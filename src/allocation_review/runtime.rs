@@ -13,6 +13,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod initialization;
+
 struct IdleDevice;
 
 struct IdleReader(mpsc::Receiver<()>);
@@ -62,9 +64,7 @@ fn isolated_config() -> Config {
     .unwrap()
 }
 
-#[test]
-#[ignore = "allocation review: fresh isolated network namespace, one test thread"]
-fn measure_runtime_teardown_allocations() {
+fn require_isolated_network() {
     // Reject the host namespace before constructing any networking objects.
     let devices = std::fs::read_to_string("/proc/net/dev").unwrap();
     let interfaces: Vec<_> = devices
@@ -75,6 +75,12 @@ fn measure_runtime_teardown_allocations() {
     assert_eq!(interfaces, ["lo"]);
     drop(interfaces);
     drop(devices);
+}
+
+#[test]
+#[ignore = "allocation review: fresh isolated network namespace, one test thread"]
+fn measure_runtime_teardown_allocations() {
+    require_isolated_network();
     let smoke = match std::env::var("P2P_VPN_REVIEW_RUNTIME_SMOKE").as_deref() {
         Err(std::env::VarError::NotPresent) | Ok("0") => false,
         Ok("1") => true,

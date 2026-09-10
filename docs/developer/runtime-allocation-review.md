@@ -112,7 +112,7 @@ Logs use `/tmp/p2p-vpn-runtime-allocation-` with suffixes
 
 ## Remaining Work
 
-1. Attribute the bounded first-use retention to its allocating owners.
+1. Refine [component-stage attribution](runtime-initialization-review.md) to precise allocating owners.
 2. Extend attribution to connected transport, pressure and repeated recovery owners.
 3. Reconcile those findings with the observed RSS series and final resource audit.
 
