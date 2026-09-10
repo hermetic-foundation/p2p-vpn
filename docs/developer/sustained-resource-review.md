@@ -88,8 +88,9 @@ was traced to an unresolved notification dialog; corrected resource admission pa
 Optional [thread sampling](android-thread-sampling.md) passed Android compatibility,
 including thread identity and scheduling counters. Its observer cost and sustained
 connected attribution remain open; main-thread counters are not process-wide wakeups.
-The [paired thread-control workload](android-thread-controls.md) is prepared but has
-not yet produced four completed control windows.
+The [paired thread controls](android-thread-controls.md) passed four windows with
+stable thread identities. Added scanning cost averaged +2.403 emulator CPU percentage
+points; sustained attribution and independent-network transitions remain open.
 
 Freeze packet size/rate, transition schedules and transport settings in each
 fixture manifest before its first capture. Select supported controls from source

@@ -79,3 +79,47 @@ not silently relabeled as permission-matched captures.
 Local tests cover permission scoping/failure propagation and thread-sample quality
 rejection. ShellCheck and focused formatting pass. The Nix structure derivation
 evaluates offline; its full matrix was not rerun. No production code was rebuilt.
+
+## Attempt 2 Manifest
+
+- Baseline `d9ec9f16`; notification permission explicitly granted before resource setup.
+- Same APK, fixture, four 60-second windows, sampling rules and 600/640-second watchdogs.
+- Output: `/tmp/p2p-vpn-android-thread-controls-2`.
+- Pre-run storage: 9,148,344 KiB; no other emulator, fixture or build running.
+- No route rescue, deadline extension, public route or physical-device interaction.
+
+## Attempt 2 Results
+
+All four windows passed in one app process. [Portable results](android-thread-control-results.json)
+retain endpoints, first/last thread counters, matched-identity deltas and raw hashes.
+Evidence SHA-256: `7df37d86f88a6fe9dbbeb4abd3c4565f65d445719f3eab448fa02c8f862a700f`.
+
+| Window | Detail | App CPU, % one core | Emulator CPU, % one core | App interval, seconds |
+| --- | --- | --- | --- | --- |
+| 1 | Process | 2.182 | 7.430 | 60.03 |
+| 2 | Threads | 2.151 | 9.679 | 61.37 |
+| 3 | Threads | 2.264 | 10.002 | 61.39 |
+| 4 | Process | 2.215 | 7.445 | 60.04 |
+
+- Thread-minus-process means: +0.009 percentage points app, +2.403 points emulator.
+- All windows contain 60 process and 12 runtime samples; both clocks are 100 Hz.
+- Thread windows each retained 30 identical TID/start pairs, no skips and no missing counters.
+- Maximum observation duration: 10 ms process-only, 40 ms with threads.
+- Sampled paths stayed at one QUIC stream and one TCP stream; two overlay peers connected.
+- Private infrastructure count varied between 0 and 2; no public WAN participated.
+- Sampled packet queues stayed empty. All six cleanup flags passed; no owned processes remained.
+
+## Scheduling Proxies
+
+| Window | Matched-thread interval | Voluntary switches | Involuntary switches | User/system tick deltas |
+| --- | --- | --- | --- | --- |
+| 2 | 61.30 seconds | 2602 | 116 | 114 / 14 |
+| 3 | 61.32 seconds | 2683 | 167 | 124 / 15 |
+
+These sum first-to-last deltas for the same 30 thread identities. They exclude
+unobserved scheduling detail and do not identify thread roles. Thread timestamps
+are bounded by each process observation, not simultaneous kernel snapshots.
+
+The optional scanner adds measurable emulator work despite little app CPU change.
+Do not subtract this estimate as an exact correction. Sustained thread attribution,
+load repetition and independent-network transitions remain outstanding.

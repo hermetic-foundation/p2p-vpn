@@ -1,0 +1,2034 @@
+{
+  "schema_version": 1,
+  "baseline": "d9ec9f16",
+  "apk_sha256": "5f7dd26c6079c673cf46eea04d5a2e83e70265b3c33b4bc1796d81b77077f6a7",
+  "fixture_sha256": "4b1bcd69a410f9a830e813d9457aa0a55a8a507d762c208aad42a1092ab8f8fa",
+  "evidence_sha256": "7df37d86f88a6fe9dbbeb4abd3c4565f65d445719f3eab448fa02c8f862a700f",
+  "raw_directory": "/tmp/p2p-vpn-android-thread-controls-2",
+  "clocks_hz": {
+    "app": 100,
+    "emulator": 100
+  },
+  "permission_state": "POST_NOTIFICATIONS granted before resource setup",
+  "windows": [
+    {
+      "before": {
+        "schema_version": 1,
+        "pid": 2206,
+        "start_ticks": 2013,
+        "started_uptime_seconds": 107.41,
+        "finished_uptime_seconds": 107.41,
+        "user_ticks": 330,
+        "system_ticks": 101,
+        "os_threads": 30,
+        "rss_kib": 206572,
+        "fds": 123,
+        "leader_voluntary_context_switches": 1360,
+        "leader_involuntary_context_switches": 496
+      },
+      "after": {
+        "schema_version": 1,
+        "pid": 2206,
+        "start_ticks": 2013,
+        "started_uptime_seconds": 167.44,
+        "finished_uptime_seconds": 167.44,
+        "user_ticks": 445,
+        "system_ticks": 117,
+        "os_threads": 30,
+        "rss_kib": 207820,
+        "fds": 123,
+        "leader_voluntary_context_switches": 1442,
+        "leader_involuntary_context_switches": 509
+      },
+      "emulator_before": {
+        "schema_version": 1,
+        "pid": 264,
+        "start_ticks": 89414496,
+        "started_uptime_seconds": 894256.18,
+        "finished_uptime_seconds": 894256.18,
+        "user_ticks": 6416,
+        "system_ticks": 1379,
+        "os_threads": 255,
+        "rss_kib": 3768584,
+        "fds": 144,
+        "leader_voluntary_context_switches": 47,
+        "leader_involuntary_context_switches": 6
+      },
+      "emulator_after": {
+        "schema_version": 1,
+        "pid": 264,
+        "start_ticks": 89414496,
+        "started_uptime_seconds": 894316.21,
+        "finished_uptime_seconds": 894316.21,
+        "user_ticks": 6794,
+        "system_ticks": 1447,
+        "os_threads": 242,
+        "rss_kib": 3768428,
+        "fds": 142,
+        "leader_voluntary_context_switches": 47,
+        "leader_involuntary_context_switches": 6
+      },
+      "runtime_samples": 12,
+      "process_samples": 60,
+      "paths": [
+        {
+          "connected_peers": 2,
+          "peers_without_supported_path": 0,
+          "direct_udp_datagram": 0,
+          "direct_quic_datagram": 0,
+          "direct_quic_stream": 1,
+          "direct_tcp_stream": 1,
+          "relay": 0,
+          "public_routing_peers": 0,
+          "packet_plane_quic_sessions": 0,
+          "promotions_to_direct": 0
+        },
+        {
+          "connected_peers": 2,
+          "peers_without_supported_path": 0,
+          "direct_udp_datagram": 0,
+          "direct_quic_datagram": 0,
+          "direct_quic_stream": 1,
+          "direct_tcp_stream": 1,
+          "relay": 0,
+          "public_routing_peers": 2,
+          "packet_plane_quic_sessions": 0,
+          "promotions_to_direct": 0
+        }
+      ],
+      "queues": [
+        {
+          "queued_packets": 0,
+          "queued_bytes": 0,
+          "oldest_packet_age_millis": 0,
+          "blocked_no_supported_path_events": 0,
+          "blocked_packet_window_events": 0
+        }
+      ],
+      "rss_kib": [
+        206528,
+        208920
+      ],
+      "pss_kib": [
+        84830,
+        86744
+      ],
+      "threads": [
+        30
+      ],
+      "fds": [
+        121,
+        123
+      ],
+      "max_sample_seconds": 0.010000000000019327,
+      "thread_first": null,
+      "thread_last": null,
+      "thread_inventory_stable": true,
+      "sample_first_time": 107.44,
+      "sample_last_time": 167.27,
+      "index": 1,
+      "detail": "process",
+      "app_elapsed_seconds": 60.03,
+      "app_cpu_percent": 2.18224221222722,
+      "emulator_elapsed_seconds": 60.029999999911524,
+      "emulator_cpu_percent": 7.429618524082248
+    },
+    {
+      "before": {
+        "schema_version": 1,
+        "pid": 2206,
+        "start_ticks": 2013,
+        "started_uptime_seconds": 167.65,
+        "finished_uptime_seconds": 167.65,
+        "user_ticks": 448,
+        "system_ticks": 119,
+        "os_threads": 30,
+        "rss_kib": 207100,
+        "fds": 123,
+        "leader_voluntary_context_switches": 1449,
+        "leader_involuntary_context_switches": 509
+      },
+      "after": {
+        "schema_version": 1,
+        "pid": 2206,
+        "start_ticks": 2013,
+        "started_uptime_seconds": 229.02,
+        "finished_uptime_seconds": 229.02,
+        "user_ticks": 562,
+        "system_ticks": 137,
+        "os_threads": 30,
+        "rss_kib": 206904,
+        "fds": 121,
+        "leader_voluntary_context_switches": 1541,
+        "leader_involuntary_context_switches": 521
+      },
+      "emulator_before": {
+        "schema_version": 1,
+        "pid": 264,
+        "start_ticks": 89414496,
+        "started_uptime_seconds": 894316.42,
+        "finished_uptime_seconds": 894316.42,
+        "user_ticks": 6807,
+        "system_ticks": 1449,
+        "os_threads": 242,
+        "rss_kib": 3768428,
+        "fds": 142,
+        "leader_voluntary_context_switches": 47,
+        "leader_involuntary_context_switches": 6
+      },
+      "emulator_after": {
+        "schema_version": 1,
+        "pid": 264,
+        "start_ticks": 89414496,
+        "started_uptime_seconds": 894377.79,
+        "finished_uptime_seconds": 894377.8,
+        "user_ticks": 7338,
+        "system_ticks": 1512,
+        "os_threads": 235,
+        "rss_kib": 3768348,
+        "fds": 142,
+        "leader_voluntary_context_switches": 47,
+        "leader_involuntary_context_switches": 6
+      },
+      "runtime_samples": 12,
+      "process_samples": 60,
+      "paths": [
+        {
+          "connected_peers": 2,
+          "peers_without_supported_path": 0,
+          "direct_udp_datagram": 0,
+          "direct_quic_datagram": 0,
+          "direct_quic_stream": 1,
+          "direct_tcp_stream": 1,
+          "relay": 0,
+          "public_routing_peers": 0,
+          "packet_plane_quic_sessions": 0,
+          "promotions_to_direct": 0
+        },
+        {
+          "connected_peers": 2,
+          "peers_without_supported_path": 0,
+          "direct_udp_datagram": 0,
+          "direct_quic_datagram": 0,
+          "direct_quic_stream": 1,
+          "direct_tcp_stream": 1,
+          "relay": 0,
+          "public_routing_peers": 2,
+          "packet_plane_quic_sessions": 0,
+          "promotions_to_direct": 0
+        }
+      ],
+      "queues": [
+        {
+          "queued_packets": 0,
+          "queued_bytes": 0,
+          "oldest_packet_age_millis": 0,
+          "blocked_no_supported_path_events": 0,
+          "blocked_packet_window_events": 0
+        }
+      ],
+      "rss_kib": [
+        206608,
+        209220
+      ],
+      "pss_kib": [
+        84931,
+        86940
+      ],
+      "threads": [
+        30
+      ],
+      "fds": [
+        121,
+        123
+      ],
+      "max_sample_seconds": 0.03999999999999204,
+      "thread_first": {
+        "listed": 30,
+        "observed": 30,
+        "skipped": 0,
+        "threads": [
+          {
+            "tid": 2206,
+            "start_ticks": 2013,
+            "user_ticks": 75,
+            "system_ticks": 13,
+            "voluntary_context_switches": 1449,
+            "involuntary_context_switches": 509
+          },
+          {
+            "tid": 2213,
+            "start_ticks": 2015,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 1,
+            "involuntary_context_switches": 0
+          },
+          {
+            "tid": 2214,
+            "start_ticks": 2015,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 1,
+            "involuntary_context_switches": 0
+          },
+          {
+            "tid": 2215,
+            "start_ticks": 2015,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 4,
+            "involuntary_context_switches": 0
+          },
+          {
+            "tid": 2216,
+            "start_ticks": 2015,
+            "user_ticks": 61,
+            "system_ticks": 6,
+            "voluntary_context_switches": 142,
+            "involuntary_context_switches": 313
+          },
+          {
+            "tid": 2217,
+            "start_ticks": 2015,
+            "user_ticks": 11,
+            "system_ticks": 0,
+            "voluntary_context_switches": 43,
+            "involuntary_context_switches": 24
+          },
+          {
+            "tid": 2218,
+            "start_ticks": 2015,
+            "user_ticks": 1,
+            "system_ticks": 0,
+            "voluntary_context_switches": 23,
+            "involuntary_context_switches": 2
+          },
+          {
+            "tid": 2219,
+            "start_ticks": 2015,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 30,
+            "involuntary_context_switches": 0
+          },
+          {
+            "tid": 2220,
+            "start_ticks": 2015,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 33,
+            "involuntary_context_switches": 0
+          },
+          {
+            "tid": 2221,
+            "start_ticks": 2015,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 142,
+            "involuntary_context_switches": 16
+          },
+          {
+            "tid": 2222,
+            "start_ticks": 2015,
+            "user_ticks": 1,
+            "system_ticks": 0,
+            "voluntary_context_switches": 416,
+            "involuntary_context_switches": 23
+          },
+          {
+            "tid": 2223,
+            "start_ticks": 2016,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 15,
+            "involuntary_context_switches": 3
+          },
+          {
+            "tid": 2224,
+            "start_ticks": 2018,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 177,
+            "involuntary_context_switches": 1
+          },
+          {
+            "tid": 2225,
+            "start_ticks": 2019,
+            "user_ticks": 20,
+            "system_ticks": 64,
+            "voluntary_context_switches": 848,
+            "involuntary_context_switches": 333
+          },
+          {
+            "tid": 2228,
+            "start_ticks": 2023,
+            "user_ticks": 77,
+            "system_ticks": 4,
+            "voluntary_context_switches": 1079,
+            "involuntary_context_switches": 202
+          },
+          {
+            "tid": 2229,
+            "start_ticks": 2024,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 3,
+            "involuntary_context_switches": 0
+          },
+          {
+            "tid": 2231,
+            "start_ticks": 2027,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 1,
+            "involuntary_context_switches": 0
+          },
+          {
+            "tid": 2232,
+            "start_ticks": 2027,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 2,
+            "involuntary_context_switches": 0
+          },
+          {
+            "tid": 2233,
+            "start_ticks": 2052,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 366,
+            "involuntary_context_switches": 0
+          },
+          {
+            "tid": 2251,
+            "start_ticks": 2132,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 1,
+            "involuntary_context_switches": 0
+          },
+          {
+            "tid": 2262,
+            "start_ticks": 2133,
+            "user_ticks": 2,
+            "system_ticks": 0,
+            "voluntary_context_switches": 1209,
+            "involuntary_context_switches": 2
+          },
+          {
+            "tid": 2267,
+            "start_ticks": 2135,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 79,
+            "involuntary_context_switches": 1
+          },
+          {
+            "tid": 2268,
+            "start_ticks": 2135,
+            "user_ticks": 1,
+            "system_ticks": 0,
+            "voluntary_context_switches": 470,
+            "involuntary_context_switches": 21
+          },
+          {
+            "tid": 2528,
+            "start_ticks": 5476,
+            "user_ticks": 1,
+            "system_ticks": 0,
+            "voluntary_context_switches": 497,
+            "involuntary_context_switches": 3
+          },
+          {
+            "tid": 2529,
+            "start_ticks": 5476,
+            "user_ticks": 3,
+            "system_ticks": 0,
+            "voluntary_context_switches": 495,
+            "involuntary_context_switches": 4
+          },
+          {
+            "tid": 2530,
+            "start_ticks": 5476,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 1,
+            "involuntary_context_switches": 0
+          },
+          {
+            "tid": 2531,
+            "start_ticks": 5476,
+            "user_ticks": 69,
+            "system_ticks": 8,
+            "voluntary_context_switches": 1464,
+            "involuntary_context_switches": 118
+          },
+          {
+            "tid": 2532,
+            "start_ticks": 5476,
+            "user_ticks": 69,
+            "system_ticks": 10,
+            "voluntary_context_switches": 1503,
+            "involuntary_context_switches": 98
+          },
+          {
+            "tid": 2533,
+            "start_ticks": 5477,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 25,
+            "involuntary_context_switches": 0
+          },
+          {
+            "tid": 2534,
+            "start_ticks": 5477,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 24,
+            "involuntary_context_switches": 0
+          }
+        ]
+      },
+      "thread_last": {
+        "listed": 30,
+        "observed": 30,
+        "skipped": 0,
+        "threads": [
+          {
+            "tid": 2206,
+            "start_ticks": 2013,
+            "user_ticks": 96,
+            "system_ticks": 18,
+            "voluntary_context_switches": 1541,
+            "involuntary_context_switches": 521
+          },
+          {
+            "tid": 2213,
+            "start_ticks": 2015,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 1,
+            "involuntary_context_switches": 0
+          },
+          {
+            "tid": 2214,
+            "start_ticks": 2015,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 1,
+            "involuntary_context_switches": 0
+          },
+          {
+            "tid": 2215,
+            "start_ticks": 2015,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 4,
+            "involuntary_context_switches": 0
+          },
+          {
+            "tid": 2216,
+            "start_ticks": 2015,
+            "user_ticks": 62,
+            "system_ticks": 6,
+            "voluntary_context_switches": 152,
+            "involuntary_context_switches": 313
+          },
+          {
+            "tid": 2217,
+            "start_ticks": 2015,
+            "user_ticks": 15,
+            "system_ticks": 1,
+            "voluntary_context_switches": 60,
+            "involuntary_context_switches": 29
+          },
+          {
+            "tid": 2218,
+            "start_ticks": 2015,
+            "user_ticks": 1,
+            "system_ticks": 0,
+            "voluntary_context_switches": 31,
+            "involuntary_context_switches": 3
+          },
+          {
+            "tid": 2219,
+            "start_ticks": 2015,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 38,
+            "involuntary_context_switches": 0
+          },
+          {
+            "tid": 2220,
+            "start_ticks": 2015,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 46,
+            "involuntary_context_switches": 0
+          },
+          {
+            "tid": 2221,
+            "start_ticks": 2015,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 166,
+            "involuntary_context_switches": 21
+          },
+          {
+            "tid": 2222,
+            "start_ticks": 2015,
+            "user_ticks": 1,
+            "system_ticks": 0,
+            "voluntary_context_switches": 416,
+            "involuntary_context_switches": 23
+          },
+          {
+            "tid": 2223,
+            "start_ticks": 2016,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 15,
+            "involuntary_context_switches": 3
+          },
+          {
+            "tid": 2224,
+            "start_ticks": 2018,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 178,
+            "involuntary_context_switches": 1
+          },
+          {
+            "tid": 2225,
+            "start_ticks": 2019,
+            "user_ticks": 20,
+            "system_ticks": 64,
+            "voluntary_context_switches": 848,
+            "involuntary_context_switches": 333
+          },
+          {
+            "tid": 2228,
+            "start_ticks": 2023,
+            "user_ticks": 103,
+            "system_ticks": 5,
+            "voluntary_context_switches": 1362,
+            "involuntary_context_switches": 235
+          },
+          {
+            "tid": 2229,
+            "start_ticks": 2024,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 3,
+            "involuntary_context_switches": 0
+          },
+          {
+            "tid": 2231,
+            "start_ticks": 2027,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 1,
+            "involuntary_context_switches": 0
+          },
+          {
+            "tid": 2232,
+            "start_ticks": 2027,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 2,
+            "involuntary_context_switches": 0
+          },
+          {
+            "tid": 2233,
+            "start_ticks": 2052,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 366,
+            "involuntary_context_switches": 0
+          },
+          {
+            "tid": 2251,
+            "start_ticks": 2132,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 1,
+            "involuntary_context_switches": 0
+          },
+          {
+            "tid": 2262,
+            "start_ticks": 2133,
+            "user_ticks": 2,
+            "system_ticks": 0,
+            "voluntary_context_switches": 1383,
+            "involuntary_context_switches": 2
+          },
+          {
+            "tid": 2267,
+            "start_ticks": 2135,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 106,
+            "involuntary_context_switches": 1
+          },
+          {
+            "tid": 2268,
+            "start_ticks": 2135,
+            "user_ticks": 1,
+            "system_ticks": 0,
+            "voluntary_context_switches": 470,
+            "involuntary_context_switches": 21
+          },
+          {
+            "tid": 2528,
+            "start_ticks": 5476,
+            "user_ticks": 1,
+            "system_ticks": 1,
+            "voluntary_context_switches": 742,
+            "involuntary_context_switches": 3
+          },
+          {
+            "tid": 2529,
+            "start_ticks": 5476,
+            "user_ticks": 5,
+            "system_ticks": 0,
+            "voluntary_context_switches": 740,
+            "involuntary_context_switches": 4
+          },
+          {
+            "tid": 2530,
+            "start_ticks": 5476,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 1,
+            "involuntary_context_switches": 0
+          },
+          {
+            "tid": 2531,
+            "start_ticks": 5476,
+            "user_ticks": 100,
+            "system_ticks": 11,
+            "voluntary_context_switches": 2174,
+            "involuntary_context_switches": 152
+          },
+          {
+            "tid": 2532,
+            "start_ticks": 5476,
+            "user_ticks": 98,
+            "system_ticks": 13,
+            "voluntary_context_switches": 2248,
+            "involuntary_context_switches": 124
+          },
+          {
+            "tid": 2533,
+            "start_ticks": 5477,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 25,
+            "involuntary_context_switches": 0
+          },
+          {
+            "tid": 2534,
+            "start_ticks": 5477,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 24,
+            "involuntary_context_switches": 0
+          }
+        ]
+      },
+      "thread_inventory_stable": true,
+      "sample_first_time": 167.68,
+      "sample_last_time": 228.98,
+      "index": 2,
+      "detail": "threads",
+      "app_elapsed_seconds": 61.370000000000005,
+      "app_cpu_percent": 2.150888056053446,
+      "emulator_elapsed_seconds": 61.36999999999534,
+      "emulator_cpu_percent": 9.678996252241243,
+      "thread_deltas": [
+        {
+          "tid": 2206,
+          "start_ticks": 2013,
+          "user_ticks": 21,
+          "system_ticks": 5,
+          "voluntary_context_switches": 92,
+          "involuntary_context_switches": 12
+        },
+        {
+          "tid": 2213,
+          "start_ticks": 2015,
+          "user_ticks": 0,
+          "system_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2214,
+          "start_ticks": 2015,
+          "user_ticks": 0,
+          "system_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2215,
+          "start_ticks": 2015,
+          "user_ticks": 0,
+          "system_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2216,
+          "start_ticks": 2015,
+          "user_ticks": 1,
+          "system_ticks": 0,
+          "voluntary_context_switches": 10,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2217,
+          "start_ticks": 2015,
+          "user_ticks": 4,
+          "system_ticks": 1,
+          "voluntary_context_switches": 17,
+          "involuntary_context_switches": 5
+        },
+        {
+          "tid": 2218,
+          "start_ticks": 2015,
+          "user_ticks": 0,
+          "system_ticks": 0,
+          "voluntary_context_switches": 8,
+          "involuntary_context_switches": 1
+        },
+        {
+          "tid": 2219,
+          "start_ticks": 2015,
+          "user_ticks": 0,
+          "system_ticks": 0,
+          "voluntary_context_switches": 8,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2220,
+          "start_ticks": 2015,
+          "user_ticks": 0,
+          "system_ticks": 0,
+          "voluntary_context_switches": 13,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2221,
+          "start_ticks": 2015,
+          "user_ticks": 0,
+          "system_ticks": 0,
+          "voluntary_context_switches": 24,
+          "involuntary_context_switches": 5
+        },
+        {
+          "tid": 2222,
+          "start_ticks": 2015,
+          "user_ticks": 0,
+          "system_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2223,
+          "start_ticks": 2016,
+          "user_ticks": 0,
+          "system_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2224,
+          "start_ticks": 2018,
+          "user_ticks": 0,
+          "system_ticks": 0,
+          "voluntary_context_switches": 1,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2225,
+          "start_ticks": 2019,
+          "user_ticks": 0,
+          "system_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2228,
+          "start_ticks": 2023,
+          "user_ticks": 26,
+          "system_ticks": 1,
+          "voluntary_context_switches": 283,
+          "involuntary_context_switches": 33
+        },
+        {
+          "tid": 2229,
+          "start_ticks": 2024,
+          "user_ticks": 0,
+          "system_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2231,
+          "start_ticks": 2027,
+          "user_ticks": 0,
+          "system_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2232,
+          "start_ticks": 2027,
+          "user_ticks": 0,
+          "system_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2233,
+          "start_ticks": 2052,
+          "user_ticks": 0,
+          "system_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2251,
+          "start_ticks": 2132,
+          "user_ticks": 0,
+          "system_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2262,
+          "start_ticks": 2133,
+          "user_ticks": 0,
+          "system_ticks": 0,
+          "voluntary_context_switches": 174,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2267,
+          "start_ticks": 2135,
+          "user_ticks": 0,
+          "system_ticks": 0,
+          "voluntary_context_switches": 27,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2268,
+          "start_ticks": 2135,
+          "user_ticks": 0,
+          "system_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2528,
+          "start_ticks": 5476,
+          "user_ticks": 0,
+          "system_ticks": 1,
+          "voluntary_context_switches": 245,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2529,
+          "start_ticks": 5476,
+          "user_ticks": 2,
+          "system_ticks": 0,
+          "voluntary_context_switches": 245,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2530,
+          "start_ticks": 5476,
+          "user_ticks": 0,
+          "system_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2531,
+          "start_ticks": 5476,
+          "user_ticks": 31,
+          "system_ticks": 3,
+          "voluntary_context_switches": 710,
+          "involuntary_context_switches": 34
+        },
+        {
+          "tid": 2532,
+          "start_ticks": 5476,
+          "user_ticks": 29,
+          "system_ticks": 3,
+          "voluntary_context_switches": 745,
+          "involuntary_context_switches": 26
+        },
+        {
+          "tid": 2533,
+          "start_ticks": 5477,
+          "user_ticks": 0,
+          "system_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2534,
+          "start_ticks": 5477,
+          "user_ticks": 0,
+          "system_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        }
+      ]
+    },
+    {
+      "before": {
+        "schema_version": 1,
+        "pid": 2206,
+        "start_ticks": 2013,
+        "started_uptime_seconds": 229.25,
+        "finished_uptime_seconds": 229.25,
+        "user_ticks": 566,
+        "system_ticks": 138,
+        "os_threads": 30,
+        "rss_kib": 208696,
+        "fds": 121,
+        "leader_voluntary_context_switches": 1547,
+        "leader_involuntary_context_switches": 525
+      },
+      "after": {
+        "schema_version": 1,
+        "pid": 2206,
+        "start_ticks": 2013,
+        "started_uptime_seconds": 290.64,
+        "finished_uptime_seconds": 290.65,
+        "user_ticks": 689,
+        "system_ticks": 154,
+        "os_threads": 30,
+        "rss_kib": 209068,
+        "fds": 123,
+        "leader_voluntary_context_switches": 1648,
+        "leader_involuntary_context_switches": 553
+      },
+      "emulator_before": {
+        "schema_version": 1,
+        "pid": 264,
+        "start_ticks": 89414496,
+        "started_uptime_seconds": 894378.02,
+        "finished_uptime_seconds": 894378.02,
+        "user_ticks": 7351,
+        "system_ticks": 1514,
+        "os_threads": 235,
+        "rss_kib": 3768348,
+        "fds": 142,
+        "leader_voluntary_context_switches": 47,
+        "leader_involuntary_context_switches": 6
+      },
+      "emulator_after": {
+        "schema_version": 1,
+        "pid": 264,
+        "start_ticks": 89414496,
+        "started_uptime_seconds": 894439.41,
+        "finished_uptime_seconds": 894439.42,
+        "user_ticks": 7896,
+        "system_ticks": 1583,
+        "os_threads": 233,
+        "rss_kib": 3768328,
+        "fds": 142,
+        "leader_voluntary_context_switches": 47,
+        "leader_involuntary_context_switches": 6
+      },
+      "runtime_samples": 12,
+      "process_samples": 60,
+      "paths": [
+        {
+          "connected_peers": 2,
+          "peers_without_supported_path": 0,
+          "direct_udp_datagram": 0,
+          "direct_quic_datagram": 0,
+          "direct_quic_stream": 1,
+          "direct_tcp_stream": 1,
+          "relay": 0,
+          "public_routing_peers": 0,
+          "packet_plane_quic_sessions": 0,
+          "promotions_to_direct": 0
+        },
+        {
+          "connected_peers": 2,
+          "peers_without_supported_path": 0,
+          "direct_udp_datagram": 0,
+          "direct_quic_datagram": 0,
+          "direct_quic_stream": 1,
+          "direct_tcp_stream": 1,
+          "relay": 0,
+          "public_routing_peers": 2,
+          "packet_plane_quic_sessions": 0,
+          "promotions_to_direct": 0
+        }
+      ],
+      "queues": [
+        {
+          "queued_packets": 0,
+          "queued_bytes": 0,
+          "oldest_packet_age_millis": 0,
+          "blocked_no_supported_path_events": 0,
+          "blocked_packet_window_events": 0
+        }
+      ],
+      "rss_kib": [
+        207068,
+        209972
+      ],
+      "pss_kib": [
+        85556,
+        87708
+      ],
+      "threads": [
+        30
+      ],
+      "fds": [
+        121,
+        123
+      ],
+      "max_sample_seconds": 0.040000000000020464,
+      "thread_first": {
+        "listed": 30,
+        "observed": 30,
+        "skipped": 0,
+        "threads": [
+          {
+            "tid": 2206,
+            "start_ticks": 2013,
+            "user_ticks": 99,
+            "system_ticks": 19,
+            "voluntary_context_switches": 1547,
+            "involuntary_context_switches": 525
+          },
+          {
+            "tid": 2213,
+            "start_ticks": 2015,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 1,
+            "involuntary_context_switches": 0
+          },
+          {
+            "tid": 2214,
+            "start_ticks": 2015,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 1,
+            "involuntary_context_switches": 0
+          },
+          {
+            "tid": 2215,
+            "start_ticks": 2015,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 4,
+            "involuntary_context_switches": 0
+          },
+          {
+            "tid": 2216,
+            "start_ticks": 2015,
+            "user_ticks": 62,
+            "system_ticks": 6,
+            "voluntary_context_switches": 152,
+            "involuntary_context_switches": 313
+          },
+          {
+            "tid": 2217,
+            "start_ticks": 2015,
+            "user_ticks": 15,
+            "system_ticks": 1,
+            "voluntary_context_switches": 60,
+            "involuntary_context_switches": 29
+          },
+          {
+            "tid": 2218,
+            "start_ticks": 2015,
+            "user_ticks": 1,
+            "system_ticks": 0,
+            "voluntary_context_switches": 31,
+            "involuntary_context_switches": 3
+          },
+          {
+            "tid": 2219,
+            "start_ticks": 2015,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 38,
+            "involuntary_context_switches": 0
+          },
+          {
+            "tid": 2220,
+            "start_ticks": 2015,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 46,
+            "involuntary_context_switches": 0
+          },
+          {
+            "tid": 2221,
+            "start_ticks": 2015,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 170,
+            "involuntary_context_switches": 22
+          },
+          {
+            "tid": 2222,
+            "start_ticks": 2015,
+            "user_ticks": 1,
+            "system_ticks": 0,
+            "voluntary_context_switches": 416,
+            "involuntary_context_switches": 23
+          },
+          {
+            "tid": 2223,
+            "start_ticks": 2016,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 15,
+            "involuntary_context_switches": 3
+          },
+          {
+            "tid": 2224,
+            "start_ticks": 2018,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 178,
+            "involuntary_context_switches": 1
+          },
+          {
+            "tid": 2225,
+            "start_ticks": 2019,
+            "user_ticks": 20,
+            "system_ticks": 64,
+            "voluntary_context_switches": 848,
+            "involuntary_context_switches": 333
+          },
+          {
+            "tid": 2228,
+            "start_ticks": 2023,
+            "user_ticks": 103,
+            "system_ticks": 5,
+            "voluntary_context_switches": 1362,
+            "involuntary_context_switches": 235
+          },
+          {
+            "tid": 2229,
+            "start_ticks": 2024,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 3,
+            "involuntary_context_switches": 0
+          },
+          {
+            "tid": 2231,
+            "start_ticks": 2027,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 1,
+            "involuntary_context_switches": 0
+          },
+          {
+            "tid": 2232,
+            "start_ticks": 2027,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 2,
+            "involuntary_context_switches": 0
+          },
+          {
+            "tid": 2233,
+            "start_ticks": 2052,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 366,
+            "involuntary_context_switches": 0
+          },
+          {
+            "tid": 2251,
+            "start_ticks": 2132,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 1,
+            "involuntary_context_switches": 0
+          },
+          {
+            "tid": 2262,
+            "start_ticks": 2133,
+            "user_ticks": 2,
+            "system_ticks": 0,
+            "voluntary_context_switches": 1383,
+            "involuntary_context_switches": 2
+          },
+          {
+            "tid": 2267,
+            "start_ticks": 2135,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 106,
+            "involuntary_context_switches": 1
+          },
+          {
+            "tid": 2268,
+            "start_ticks": 2135,
+            "user_ticks": 1,
+            "system_ticks": 0,
+            "voluntary_context_switches": 470,
+            "involuntary_context_switches": 21
+          },
+          {
+            "tid": 2528,
+            "start_ticks": 5476,
+            "user_ticks": 1,
+            "system_ticks": 1,
+            "voluntary_context_switches": 744,
+            "involuntary_context_switches": 3
+          },
+          {
+            "tid": 2529,
+            "start_ticks": 5476,
+            "user_ticks": 5,
+            "system_ticks": 0,
+            "voluntary_context_switches": 741,
+            "involuntary_context_switches": 4
+          },
+          {
+            "tid": 2530,
+            "start_ticks": 5476,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 1,
+            "involuntary_context_switches": 0
+          },
+          {
+            "tid": 2531,
+            "start_ticks": 5476,
+            "user_ticks": 100,
+            "system_ticks": 11,
+            "voluntary_context_switches": 2174,
+            "involuntary_context_switches": 152
+          },
+          {
+            "tid": 2532,
+            "start_ticks": 5476,
+            "user_ticks": 98,
+            "system_ticks": 13,
+            "voluntary_context_switches": 2248,
+            "involuntary_context_switches": 124
+          },
+          {
+            "tid": 2533,
+            "start_ticks": 5477,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 25,
+            "involuntary_context_switches": 0
+          },
+          {
+            "tid": 2534,
+            "start_ticks": 5477,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 24,
+            "involuntary_context_switches": 0
+          }
+        ]
+      },
+      "thread_last": {
+        "listed": 30,
+        "observed": 30,
+        "skipped": 0,
+        "threads": [
+          {
+            "tid": 2206,
+            "start_ticks": 2013,
+            "user_ticks": 121,
+            "system_ticks": 25,
+            "voluntary_context_switches": 1648,
+            "involuntary_context_switches": 553
+          },
+          {
+            "tid": 2213,
+            "start_ticks": 2015,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 1,
+            "involuntary_context_switches": 0
+          },
+          {
+            "tid": 2214,
+            "start_ticks": 2015,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 1,
+            "involuntary_context_switches": 0
+          },
+          {
+            "tid": 2215,
+            "start_ticks": 2015,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 4,
+            "involuntary_context_switches": 0
+          },
+          {
+            "tid": 2216,
+            "start_ticks": 2015,
+            "user_ticks": 62,
+            "system_ticks": 6,
+            "voluntary_context_switches": 162,
+            "involuntary_context_switches": 314
+          },
+          {
+            "tid": 2217,
+            "start_ticks": 2015,
+            "user_ticks": 20,
+            "system_ticks": 1,
+            "voluntary_context_switches": 80,
+            "involuntary_context_switches": 34
+          },
+          {
+            "tid": 2218,
+            "start_ticks": 2015,
+            "user_ticks": 2,
+            "system_ticks": 0,
+            "voluntary_context_switches": 40,
+            "involuntary_context_switches": 5
+          },
+          {
+            "tid": 2219,
+            "start_ticks": 2015,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 46,
+            "involuntary_context_switches": 0
+          },
+          {
+            "tid": 2220,
+            "start_ticks": 2015,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 58,
+            "involuntary_context_switches": 0
+          },
+          {
+            "tid": 2221,
+            "start_ticks": 2015,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 195,
+            "involuntary_context_switches": 36
+          },
+          {
+            "tid": 2222,
+            "start_ticks": 2015,
+            "user_ticks": 1,
+            "system_ticks": 0,
+            "voluntary_context_switches": 416,
+            "involuntary_context_switches": 23
+          },
+          {
+            "tid": 2223,
+            "start_ticks": 2016,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 15,
+            "involuntary_context_switches": 3
+          },
+          {
+            "tid": 2224,
+            "start_ticks": 2018,
+            "user_ticks": 1,
+            "system_ticks": 0,
+            "voluntary_context_switches": 179,
+            "involuntary_context_switches": 3
+          },
+          {
+            "tid": 2225,
+            "start_ticks": 2019,
+            "user_ticks": 20,
+            "system_ticks": 64,
+            "voluntary_context_switches": 848,
+            "involuntary_context_switches": 333
+          },
+          {
+            "tid": 2228,
+            "start_ticks": 2023,
+            "user_ticks": 128,
+            "system_ticks": 6,
+            "voluntary_context_switches": 1657,
+            "involuntary_context_switches": 247
+          },
+          {
+            "tid": 2229,
+            "start_ticks": 2024,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 3,
+            "involuntary_context_switches": 0
+          },
+          {
+            "tid": 2231,
+            "start_ticks": 2027,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 1,
+            "involuntary_context_switches": 0
+          },
+          {
+            "tid": 2232,
+            "start_ticks": 2027,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 2,
+            "involuntary_context_switches": 0
+          },
+          {
+            "tid": 2233,
+            "start_ticks": 2052,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 366,
+            "involuntary_context_switches": 0
+          },
+          {
+            "tid": 2251,
+            "start_ticks": 2132,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 1,
+            "involuntary_context_switches": 0
+          },
+          {
+            "tid": 2262,
+            "start_ticks": 2133,
+            "user_ticks": 3,
+            "system_ticks": 0,
+            "voluntary_context_switches": 1609,
+            "involuntary_context_switches": 2
+          },
+          {
+            "tid": 2267,
+            "start_ticks": 2135,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 138,
+            "involuntary_context_switches": 1
+          },
+          {
+            "tid": 2268,
+            "start_ticks": 2135,
+            "user_ticks": 1,
+            "system_ticks": 0,
+            "voluntary_context_switches": 470,
+            "involuntary_context_switches": 21
+          },
+          {
+            "tid": 2528,
+            "start_ticks": 5476,
+            "user_ticks": 2,
+            "system_ticks": 1,
+            "voluntary_context_switches": 988,
+            "involuntary_context_switches": 3
+          },
+          {
+            "tid": 2529,
+            "start_ticks": 5476,
+            "user_ticks": 7,
+            "system_ticks": 0,
+            "voluntary_context_switches": 986,
+            "involuntary_context_switches": 4
+          },
+          {
+            "tid": 2530,
+            "start_ticks": 5476,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 1,
+            "involuntary_context_switches": 0
+          },
+          {
+            "tid": 2531,
+            "start_ticks": 5476,
+            "user_ticks": 132,
+            "system_ticks": 16,
+            "voluntary_context_switches": 2908,
+            "involuntary_context_switches": 177
+          },
+          {
+            "tid": 2532,
+            "start_ticks": 5476,
+            "user_ticks": 132,
+            "system_ticks": 16,
+            "voluntary_context_switches": 2969,
+            "involuntary_context_switches": 202
+          },
+          {
+            "tid": 2533,
+            "start_ticks": 5477,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 25,
+            "involuntary_context_switches": 0
+          },
+          {
+            "tid": 2534,
+            "start_ticks": 5477,
+            "user_ticks": 0,
+            "system_ticks": 0,
+            "voluntary_context_switches": 24,
+            "involuntary_context_switches": 0
+          }
+        ]
+      },
+      "thread_inventory_stable": true,
+      "sample_first_time": 229.28,
+      "sample_last_time": 290.6,
+      "index": 3,
+      "detail": "threads",
+      "app_elapsed_seconds": 61.389999999999986,
+      "app_cpu_percent": 2.264212412445024,
+      "emulator_elapsed_seconds": 61.39000000001397,
+      "emulator_cpu_percent": 10.00162892979085,
+      "thread_deltas": [
+        {
+          "tid": 2206,
+          "start_ticks": 2013,
+          "user_ticks": 22,
+          "system_ticks": 6,
+          "voluntary_context_switches": 101,
+          "involuntary_context_switches": 28
+        },
+        {
+          "tid": 2213,
+          "start_ticks": 2015,
+          "user_ticks": 0,
+          "system_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2214,
+          "start_ticks": 2015,
+          "user_ticks": 0,
+          "system_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2215,
+          "start_ticks": 2015,
+          "user_ticks": 0,
+          "system_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2216,
+          "start_ticks": 2015,
+          "user_ticks": 0,
+          "system_ticks": 0,
+          "voluntary_context_switches": 10,
+          "involuntary_context_switches": 1
+        },
+        {
+          "tid": 2217,
+          "start_ticks": 2015,
+          "user_ticks": 5,
+          "system_ticks": 0,
+          "voluntary_context_switches": 20,
+          "involuntary_context_switches": 5
+        },
+        {
+          "tid": 2218,
+          "start_ticks": 2015,
+          "user_ticks": 1,
+          "system_ticks": 0,
+          "voluntary_context_switches": 9,
+          "involuntary_context_switches": 2
+        },
+        {
+          "tid": 2219,
+          "start_ticks": 2015,
+          "user_ticks": 0,
+          "system_ticks": 0,
+          "voluntary_context_switches": 8,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2220,
+          "start_ticks": 2015,
+          "user_ticks": 0,
+          "system_ticks": 0,
+          "voluntary_context_switches": 12,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2221,
+          "start_ticks": 2015,
+          "user_ticks": 0,
+          "system_ticks": 0,
+          "voluntary_context_switches": 25,
+          "involuntary_context_switches": 14
+        },
+        {
+          "tid": 2222,
+          "start_ticks": 2015,
+          "user_ticks": 0,
+          "system_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2223,
+          "start_ticks": 2016,
+          "user_ticks": 0,
+          "system_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2224,
+          "start_ticks": 2018,
+          "user_ticks": 1,
+          "system_ticks": 0,
+          "voluntary_context_switches": 1,
+          "involuntary_context_switches": 2
+        },
+        {
+          "tid": 2225,
+          "start_ticks": 2019,
+          "user_ticks": 0,
+          "system_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2228,
+          "start_ticks": 2023,
+          "user_ticks": 25,
+          "system_ticks": 1,
+          "voluntary_context_switches": 295,
+          "involuntary_context_switches": 12
+        },
+        {
+          "tid": 2229,
+          "start_ticks": 2024,
+          "user_ticks": 0,
+          "system_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2231,
+          "start_ticks": 2027,
+          "user_ticks": 0,
+          "system_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2232,
+          "start_ticks": 2027,
+          "user_ticks": 0,
+          "system_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2233,
+          "start_ticks": 2052,
+          "user_ticks": 0,
+          "system_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2251,
+          "start_ticks": 2132,
+          "user_ticks": 0,
+          "system_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2262,
+          "start_ticks": 2133,
+          "user_ticks": 1,
+          "system_ticks": 0,
+          "voluntary_context_switches": 226,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2267,
+          "start_ticks": 2135,
+          "user_ticks": 0,
+          "system_ticks": 0,
+          "voluntary_context_switches": 32,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2268,
+          "start_ticks": 2135,
+          "user_ticks": 0,
+          "system_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2528,
+          "start_ticks": 5476,
+          "user_ticks": 1,
+          "system_ticks": 0,
+          "voluntary_context_switches": 244,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2529,
+          "start_ticks": 5476,
+          "user_ticks": 2,
+          "system_ticks": 0,
+          "voluntary_context_switches": 245,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2530,
+          "start_ticks": 5476,
+          "user_ticks": 0,
+          "system_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2531,
+          "start_ticks": 5476,
+          "user_ticks": 32,
+          "system_ticks": 5,
+          "voluntary_context_switches": 734,
+          "involuntary_context_switches": 25
+        },
+        {
+          "tid": 2532,
+          "start_ticks": 5476,
+          "user_ticks": 34,
+          "system_ticks": 3,
+          "voluntary_context_switches": 721,
+          "involuntary_context_switches": 78
+        },
+        {
+          "tid": 2533,
+          "start_ticks": 5477,
+          "user_ticks": 0,
+          "system_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2534,
+          "start_ticks": 5477,
+          "user_ticks": 0,
+          "system_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        }
+      ]
+    },
+    {
+      "before": {
+        "schema_version": 1,
+        "pid": 2206,
+        "start_ticks": 2013,
+        "started_uptime_seconds": 290.87,
+        "finished_uptime_seconds": 290.87,
+        "user_ticks": 694,
+        "system_ticks": 155,
+        "os_threads": 30,
+        "rss_kib": 208756,
+        "fds": 123,
+        "leader_voluntary_context_switches": 1660,
+        "leader_involuntary_context_switches": 554
+      },
+      "after": {
+        "schema_version": 1,
+        "pid": 2206,
+        "start_ticks": 2013,
+        "started_uptime_seconds": 350.91,
+        "finished_uptime_seconds": 350.91,
+        "user_ticks": 810,
+        "system_ticks": 172,
+        "os_threads": 30,
+        "rss_kib": 209472,
+        "fds": 123,
+        "leader_voluntary_context_switches": 1758,
+        "leader_involuntary_context_switches": 573
+      },
+      "emulator_before": {
+        "schema_version": 1,
+        "pid": 264,
+        "start_ticks": 89414496,
+        "started_uptime_seconds": 894439.64,
+        "finished_uptime_seconds": 894439.64,
+        "user_ticks": 7909,
+        "system_ticks": 1585,
+        "os_threads": 233,
+        "rss_kib": 3768328,
+        "fds": 142,
+        "leader_voluntary_context_switches": 47,
+        "leader_involuntary_context_switches": 6
+      },
+      "emulator_after": {
+        "schema_version": 1,
+        "pid": 264,
+        "start_ticks": 89414496,
+        "started_uptime_seconds": 894499.68,
+        "finished_uptime_seconds": 894499.68,
+        "user_ticks": 8290,
+        "system_ticks": 1651,
+        "os_threads": 233,
+        "rss_kib": 3768328,
+        "fds": 142,
+        "leader_voluntary_context_switches": 47,
+        "leader_involuntary_context_switches": 6
+      },
+      "runtime_samples": 12,
+      "process_samples": 60,
+      "paths": [
+        {
+          "connected_peers": 2,
+          "peers_without_supported_path": 0,
+          "direct_udp_datagram": 0,
+          "direct_quic_datagram": 0,
+          "direct_quic_stream": 1,
+          "direct_tcp_stream": 1,
+          "relay": 0,
+          "public_routing_peers": 0,
+          "packet_plane_quic_sessions": 0,
+          "promotions_to_direct": 0
+        },
+        {
+          "connected_peers": 2,
+          "peers_without_supported_path": 0,
+          "direct_udp_datagram": 0,
+          "direct_quic_datagram": 0,
+          "direct_quic_stream": 1,
+          "direct_tcp_stream": 1,
+          "relay": 0,
+          "public_routing_peers": 2,
+          "packet_plane_quic_sessions": 0,
+          "promotions_to_direct": 0
+        }
+      ],
+      "queues": [
+        {
+          "queued_packets": 0,
+          "queued_bytes": 0,
+          "oldest_packet_age_millis": 0,
+          "blocked_no_supported_path_events": 0,
+          "blocked_packet_window_events": 0
+        }
+      ],
+      "rss_kib": [
+        207124,
+        209888
+      ],
+      "pss_kib": [
+        85488,
+        87563
+      ],
+      "threads": [
+        30
+      ],
+      "fds": [
+        121,
+        123
+      ],
+      "max_sample_seconds": 0.010000000000047748,
+      "thread_first": null,
+      "thread_last": null,
+      "thread_inventory_stable": true,
+      "sample_first_time": 290.9,
+      "sample_last_time": 350.7,
+      "index": 4,
+      "detail": "process",
+      "app_elapsed_seconds": 60.04000000000002,
+      "app_cpu_percent": 2.215189873417721,
+      "emulator_elapsed_seconds": 60.04000000003725,
+      "emulator_cpu_percent": 7.445036642233888
+    }
+  ],
+  "mean_difference_percentage_points": {
+    "app": 0.00883419142676467,
+    "emulator": 2.4029850078579797
+  },
+  "sha256": {
+    "/tmp/p2p-vpn-android-thread-controls-2/thread-control-1-process-boundary-after.jsonl": "ce4849f8e8c7e1057c8aefabec71b913dbb1082fc3828b8aaee764a9e2380191",
+    "/tmp/p2p-vpn-android-thread-controls-2/thread-control-1-process-boundary-before.jsonl": "d2b3d5dd881495b2b9c9175a80793b272ab5bbe351ee3af4d8b5f98311489156",
+    "/tmp/p2p-vpn-android-thread-controls-2/thread-control-1-process-emulator-after.jsonl": "72083df416a03984a786b97165dedb4a07091a311680bfc4ed491ee2ae3282d9",
+    "/tmp/p2p-vpn-android-thread-controls-2/thread-control-1-process-emulator-before.jsonl": "bde0218d4e4f9c2d9b55de79980746603f2a3d26247d9efdb903aedd5e0906bc",
+    "/tmp/p2p-vpn-android-thread-controls-2/thread-control-1-process-host-load-after.txt": "c022cf2bfdcaed49a2de1aefb0c466890ad294a01d97efa9a66c11d9e59ba912",
+    "/tmp/p2p-vpn-android-thread-controls-2/thread-control-1-process-host-load-before.txt": "7536fb4cf84d2a917e02df783aec3fd645eb53b13a445f2b87a9d52f799c0135",
+    "/tmp/p2p-vpn-android-thread-controls-2/thread-control-1-process-process-after.jsonl": "1f859a51b7ffbe047cd3eec8730e2e62cd450a17ec43e15c96e49741004b3f53",
+    "/tmp/p2p-vpn-android-thread-controls-2/thread-control-1-process-process-before.jsonl": "5212d7a9e12f50540ab4dd680f35a0c808bc8e6b2c0e703f12c050bdbdf38575",
+    "/tmp/p2p-vpn-android-thread-controls-2/thread-control-1-process-process.jsonl": "cfc23a0f869150bc4aac4df7534fe0466fee38bab92cd550cef85805a111223f",
+    "/tmp/p2p-vpn-android-thread-controls-2/thread-control-1-process-runtime.jsonl": "d0ec81e36ae7833e6ff4a2d6f0addd136c2c4ea2b163fb1d4fbe57968fd0e176",
+    "/tmp/p2p-vpn-android-thread-controls-2/thread-control-1-process-window.json": "8178281641ae43aa764dadda7486b6f26f48e0721f604b45923c7af4e73eebd5",
+    "/tmp/p2p-vpn-android-thread-controls-2/thread-control-2-threads-boundary-after.jsonl": "a112fac830ebe6b1b9b6776e0b8ab3a7b0493806370461d2e8871873b53131c7",
+    "/tmp/p2p-vpn-android-thread-controls-2/thread-control-2-threads-boundary-before.jsonl": "b0fbc8823b29ee5c5953e33298e3b9a7dd42171774d123314fbea6a651ea3871",
+    "/tmp/p2p-vpn-android-thread-controls-2/thread-control-2-threads-emulator-after.jsonl": "09a58106e40fc553bebf0a1552cb7eccca87058af78c7dcae32e7467a00cfac8",
+    "/tmp/p2p-vpn-android-thread-controls-2/thread-control-2-threads-emulator-before.jsonl": "f2d17d012bcac1188965de46eb41c4895fcda1d8ec8803241aae00b091d83038",
+    "/tmp/p2p-vpn-android-thread-controls-2/thread-control-2-threads-host-load-after.txt": "8ab730a70e08c28b55dd2eaabf4c2ebdb67ddf7b023072d8137d44967bf1f9d4",
+    "/tmp/p2p-vpn-android-thread-controls-2/thread-control-2-threads-host-load-before.txt": "0c0459a0d85d9e91bc0962187a0e805836bc173cb006ac18f1affd50ae86e602",
+    "/tmp/p2p-vpn-android-thread-controls-2/thread-control-2-threads-process-after.jsonl": "122000c84e716711dd6a904212f7378475a538fea1521f9bd61ecbc15472d1f0",
+    "/tmp/p2p-vpn-android-thread-controls-2/thread-control-2-threads-process-before.jsonl": "12cf25b1b46e5deae3adc20d559379ee2dd75c6dc76a98dfbe41edb91ffc5716",
+    "/tmp/p2p-vpn-android-thread-controls-2/thread-control-2-threads-process.jsonl": "dde6b54c52dd2307cb9d201d61e8a650127549f20b325aa7660bf3ddca1abc75",
+    "/tmp/p2p-vpn-android-thread-controls-2/thread-control-2-threads-runtime.jsonl": "bf94f10801817080c46c9f9fff7a071de1e07e55ad079d636a57698b42a5489f",
+    "/tmp/p2p-vpn-android-thread-controls-2/thread-control-2-threads-window.json": "2be00252f05f452f3e86d4397e978d6b8b4cea72d1e722323e64787e008d8bd1",
+    "/tmp/p2p-vpn-android-thread-controls-2/thread-control-3-threads-boundary-after.jsonl": "447d54adc4699d8926d9a1671c152a0a8307a68a08fd4b71190993bc7b77ce74",
+    "/tmp/p2p-vpn-android-thread-controls-2/thread-control-3-threads-boundary-before.jsonl": "c13363cd973d17ce7447de0bc1f7730c387be5e969d5b7fafc3736beec9863b6",
+    "/tmp/p2p-vpn-android-thread-controls-2/thread-control-3-threads-emulator-after.jsonl": "3344d297be7788d7529a70e3f214e61a0b16a68aff4b4f9c905e2965bae3442b",
+    "/tmp/p2p-vpn-android-thread-controls-2/thread-control-3-threads-emulator-before.jsonl": "4343fbafa649213aa17b1fb1e78f48effb1b81f40d5b2e1d0de4154ee427a113",
+    "/tmp/p2p-vpn-android-thread-controls-2/thread-control-3-threads-host-load-after.txt": "6432c25685493ffbc31cff696cb6544811f643122a69a60145154915b198ce30",
+    "/tmp/p2p-vpn-android-thread-controls-2/thread-control-3-threads-host-load-before.txt": "cc1e116d2809a3690b1cfd9d9ebb0ff6238750ce065a196bfb433ea017a5d4a1",
+    "/tmp/p2p-vpn-android-thread-controls-2/thread-control-3-threads-process-after.jsonl": "0dcf694a9d54f9d1e3351be7d34d0f4266b05582778e1593746a13202c912e77",
+    "/tmp/p2p-vpn-android-thread-controls-2/thread-control-3-threads-process-before.jsonl": "41d73fdadaa6c710df89cb4772bcd1d217435aaaf7fcdd777b933398b2208a49",
+    "/tmp/p2p-vpn-android-thread-controls-2/thread-control-3-threads-process.jsonl": "efa5089270983d78f7667662587fd513f592102650add55553410253cbb47786",
+    "/tmp/p2p-vpn-android-thread-controls-2/thread-control-3-threads-runtime.jsonl": "e7ad6352c1711f644f512abe8cc226d2bc61f7b7c6e96574bd25cfde36f4aaeb",
+    "/tmp/p2p-vpn-android-thread-controls-2/thread-control-3-threads-window.json": "fe1134a8ba36e21859a3c91465a81af4a8d5be1aa783ef6941f6ea7db85b418f",
+    "/tmp/p2p-vpn-android-thread-controls-2/thread-control-4-process-boundary-after.jsonl": "63b7231e7d5675127ebf7311bd8791fe8f1a8a29159256f2652877e72f735cdc",
+    "/tmp/p2p-vpn-android-thread-controls-2/thread-control-4-process-boundary-before.jsonl": "207ccf8615e5de8550b020d0f391052d8353c2ea94aef2f1e36f26ae26c2bad7",
+    "/tmp/p2p-vpn-android-thread-controls-2/thread-control-4-process-emulator-after.jsonl": "963d1b3d0f54cdb1be67b933b1ff18c253a189870c2986cfe23889c00e3f4524",
+    "/tmp/p2p-vpn-android-thread-controls-2/thread-control-4-process-emulator-before.jsonl": "8058d3e8458b209839ccfb90fa1dfc9f02de3c6ed27e792d4169c9afa66edc06",
+    "/tmp/p2p-vpn-android-thread-controls-2/thread-control-4-process-host-load-after.txt": "c915546d1292ecb3045a22f78ed08581dd17b355500f13a95a43604f0b9ab8ac",
+    "/tmp/p2p-vpn-android-thread-controls-2/thread-control-4-process-host-load-before.txt": "295e9a413788ac7c957e99aefddeb7a820d902b8bb5407a7685c15cda1aeca0c",
+    "/tmp/p2p-vpn-android-thread-controls-2/thread-control-4-process-process-after.jsonl": "e8c0d77576485f5c39343218c1d3b672b8301987402af3cf03316ba8791ccf2d",
+    "/tmp/p2p-vpn-android-thread-controls-2/thread-control-4-process-process-before.jsonl": "babe40a4eb774e579883d5b70bad40b2a554d014843682988bc0258ca4b08977",
+    "/tmp/p2p-vpn-android-thread-controls-2/thread-control-4-process-process.jsonl": "ea6b71cbf11fd0814c54443bca730f3b78d48e03cd4d3741cdc124a751ead7cd",
+    "/tmp/p2p-vpn-android-thread-controls-2/thread-control-4-process-runtime.jsonl": "58d305c6d2954fb9d84bb545f7bb5d94334465ac0be029d144c3fa8988261d8f",
+    "/tmp/p2p-vpn-android-thread-controls-2/thread-control-4-process-window.json": "25ad4aad7550965a7419bd7233e5213a56a141e82f460e71c655cadb054aa61b",
+    "/tmp/p2p-vpn-android-thread-controls-2/resource-guest-clock.txt": "eea8254c7500ba3de996aa8ad6af399183f04e17d4a8102fde539dbc93a90012",
+    "/tmp/p2p-vpn-android-thread-controls-2/resource-host-clock.txt": "eea8254c7500ba3de996aa8ad6af399183f04e17d4a8102fde539dbc93a90012",
+    "scripts/android-resource-controls.sh": "5df9b3614587d3faaccd0120cf8bbc47a4c8169c49423b85d4ddf77a8c00867b",
+    "scripts/android-process-sample.sh": "bdebe1c834a5f21cad746eb33c679625082755152b2fc50a566906ac2359b011",
+    "scripts/android-e2e.sh": "7e070900ce4117d3582255853cf52e705b5da0f8dd9e896c9cf9219883b303c1"
+  },
+  "limitations": [
+    "One boot; background protocol work and host activity can vary.",
+    "Thread scans are not atomic; identity was matched before calculating deltas.",
+    "Context switches are scheduling proxies, not hardware wakeups or battery use.",
+    "No thread-role attribution from anonymous TIDs.",
+    "Observed CPU difference is not an exact correction factor.",
+    "No sustained load or independent network transitions in these windows."
+  ]
+}
