@@ -33,6 +33,7 @@ No physical device or deployed host is authorized for this work.
 | [Queue pressure](sustained-pressure-results.md) | Corrected S4: 20 TCP pressure/recovery rounds; probe rejection/owner regression passes | RSS allocation attribution and broader workload coverage |
 | [Ledger allocations](allocation-review.md) | Twelve captures, 120 teardowns; zero retained requested Rust bytes/blocks | Whole-runtime/native allocation attribution |
 | [Queue allocations](queue-allocation-review.md) | Four captures, 40 cycles; exact payload release, stable container storage, full owner release | Transport buffers and full-process pressure retention |
+| [Runtime allocation fixture](runtime-allocation-review.md) | Isolated teardown smoke and timer-thread attribution; test-only allocator | Paired baseline captures and connected runtime/transport attribution |
 | [Sustained traffic fixture](sustained-traffic-review.md) | Two full captures: 30000/30000, stable descriptors, CPU settles below 0.2% per node after load | Broader allocation attribution and multi-network workloads remain open |
 | [Capability retirement](capability-retirement-review.md) | Retry gap reproduced; guarded correction and dispatch regressions pass | Live follow-ups pass but did not exercise the retry branch |
 | [Lifecycle churn results](lifecycle-churn-results.md) | Both ten-cycle captures pass; queues drain and recovery descriptor counts stay stable | RSS attribution and multi-network isolation remain open |
