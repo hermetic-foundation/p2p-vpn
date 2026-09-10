@@ -103,3 +103,46 @@ remain outstanding.
 - Cached Nix structure derivation evaluated offline; its full shell matrix was not rerun.
 - Review added rejection of a valid summary accompanied by a malformed extra summary.
 - Attempt 3 raw traffic files also pass the stricter parser; runtime commands are unchanged.
+
+## Sustained Attempt 1 Manifest
+
+- Baseline: `0067e3d3`; same instrumented APK and fixture hashes as compatibility attempt 3.
+- Output: `/tmp/p2p-vpn-android-sustained-load-1`.
+- Phases: 300 seconds idle, 300 seconds load, 60 seconds drain, without restarting the app.
+- Four load legs, 15000 requests each; unchanged traffic and sample acceptance limits.
+- Inner watchdog 1000 seconds plus 15-second kill grace; outer 1040 plus 20 seconds.
+- Pre-run storage: 9,139,224 KiB; no emulator, fixture or build process running.
+- No manual recovery or deadline extension. Preserve failures before any retry.
+
+## Sustained Attempt 1 Results
+
+All three phases passed. [Portable results](android-sustained-load-results.json)
+retain endpoint counters, aggregate ranges, traffic summaries and raw-file hashes.
+Evidence SHA-256: `6fc3763f668c0b0e52d7606b87b1c5a336b74746750dc68186ffe14015a6e0a4`.
+
+| Measurement | Idle | Load | Drain |
+| --- | --- | --- | --- |
+| App endpoint duration, seconds | 303.17 | 308.70 | 60.03 |
+| App CPU, percent of one core | 2.12 | 90.99 | 1.98 |
+| Emulator CPU, percent of one core | 7.58 | 181.75 | 7.30 |
+| Process / runtime samples | 300 / 60 | 300 / 60 | 60 / 12 |
+| RSS range, KiB | 205596-208628 | 205916-208820 | 206396-208924 |
+| PSS range, KiB | 84509-86789 | 84708-87619 | 85725-87752 |
+| Threads | 31 | 31 | 31 |
+| Descriptor range | 121-124 | 121-123 | 121-123 |
+| Sampled queued packets / bytes | 0 / 0 | 0 / 0 | 0 / 0 |
+
+- All four traffic legs sent and received 15000 packets, with zero reported loss.
+- Traffic durations were 308.33-308.66 seconds, within the frozen 299-310 second bounds.
+- One QUIC-stream path and one TCP-stream path remained present in every runtime sample.
+- App PID 2205 and start identity 1917 were unchanged across all phases.
+- Both clocks report 100 Hz. CPU uses user-plus-system tick deltas over endpoint elapsed time.
+- All six cleanup flags passed; no emulator or fixture process remained after completion.
+
+CPU returned toward the idle baseline after traffic. RSS/PSS ranges overlap, but
+these samples do not prove allocation release. Queue snapshots cannot exclude
+short-lived between-sample backlog. High debug load CPU remains unattributed.
+
+This is the first complete idle/load/drain sequence, not completed S7 acceptance.
+Repeat capture, five independent network transitions, scheduling attribution and
+the intermittent migration setup investigation remain outstanding.

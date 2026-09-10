@@ -1,0 +1,471 @@
+{
+  "schema_version": 1,
+  "baseline": "0067e3d3",
+  "apk_sha256": "5f7dd26c6079c673cf46eea04d5a2e83e70265b3c33b4bc1796d81b77077f6a7",
+  "fixture_sha256": "4b1bcd69a410f9a830e813d9457aa0a55a8a507d762c208aad42a1092ab8f8fa",
+  "evidence_sha256": "6fc3763f668c0b0e52d7606b87b1c5a336b74746750dc68186ffe14015a6e0a4",
+  "clock_ticks_per_second": {
+    "app": 100,
+    "emulator": 100
+  },
+  "raw_directory": "/tmp/p2p-vpn-android-sustained-load-1",
+  "phases": {
+    "idle": {
+      "app_before": {
+        "schema_version": 1,
+        "pid": 2205,
+        "start_ticks": 1917,
+        "started_uptime_seconds": 107.54,
+        "finished_uptime_seconds": 107.55,
+        "user_ticks": 338,
+        "system_ticks": 103,
+        "os_threads": 31,
+        "rss_kib": 205596,
+        "fds": 123,
+        "leader_voluntary_context_switches": 1307,
+        "leader_involuntary_context_switches": 615
+      },
+      "app_after": {
+        "schema_version": 1,
+        "pid": 2205,
+        "start_ticks": 1917,
+        "started_uptime_seconds": 410.71,
+        "finished_uptime_seconds": 410.71,
+        "user_ticks": 912,
+        "system_ticks": 173,
+        "os_threads": 31,
+        "rss_kib": 206208,
+        "fds": 121,
+        "leader_voluntary_context_switches": 1706,
+        "leader_involuntary_context_switches": 720
+      },
+      "emulator_before": {
+        "schema_version": 1,
+        "pid": 264,
+        "start_ticks": 89203086,
+        "started_uptime_seconds": 892142.2,
+        "finished_uptime_seconds": 892142.2,
+        "user_ticks": 6725,
+        "system_ticks": 1425,
+        "os_threads": 259,
+        "rss_kib": 3860644,
+        "fds": 146,
+        "leader_voluntary_context_switches": 40,
+        "leader_involuntary_context_switches": 7
+      },
+      "emulator_after": {
+        "schema_version": 1,
+        "pid": 264,
+        "start_ticks": 89203086,
+        "started_uptime_seconds": 892445.37,
+        "finished_uptime_seconds": 892445.37,
+        "user_ticks": 8638,
+        "system_ticks": 1811,
+        "os_threads": 250,
+        "rss_kib": 3860544,
+        "fds": 146,
+        "leader_voluntary_context_switches": 40,
+        "leader_involuntary_context_switches": 7
+      },
+      "app_cpu_percent": 2.124220734241515,
+      "emulator_cpu_percent": 7.5832041428890795,
+      "process_samples": 300,
+      "runtime_samples": 60,
+      "rss_kib": [
+        205596,
+        208628
+      ],
+      "pss_kib": [
+        84509,
+        86789
+      ],
+      "threads": [
+        31
+      ],
+      "fds": [
+        121,
+        122,
+        123,
+        124
+      ],
+      "paths": [
+        {
+          "connected_peers": 2,
+          "peers_without_supported_path": 0,
+          "direct_udp_datagram": 0,
+          "direct_quic_datagram": 0,
+          "direct_quic_stream": 1,
+          "direct_tcp_stream": 1,
+          "relay": 0,
+          "public_routing_peers": 0,
+          "packet_plane_quic_sessions": 0,
+          "promotions_to_direct": 0
+        },
+        {
+          "connected_peers": 2,
+          "peers_without_supported_path": 0,
+          "direct_udp_datagram": 0,
+          "direct_quic_datagram": 0,
+          "direct_quic_stream": 1,
+          "direct_tcp_stream": 1,
+          "relay": 0,
+          "public_routing_peers": 2,
+          "packet_plane_quic_sessions": 0,
+          "promotions_to_direct": 0
+        }
+      ],
+      "queues": [
+        {
+          "queued_packets": 0,
+          "queued_bytes": 0,
+          "oldest_packet_age_millis": 0,
+          "blocked_no_supported_path_events": 0,
+          "blocked_packet_window_events": 0
+        }
+      ]
+    },
+    "load": {
+      "app_before": {
+        "schema_version": 1,
+        "pid": 2205,
+        "start_ticks": 1917,
+        "started_uptime_seconds": 410.92,
+        "finished_uptime_seconds": 410.92,
+        "user_ticks": 917,
+        "system_ticks": 174,
+        "os_threads": 31,
+        "rss_kib": 206716,
+        "fds": 121,
+        "leader_voluntary_context_switches": 1714,
+        "leader_involuntary_context_switches": 724
+      },
+      "app_after": {
+        "schema_version": 1,
+        "pid": 2205,
+        "start_ticks": 1917,
+        "started_uptime_seconds": 719.62,
+        "finished_uptime_seconds": 719.62,
+        "user_ticks": 27273,
+        "system_ticks": 1908,
+        "os_threads": 31,
+        "rss_kib": 206816,
+        "fds": 123,
+        "leader_voluntary_context_switches": 2166,
+        "leader_involuntary_context_switches": 1671
+      },
+      "emulator_before": {
+        "schema_version": 1,
+        "pid": 264,
+        "start_ticks": 89203086,
+        "started_uptime_seconds": 892445.58,
+        "finished_uptime_seconds": 892445.58,
+        "user_ticks": 8651,
+        "system_ticks": 1813,
+        "os_threads": 250,
+        "rss_kib": 3860544,
+        "fds": 146,
+        "leader_voluntary_context_switches": 40,
+        "leader_involuntary_context_switches": 7
+      },
+      "emulator_after": {
+        "schema_version": 1,
+        "pid": 264,
+        "start_ticks": 89203086,
+        "started_uptime_seconds": 892754.28,
+        "finished_uptime_seconds": 892754.28,
+        "user_ticks": 48001,
+        "system_ticks": 18570,
+        "os_threads": 247,
+        "rss_kib": 3860728,
+        "fds": 146,
+        "leader_voluntary_context_switches": 40,
+        "leader_involuntary_context_switches": 7
+      },
+      "app_cpu_percent": 90.99449303530936,
+      "emulator_cpu_percent": 181.7525105279796,
+      "process_samples": 300,
+      "runtime_samples": 60,
+      "rss_kib": [
+        205916,
+        208820
+      ],
+      "pss_kib": [
+        84708,
+        87619
+      ],
+      "threads": [
+        31
+      ],
+      "fds": [
+        121,
+        122,
+        123
+      ],
+      "paths": [
+        {
+          "connected_peers": 2,
+          "peers_without_supported_path": 0,
+          "direct_udp_datagram": 0,
+          "direct_quic_datagram": 0,
+          "direct_quic_stream": 1,
+          "direct_tcp_stream": 1,
+          "relay": 0,
+          "public_routing_peers": 0,
+          "packet_plane_quic_sessions": 0,
+          "promotions_to_direct": 0
+        },
+        {
+          "connected_peers": 2,
+          "peers_without_supported_path": 0,
+          "direct_udp_datagram": 0,
+          "direct_quic_datagram": 0,
+          "direct_quic_stream": 1,
+          "direct_tcp_stream": 1,
+          "relay": 0,
+          "public_routing_peers": 2,
+          "packet_plane_quic_sessions": 0,
+          "promotions_to_direct": 0
+        }
+      ],
+      "queues": [
+        {
+          "queued_packets": 0,
+          "queued_bytes": 0,
+          "oldest_packet_age_millis": 0,
+          "blocked_no_supported_path_events": 0,
+          "blocked_packet_window_events": 0
+        }
+      ]
+    },
+    "drain": {
+      "app_before": {
+        "schema_version": 1,
+        "pid": 2205,
+        "start_ticks": 1917,
+        "started_uptime_seconds": 719.85,
+        "finished_uptime_seconds": 719.85,
+        "user_ticks": 27276,
+        "system_ticks": 1910,
+        "os_threads": 31,
+        "rss_kib": 206752,
+        "fds": 123,
+        "leader_voluntary_context_switches": 2173,
+        "leader_involuntary_context_switches": 1677
+      },
+      "app_after": {
+        "schema_version": 1,
+        "pid": 2205,
+        "start_ticks": 1917,
+        "started_uptime_seconds": 779.88,
+        "finished_uptime_seconds": 779.88,
+        "user_ticks": 27383,
+        "system_ticks": 1922,
+        "os_threads": 31,
+        "rss_kib": 206652,
+        "fds": 121,
+        "leader_voluntary_context_switches": 2301,
+        "leader_involuntary_context_switches": 1697
+      },
+      "emulator_before": {
+        "schema_version": 1,
+        "pid": 264,
+        "start_ticks": 89203086,
+        "started_uptime_seconds": 892754.51,
+        "finished_uptime_seconds": 892754.52,
+        "user_ticks": 48016,
+        "system_ticks": 18572,
+        "os_threads": 247,
+        "rss_kib": 3860728,
+        "fds": 146,
+        "leader_voluntary_context_switches": 40,
+        "leader_involuntary_context_switches": 7
+      },
+      "emulator_after": {
+        "schema_version": 1,
+        "pid": 264,
+        "start_ticks": 89203086,
+        "started_uptime_seconds": 892814.55,
+        "finished_uptime_seconds": 892814.55,
+        "user_ticks": 48374,
+        "system_ticks": 18652,
+        "os_threads": 247,
+        "rss_kib": 3860728,
+        "fds": 146,
+        "leader_voluntary_context_switches": 40,
+        "leader_involuntary_context_switches": 7
+      },
+      "app_cpu_percent": 1.9823421622522082,
+      "emulator_cpu_percent": 7.295136575611729,
+      "process_samples": 60,
+      "runtime_samples": 12,
+      "rss_kib": [
+        206396,
+        208924
+      ],
+      "pss_kib": [
+        85725,
+        87752
+      ],
+      "threads": [
+        31
+      ],
+      "fds": [
+        121,
+        123
+      ],
+      "paths": [
+        {
+          "connected_peers": 2,
+          "peers_without_supported_path": 0,
+          "direct_udp_datagram": 0,
+          "direct_quic_datagram": 0,
+          "direct_quic_stream": 1,
+          "direct_tcp_stream": 1,
+          "relay": 0,
+          "public_routing_peers": 0,
+          "packet_plane_quic_sessions": 0,
+          "promotions_to_direct": 0
+        },
+        {
+          "connected_peers": 2,
+          "peers_without_supported_path": 0,
+          "direct_udp_datagram": 0,
+          "direct_quic_datagram": 0,
+          "direct_quic_stream": 1,
+          "direct_tcp_stream": 1,
+          "relay": 0,
+          "public_routing_peers": 2,
+          "packet_plane_quic_sessions": 0,
+          "promotions_to_direct": 0
+        }
+      ],
+      "queues": [
+        {
+          "queued_packets": 0,
+          "queued_bytes": 0,
+          "oldest_packet_age_millis": 0,
+          "blocked_no_supported_path_events": 0,
+          "blocked_packet_window_events": 0
+        }
+      ]
+    }
+  },
+  "traffic_order": [
+    "alpha_ipv4",
+    "alpha_ipv6",
+    "beta_ipv4",
+    "beta_ipv6"
+  ],
+  "traffic": [
+    {
+      "started_millis": 892445590,
+      "finished_millis": 892753920,
+      "status": 0,
+      "requested_packets": 15000,
+      "interval_seconds": 0.02,
+      "payload_bytes": 512,
+      "counts": {
+        "sent": 15000,
+        "received": 15000,
+        "loss_percent": 0
+      }
+    },
+    {
+      "started_millis": 892445590,
+      "finished_millis": 892753940,
+      "status": 0,
+      "requested_packets": 15000,
+      "interval_seconds": 0.02,
+      "payload_bytes": 512,
+      "counts": {
+        "sent": 15000,
+        "received": 15000,
+        "loss_percent": 0
+      }
+    },
+    {
+      "started_millis": 892445590,
+      "finished_millis": 892754190,
+      "status": 0,
+      "requested_packets": 15000,
+      "interval_seconds": 0.02,
+      "payload_bytes": 512,
+      "counts": {
+        "sent": 15000,
+        "received": 15000,
+        "loss_percent": 0
+      }
+    },
+    {
+      "started_millis": 892445590,
+      "finished_millis": 892754250,
+      "status": 0,
+      "requested_packets": 15000,
+      "interval_seconds": 0.02,
+      "payload_bytes": 512,
+      "counts": {
+        "sent": 15000,
+        "received": 15000,
+        "loss_percent": 0
+      }
+    }
+  ],
+  "sha256": {
+    "/tmp/p2p-vpn-android-sustained-load-1/sustained-drain-boundary-after.jsonl": "2a98b859975f85e324e19e4b2de080de1024367e41df4efcc27ae2f5c1142c9f",
+    "/tmp/p2p-vpn-android-sustained-load-1/sustained-drain-boundary-before.jsonl": "babcbbe77e77917b6525987181577200edc535680a84b440135c863bd7b225e5",
+    "/tmp/p2p-vpn-android-sustained-load-1/sustained-drain-emulator-after.jsonl": "2c37aa51b5218de88a70c826d79ebea8af0b077e90cfa8e2b76297e4873ea16c",
+    "/tmp/p2p-vpn-android-sustained-load-1/sustained-drain-emulator-before.jsonl": "668f842baa2e06bc646f675a694c33fc95a295317a2ff144c1484f6baabef2ac",
+    "/tmp/p2p-vpn-android-sustained-load-1/sustained-drain-host-load-after.txt": "8c7f2e319cda9364951be99de02e24001833cb2c6dfc21fef6efcaa822c95394",
+    "/tmp/p2p-vpn-android-sustained-load-1/sustained-drain-host-load-before.txt": "205950f80ad79beb4991494096371b4cd3fc00176467b1ec123071a065185dee",
+    "/tmp/p2p-vpn-android-sustained-load-1/sustained-drain-process-after.jsonl": "60d447b80007b3a830c7ab73c2b1efb3e4d4a9c98234446ba4d7f664af4a8cf1",
+    "/tmp/p2p-vpn-android-sustained-load-1/sustained-drain-process-before.jsonl": "b96930de6cbc44f806eaf47912541bc426db0512ed1a17bfc460ec942d5609d6",
+    "/tmp/p2p-vpn-android-sustained-load-1/sustained-drain-process.jsonl": "c6163997581473b3dc31245a9f57d83fa3c72f69a67c7214033d74854247e505",
+    "/tmp/p2p-vpn-android-sustained-load-1/sustained-drain-runtime.jsonl": "d9dc4fdc9ff9855947530996ac0c4ac6527b3591f4be1999446cd202aee2ed6b",
+    "/tmp/p2p-vpn-android-sustained-load-1/sustained-drain-window.json": "c6732194fa208ad0eb25a5965898240063c429423ad27635048c584e968f4f95",
+    "/tmp/p2p-vpn-android-sustained-load-1/sustained-idle-boundary-after.jsonl": "880d973da8dd17a18377dd5342fd557c717a4ec4a3b4782d93ca0ae7b2f8cfa3",
+    "/tmp/p2p-vpn-android-sustained-load-1/sustained-idle-boundary-before.jsonl": "93c38010d01d4b8d89040b11e1975b69d34848d3c90b3e46c6418e9020d27a02",
+    "/tmp/p2p-vpn-android-sustained-load-1/sustained-idle-emulator-after.jsonl": "056fc466d20f3a0b740616ec440f1bb327a75bf7ca6ba22f925f12ee67f983f5",
+    "/tmp/p2p-vpn-android-sustained-load-1/sustained-idle-emulator-before.jsonl": "10e050bf0cb55ffbe581be54e3b54084c5aec6a1596d437e1fbf555534a6ef3e",
+    "/tmp/p2p-vpn-android-sustained-load-1/sustained-idle-host-load-after.txt": "5f8ff255591a85f68564cf93d667287d57142d213cf09e4fb4a8b7637e1a677d",
+    "/tmp/p2p-vpn-android-sustained-load-1/sustained-idle-host-load-before.txt": "f3c076263ad7927d8b632991ceea8de1cba0271fcceeafd27bce48c5a263dab1",
+    "/tmp/p2p-vpn-android-sustained-load-1/sustained-idle-process-after.jsonl": "79da618727df524c62f17d3c5f4445d6e3ed81ef6d3d7c7d79158cea1bd48d77",
+    "/tmp/p2p-vpn-android-sustained-load-1/sustained-idle-process-before.jsonl": "887a479c8b80aed3cdf2779e9864a412b8e139a3c724ff52422de752cd23cd35",
+    "/tmp/p2p-vpn-android-sustained-load-1/sustained-idle-process.jsonl": "af63b131be39b1faef07aeac56c61bad4f7d973ee2017f552181328642b12ab2",
+    "/tmp/p2p-vpn-android-sustained-load-1/sustained-idle-runtime.jsonl": "da3bf6f1110918816063ef238170584bdecb2cd3d9ea0e547f6e7ed8ae400213",
+    "/tmp/p2p-vpn-android-sustained-load-1/sustained-idle-window.json": "e11a19e1ab9c1c1a0646991e549455aa031b31d367ba61c139be5a90af081125",
+    "/tmp/p2p-vpn-android-sustained-load-1/sustained-load-alpha-ipv4-counts.json": "b8977db3f99aaabe762d859f5f3ab515120767401446d2db3c9d15c9dd1d2671",
+    "/tmp/p2p-vpn-android-sustained-load-1/sustained-load-alpha-ipv4.json": "c6afd9396cf06eb067bb342f62da83e98933737a4d87e40d1a12222302083427",
+    "/tmp/p2p-vpn-android-sustained-load-1/sustained-load-alpha-ipv4.txt": "98b458119558f96c1a34b874457363c4434eb6da148456fffb7be7886fdb70be",
+    "/tmp/p2p-vpn-android-sustained-load-1/sustained-load-alpha-ipv6-counts.json": "b8977db3f99aaabe762d859f5f3ab515120767401446d2db3c9d15c9dd1d2671",
+    "/tmp/p2p-vpn-android-sustained-load-1/sustained-load-alpha-ipv6.json": "3f3e504001033680fa2340f54103e6d7d099fc11bf51f7637445c9dda4581c70",
+    "/tmp/p2p-vpn-android-sustained-load-1/sustained-load-alpha-ipv6.txt": "e210bd9a69498ec9911bf90a3d7028cc760888bdf44d3f7189d88fa3497a4442",
+    "/tmp/p2p-vpn-android-sustained-load-1/sustained-load-beta-ipv4-counts.json": "b8977db3f99aaabe762d859f5f3ab515120767401446d2db3c9d15c9dd1d2671",
+    "/tmp/p2p-vpn-android-sustained-load-1/sustained-load-beta-ipv4.json": "c0f0511a4158f982f663c5db883220e5745645edd4e87ec8f24bbcac2cf18c1f",
+    "/tmp/p2p-vpn-android-sustained-load-1/sustained-load-beta-ipv4.txt": "d9a0c213ff1213a9999cec22cf619573cc9f42bfb90d902b12dd0d3b10ff9383",
+    "/tmp/p2p-vpn-android-sustained-load-1/sustained-load-beta-ipv6-counts.json": "b8977db3f99aaabe762d859f5f3ab515120767401446d2db3c9d15c9dd1d2671",
+    "/tmp/p2p-vpn-android-sustained-load-1/sustained-load-beta-ipv6.json": "d94d349d3864f8452f682ace7424d6b080d8c85dfc542ae50e215ead0971d828",
+    "/tmp/p2p-vpn-android-sustained-load-1/sustained-load-beta-ipv6.txt": "d19128edb0a86e051490897e807a41d81ad2c9d182e3394e51a6a76b0c7c987c",
+    "/tmp/p2p-vpn-android-sustained-load-1/sustained-load-boundary-after.jsonl": "9a06d1e813007fc372c0bdf050ce4b5b8390c298a3f66db5b07d2cc1928ffb0d",
+    "/tmp/p2p-vpn-android-sustained-load-1/sustained-load-boundary-before.jsonl": "d662ccfdaa65faa895272cb3b2a3d97b219bb7d3ed581525b2fcaae594e54d2b",
+    "/tmp/p2p-vpn-android-sustained-load-1/sustained-load-emulator-after.jsonl": "c63a911bd3c74f0d0aeb582490e0f9d25141d3b5d7de8d322716cb1efe2dcc3f",
+    "/tmp/p2p-vpn-android-sustained-load-1/sustained-load-emulator-before.jsonl": "5eebb444175d29a844a1d9264e13bd296ffb0a90e6925363c78b22c2be9a9958",
+    "/tmp/p2p-vpn-android-sustained-load-1/sustained-load-host-load-after.txt": "93c7cd705b1af94e85db0e173b9e6bee47ab6fef382107f8442a84ba1f379353",
+    "/tmp/p2p-vpn-android-sustained-load-1/sustained-load-host-load-before.txt": "f7cc7220f537e0a2d3676b1383b7876a2ea94d923139cb84d50aa3ea1291cc99",
+    "/tmp/p2p-vpn-android-sustained-load-1/sustained-load-process-after.jsonl": "b1d2c627e2b9e7496985a9af22bd4bbfc9731ab3daf81ef693d0cd93e9eba263",
+    "/tmp/p2p-vpn-android-sustained-load-1/sustained-load-process-before.jsonl": "e0006ea4f791e7480df50af3b7c990f4b01ef919a39b057a2a2d05bedf6aa8c4",
+    "/tmp/p2p-vpn-android-sustained-load-1/sustained-load-process.jsonl": "e2283e99648407e639f2c42f0a3d627bbda681215c6da2c3dbe404e14934133e",
+    "/tmp/p2p-vpn-android-sustained-load-1/sustained-load-runtime.jsonl": "414a7815c6693ae8126e79863699d8312f76375de5816f01d31aed61c4fefd95",
+    "/tmp/p2p-vpn-android-sustained-load-1/sustained-load-window.json": "8019bd785f8d4e17abd1c2257fc187e12543e7a0c82f4be7cbebde6be02d27de",
+    "/tmp/p2p-vpn-android-sustained-load-1/resource-guest-clock.txt": "eea8254c7500ba3de996aa8ad6af399183f04e17d4a8102fde539dbc93a90012",
+    "/tmp/p2p-vpn-android-sustained-load-1/resource-host-clock.txt": "eea8254c7500ba3de996aa8ad6af399183f04e17d4a8102fde539dbc93a90012",
+    "scripts/android-resource-controls.sh": "d975b9cc134960afd11e4a20a534160b705d91303bd73bd67febe6603726cc92",
+    "scripts/android-e2e.sh": "474320777f1e67c29d456f2db31b744612aa96c282789d964f26580cfa5e3d0f"
+  },
+  "limitations": [
+    "One run; repetition and independent network transitions remain open.",
+    "Debug emulator; no physical energy or release performance claim.",
+    "CPU percentage is per core with observer overhead retained.",
+    "Mixed QUIC stream and TCP stream; no transport-specific attribution.",
+    "RSS/PSS and endpoint stability are not allocation ownership proof."
+  ]
+}

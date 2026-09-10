@@ -80,8 +80,9 @@ Repeat each capture twice; retain failed attempts separately from successful dat
 | S7 | Android two-network background | 30-second warmup; 300-second idle and load phases; five independent disable/enable cycles |
 
 Android [load compatibility](android-sustained-load.md) passed four 3000-packet
-streams with resource sampling. Sustained phases remain open, as do high debug
-CPU attribution and the [intermittent setup failure](android-migration-resource-investigation.md).
+streams with resource sampling. One full idle/load/drain sequence also passed,
+with 60000/60000 replies and CPU returning to idle. Repetition, independent
+transitions, CPU attribution and the [setup failure](android-migration-resource-investigation.md) remain open.
 
 Freeze packet size/rate, transition schedules and transport settings in each
 fixture manifest before its first capture. Select supported controls from source
