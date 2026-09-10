@@ -248,6 +248,54 @@ No redeployment, firewall mutation or underlay change was performed during this 
 | ARM64 library | `ac716abb317630ed7705f0e62647ae890ad0de0722fb282dcd0ad1dcc98f76d6` |
 | Linux binary | `21da5503ffc19f9b25963154056c633a3af9d4242950d1865106178b409f473c` |
 
+### Correlated Physical Repeat
+
+The user granted standing test/deployment authorization for the attached OnePlus.
+Preserve its identity and pairing; physical underlay switches and other devices remain
+separately scoped. This run used the prepared `ff4d9884` diagnostics artifacts above.
+
+- Temporarily ran Linux process `2458974` with the existing minimal configuration.
+  Phone identity/profile remained unchanged; neither runtime was manually restarted during measurement.
+- QUIC endpoint `192.168.0.229:42891` was blocked from 14:12:12 to 14:13:22 CDT on September 10.
+  The dedicated chain dropped 55 packets; its automatic unblock timer was stopped after explicit removal.
+- Capture included phone QUIC and UDP (`42845`) endpoints on `wlp1s0`, plus only the
+  overlay test ICMP flow on `pv1`. Android logs were collected continuously over USB.
+
+| Full-MTU traffic stage | Replies |
+| --- | --- |
+| Baseline laptop to phone | 10/10 |
+| Block transition laptop to phone | 30/45; sequences 1-15 lost |
+| Blocked-path phone to laptop | 5/5 |
+| Unblock/re-promotion laptop to phone | 45/45 |
+| Settled laptop to phone | 60/60 |
+| Settled phone to laptop | 30/30 |
+
+- Settled Linux owned-QUIC/UDP counters changed from 50/63 to 140/63.
+  Android changed from 45/60 to 134/61; retain the one UDP payload rather than claim QUIC-only traffic.
+- At 14:14:33, both Linux probe paths expired after 14,997 ms against a 12,000 ms threshold.
+  Full-MTU payload traffic still completed successfully during this check.
+
+| Path | Expired probe token | New confirmed token at 14:14:33 | New RTT |
+| --- | --- | --- | --- |
+| UDP | `5159263635875717152` | `5557157863473720637` | 16 ms |
+| QUIC | `18371448710816733584` | `299777907167434412` | 28 ms |
+
+The nearby confirmations were fresh probes, not delayed acknowledgements of the expired tokens.
+The capture records both outgoing probes at 14:14:18.096 and no small incoming UDP datagram
+until 14:14:33.118. It does not establish whether the earlier probes reached the phone.
+
+- Evidence: `/tmp/p2p-vpn-correlated-20260910.pcapng` and `/tmp/p2p-vpn-correlation-*`.
+  Five-minute capture: 1,151 underlay packets and 375 TUN packets, zero reported capture drops.
+- TUN capture contains all 195 requests and 180 replies: exactly the 15 intentional-transition
+  losses. It covers the final traffic checks; no post-recovery loss reproduced in this run.
+- Restored the original Nix Linux service and removed the task-owned override, binary and
+  firewall chain. Timer inactive; captures exited. Five post-restoration pings all succeeded.
+- Storage measured 9,783,356 KiB. The diagnostics APK remains installed on the OnePlus.
+
+This strengthens physical fallback/re-promotion evidence and clarifies the probe timeline.
+It does not explain the prior post-recovery loss, certify long-duration stability or test
+physical network movement. No timeout or routing policy change was made to obtain this pass.
+
 ## Failed Datagram Fallback Review
 
 - Inspection found that a failed QUIC send could try UDP, then immediately drop on UDP failure
