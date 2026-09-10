@@ -1,0 +1,438 @@
+{
+  "schema_version": 1,
+  "baseline_revision": "280b6742",
+  "binary_sha256": "7bd693606049cc7df7de8d5294ab91fe2bab8dca81fdbfdd4b3c77c747a5ad04",
+  "status": "Failed sustained-resource acceptance; partial allocation-site evidence only",
+  "second_fixture_evidence_sha256": {
+    "node-a.log": "b8b851d8a1c18d9eff497bd08cfc696ec4d0b3e0c239e88c5b34fb70cbcbc679",
+    "churn-settle.json": "1c8e9c24ba474fd92d3df98da74d4b341e437fa8271f2b02bd4c6424aa6f8a12",
+    "churn-01-recovery.json": "e1fb08a6aafad9870aed81caac7a7c1b983d34d710850bea171ad2a8367af4e7"
+  },
+  "preflight_tmp_kib": [
+    8258128,
+    8260388
+  ],
+  "fixture_command": "env -u P2P_VPN_TUN_E2E_IDLE_SECONDS -u P2P_VPN_TUN_E2E_ORCHESTRATOR_TIMEOUT_SECONDS -u P2P_VPN_TUN_E2E_WAIT_SCALE P2P_VPN_REVIEW_CHURN_SMOKE=1 P2P_VPN_TUN_E2E_KEEP_TEMP=1 TOKIO_WORKER_THREADS=2 timeout --signal=TERM --kill-after=10s 250 /tmp/p2p-vpn-review-target/debug/deps/tun_namespace-8ef8d4fc7581d039 tun_namespace_measures_lifecycle_churn_resources --ignored --exact --nocapture --test-threads=1",
+  "trace_command_recorded": "timeout --signal=TERM --kill-after=2s 240 prlimit --fsize=1048576:1048576 -- 'nsenter' '--target' '1473310' '--user' '--net' '--mount' '--pid' '--preserve-credentials' '--' '/nix/store/bg2bp1zmii5spb2hkgv5xn6mzva7nx9r-gdb-17.2/bin/gdb' '-q' '-nx' '-batch' '-ex' 'set pagination off' '-ex' 'set confirm off' '-ex' 'set debuginfod enabled off' '-ex' 'set auto-load off' '-ex' 'set print frame-arguments none' '-ex' 'attach 18' '-ex' 'python exec(\"import gdb, time\\nlive = {}\\nserial = 0\\nsites = {}\\nstarted = time.monotonic()\\ndef stamp():\\n    return round(time.monotonic() - started, 3)\\nclass Returned(gdb.FinishBreakpoint):\\n    def __init__(self, ident, size):\\n        super().__init__(gdb.newest_frame(), internal=True)\\n        self.ident, self.size = ident, size\\n    def stop(self):\\n        address = int(gdb.parse_and_eval(\\\"$rax\\\"))\\n        if address:\\n            live[address] = (self.ident, self.size)\\n        else:\\n            print(\\\"NULL_RETURN\\\", stamp(), self.ident)\\n        return False\\nclass Alloc(gdb.Breakpoint):\\n    def stop(self):\\n        global serial\\n        if int(gdb.parse_and_eval(\\\"$rdi\\\")) != 52:\\n            return False\\n        serial += 1\\n        if serial > 4096:\\n            print(\\\"QUOTA_EXCEEDED\\\")\\n            return True\\n        frame = gdb.newest_frame()\\n        frames = []\\n        for index in range(24):\\n            if frame is None:\\n                break\\n            frames.append((frame.name() or \\\"?\\\")[:240])\\n            frame = frame.older()\\n        key = tuple(frames[:12])\\n        if key not in sites:\\n            if len(sites) >= 64:\\n                print(\\\"SITE_QUOTA_EXCEEDED\\\")\\n                return True\\n            sites[key] = len(sites) + 1\\n            print(\\\"SITE\\\", sites[key])\\n            for name in frames:\\n                print(name)\\n        print(\\\"ALLOC\\\", stamp(), serial, 52, \\\"SITE\\\", sites[key])\\n        Returned(serial, 52)\\n        return False\\nclass Free(gdb.Breakpoint):\\n    def stop(self):\\n        address = int(gdb.parse_and_eval(\\\"$rdi\\\"))\\n        if address in live:\\n            ident, size = live.pop(address)\\n            actual = int(gdb.parse_and_eval(\\\"$rsi\\\"))\\n            print(\\\"FREE\\\", stamp(), ident, size, actual)\\n        return False\\nclass Realloc(gdb.Breakpoint):\\n    def stop(self):\\n        address = int(gdb.parse_and_eval(\\\"$rdi\\\"))\\n        if address in live:\\n            ident, old = live.pop(address)\\n            size = int(gdb.parse_and_eval(\\\"$rcx\\\"))\\n            print(\\\"REALLOC\\\", stamp(), ident, old, size)\\n            Returned(ident, size)\\n        return False\\nclass Sample(gdb.Breakpoint):\\n    def stop(self):\\n        print(\\\"LIVE\\\", stamp(), sorted(live.values()))\\n        return False\\nAlloc(\\\"__rustc::__rust_alloc\\\", internal=True)\\nFree(\\\"__rustc::__rust_dealloc\\\", internal=True)\\nRealloc(\\\"__rustc::__rust_realloc\\\", internal=True)\\nSample(\\\"tun_namespace::allocation_sample::emit\\\", internal=True)\\ndef ended(event):\\n    print(\\\"END\\\", stamp(), sorted(live.values()))\\ngdb.events.exited.connect(ended)\\nprint(\\\"TRACE_READY\\\", time.time())\\n\")' '-ex' 'continue' '-ex' 'quit'",
+  "trace_command_warning": "Recorded PIDs are historical. Never run against reused PIDs. Launch a fresh owned fixture and verify role, executable, namespace and start identity before replacing host target and namespace-local attach IDs.",
+  "limits": {
+    "fixture_internal_seconds": 240,
+    "fixture_external_seconds": 250,
+    "debugger_seconds": 240,
+    "debugger_kill_grace_seconds": 2,
+    "trace_bytes": 1048576,
+    "allocations": 4096,
+    "sites": 64,
+    "frames": 24,
+    "site_key_frames": 12
+  },
+  "captures": [
+    {
+      "path": "/tmp/p2p-vpn-connected-gdb-smoke-1.log",
+      "sha256": "fad7f466f640668f650df271c556b7436a9e55b2621046d4c4f2b4c20ce0abcb",
+      "exit_code": 0,
+      "seconds": 189.45,
+      "result": "Recovery smoke passed; two incomplete/disjoint debugger observation windows."
+    },
+    {
+      "path": "/tmp/p2p-vpn-connected-gdb-sites-1.log",
+      "sha256": "ba89db59500f0661bc112c950fb2005e3c286e22d9240e3dfafe593f784b50d5",
+      "exit_code": 0,
+      "result": "Different PID namespace warning; 256-allocation quota hit at 29.901 seconds, then detached. Partial evidence only."
+    },
+    {
+      "path": "/tmp/p2p-vpn-connected-gdb-sites-2.log",
+      "sha256": "c6cbfdfa619d519a88496b4e3c479172a4914824694a3e8024b8290c85f074eb",
+      "exit_code": 0,
+      "result": "Late same-PID-namespace observation; empty tracked-live set at 57.961 seconds, daemon killed by fixture. No whole-heap teardown claim."
+    },
+    {
+      "path": "/tmp/p2p-vpn-connected-gdb-smoke-2.log",
+      "sha256": "30e51eb027bf9b919fcd440ccaf550f1a6f8a7b64fe0f153b5cf822bc01538ad",
+      "exit_code": 101,
+      "seconds": 185.8,
+      "result": "Failed runtime counter completeness during settling; recovery 5/5 both directions had passed."
+    },
+    {
+      "path": "/tmp/p2p-vpn-connected-gdb-sites-3.log",
+      "sha256": "f530f891c695a8d9e827ce28f12b57beef9a6ab8365d0003acbfb011aebea42a",
+      "exit_code": 137,
+      "result": "Debugger killed during failed fixture namespace cleanup; no complete final lifetime summary."
+    },
+    {
+      "path": "/tmp/p2p-vpn-gdb-finish-breakpoint-count.log",
+      "sha256": "62eb5bb39a589eecf735beda48f2252d74e01625504567ca058df21a80a600b5",
+      "exit_code": 0,
+      "result": "Isolated test passed; two persistent allocation/free breakpoints after normal exit. Does not measure breakpoint count during daemon capture."
+    }
+  ],
+  "fixture_directories": [
+    "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.5b232871391603ae",
+    "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7f5b07a5d447cfa0"
+  ],
+  "source_sha256": {
+    "libp2p-request-response-0.29.0/src/lib.rs": "a600455fa63912a7aef65b9956e82b1f7219a997068058b1cb34e2271b50d983"
+  },
+  "trace_start_unix_seconds": 1789030028.0473912,
+  "allocated": 1113,
+  "freed": 1103,
+  "site_count": 43,
+  "sample_count": 34,
+  "selected_allocations": [
+    {
+      "seconds": 3.513,
+      "id": 25,
+      "bytes": 52,
+      "site": 12
+    },
+    {
+      "seconds": 3.754,
+      "id": 26,
+      "bytes": 52,
+      "site": 13
+    },
+    {
+      "seconds": 68.918,
+      "id": 413,
+      "bytes": 52,
+      "site": 27
+    },
+    {
+      "seconds": 68.998,
+      "id": 417,
+      "bytes": 52,
+      "site": 28
+    },
+    {
+      "seconds": 69.087,
+      "id": 418,
+      "bytes": 52,
+      "site": 29
+    },
+    {
+      "seconds": 69.089,
+      "id": 419,
+      "bytes": 52,
+      "site": 30
+    },
+    {
+      "seconds": 69.459,
+      "id": 424,
+      "bytes": 52,
+      "site": 33
+    },
+    {
+      "seconds": 69.752,
+      "id": 434,
+      "bytes": 52,
+      "site": 38
+    },
+    {
+      "seconds": 69.833,
+      "id": 443,
+      "bytes": 52,
+      "site": 42
+    },
+    {
+      "seconds": 70.554,
+      "id": 453,
+      "bytes": 52,
+      "site": 43
+    },
+    {
+      "seconds": 93.568,
+      "id": 612,
+      "bytes": 52,
+      "site": 12
+    },
+    {
+      "seconds": 93.757,
+      "id": 613,
+      "bytes": 52,
+      "site": 13
+    }
+  ],
+  "selected_frees": [
+    {
+      "seconds": 63.851,
+      "id": 25,
+      "expected_bytes": 52,
+      "bytes": 52
+    },
+    {
+      "seconds": 63.851,
+      "id": 26,
+      "expected_bytes": 52,
+      "bytes": 52
+    }
+  ],
+  "selected_site_frames": {
+    "12": [
+      "__rustc::__rust_alloc",
+      "<alloc::alloc::Global>::alloc_impl_runtime",
+      "<alloc::alloc::Global as core::alloc::Allocator>::allocate",
+      "<hashbrown::raw::RawTableInner>::new_uninitialized::<alloc::alloc::Global>",
+      "<hashbrown::raw::RawTableInner>::fallible_with_capacity::<alloc::alloc::Global>",
+      "<hashbrown::raw::RawTable<(libp2p_request_response::InboundRequestId, ())>>::reserve_rehash::<hashbrown::map::make_hasher<libp2p_request_response::InboundRequestId, (), std::hash::random::RandomState>::{closure#0}>",
+      "<hashbrown::raw::RawTable<(libp2p_request_response::InboundRequestId, ())>>::reserve::<hashbrown::map::make_hasher<libp2p_request_response::InboundRequestId, (), std::hash::random::RandomState>::{closure#0}>",
+      "<hashbrown::raw::RawTable<(libp2p_request_response::InboundRequestId, ())>>::find_or_find_insert_index::<hashbrown::map::equivalent_key<libp2p_request_response::InboundRequestId, libp2p_request_response::InboundRequestId, ()>::{closure#0}, ",
+      "<hashbrown::map::HashMap<libp2p_request_response::InboundRequestId, (), std::hash::random::RandomState>>::insert",
+      "<std::collections::hash::set::HashSet<libp2p_request_response::InboundRequestId>>::insert",
+      "<libp2p_request_response::Behaviour<libp2p_autonat::v1::protocol::AutoNatCodec> as libp2p_swarm::behaviour::NetworkBehaviour>::on_connection_handler_event",
+      "<libp2p_autonat::v1::behaviour::Behaviour as libp2p_swarm::behaviour::NetworkBehaviour>::on_connection_handler_event"
+    ],
+    "13": [
+      "__rustc::__rust_alloc",
+      "<alloc::alloc::Global>::alloc_impl_runtime",
+      "<alloc::alloc::Global as core::alloc::Allocator>::allocate",
+      "<hashbrown::raw::RawTableInner>::new_uninitialized::<alloc::alloc::Global>",
+      "<hashbrown::raw::RawTableInner>::fallible_with_capacity::<alloc::alloc::Global>",
+      "<hashbrown::raw::RawTable<(libp2p_request_response::OutboundRequestId, ())>>::reserve_rehash::<hashbrown::map::make_hasher<libp2p_request_response::OutboundRequestId, (), std::hash::random::RandomState>::{closure#0}>",
+      "<hashbrown::raw::RawTable<(libp2p_request_response::OutboundRequestId, ())>>::reserve::<hashbrown::map::make_hasher<libp2p_request_response::OutboundRequestId, (), std::hash::random::RandomState>::{closure#0}>",
+      "<hashbrown::raw::RawTable<(libp2p_request_response::OutboundRequestId, ())>>::find_or_find_insert_index::<hashbrown::map::equivalent_key<libp2p_request_response::OutboundRequestId, libp2p_request_response::OutboundRequestId, ()>::{closure#0",
+      "<hashbrown::map::HashMap<libp2p_request_response::OutboundRequestId, (), std::hash::random::RandomState>>::insert",
+      "<std::collections::hash::set::HashSet<libp2p_request_response::OutboundRequestId>>::insert",
+      "<libp2p_request_response::Behaviour<libp2p_autonat::v1::protocol::AutoNatCodec>>::try_send_request",
+      "<libp2p_request_response::Behaviour<libp2p_autonat::v1::protocol::AutoNatCodec>>::send_request_with_addresses"
+    ],
+    "27": [
+      "__rustc::__rust_alloc",
+      "<alloc::alloc::Global>::alloc_impl_runtime",
+      "<alloc::alloc::Global as core::alloc::Allocator>::allocate",
+      "<hashbrown::raw::RawTableInner>::new_uninitialized::<alloc::alloc::Global>",
+      "<hashbrown::raw::RawTableInner>::fallible_with_capacity::<alloc::alloc::Global>",
+      "<hashbrown::raw::RawTable<(libp2p_kad::query::QueryId, ())>>::reserve_rehash::<hashbrown::map::make_hasher<libp2p_kad::query::QueryId, (), std::hash::random::RandomState>::{closure#0}>",
+      "<hashbrown::raw::RawTable<(libp2p_kad::query::QueryId, ())>>::reserve::<hashbrown::map::make_hasher<libp2p_kad::query::QueryId, (), std::hash::random::RandomState>::{closure#0}>",
+      "<hashbrown::raw::RawTable<(libp2p_kad::query::QueryId, ())>>::find_or_find_insert_index::<hashbrown::map::equivalent_key<libp2p_kad::query::QueryId, libp2p_kad::query::QueryId, ()>::{closure#0}, hashbrown::map::make_hasher<libp2p_kad::query",
+      "<hashbrown::map::HashMap<libp2p_kad::query::QueryId, (), std::hash::random::RandomState>>::insert",
+      "<std::collections::hash::set::HashSet<libp2p_kad::query::QueryId>>::insert",
+      "<p2p_vpn::runtime::runner::KademliaMaintenance>::record_started",
+      "p2p_vpn::runtime::runner::run_node_until_with_membership_state::<core::future::pending::Pending<p2p_vpn::runtime::runner::ShutdownReason>>::{closure#0}"
+    ],
+    "28": [
+      "__rustc::__rust_alloc",
+      "<alloc::alloc::Global>::alloc_impl_runtime",
+      "<alloc::alloc::Global as core::alloc::Allocator>::allocate",
+      "<hashbrown::raw::RawTableInner>::new_uninitialized::<alloc::alloc::Global>",
+      "<hashbrown::raw::RawTableInner>::fallible_with_capacity::<alloc::alloc::Global>",
+      "<hashbrown::raw::RawTable<(libp2p_swarm::connection::ConnectionId, ())>>::reserve_rehash::<hashbrown::map::make_hasher<libp2p_swarm::connection::ConnectionId, (), std::hash::random::RandomState>::{closure#0}>",
+      "<hashbrown::raw::RawTable<(libp2p_swarm::connection::ConnectionId, ())>>::reserve::<hashbrown::map::make_hasher<libp2p_swarm::connection::ConnectionId, (), std::hash::random::RandomState>::{closure#0}>",
+      "<hashbrown::raw::RawTable<(libp2p_swarm::connection::ConnectionId, ())>>::find_or_find_insert_index::<hashbrown::map::equivalent_key<libp2p_swarm::connection::ConnectionId, libp2p_swarm::connection::ConnectionId, ()>::{closure#0}, hashbrown",
+      "<hashbrown::map::HashMap<libp2p_swarm::connection::ConnectionId, (), std::hash::random::RandomState>>::insert",
+      "<std::collections::hash::set::HashSet<libp2p_swarm::connection::ConnectionId>>::insert",
+      "<libp2p_dcutr::behaviour::Behaviour as libp2p_swarm::behaviour::NetworkBehaviour>::handle_established_outbound_connection",
+      "<libp2p_swarm::behaviour::toggle::Toggle<libp2p_dcutr::behaviour::Behaviour> as libp2p_swarm::behaviour::NetworkBehaviour>::handle_established_outbound_connection"
+    ],
+    "29": [
+      "__rustc::__rust_alloc",
+      "<alloc::alloc::Global>::alloc_impl_runtime",
+      "<alloc::alloc::Global as core::alloc::Allocator>::allocate",
+      "<hashbrown::raw::RawTableInner>::new_uninitialized::<alloc::alloc::Global>",
+      "<hashbrown::raw::RawTableInner>::fallible_with_capacity::<alloc::alloc::Global>",
+      "<hashbrown::raw::RawTable<(libp2p_request_response::OutboundRequestId, ())>>::reserve_rehash::<hashbrown::map::make_hasher<libp2p_request_response::OutboundRequestId, (), std::hash::random::RandomState>::{closure#0}>",
+      "<hashbrown::raw::RawTable<(libp2p_request_response::OutboundRequestId, ())>>::reserve::<hashbrown::map::make_hasher<libp2p_request_response::OutboundRequestId, (), std::hash::random::RandomState>::{closure#0}>",
+      "<hashbrown::raw::RawTable<(libp2p_request_response::OutboundRequestId, ())>>::find_or_find_insert_index::<hashbrown::map::equivalent_key<libp2p_request_response::OutboundRequestId, libp2p_request_response::OutboundRequestId, ()>::{closure#0",
+      "<hashbrown::map::HashMap<libp2p_request_response::OutboundRequestId, (), std::hash::random::RandomState>>::insert",
+      "<std::collections::hash::set::HashSet<libp2p_request_response::OutboundRequestId>>::insert",
+      "<libp2p_request_response::Behaviour<p2p_vpn::runtime::control::ControlCodec>>::try_send_request",
+      "<libp2p_request_response::Behaviour<p2p_vpn::runtime::control::ControlCodec>>::send_request_with_addresses"
+    ],
+    "30": [
+      "__rustc::__rust_alloc",
+      "<alloc::alloc::Global>::alloc_impl_runtime",
+      "<alloc::alloc::Global as core::alloc::Allocator>::allocate",
+      "<hashbrown::raw::RawTableInner>::new_uninitialized::<alloc::alloc::Global>",
+      "<hashbrown::raw::RawTableInner>::fallible_with_capacity::<alloc::alloc::Global>",
+      "<hashbrown::raw::RawTable<(libp2p_request_response::OutboundRequestId, ())>>::reserve_rehash::<hashbrown::map::make_hasher<libp2p_request_response::OutboundRequestId, (), std::hash::random::RandomState>::{closure#0}>",
+      "<hashbrown::raw::RawTable<(libp2p_request_response::OutboundRequestId, ())>>::reserve::<hashbrown::map::make_hasher<libp2p_request_response::OutboundRequestId, (), std::hash::random::RandomState>::{closure#0}>",
+      "<hashbrown::raw::RawTable<(libp2p_request_response::OutboundRequestId, ())>>::find_or_find_insert_index::<hashbrown::map::equivalent_key<libp2p_request_response::OutboundRequestId, libp2p_request_response::OutboundRequestId, ()>::{closure#0",
+      "<hashbrown::map::HashMap<libp2p_request_response::OutboundRequestId, (), std::hash::random::RandomState>>::insert",
+      "<std::collections::hash::set::HashSet<libp2p_request_response::OutboundRequestId>>::insert",
+      "<libp2p_request_response::Behaviour<p2p_vpn::runtime::service::ServiceCodec>>::try_send_request",
+      "<libp2p_request_response::Behaviour<p2p_vpn::runtime::service::ServiceCodec>>::send_request_with_addresses"
+    ],
+    "33": [
+      "__rustc::__rust_alloc",
+      "<alloc::alloc::Global>::alloc_impl_runtime",
+      "<alloc::alloc::Global as core::alloc::Allocator>::allocate",
+      "<hashbrown::raw::RawTableInner>::new_uninitialized::<alloc::alloc::Global>",
+      "<hashbrown::raw::RawTableInner>::fallible_with_capacity::<alloc::alloc::Global>",
+      "<hashbrown::raw::RawTable<(libp2p_request_response::InboundRequestId, ())>>::reserve_rehash::<hashbrown::map::make_hasher<libp2p_request_response::InboundRequestId, (), std::hash::random::RandomState>::{closure#0}>",
+      "<hashbrown::raw::RawTable<(libp2p_request_response::InboundRequestId, ())>>::reserve::<hashbrown::map::make_hasher<libp2p_request_response::InboundRequestId, (), std::hash::random::RandomState>::{closure#0}>",
+      "<hashbrown::raw::RawTable<(libp2p_request_response::InboundRequestId, ())>>::find_or_find_insert_index::<hashbrown::map::equivalent_key<libp2p_request_response::InboundRequestId, libp2p_request_response::InboundRequestId, ()>::{closure#0}, ",
+      "<hashbrown::map::HashMap<libp2p_request_response::InboundRequestId, (), std::hash::random::RandomState>>::insert",
+      "<std::collections::hash::set::HashSet<libp2p_request_response::InboundRequestId>>::insert",
+      "<libp2p_request_response::Behaviour<p2p_vpn::runtime::service::ServiceCodec> as libp2p_swarm::behaviour::NetworkBehaviour>::on_connection_handler_event",
+      "<p2p_vpn::runtime::p2p::Behaviour as libp2p_swarm::behaviour::NetworkBehaviour>::on_connection_handler_event"
+    ],
+    "38": [
+      "__rustc::__rust_alloc",
+      "<alloc::alloc::Global>::alloc_impl_runtime",
+      "<alloc::alloc::Global as core::alloc::Allocator>::allocate",
+      "<hashbrown::raw::RawTableInner>::new_uninitialized::<alloc::alloc::Global>",
+      "<hashbrown::raw::RawTableInner>::fallible_with_capacity::<alloc::alloc::Global>",
+      "<hashbrown::raw::RawTable<(libp2p_request_response::InboundRequestId, ())>>::reserve_rehash::<hashbrown::map::make_hasher<libp2p_request_response::InboundRequestId, (), std::hash::random::RandomState>::{closure#0}>",
+      "<hashbrown::raw::RawTable<(libp2p_request_response::InboundRequestId, ())>>::reserve::<hashbrown::map::make_hasher<libp2p_request_response::InboundRequestId, (), std::hash::random::RandomState>::{closure#0}>",
+      "<hashbrown::raw::RawTable<(libp2p_request_response::InboundRequestId, ())>>::find_or_find_insert_index::<hashbrown::map::equivalent_key<libp2p_request_response::InboundRequestId, libp2p_request_response::InboundRequestId, ()>::{closure#0}, ",
+      "<hashbrown::map::HashMap<libp2p_request_response::InboundRequestId, (), std::hash::random::RandomState>>::insert",
+      "<std::collections::hash::set::HashSet<libp2p_request_response::InboundRequestId>>::insert",
+      "<libp2p_request_response::Behaviour<p2p_vpn::runtime::control::ControlCodec> as libp2p_swarm::behaviour::NetworkBehaviour>::on_connection_handler_event",
+      "<p2p_vpn::runtime::p2p::Behaviour as libp2p_swarm::behaviour::NetworkBehaviour>::on_connection_handler_event"
+    ],
+    "42": [
+      "__rustc::__rust_alloc",
+      "<alloc::alloc::Global>::alloc_impl_runtime",
+      "<alloc::alloc::Global as core::alloc::Allocator>::allocate",
+      "<hashbrown::raw::RawTableInner>::new_uninitialized::<alloc::alloc::Global>",
+      "<hashbrown::raw::RawTable<(multiaddr::Multiaddr, ())>>::new_uninitialized",
+      "<hashbrown::raw::RawTable<(multiaddr::Multiaddr, ())> as core::clone::Clone>::clone",
+      "<hashbrown::map::HashMap<multiaddr::Multiaddr, (), std::hash::random::RandomState> as core::clone::Clone>::clone",
+      "<std::collections::hash::set::HashSet<multiaddr::Multiaddr> as core::clone::Clone>::clone",
+      "<libp2p_kad::addresses::Addresses as core::clone::Clone>::clone",
+      "<libp2p_kad::addresses::Addresses>::candidate",
+      "<libp2p_kad::addresses::Addresses>::insert",
+      "<libp2p_kad::behaviour::Behaviour<libp2p_kad::record::store::memory::MemoryStore>>::add_address"
+    ],
+    "43": [
+      "__rustc::__rust_alloc",
+      "<alloc::alloc::Global>::alloc_impl_runtime",
+      "<alloc::alloc::Global as core::alloc::Allocator>::allocate",
+      "<hashbrown::raw::RawTableInner>::new_uninitialized::<alloc::alloc::Global>",
+      "<hashbrown::raw::RawTableInner>::fallible_with_capacity::<alloc::alloc::Global>",
+      "<hashbrown::raw::RawTable<(libp2p_request_response::InboundRequestId, ())>>::reserve_rehash::<hashbrown::map::make_hasher<libp2p_request_response::InboundRequestId, (), std::hash::random::RandomState>::{closure#0}>",
+      "<hashbrown::raw::RawTable<(libp2p_request_response::InboundRequestId, ())>>::reserve::<hashbrown::map::make_hasher<libp2p_request_response::InboundRequestId, (), std::hash::random::RandomState>::{closure#0}>",
+      "<hashbrown::raw::RawTable<(libp2p_request_response::InboundRequestId, ())>>::find_or_find_insert_index::<hashbrown::map::equivalent_key<libp2p_request_response::InboundRequestId, libp2p_request_response::InboundRequestId, ()>::{closure#0}, ",
+      "<hashbrown::map::HashMap<libp2p_request_response::InboundRequestId, (), std::hash::random::RandomState>>::insert",
+      "<std::collections::hash::set::HashSet<libp2p_request_response::InboundRequestId>>::insert",
+      "<libp2p_request_response::Behaviour<p2p_vpn::runtime::packet::PacketCodec> as libp2p_swarm::behaviour::NetworkBehaviour>::on_connection_handler_event",
+      "<p2p_vpn::runtime::p2p::Behaviour as libp2p_swarm::behaviour::NetworkBehaviour>::on_connection_handler_event"
+    ]
+  },
+  "last_live_sample": {
+    "seconds": 168.757,
+    "live": [
+      [
+        413,
+        52
+      ],
+      [
+        417,
+        52
+      ],
+      [
+        418,
+        52
+      ],
+      [
+        419,
+        52
+      ],
+      [
+        424,
+        52
+      ],
+      [
+        434,
+        52
+      ],
+      [
+        443,
+        52
+      ],
+      [
+        453,
+        52
+      ],
+      [
+        612,
+        52
+      ],
+      [
+        613,
+        52
+      ]
+    ]
+  },
+  "unfreed_at_trace_end": [
+    {
+      "seconds": 68.918,
+      "id": 413,
+      "bytes": 52,
+      "site": 27
+    },
+    {
+      "seconds": 68.998,
+      "id": 417,
+      "bytes": 52,
+      "site": 28
+    },
+    {
+      "seconds": 69.087,
+      "id": 418,
+      "bytes": 52,
+      "site": 29
+    },
+    {
+      "seconds": 69.089,
+      "id": 419,
+      "bytes": 52,
+      "site": 30
+    },
+    {
+      "seconds": 69.459,
+      "id": 424,
+      "bytes": 52,
+      "site": 33
+    },
+    {
+      "seconds": 69.752,
+      "id": 434,
+      "bytes": 52,
+      "site": 38
+    },
+    {
+      "seconds": 69.833,
+      "id": 443,
+      "bytes": 52,
+      "site": 42
+    },
+    {
+      "seconds": 70.554,
+      "id": 453,
+      "bytes": 52,
+      "site": 43
+    },
+    {
+      "seconds": 93.568,
+      "id": 612,
+      "bytes": 52,
+      "site": 12
+    },
+    {
+      "seconds": 93.757,
+      "id": 613,
+      "bytes": 52,
+      "site": 13
+    }
+  ],
+  "runtime_failure": {
+    "role": "a",
+    "scheduled_seconds": [
+      40,
+      45,
+      50,
+      55
+    ],
+    "error": "status query: TimedOut",
+    "query_timeout_seconds": 1,
+    "role_b_errors": 0
+  },
+  "cleanup": "All recorded runner, orchestrator and daemon host PIDs absent after terminal sessions.",
+  "limitations": [
+    "Only node A allocations requested as 52 bytes after attachment are covered.",
+    "Pre-attachment allocations/frees are not counted; ten remaining blocks are not ten blocks of net heap growth.",
+    "Reallocation entry hooks exist, but no tracked reallocations were observed.",
+    "Frames are function names only; pointers remain internal to debugger matching.",
+    "No whole-process leak-freedom, successful sustained-resource gate or graceful runtime teardown claim."
+  ]
+}

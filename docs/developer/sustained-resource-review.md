@@ -40,6 +40,7 @@ No physical device or deployed host is authorized for this work.
 | [Connected allocation results](connected-allocation-results.md) | Paired full ten-cycle captures; requested allocations rise despite drained work | Connected transport and retained-growth attribution |
 | [AutoNAT ownership](autonat-ownership-review.md) | Paired isolated controls/refusals; repeated requests plateau; timer residual attributed separately | Exact daemon attribution and reconnect retention |
 | [AutoNAT allocation sites](autonat-allocation-sites.md) | Two debugger captures identify seven 52-byte tables and matching frees | Full-daemon ownership across reconnect and pressure |
+| [Connected allocation sites](connected-allocation-sites.md) | Full-daemon request-set allocation/free evidence across retirement | Observer-overhead failure; complete coverage and larger owners remain open |
 | [Sustained traffic fixture](sustained-traffic-review.md) | Two full captures: 30000/30000, stable descriptors, CPU settles below 0.2% per node after load | Broader allocation attribution and multi-network workloads remain open |
 | [Capability retirement](capability-retirement-review.md) | Retry gap reproduced; guarded correction and dispatch regressions pass | Live follow-ups pass but did not exercise the retry branch |
 | [Lifecycle churn results](lifecycle-churn-results.md) | Both ten-cycle captures pass; queues drain and recovery descriptor counts stay stable | RSS attribution and multi-network isolation remain open |
