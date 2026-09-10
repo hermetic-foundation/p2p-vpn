@@ -137,6 +137,28 @@ Acceptance remains incomplete. Local evidence does not certify physical Android 
 - This addition is test-only; existing prepared native artifacts still predate the provider-key fix.
   No runtime, configuration, pairing or phone changes were made.
 
+### Prepared Bounded-Provider Builds
+
+- Source `648d0943` includes peer-ID recovery and bounded public provider keys.
+  Offline ARM64 build passed in 40.80s; Linux build passed in 42.42s, using two Cargo jobs.
+- Build logs: `/tmp/p2p-vpn-bounded-provider-{android,linux}.log`.
+  APK assembly passed in seven seconds; `/tmp/p2p-vpn-bounded-provider-apk.log`.
+- APK 16 KiB alignment passed. Java tests were up-to-date, not freshly executed.
+  Embedded ARM64 library matches Gradle's stripped output; its merged input matches the native build.
+- Nix-evaluated source `/nix/store/sm3wsqxr2rv619xmngrr46z96vrn7f40-source`
+  matches working-tree `src` and `crates`; no full Nix package realization was attempted.
+- Root-inclusive temporary storage after builds: 9,797,684 KiB, below 10 GiB.
+  Pixel remained attached and Linux retained its original active service without drop-ins.
+- Neither artifact was deployed. Fresh approval for the matched-build cellular retest is pending.
+  These build checks do not supersede the failed physical test.
+
+| Artifact | SHA-256 |
+| --- | --- |
+| Debug APK | `9533099242f6cbae6b83aa1c6d7817f6b4f0b739e0a923c5affae2e5a9161c04` |
+| ARM64 library before stripping | `e62bd69108404787ecd2ea0a0ddb585306c39351867204f4c3f0592179ba4b38` |
+| ARM64 library inside APK | `5cdfdf633c05a02082bd8305d352f63804f54ec6c2e34a59c5ccc597db3b270f` |
+| Linux binary | `a763cf82d95d48cdc155e26b5e17b807fb0ff4243ff5e296f55ff17bad0842a3` |
+
 ### Requirement Status
 
 | Requirement | Verified evidence | Remaining work |
