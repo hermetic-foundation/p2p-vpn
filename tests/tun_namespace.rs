@@ -72,6 +72,8 @@ const DIRECT_QUIC_TEST_NAME: &str = "tun_namespace_ping_crosses_owned_quic_packe
 const MDNS_TEST_NAME: &str = "tun_namespace_ping_crosses_mdns_discovered_overlay";
 const AUTOMATIC_QUIC_TEST_NAME: &str = "tun_namespace_minimal_config_prefers_quic_datagrams";
 const AUTOMATIC_UDP_COMPAT_TEST_NAME: &str = "tun_namespace_minimal_config_uses_udp_only_peer";
+const AUTOMATIC_STREAM_COMPAT_TEST_NAME: &str =
+    "tun_namespace_minimal_config_uses_stream_only_peer";
 const RELAY_TEST_NAME: &str = "tun_namespace_ping_crosses_relay_overlay";
 const INVITE_RELAY_TEST_NAME: &str = "tun_namespace_invite_import_crosses_relay_overlay";
 const PAIRING_TEST_NAME: &str = "tun_namespace_pair_accept_crosses_live_pairing_overlay";
@@ -211,6 +213,16 @@ fn tun_namespace_minimal_config_uses_udp_only_peer() {
         Ok("orchestrator") => run_mdns_orchestrator(AUTOMATIC_UDP_COMPAT_TEST_NAME),
         Ok("node") => run_node_child(),
         _ => reexec_orchestrator(AUTOMATIC_UDP_COMPAT_TEST_NAME),
+    }
+}
+
+#[test]
+#[ignore = "requires Linux user and network namespaces plus /dev/net/tun"]
+fn tun_namespace_minimal_config_uses_stream_only_peer() {
+    match env::var(CHILD_ENV).as_deref() {
+        Ok("orchestrator") => run_mdns_orchestrator(AUTOMATIC_STREAM_COMPAT_TEST_NAME),
+        Ok("node") => run_node_child(),
+        _ => reexec_orchestrator(AUTOMATIC_STREAM_COMPAT_TEST_NAME),
     }
 }
 
@@ -787,6 +799,7 @@ fn run_direct_orchestrator(test_name: &str) {
 }
 
 fn run_mdns_orchestrator(test_name: &str) {
+    let stream_only = test_name == AUTOMATIC_STREAM_COMPAT_TEST_NAME;
     let automatic_quic = test_name == AUTOMATIC_QUIC_TEST_NAME
         || test_name == automatic_quic_recovery::TEST_NAME
         || test_name == automatic_quic_recovery::STARTUP_TEST_NAME
@@ -804,7 +817,7 @@ fn run_mdns_orchestrator(test_name: &str) {
     let start_a = temp_dir.join("start-a");
     let start_b = temp_dir.join("start-b");
 
-    let config_b = if automatic_quic || test_name == AUTOMATIC_UDP_COMPAT_TEST_NAME {
+    let config_b = if automatic_quic || test_name == AUTOMATIC_UDP_COMPAT_TEST_NAME || stream_only {
         automatic_quic_overlay_config("b", &identity_b, &identity_a)
     } else {
         mdns_overlay_config("b", &identity_b, &identity_a)
@@ -853,7 +866,10 @@ fn run_mdns_orchestrator(test_name: &str) {
             &port,
         );
     }
-    if automatic_quic {
+    if stream_only {
+        wait_for_peer_ready(&temp_dir, "a");
+        wait_for_peer_ready(&temp_dir, "b");
+    } else if automatic_quic {
         wait_for_owned_quic_packet_plane_sessions(&temp_dir);
         wait_for_selected_path(&temp_dir, "a", "direct_quic_datagram");
         wait_for_selected_path(&temp_dir, "b", "direct_quic_datagram");
@@ -867,7 +883,38 @@ fn run_mdns_orchestrator(test_name: &str) {
     let initiator_routes = ns_command_output(node_a.id(), "ip", &["route", "show", "table", "all"]);
     let responder_addresses = ns_command_output(node_b.id(), "ip", &["addr", "show"]);
     let responder_routes = ns_command_output(node_b.id(), "ip", &["route", "show", "table", "all"]);
-    if automatic_quic {
+    if stream_only {
+        fs::write(temp_dir.join("stream-only-ping.txt"), &host_ping.stdout)
+            .expect("save stream-only traffic evidence");
+        assert!(
+            host_ping.status.success()
+                && recovery_soak::complete_ping(&String::from_utf8_lossy(&host_ping.stdout)),
+            "stream-only peer did not deliver all five packets: {host_ping:?}"
+        );
+        for role in ["a", "b"] {
+            wait_for_daemon_state(
+                &temp_dir,
+                role,
+                Duration::from_secs(5),
+                "direct stream payload without datagrams",
+                |lines| {
+                    let tcp =
+                        state_metric_count(lines, "outbound_direct_tcp_stream_fallback_packets");
+                    let quic =
+                        state_metric_count(lines, "outbound_direct_quic_stream_fallback_packets");
+                    tcp.zip(quic)
+                        .is_some_and(|(tcp, quic)| tcp.saturating_add(quic) >= 5)
+                        && state_metric_count(lines, "outbound_owned_quic_datagram_packets")
+                            == Some(0)
+                        && state_metric_count(lines, "outbound_owned_udp_datagram_packets")
+                            == Some(0)
+                        && state_metric_count(lines, "outbound_relay_stream_fallback_packets")
+                            == Some(0)
+                },
+            );
+        }
+        capture_daemon_snapshots(&temp_dir, &["a", "b"]);
+    } else if automatic_quic {
         wait_for_owned_quic_packet_plane_datagrams(&temp_dir);
     } else {
         wait_for_packet_plane_datagrams(&temp_dir);
@@ -906,7 +953,7 @@ fn run_mdns_orchestrator(test_name: &str) {
     if automatic_quic {
         assert_owned_quic_packet_plane_datagrams_used("node A", &initiator_log, &responder_log);
         assert_owned_quic_packet_plane_datagrams_used("node B", &responder_log, &initiator_log);
-    } else {
+    } else if !stream_only {
         assert_packet_plane_datagrams_used("node A", &initiator_log, &responder_log);
         assert_packet_plane_datagrams_used("node B", &responder_log, &initiator_log);
     }
@@ -3292,6 +3339,7 @@ fn run_node_child_inner() {
         } else if env::args().any(|argument| {
             argument == AUTOMATIC_QUIC_TEST_NAME
                 || argument == AUTOMATIC_UDP_COMPAT_TEST_NAME
+                || argument == AUTOMATIC_STREAM_COMPAT_TEST_NAME
                 || argument == automatic_quic_recovery::TEST_NAME
                 || argument == automatic_quic_recovery::STARTUP_TEST_NAME
                 || argument == automatic_quic_recovery::MOVEMENT_TEST_NAME
@@ -3623,6 +3671,10 @@ fn automatic_quic_overlay_config(
     // Keep discovery inside the isolated test LAN, without supplying peer endpoints.
     config.network.discovery = mdns_test_discovery();
     if role == "b" && env::args().any(|argument| argument == AUTOMATIC_UDP_COMPAT_TEST_NAME) {
+        config.network.packet_plane.quic_listen.clear();
+    }
+    if role == "b" && env::args().any(|argument| argument == AUTOMATIC_STREAM_COMPAT_TEST_NAME) {
+        config.network.packet_plane.listen.clear();
         config.network.packet_plane.quic_listen.clear();
     }
     config

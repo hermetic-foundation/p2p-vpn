@@ -11,7 +11,7 @@ The goal remains active. Local evidence does not certify physical Android or pub
 | --- | --- | --- |
 | Defaults and overrides | Shared config and Android profile regressions; 26 NixOS contracts; Pixel profile upgrade | Native NixOS activation |
 | QUIC payload preference | Minimal TUN fixture; physical Pixel/Linux payloads and Linux backend-specific counters | Physical sustained stability and Android backend-specific accounting |
-| Compatibility | Explicit UDP-only current peer; override round trips; isolated relay payloads | Archived-release compatibility is not established; review direct stream-only coverage |
+| Compatibility | Explicit UDP-only and stream-only current peers; override round trips; isolated relay payloads | Archived-release compatibility is not established |
 | Autonomous recovery | Four initiator orderings; startup and established QUIC blocking | Physical movement and sustained settling evidence |
 | MTU and isolation | 1,280-byte IPv4 fallback/recovery traffic; Android supervisor tests | Smaller-underlay MTU boundaries and physical multi-network behavior |
 | Verification | 1,526 workspace tests; required root Clippy groups; ARM64 build; fresh JVM tests | Full Nix package/source-parity audit and remaining targeted scenarios |
@@ -95,6 +95,31 @@ APK alignment passed; native library hash is unchanged from the physical run.
 
 New APK SHA-256: `2be7a7d92012e45ff1f51a5220c6df8d730ab22acffac1c5ef7a52a5ece1aee8`.
 This diagnostics APK has not been deployed. Rust/Nix checks were not rerun for this Java-only change.
+
+## Stream-Only Compatibility Check
+
+- Extend the isolated minimal-config mDNS fixture with one explicitly stream-only peer.
+- Leave the other peer's datagram defaults enabled; supply no peer endpoints or routes.
+- Require five delivered pings and at least five direct-stream payloads per side.
+- Require zero datagram and relay payload counts; retain existing discovery and timeout assertions.
+- Run helper tests and the ignored namespace scenario with cached tools and bounded storage.
+- This verifies current stream-only configuration compatibility, not an archived binary release.
+
+| Scenario | Result | Evidence directory under `/tmp/` |
+| --- | --- | --- |
+| Stream-only, strict five-reply assertion | Passed, 7.27 seconds | `p2p-vpn-mdns-tun-e2e-1.d5d5b552096ba4ea` |
+| Minimal automatic QUIC regression | Passed, 11.99 seconds | `p2p-vpn-mdns-tun-e2e-1.e343901827b88dcd` |
+| Minimal UDP-only compatibility regression | Passed, 11.08 seconds | `p2p-vpn-mdns-tun-e2e-1.2d690ec9c581005a` |
+
+The strict stream-only run saved ping output and daemon snapshots before shutdown.
+Both peers submitted at least five direct-stream payloads, with zero datagram or relay payloads.
+The run used TCP streams; it does not independently certify QUIC stream-only behavior.
+
+- Namespace helpers: 60 passed, 32 ignored, zero failed.
+- Cached Clippy correctness/suspicious/perf gates passed; nonfatal warnings remain.
+- Rustfmt and whitespace checks passed. No production code or device configuration changed.
+- Final harness SHA-256: `cd3c041004f256a82261591eb2dd5f6e71d8233900f5146757378ee57ad4b6b7`.
+- QUIC/UDP regression runs preceded the final stream-only assertion strengthening.
 
 ## Historical Implementation Progress
 
