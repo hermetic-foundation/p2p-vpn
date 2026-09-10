@@ -44,8 +44,8 @@ Acceptance remains incomplete. Local evidence does not certify physical Android 
   Investigate destination-address discovery and publication before changing resource limits.
 - Native build logs: `/tmp/p2p-vpn-network-reset-{android,linux}.log`.
   APK assembly and up-to-date JVM tasks: `/tmp/p2p-vpn-network-reset-apk.log`; 16 KiB alignment passed.
-- Latest source has not had a fresh full-workspace or Nix source-parity run.
-  The failed physical test remains an unresolved acceptance defect.
+- At this checkpoint, full-workspace and Nix source-parity validation had not been rerun.
+  Later validation is recorded below; the failed physical test remains an unresolved defect.
 
 | Artifact | SHA-256 |
 | --- | --- |
@@ -82,12 +82,29 @@ Acceptance remains incomplete. Local evidence does not certify physical Android 
   matches working-tree `src` and `crates`; this is source parity, not full package realization.
 - Root-inclusive temporary storage: 9,796,000 KiB, below 10 GiB.
   No new deployment occurred; a fresh matched-build cellular test awaits approval.
+- Full workspace/all-target verification subsequently passed: 1,532 passed, 46 ignored, zero failures.
+  Evidence: `/tmp/p2p-vpn-public-peer-recovery-workspace.log`; source remains `eb0fb4ca`.
 
 | Artifact | SHA-256 |
 | --- | --- |
 | Debug APK | `d1fdc641323e07e33f3c864e3fe57296add1b76850bfe4f84d72296a453ec265` |
 | ARM64 native library | `2f000837d82bc159bec1d26d18aed51c25fe0e3c00cb27385436b9a6c9be7ddd` |
 | Linux binary | `f9fa3e4e6794685b65420bd064d36cae5d7b7eceec90c23cca8c9868861f34c3` |
+
+### Public Provider-Key Review Finding
+
+- `kademlia_rendezvous_key` emits the full network name and base64 membership tag as a provider key.
+  `personal-devices` plus a normal 44-byte tag produces 90 bytes, independently of the tag value.
+- [Upstream Go handlers](https://github.com/libp2p/go-libp2p-kad-dht/blob/master/handlers.go)
+  reject provider advertisement and lookup keys above 80 bytes.
+- Existing key tests use the short literal `tag`; they do not test this interoperability boundary.
+  A permissive local Rust DHT fixture does not establish public-server compatibility.
+- Required correction: bounded public rendezvous keys, consistent publication and lookup derivation,
+  and preserved private/legacy discovery compatibility without changing membership authorization.
+- Required tests: real-length tags, long network names, distinct network/tag scopes and rotation,
+  plus a server fixture enforcing public key-size and value-namespace restrictions.
+- This is a separate unresolved defect; peer-ID lookup alone does not fix provider advertisement.
+  No rollout or successful public-network result is implied by this review.
 
 ### Requirement Status
 
@@ -98,7 +115,7 @@ Acceptance remains incomplete. Local evidence does not certify physical Android 
 | Compatibility | Explicit UDP-only and stream-only current peers; override round trips; isolated relay payloads | Archived-release compatibility is not established |
 | Autonomous recovery | Four initiator orderings; namespace blocking; OnePlus QUIC block/re-promotion | Physical movement, residual loss and sustained settling |
 | MTU and isolation | 1,280-byte IPv4 fallback/recovery traffic; Android supervisor tests | Smaller-underlay MTU boundaries and physical multi-network behavior |
-| Verification | 1,530 workspace tests at `8b4e8d55`; required root Clippy groups; ARM64 build; earlier fresh JVM tests; cached source parity | Full Nix package realization and remaining targeted scenarios |
+| Verification | 1,532 workspace tests at `eb0fb4ca`; required root Clippy groups; ARM64 build; earlier fresh JVM tests; Nix source parity | Full Nix package realization and remaining targeted scenarios |
 | Deployment | Verified debug APK upgrades on Pixel and OnePlus preserving profiles | Physical stability, fallback and recovery checks |
 | Delivery | Core and NixOS commits pushed to main | Final evidence review and requirement-by-requirement closeout |
 
