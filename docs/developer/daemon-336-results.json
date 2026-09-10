@@ -1,0 +1,3866 @@
+{
+  "schema_version": 1,
+  "baseline": "6bc0d8a9",
+  "binary": {
+    "path": "/tmp/p2p-vpn-review-target/debug/deps/tun_namespace-92e26a895f071361",
+    "sha256": "ce9dd5655f18717a1f84f6bdfb848d879d5845f2fe426795182945856e85d486"
+  },
+  "command": "env -u P2P_VPN_TUN_E2E_IDLE_SECONDS -u P2P_VPN_TUN_E2E_ORCHESTRATOR_TIMEOUT_SECONDS -u P2P_VPN_TUN_E2E_WAIT_SCALE PATH=/tmp/p2p-vpn-daemon-336-wrapper:$PATH RUST_MIN_STACK=8388608 P2P_VPN_REVIEW_GRACEFUL_SHUTDOWN=1 P2P_VPN_TUN_E2E_KEEP_TEMP=1 TOKIO_WORKER_THREADS=2 timeout --signal=TERM --kill-after=2s 100 prlimit --fsize=1048576:1048576 -- /tmp/p2p-vpn-review-target/debug/deps/tun_namespace-92e26a895f071361 tun_namespace_ping_crosses_two_node_overlay --ignored --exact --nocapture --test-threads=1",
+  "wrapper": "#!/bin/sh\nset -eu\nif [ \"${P2P_VPN_TUN_E2E_MODE-}\" = node ] && [ \"${P2P_VPN_TUN_E2E_ROLE-}\" = a ]; then\n    test \"$1\" = --net\n    shift\n    exec /run/current-system/sw/bin/unshare --net prlimit --fsize=1048576:1048576 -- /nix/store/bg2bp1zmii5spb2hkgv5xn6mzva7nx9r-gdb-17.2/bin/gdb -q -nx -batch -x /tmp/p2p-vpn-daemon-336.gdb --args \"$@\"\nfi\nexec /run/current-system/sw/bin/unshare \"$@\"\n",
+  "gdb_script": "set pagination off\nset confirm off\nset debuginfod enabled off\nset auto-load off\nset print frame-arguments none\nset print address off\ntbreak tun_namespace::run_node_child\nrun\nset language c\npython\nimport gdb, json\nlive = {}\nsites = []\nallocated = 0\nfreed = 0\nsnapshots = 0\nfailures = []\nexit_code = None\nsizes = {336}\ndef fail(message):\n    failures.append(message)\n    raise gdb.GdbError(message)\ndef filters():\n    free_bp.condition = \" || \".join(\"$rsi == %d\" % s for s in sorted(sizes))\n    resize_bp.condition = \"(\" + free_bp.condition + \") || $rcx == 336\"\nclass Returned(gdb.FinishBreakpoint):\n    def __init__(self, owner, old=None):\n        super().__init__(gdb.newest_frame(), internal=True)\n        self.owner, self.old = owner, old\n    def stop(self):\n        address = int(gdb.parse_and_eval(\"$rax\"))\n        if not address:\n            fail(\"allocation or resize failed; old owner retained\")\n        if self.old is not None:\n            live.pop(self.old, None)\n        if address in live:\n            fail(\"duplicate live allocation address\")\n        live[address] = self.owner\n        return False\n    def out_of_scope(self):\n        failures.append(\"return breakpoint out of scope\")\ndef stack_site():\n    frames = []\n    frame = gdb.newest_frame()\n    for _ in range(24):\n        if frame is None:\n            break\n        frames.append((frame.name() or \"?\")[:240])\n        frame = frame.older()\n    if frames not in sites:\n        if len(sites) >= 64:\n            fail(\"site quota exceeded\")\n        sites.append(frames)\n        print(\"SITE\", json.dumps({\"id\": len(sites), \"frames\": frames}))\n    return sites.index(frames) + 1\ndef new_owner(size):\n    global allocated\n    allocated += 1\n    if allocated > 4096:\n        fail(\"allocation quota exceeded\")\n    return (allocated, size, stack_site())\ndef allocate():\n    size = int(gdb.parse_and_eval(\"$rdi\"))\n    if size != 336:\n        fail(\"allocation filter mismatch\")\n    Returned(new_owner(size))\ndef deallocate():\n    global freed\n    address = int(gdb.parse_and_eval(\"$rdi\"))\n    if address in live:\n        freed += 1\n        live.pop(address)\ndef resize():\n    address = int(gdb.parse_and_eval(\"$rdi\"))\n    size = int(gdb.parse_and_eval(\"$rcx\"))\n    if address in live:\n        ident, _, site = live[address]\n        if size not in sizes:\n            sizes.add(size)\n            filters()\n        Returned((ident, size, site), address)\n    elif size == 336:\n        Returned(new_owner(size))\ndef checkpoint():\n    global snapshots\n    snapshots += 1\n    print(\"CHECKPOINT\", json.dumps({\"index\": snapshots, \"live\": sorted(live.values())}))\nfor symbol in (\"__rust_alloc\", \"__rust_alloc_zeroed\"):\n    bp = gdb.Breakpoint(\"__rustc::\" + symbol, internal=True)\n    bp.condition = \"$rdi == 336\"\n    bp.commands = \"silent\\npython allocate()\\ncontinue\\n\"\nfree_bp = gdb.Breakpoint(\"__rustc::__rust_dealloc\", internal=True)\nfree_bp.commands = \"silent\\npython deallocate()\\ncontinue\\n\"\nresize_bp = gdb.Breakpoint(\"__rustc::__rust_realloc\", internal=True)\nresize_bp.commands = \"silent\\npython resize()\\ncontinue\\n\"\nfilters()\nbp = gdb.Breakpoint(\"tun_namespace::allocation_sample::emit_sizes\", internal=True)\nbp.commands = \"silent\\npython checkpoint()\\ncontinue\\n\"\ndef ended(event):\n    global exit_code\n    exit_code = getattr(event, \"exit_code\", None)\n    print(\"TRACE_SUMMARY\", json.dumps({\"allocated\": allocated, \"freed\": freed, \"live\": sorted(live.values()), \"snapshots\": snapshots, \"sites\": len(sites), \"failures\": failures, \"exit_code\": exit_code}))\ngdb.events.exited.connect(ended)\n\nend\ncontinue\npython assert exit_code == 0 and snapshots == 3 and not failures, \"incomplete trace\"\nquit\n",
+  "excluded_command": "env -u P2P_VPN_TUN_E2E_IDLE_SECONDS -u P2P_VPN_TUN_E2E_ORCHESTRATOR_TIMEOUT_SECONDS -u P2P_VPN_TUN_E2E_WAIT_SCALE PATH=/tmp/p2p-vpn-daemon-336-wrapper:$PATH RUST_MIN_STACK=8388608 P2P_VPN_REVIEW_GRACEFUL_SHUTDOWN=1 P2P_VPN_TUN_E2E_KEEP_TEMP=1 P2P_VPN_TOKIO_WORKER_THREADS=2 timeout --signal=TERM --kill-after=2s 100 prlimit --fsize=1048576:1048576 -- /tmp/p2p-vpn-review-target/debug/deps/tun_namespace-92e26a895f071361 tun_namespace_ping_crosses_two_node_overlay --ignored --exact --nocapture --test-threads=1",
+  "excluded": {
+    "dir": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.c0ee0bae9a52c4dd",
+    "checkpoints": [
+      {
+        "index": 1,
+        "live": []
+      },
+      {
+        "index": 2,
+        "live": [
+          [
+            1,
+            336,
+            1
+          ],
+          [
+            2,
+            336,
+            1
+          ],
+          [
+            3,
+            336,
+            1
+          ],
+          [
+            4,
+            336,
+            1
+          ],
+          [
+            5,
+            336,
+            1
+          ],
+          [
+            6,
+            336,
+            1
+          ],
+          [
+            7,
+            336,
+            1
+          ],
+          [
+            8,
+            336,
+            1
+          ],
+          [
+            9,
+            336,
+            1
+          ],
+          [
+            10,
+            336,
+            1
+          ],
+          [
+            11,
+            336,
+            1
+          ],
+          [
+            12,
+            336,
+            1
+          ],
+          [
+            13,
+            336,
+            1
+          ],
+          [
+            14,
+            336,
+            1
+          ],
+          [
+            15,
+            336,
+            1
+          ],
+          [
+            16,
+            336,
+            1
+          ],
+          [
+            17,
+            336,
+            1
+          ],
+          [
+            18,
+            336,
+            1
+          ],
+          [
+            19,
+            336,
+            1
+          ],
+          [
+            20,
+            336,
+            1
+          ],
+          [
+            21,
+            336,
+            1
+          ],
+          [
+            22,
+            336,
+            1
+          ],
+          [
+            23,
+            336,
+            1
+          ],
+          [
+            24,
+            336,
+            1
+          ],
+          [
+            25,
+            336,
+            1
+          ],
+          [
+            26,
+            336,
+            1
+          ],
+          [
+            27,
+            336,
+            1
+          ],
+          [
+            28,
+            336,
+            1
+          ],
+          [
+            29,
+            336,
+            1
+          ],
+          [
+            30,
+            336,
+            1
+          ],
+          [
+            31,
+            336,
+            1
+          ],
+          [
+            32,
+            336,
+            1
+          ],
+          [
+            33,
+            336,
+            1
+          ],
+          [
+            34,
+            336,
+            1
+          ],
+          [
+            35,
+            336,
+            1
+          ],
+          [
+            36,
+            336,
+            1
+          ],
+          [
+            37,
+            336,
+            1
+          ],
+          [
+            38,
+            336,
+            1
+          ],
+          [
+            39,
+            336,
+            1
+          ],
+          [
+            40,
+            336,
+            1
+          ],
+          [
+            41,
+            336,
+            1
+          ],
+          [
+            42,
+            336,
+            1
+          ],
+          [
+            43,
+            336,
+            1
+          ],
+          [
+            44,
+            336,
+            1
+          ],
+          [
+            45,
+            336,
+            1
+          ],
+          [
+            46,
+            336,
+            1
+          ],
+          [
+            47,
+            336,
+            1
+          ],
+          [
+            48,
+            336,
+            1
+          ],
+          [
+            49,
+            336,
+            1
+          ],
+          [
+            50,
+            336,
+            1
+          ],
+          [
+            51,
+            336,
+            1
+          ],
+          [
+            52,
+            336,
+            1
+          ],
+          [
+            53,
+            336,
+            1
+          ],
+          [
+            54,
+            336,
+            1
+          ],
+          [
+            55,
+            336,
+            1
+          ],
+          [
+            56,
+            336,
+            1
+          ],
+          [
+            57,
+            336,
+            1
+          ],
+          [
+            58,
+            336,
+            1
+          ],
+          [
+            59,
+            336,
+            1
+          ],
+          [
+            60,
+            336,
+            1
+          ],
+          [
+            61,
+            336,
+            1
+          ],
+          [
+            62,
+            336,
+            1
+          ],
+          [
+            63,
+            336,
+            1
+          ],
+          [
+            64,
+            336,
+            1
+          ],
+          [
+            65,
+            336,
+            2
+          ]
+        ]
+      },
+      {
+        "index": 3,
+        "live": [
+          [
+            1,
+            336,
+            1
+          ],
+          [
+            2,
+            336,
+            1
+          ],
+          [
+            3,
+            336,
+            1
+          ],
+          [
+            4,
+            336,
+            1
+          ],
+          [
+            5,
+            336,
+            1
+          ],
+          [
+            6,
+            336,
+            1
+          ],
+          [
+            7,
+            336,
+            1
+          ],
+          [
+            8,
+            336,
+            1
+          ],
+          [
+            9,
+            336,
+            1
+          ],
+          [
+            10,
+            336,
+            1
+          ],
+          [
+            11,
+            336,
+            1
+          ],
+          [
+            12,
+            336,
+            1
+          ],
+          [
+            13,
+            336,
+            1
+          ],
+          [
+            14,
+            336,
+            1
+          ],
+          [
+            15,
+            336,
+            1
+          ],
+          [
+            16,
+            336,
+            1
+          ],
+          [
+            17,
+            336,
+            1
+          ],
+          [
+            18,
+            336,
+            1
+          ],
+          [
+            19,
+            336,
+            1
+          ],
+          [
+            20,
+            336,
+            1
+          ],
+          [
+            21,
+            336,
+            1
+          ],
+          [
+            22,
+            336,
+            1
+          ],
+          [
+            23,
+            336,
+            1
+          ],
+          [
+            24,
+            336,
+            1
+          ],
+          [
+            25,
+            336,
+            1
+          ],
+          [
+            26,
+            336,
+            1
+          ],
+          [
+            27,
+            336,
+            1
+          ],
+          [
+            28,
+            336,
+            1
+          ],
+          [
+            29,
+            336,
+            1
+          ],
+          [
+            30,
+            336,
+            1
+          ],
+          [
+            31,
+            336,
+            1
+          ],
+          [
+            32,
+            336,
+            1
+          ],
+          [
+            33,
+            336,
+            1
+          ],
+          [
+            34,
+            336,
+            1
+          ],
+          [
+            35,
+            336,
+            1
+          ],
+          [
+            36,
+            336,
+            1
+          ],
+          [
+            37,
+            336,
+            1
+          ],
+          [
+            38,
+            336,
+            1
+          ],
+          [
+            39,
+            336,
+            1
+          ],
+          [
+            40,
+            336,
+            1
+          ],
+          [
+            41,
+            336,
+            1
+          ],
+          [
+            42,
+            336,
+            1
+          ],
+          [
+            43,
+            336,
+            1
+          ],
+          [
+            44,
+            336,
+            1
+          ],
+          [
+            45,
+            336,
+            1
+          ],
+          [
+            46,
+            336,
+            1
+          ],
+          [
+            47,
+            336,
+            1
+          ],
+          [
+            48,
+            336,
+            1
+          ],
+          [
+            49,
+            336,
+            1
+          ],
+          [
+            50,
+            336,
+            1
+          ],
+          [
+            51,
+            336,
+            1
+          ],
+          [
+            52,
+            336,
+            1
+          ],
+          [
+            53,
+            336,
+            1
+          ],
+          [
+            54,
+            336,
+            1
+          ],
+          [
+            55,
+            336,
+            1
+          ],
+          [
+            56,
+            336,
+            1
+          ],
+          [
+            57,
+            336,
+            1
+          ],
+          [
+            58,
+            336,
+            1
+          ],
+          [
+            59,
+            336,
+            1
+          ],
+          [
+            60,
+            336,
+            1
+          ],
+          [
+            61,
+            336,
+            1
+          ],
+          [
+            62,
+            336,
+            1
+          ],
+          [
+            63,
+            336,
+            1
+          ],
+          [
+            64,
+            336,
+            1
+          ],
+          [
+            65,
+            336,
+            2
+          ]
+        ]
+      }
+    ],
+    "sites": [
+      {
+        "id": 1,
+        "frames": [
+          "__rustc::__rust_alloc",
+          "<alloc::alloc::Global>::alloc_impl_runtime",
+          "alloc::boxed::box_new_uninit",
+          "<alloc::sync::Arc<tokio::sync::watch::Shared<()>>>::new",
+          "tokio::sync::watch::channel::<()>",
+          "<tokio::signal::registry::EventInfo as core::default::Default>::default",
+          "<tokio::signal::unix::SignalInfo as core::default::Default>::default",
+          "<<tokio::signal::unix::SignalInfo as core::default::Default>::default as core::ops::function::FnMut<()>>::call_mut",
+          "<core::iter::sources::repeat_with::RepeatWith<<tokio::signal::unix::SignalInfo as core::default::Default>::default> as core::iter::traits::iterator::Iterator>::try_fold::<usize, <core::iter::adapters::take::Take<_> as core::iter::adapters::",
+          "<core::iter::adapters::take::Take<core::iter::sources::repeat_with::RepeatWith<<tokio::signal::unix::SignalInfo as core::default::Default>::default>> as core::iter::adapters::take::SpecTake>::spec_for_each::<<alloc::vec::Vec<tokio::signal::",
+          "<core::iter::adapters::take::Take<core::iter::sources::repeat_with::RepeatWith<<tokio::signal::unix::SignalInfo as core::default::Default>::default>> as core::iter::traits::iterator::Iterator>::for_each::<<alloc::vec::Vec<tokio::signal::uni",
+          "<alloc::vec::Vec<tokio::signal::unix::SignalInfo>>::extend_trusted::<core::iter::adapters::take::Take<core::iter::sources::repeat_with::RepeatWith<<tokio::signal::unix::SignalInfo as core::default::Default>::default>>>",
+          "<alloc::vec::Vec<tokio::signal::unix::SignalInfo> as alloc::vec::spec_extend::SpecExtend<tokio::signal::unix::SignalInfo, core::iter::adapters::take::Take<core::iter::sources::repeat_with::RepeatWith<<tokio::signal::unix::SignalInfo as core",
+          "<alloc::vec::Vec<tokio::signal::unix::SignalInfo> as alloc::vec::spec_from_iter_nested::SpecFromIterNested<tokio::signal::unix::SignalInfo, core::iter::adapters::take::Take<core::iter::sources::repeat_with::RepeatWith<<tokio::signal::unix::",
+          "<alloc::vec::Vec<tokio::signal::unix::SignalInfo> as alloc::vec::spec_from_iter::SpecFromIter<tokio::signal::unix::SignalInfo, core::iter::adapters::take::Take<core::iter::sources::repeat_with::RepeatWith<<tokio::signal::unix::SignalInfo as",
+          "<alloc::vec::Vec<tokio::signal::unix::SignalInfo> as core::iter::traits::collect::FromIterator<tokio::signal::unix::SignalInfo>>::from_iter::<core::iter::adapters::take::Take<core::iter::sources::repeat_with::RepeatWith<<tokio::signal::unix",
+          "<core::iter::adapters::take::Take<core::iter::sources::repeat_with::RepeatWith<<tokio::signal::unix::SignalInfo as core::default::Default>::default>> as core::iter::traits::iterator::Iterator>::collect::<alloc::vec::Vec<tokio::signal::unix:",
+          "<alloc::boxed::Box<[tokio::signal::unix::SignalInfo]> as core::iter::traits::collect::FromIterator<tokio::signal::unix::SignalInfo>>::from_iter::<core::iter::adapters::take::Take<core::iter::sources::repeat_with::RepeatWith<<tokio::signal::",
+          "<core::iter::adapters::take::Take<core::iter::sources::repeat_with::RepeatWith<<tokio::signal::unix::SignalInfo as core::default::Default>::default>> as core::iter::traits::iterator::Iterator>::collect::<alloc::boxed::Box<[tokio::signal::un",
+          "<tokio::signal::unix::OsStorage as core::default::Default>::default",
+          "tokio::signal::registry::globals_init",
+          "<tokio::signal::registry::globals_init as core::ops::function::FnOnce<()>>::call_once",
+          "<std::sync::once_lock::OnceLock<tokio::signal::registry::Globals>>::get_or_init::<tokio::signal::registry::globals_init>::{closure#0}",
+          "<std::sync::once_lock::OnceLock<tokio::signal::registry::Globals>>::initialize::<<std::sync::once_lock::OnceLock<tokio::signal::registry::Globals>>::get_or_init<tokio::signal::registry::globals_init>::{closure#0}, !>::{closure#0}"
+        ]
+      },
+      {
+        "id": 2,
+        "frames": [
+          "__rustc::__rust_alloc",
+          "<alloc::alloc::Global>::alloc_impl_runtime",
+          "alloc::boxed::box_new_uninit",
+          "<alloc::rc::Rc<core::cell::UnsafeCell<rand_core::block::BlockRng<rand::rngs::thread::ReseedingCore>>>>::new",
+          "rand::rngs::thread::THREAD_RNG_KEY::__rust_std_internal_init_fn",
+          "<rand::rngs::thread::THREAD_RNG_KEY::__rust_std_internal_init_fn as core::ops::function::FnOnce<()>>::call_once",
+          "<std::sys::thread_local::native::lazy::Storage<alloc::rc::Rc<core::cell::UnsafeCell<rand_core::block::BlockRng<rand::rngs::thread::ReseedingCore>>>, ()>>::get_or_init_slow::<rand::rngs::thread::THREAD_RNG_KEY::__rust_std_internal_init_fn>",
+          "<std::sys::thread_local::native::lazy::Storage<alloc::rc::Rc<core::cell::UnsafeCell<rand_core::block::BlockRng<rand::rngs::thread::ReseedingCore>>>, ()>>::get_or_init::<rand::rngs::thread::THREAD_RNG_KEY::__rust_std_internal_init_fn>",
+          "rand::rngs::thread::THREAD_RNG_KEY::{K#0}::{closure#0}",
+          "<rand::rngs::thread::THREAD_RNG_KEY::{K#0}::{closure#0} as core::ops::function::FnOnce<(core::option::Option<&mut core::option::Option<alloc::rc::Rc<core::cell::UnsafeCell<rand_core::block::BlockRng<rand::rngs::thread::ReseedingCore>>>>>,)>",
+          "<std::thread::local::LocalKey<alloc::rc::Rc<core::cell::UnsafeCell<rand_core::block::BlockRng<rand::rngs::thread::ReseedingCore>>>>>::try_with::<rand::rngs::thread::rng::{closure#0}, alloc::rc::Rc<core::cell::UnsafeCell<rand_core::block::Bl",
+          "<std::thread::local::LocalKey<alloc::rc::Rc<core::cell::UnsafeCell<rand_core::block::BlockRng<rand::rngs::thread::ReseedingCore>>>>>::with::<rand::rngs::thread::rng::{closure#0}, alloc::rc::Rc<core::cell::UnsafeCell<rand_core::block::BlockR",
+          "rand::rngs::thread::rng",
+          "<quinn_proto::config::ServerConfig>::with_crypto",
+          "<libp2p_quic::config::QuinnConfig as core::convert::From<libp2p_quic::config::Config>>::from",
+          "<libp2p_quic::config::Config as core::convert::Into<libp2p_quic::config::QuinnConfig>>::into",
+          "<libp2p_quic::transport::GenTransport<libp2p_quic::provider::tokio::Provider>>::new",
+          "<libp2p::builder::SwarmBuilder<libp2p::builder::phase::provider::Tokio, libp2p::builder::phase::quic::QuicPhase<libp2p_core::transport::map::Map<libp2p_core::transport::upgrade::Multiplexed<libp2p_core::transport::and_then::AndThen<libp2p_c",
+          "<libp2p::builder::SwarmBuilder<libp2p::builder::phase::provider::Tokio, libp2p::builder::phase::quic::QuicPhase<libp2p_core::transport::map::Map<libp2p_core::transport::upgrade::Multiplexed<libp2p_core::transport::and_then::AndThen<libp2p_c",
+          "p2p_vpn::runtime::p2p::build_node_with_dial_observer::<p2p_vpn::runtime::p2p::build_node::{closure#0}>",
+          "p2p_vpn::runtime::p2p::build_node",
+          "tun_namespace::run_ready_node::{closure#0}",
+          "<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>> as core::future::future::Future>::poll",
+          "<tokio::runtime::park::CachedParkThread>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>::{closure#0}"
+        ]
+      },
+      {
+        "id": 3,
+        "frames": [
+          "__rustc::__rust_alloc",
+          "<alloc::alloc::Global>::alloc_impl_runtime",
+          "alloc::boxed::box_new_uninit",
+          "<futures_channel::mpsc::queue::Node<(libp2p_request_response::InboundRequestId, p2p_vpn::runtime::control::ControlRequest, futures_channel::oneshot::Sender<p2p_vpn::runtime::control::ControlResponse>)>>::new",
+          "<futures_channel::mpsc::queue::Queue<(libp2p_request_response::InboundRequestId, p2p_vpn::runtime::control::ControlRequest, futures_channel::oneshot::Sender<p2p_vpn::runtime::control::ControlResponse>)>>::new",
+          "futures_channel::mpsc::channel::<(libp2p_request_response::InboundRequestId, p2p_vpn::runtime::control::ControlRequest, futures_channel::oneshot::Sender<p2p_vpn::runtime::control::ControlResponse>)>",
+          "<libp2p_request_response::handler::Handler<p2p_vpn::runtime::control::ControlCodec>>::new",
+          "<libp2p_request_response::Behaviour<p2p_vpn::runtime::control::ControlCodec> as libp2p_swarm::behaviour::NetworkBehaviour>::handle_established_outbound_connection",
+          "<p2p_vpn::runtime::p2p::Behaviour as libp2p_swarm::behaviour::NetworkBehaviour>::handle_established_outbound_connection",
+          "<libp2p_swarm::Swarm<p2p_vpn::runtime::p2p::Behaviour>>::handle_pool_event",
+          "<libp2p_swarm::Swarm<p2p_vpn::runtime::p2p::Behaviour>>::poll_next_event",
+          "<libp2p_swarm::Swarm<p2p_vpn::runtime::p2p::Behaviour> as futures_core::stream::Stream>::poll_next",
+          "<libp2p_swarm::Swarm<p2p_vpn::runtime::p2p::Behaviour> as futures_util::stream::stream::StreamExt>::poll_next_unpin",
+          "<futures_util::stream::stream::select_next_some::SelectNextSome<libp2p_swarm::Swarm<p2p_vpn::runtime::p2p::Behaviour>> as core::future::future::Future>::poll",
+          "tun_namespace::wait_for_listen_address::{closure#0}",
+          "tun_namespace::wait_for_node_ready::{closure#0}",
+          "tun_namespace::run_ready_node::{closure#0}",
+          "<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>> as core::future::future::Future>::poll",
+          "<tokio::runtime::park::CachedParkThread>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>::{closure#0}",
+          "<tokio::runtime::park::CachedParkThread>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>",
+          "<tokio::runtime::context::blocking::BlockingRegionGuard>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>",
+          "<tokio::runtime::scheduler::multi_thread::MultiThread>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>::{closure#0}",
+          "tokio::runtime::context::runtime::enter_runtime::<<tokio::runtime::scheduler::multi_thread::MultiThread>::block_on<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>::{closure#0}, core::result::Result<(), p2p_vpn",
+          "<tokio::runtime::scheduler::multi_thread::MultiThread>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>"
+        ]
+      },
+      {
+        "id": 4,
+        "frames": [
+          "__rustc::__rust_alloc",
+          "<alloc::alloc::Global>::alloc_impl_runtime",
+          "alloc::boxed::box_new_uninit",
+          "<libp2p_ping::protocol::recv_ping<libp2p_swarm::stream::Stream>::{closure#0} as futures_util::future::future::FutureExt>::boxed",
+          "<libp2p_ping::handler::Handler as libp2p_swarm::handler::ConnectionHandler>::on_connection_event",
+          "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<p2p_vpn::runtime::c",
+          "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+          "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+          "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+          "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+          "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+          "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+          "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+          "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+          "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+          "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+          "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+          "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+          "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+          "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+          "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+          "<libp2p_swarm::connection::Connection<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::Connec",
+          "libp2p_swarm::connection::pool::task::new_for_established_connection::<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp",
+          "<futures_util::future::poll_fn::PollFn<libp2p_swarm::connection::pool::task::new_for_established_connection<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler:"
+        ]
+      },
+      {
+        "id": 5,
+        "frames": [
+          "__rustc::__rust_alloc",
+          "<alloc::alloc::Global>::alloc_impl_runtime",
+          "alloc::boxed::box_new_uninit",
+          "<libp2p_ping::protocol::recv_ping<libp2p_swarm::stream::Stream>::{closure#0} as futures_util::future::future::FutureExt>::boxed",
+          "<libp2p_ping::handler::Handler as libp2p_swarm::handler::ConnectionHandler>::poll",
+          "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<p2p_vpn::runtime::c",
+          "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+          "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+          "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+          "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+          "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+          "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+          "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+          "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+          "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+          "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+          "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+          "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+          "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+          "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+          "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+          "<libp2p_swarm::connection::Connection<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::Connec",
+          "libp2p_swarm::connection::pool::task::new_for_established_connection::<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp",
+          "<futures_util::future::poll_fn::PollFn<libp2p_swarm::connection::pool::task::new_for_established_connection<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler:"
+        ]
+      },
+      {
+        "id": 6,
+        "frames": [
+          "__rustc::__rust_alloc",
+          "<alloc::alloc::Global>::alloc_impl_runtime",
+          "alloc::boxed::box_new_uninit",
+          "<futures_channel::mpsc::queue::Node<(libp2p_request_response::InboundRequestId, p2p_vpn::runtime::control::ControlRequest, futures_channel::oneshot::Sender<p2p_vpn::runtime::control::ControlResponse>)>>::new",
+          "<futures_channel::mpsc::queue::Queue<(libp2p_request_response::InboundRequestId, p2p_vpn::runtime::control::ControlRequest, futures_channel::oneshot::Sender<p2p_vpn::runtime::control::ControlResponse>)>>::push",
+          "<futures_channel::mpsc::BoundedSenderInner<(libp2p_request_response::InboundRequestId, p2p_vpn::runtime::control::ControlRequest, futures_channel::oneshot::Sender<p2p_vpn::runtime::control::ControlResponse>)>>::queue_push_and_signal",
+          "<futures_channel::mpsc::BoundedSenderInner<(libp2p_request_response::InboundRequestId, p2p_vpn::runtime::control::ControlRequest, futures_channel::oneshot::Sender<p2p_vpn::runtime::control::ControlResponse>)>>::do_send_b",
+          "<futures_channel::mpsc::BoundedSenderInner<(libp2p_request_response::InboundRequestId, p2p_vpn::runtime::control::ControlRequest, futures_channel::oneshot::Sender<p2p_vpn::runtime::control::ControlResponse>)>>::try_send",
+          "<futures_channel::mpsc::Sender<(libp2p_request_response::InboundRequestId, p2p_vpn::runtime::control::ControlRequest, futures_channel::oneshot::Sender<p2p_vpn::runtime::control::ControlResponse>)>>::try_send",
+          "<futures_channel::mpsc::Sender<(libp2p_request_response::InboundRequestId, p2p_vpn::runtime::control::ControlRequest, futures_channel::oneshot::Sender<p2p_vpn::runtime::control::ControlResponse>)>>::start_send",
+          "<futures_channel::mpsc::Sender<(libp2p_request_response::InboundRequestId, p2p_vpn::runtime::control::ControlRequest, futures_channel::oneshot::Sender<p2p_vpn::runtime::control::ControlResponse>)> as futures_sink::Sink<(libp2p_request_respo",
+          "<&mut futures_channel::mpsc::Sender<(libp2p_request_response::InboundRequestId, p2p_vpn::runtime::control::ControlRequest, futures_channel::oneshot::Sender<p2p_vpn::runtime::control::ControlResponse>)> as futures_sink::Sink<(libp2p_request_",
+          "<futures_util::sink::feed::Feed<futures_channel::mpsc::Sender<(libp2p_request_response::InboundRequestId, p2p_vpn::runtime::control::ControlRequest, futures_channel::oneshot::Sender<p2p_vpn::runtime::control::ControlResponse>)>, (libp2p_req",
+          "<futures_util::sink::send::Send<futures_channel::mpsc::Sender<(libp2p_request_response::InboundRequestId, p2p_vpn::runtime::control::ControlRequest, futures_channel::oneshot::Sender<p2p_vpn::runtime::control::ControlResponse>)>, (libp2p_req",
+          "<libp2p_request_response::handler::Handler<p2p_vpn::runtime::control::ControlCodec>>::on_fully_negotiated_inbound::{closure#0}",
+          "<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<libp2p_request_response::handler::Event<p2p_vpn::runtime::control::ControlCodec>, std::io::error::Error>> + core::marker::Send>> as core::futur",
+          "<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<libp2p_request_response::handler::Event<p2p_vpn::runtime::control::ControlCodec>, std::io::error::Error>> + core::marker::Send>> as core::futur",
+          "<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<libp2p_request_response::handler::Event<p2p_vpn::runtime::control::ControlCodec>, std::io::error::Error>> + core::marker::Send>> as futures_uti",
+          "<futures_bounded::futures_map::TimeoutFuture<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<libp2p_request_response::handler::Event<p2p_vpn::runtime::control::ControlCodec>, std::io::error::E",
+          "<futures_bounded::futures_map::TimeoutFuture<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<libp2p_request_response::handler::Event<p2p_vpn::runtime::control::ControlCodec>, std::io::error::E",
+          "<futures_bounded::futures_map::TaggedFuture<libp2p_request_response::handler::RequestId, futures_bounded::futures_map::TimeoutFuture<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<libp2p_requ",
+          "<futures_util::stream::futures_unordered::FuturesUnordered<futures_bounded::futures_map::TaggedFuture<libp2p_request_response::handler::RequestId, futures_bounded::futures_map::TimeoutFuture<core::pin::Pin<alloc::boxed::Box<dyn core::future",
+          "<futures_util::stream::futures_unordered::FuturesUnordered<futures_bounded::futures_map::TaggedFuture<libp2p_request_response::handler::RequestId, futures_bounded::futures_map::TimeoutFuture<core::pin::Pin<alloc::boxed::Box<dyn core::future",
+          "<futures_bounded::futures_map::FuturesMap<libp2p_request_response::handler::RequestId, core::result::Result<libp2p_request_response::handler::Event<p2p_vpn::runtime::control::ControlCodec>, std::io::error::Error>>>::poll_unpin"
+        ]
+      },
+      {
+        "id": 7,
+        "frames": [
+          "__rustc::__rust_alloc",
+          "<alloc::alloc::Global>::alloc_impl_runtime",
+          "alloc::boxed::box_new_uninit",
+          "<futures_channel::mpsc::queue::Node<(libp2p_request_response::InboundRequestId, p2p_vpn::runtime::control::ControlRequest, futures_channel::oneshot::Sender<p2p_vpn::runtime::control::ControlResponse>)>>::new",
+          "<futures_channel::mpsc::queue::Queue<(libp2p_request_response::InboundRequestId, p2p_vpn::runtime::control::ControlRequest, futures_channel::oneshot::Sender<p2p_vpn::runtime::control::ControlResponse>)>>::new",
+          "futures_channel::mpsc::channel::<(libp2p_request_response::InboundRequestId, p2p_vpn::runtime::control::ControlRequest, futures_channel::oneshot::Sender<p2p_vpn::runtime::control::ControlResponse>)>",
+          "<libp2p_request_response::handler::Handler<p2p_vpn::runtime::control::ControlCodec>>::new",
+          "<libp2p_request_response::Behaviour<p2p_vpn::runtime::control::ControlCodec> as libp2p_swarm::behaviour::NetworkBehaviour>::handle_established_outbound_connection",
+          "<p2p_vpn::runtime::p2p::Behaviour as libp2p_swarm::behaviour::NetworkBehaviour>::handle_established_outbound_connection",
+          "<libp2p_swarm::Swarm<p2p_vpn::runtime::p2p::Behaviour>>::handle_pool_event",
+          "<libp2p_swarm::Swarm<p2p_vpn::runtime::p2p::Behaviour>>::poll_next_event",
+          "<libp2p_swarm::Swarm<p2p_vpn::runtime::p2p::Behaviour> as futures_core::stream::Stream>::poll_next",
+          "<libp2p_swarm::Swarm<p2p_vpn::runtime::p2p::Behaviour> as futures_util::stream::stream::StreamExt>::poll_next_unpin",
+          "<futures_util::stream::stream::select_next_some::SelectNextSome<libp2p_swarm::Swarm<p2p_vpn::runtime::p2p::Behaviour>> as core::future::future::Future>::poll",
+          "p2p_vpn::runtime::runner::run_node_until_with_membership_state::<core::future::pending::Pending<p2p_vpn::runtime::runner::ShutdownReason>>::{closure#0}::{closure#8}",
+          "<core::future::poll_fn::PollFn<p2p_vpn::runtime::runner::run_node_until_with_membership_state<core::future::pending::Pending<p2p_vpn::runtime::runner::ShutdownReason>>::{closure#0}::{closure#8}> as core::future::future::Future>::poll",
+          "p2p_vpn::runtime::runner::run_node_until_with_membership_state::<core::future::pending::Pending<p2p_vpn::runtime::runner::ShutdownReason>>::{closure#0}",
+          "<core::pin::Pin<alloc::boxed::Box<p2p_vpn::runtime::runner::run_node_until_with_membership_state<core::future::pending::Pending<p2p_vpn::runtime::runner::ShutdownReason>>::{closure#0}>> as core::future::future::Future>::poll",
+          "p2p_vpn::runtime::runner::run_node_until_with_platform::<core::future::pending::Pending<p2p_vpn::runtime::runner::ShutdownReason>, p2p_vpn::runtime::runner::LinuxTunRoutes>::{closure#0}",
+          "<core::pin::Pin<alloc::boxed::Box<p2p_vpn::runtime::runner::run_node_until_with_platform<core::future::pending::Pending<p2p_vpn::runtime::runner::ShutdownReason>, p2p_vpn::runtime::runner::LinuxTunRoutes>::{closure#0}>> as core::future::fut",
+          "p2p_vpn::runtime::runner::run_node_until::<core::future::pending::Pending<p2p_vpn::runtime::runner::ShutdownReason>>::{closure#0}",
+          "<core::pin::Pin<alloc::boxed::Box<p2p_vpn::runtime::runner::run_node_until<core::future::pending::Pending<p2p_vpn::runtime::runner::ShutdownReason>>::{closure#0}>> as core::future::future::Future>::poll",
+          "<core::pin::Pin<&mut core::pin::Pin<alloc::boxed::Box<p2p_vpn::runtime::runner::run_node_until<core::future::pending::Pending<p2p_vpn::runtime::runner::ShutdownReason>>::{closure#0}>>> as core::future::future::Future>::poll",
+          "<&mut core::pin::Pin<&mut core::pin::Pin<alloc::boxed::Box<p2p_vpn::runtime::runner::run_node_until<core::future::pending::Pending<p2p_vpn::runtime::runner::ShutdownReason>>::{closure#0}>>> as core::future::future::Future>::poll"
+        ]
+      }
+    ],
+    "summary": [
+      {
+        "allocated": 74,
+        "freed": 10,
+        "live": [
+          [
+            1,
+            336,
+            1
+          ],
+          [
+            2,
+            336,
+            1
+          ],
+          [
+            3,
+            336,
+            1
+          ],
+          [
+            4,
+            336,
+            1
+          ],
+          [
+            5,
+            336,
+            1
+          ],
+          [
+            6,
+            336,
+            1
+          ],
+          [
+            7,
+            336,
+            1
+          ],
+          [
+            8,
+            336,
+            1
+          ],
+          [
+            9,
+            336,
+            1
+          ],
+          [
+            10,
+            336,
+            1
+          ],
+          [
+            11,
+            336,
+            1
+          ],
+          [
+            12,
+            336,
+            1
+          ],
+          [
+            13,
+            336,
+            1
+          ],
+          [
+            14,
+            336,
+            1
+          ],
+          [
+            15,
+            336,
+            1
+          ],
+          [
+            16,
+            336,
+            1
+          ],
+          [
+            17,
+            336,
+            1
+          ],
+          [
+            18,
+            336,
+            1
+          ],
+          [
+            19,
+            336,
+            1
+          ],
+          [
+            20,
+            336,
+            1
+          ],
+          [
+            21,
+            336,
+            1
+          ],
+          [
+            22,
+            336,
+            1
+          ],
+          [
+            23,
+            336,
+            1
+          ],
+          [
+            24,
+            336,
+            1
+          ],
+          [
+            25,
+            336,
+            1
+          ],
+          [
+            26,
+            336,
+            1
+          ],
+          [
+            27,
+            336,
+            1
+          ],
+          [
+            28,
+            336,
+            1
+          ],
+          [
+            29,
+            336,
+            1
+          ],
+          [
+            30,
+            336,
+            1
+          ],
+          [
+            31,
+            336,
+            1
+          ],
+          [
+            32,
+            336,
+            1
+          ],
+          [
+            33,
+            336,
+            1
+          ],
+          [
+            34,
+            336,
+            1
+          ],
+          [
+            35,
+            336,
+            1
+          ],
+          [
+            36,
+            336,
+            1
+          ],
+          [
+            37,
+            336,
+            1
+          ],
+          [
+            38,
+            336,
+            1
+          ],
+          [
+            39,
+            336,
+            1
+          ],
+          [
+            40,
+            336,
+            1
+          ],
+          [
+            41,
+            336,
+            1
+          ],
+          [
+            42,
+            336,
+            1
+          ],
+          [
+            43,
+            336,
+            1
+          ],
+          [
+            44,
+            336,
+            1
+          ],
+          [
+            45,
+            336,
+            1
+          ],
+          [
+            46,
+            336,
+            1
+          ],
+          [
+            47,
+            336,
+            1
+          ],
+          [
+            48,
+            336,
+            1
+          ],
+          [
+            49,
+            336,
+            1
+          ],
+          [
+            50,
+            336,
+            1
+          ],
+          [
+            51,
+            336,
+            1
+          ],
+          [
+            52,
+            336,
+            1
+          ],
+          [
+            53,
+            336,
+            1
+          ],
+          [
+            54,
+            336,
+            1
+          ],
+          [
+            55,
+            336,
+            1
+          ],
+          [
+            56,
+            336,
+            1
+          ],
+          [
+            57,
+            336,
+            1
+          ],
+          [
+            58,
+            336,
+            1
+          ],
+          [
+            59,
+            336,
+            1
+          ],
+          [
+            60,
+            336,
+            1
+          ],
+          [
+            61,
+            336,
+            1
+          ],
+          [
+            62,
+            336,
+            1
+          ],
+          [
+            63,
+            336,
+            1
+          ],
+          [
+            64,
+            336,
+            1
+          ]
+        ],
+        "snapshots": 3,
+        "sites": 7,
+        "failures": [],
+        "exit_code": 0
+      }
+    ],
+    "lifecycle": [
+      {
+        "stage": "before_child",
+        "pid": 48,
+        "unix_millis": 1789039459873,
+        "elapsed_millis": 0,
+        "allocations": 618,
+        "deallocations": 195,
+        "reallocations": 22,
+        "bytes_allocated": 74274,
+        "bytes_deallocated": 52675,
+        "bytes_reallocated": 6366,
+        "live_bytes": 21599,
+        "live_blocks": 423
+      },
+      {
+        "stage": "child_returned",
+        "pid": 48,
+        "unix_millis": 1789039475257,
+        "elapsed_millis": 15383,
+        "allocations": 14948,
+        "deallocations": 14431,
+        "reallocations": 5403,
+        "bytes_allocated": 4740577,
+        "bytes_deallocated": 4671969,
+        "bytes_reallocated": 680863,
+        "live_bytes": 68608,
+        "live_blocks": 517
+      },
+      {
+        "stage": "child_settled",
+        "pid": 48,
+        "unix_millis": 1789039475358,
+        "elapsed_millis": 15484,
+        "allocations": 14948,
+        "deallocations": 14431,
+        "reallocations": 5403,
+        "bytes_allocated": 4740577,
+        "bytes_deallocated": 4671969,
+        "bytes_reallocated": 680863,
+        "live_bytes": 68608,
+        "live_blocks": 517
+      }
+    ],
+    "outer_log": "/tmp/p2p-vpn-daemon-336-1.log",
+    "artifacts": [
+      {
+        "sha256": "82357a8486fe4ce2469f0392324f30a0bd18de2e7bd74a9d7dc9cd87b3bbed4c",
+        "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.c0ee0bae9a52c4dd/node-a.log"
+      },
+      {
+        "sha256": "b24d6d33736ecd5604a4b17bc9c6481039fac362bb7df044ef1c10a2bfd21db6",
+        "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.c0ee0bae9a52c4dd/ready-b"
+      },
+      {
+        "sha256": "085c3042456aa021af5dfa18964c982f69a5b7c13045f1d1218ec17e5813f9ae",
+        "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.c0ee0bae9a52c4dd/repro-metadata.txt"
+      },
+      {
+        "sha256": "cced28c6dc3f99c2396a5eaad732bf6b28142335892b1cd0e6af6cdb53f5ccfa",
+        "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.c0ee0bae9a52c4dd/start-a"
+      },
+      {
+        "sha256": "b24d6d33736ecd5604a4b17bc9c6481039fac362bb7df044ef1c10a2bfd21db6",
+        "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.c0ee0bae9a52c4dd/ready-a"
+      },
+      {
+        "sha256": "cced28c6dc3f99c2396a5eaad732bf6b28142335892b1cd0e6af6cdb53f5ccfa",
+        "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.c0ee0bae9a52c4dd/start-b"
+      },
+      {
+        "sha256": "8f0a730f244bb780e91234ce6f40aad683eaddb4375a201501874397b13b0755",
+        "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.c0ee0bae9a52c4dd/node-b.log"
+      },
+      {
+        "sha256": "7b3e655210b0b2af6ddbe0190ee20b1cc565cbde7dcfa9aed1f3f2333daa6c9e",
+        "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.c0ee0bae9a52c4dd/repro-commands.sh"
+      },
+      {
+        "sha256": "8dad725a7145084b90803912df94c63bd9d66866bb8f93443e94e42bc772c6d8",
+        "path": "/tmp/p2p-vpn-daemon-336-1.log"
+      }
+    ]
+  },
+  "repetitions": [
+    {
+      "dir": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.c6ef55fdd4bd2072",
+      "checkpoints": [
+        {
+          "index": 1,
+          "live": []
+        },
+        {
+          "index": 2,
+          "live": [
+            [
+              1,
+              336,
+              1
+            ],
+            [
+              2,
+              336,
+              1
+            ],
+            [
+              3,
+              336,
+              1
+            ],
+            [
+              4,
+              336,
+              1
+            ],
+            [
+              5,
+              336,
+              1
+            ],
+            [
+              6,
+              336,
+              1
+            ],
+            [
+              7,
+              336,
+              1
+            ],
+            [
+              8,
+              336,
+              1
+            ],
+            [
+              9,
+              336,
+              1
+            ],
+            [
+              10,
+              336,
+              1
+            ],
+            [
+              11,
+              336,
+              1
+            ],
+            [
+              12,
+              336,
+              1
+            ],
+            [
+              13,
+              336,
+              1
+            ],
+            [
+              14,
+              336,
+              1
+            ],
+            [
+              15,
+              336,
+              1
+            ],
+            [
+              16,
+              336,
+              1
+            ],
+            [
+              17,
+              336,
+              1
+            ],
+            [
+              18,
+              336,
+              1
+            ],
+            [
+              19,
+              336,
+              1
+            ],
+            [
+              20,
+              336,
+              1
+            ],
+            [
+              21,
+              336,
+              1
+            ],
+            [
+              22,
+              336,
+              1
+            ],
+            [
+              23,
+              336,
+              1
+            ],
+            [
+              24,
+              336,
+              1
+            ],
+            [
+              25,
+              336,
+              1
+            ],
+            [
+              26,
+              336,
+              1
+            ],
+            [
+              27,
+              336,
+              1
+            ],
+            [
+              28,
+              336,
+              1
+            ],
+            [
+              29,
+              336,
+              1
+            ],
+            [
+              30,
+              336,
+              1
+            ],
+            [
+              31,
+              336,
+              1
+            ],
+            [
+              32,
+              336,
+              1
+            ],
+            [
+              33,
+              336,
+              1
+            ],
+            [
+              34,
+              336,
+              1
+            ],
+            [
+              35,
+              336,
+              1
+            ],
+            [
+              36,
+              336,
+              1
+            ],
+            [
+              37,
+              336,
+              1
+            ],
+            [
+              38,
+              336,
+              1
+            ],
+            [
+              39,
+              336,
+              1
+            ],
+            [
+              40,
+              336,
+              1
+            ],
+            [
+              41,
+              336,
+              1
+            ],
+            [
+              42,
+              336,
+              1
+            ],
+            [
+              43,
+              336,
+              1
+            ],
+            [
+              44,
+              336,
+              1
+            ],
+            [
+              45,
+              336,
+              1
+            ],
+            [
+              46,
+              336,
+              1
+            ],
+            [
+              47,
+              336,
+              1
+            ],
+            [
+              48,
+              336,
+              1
+            ],
+            [
+              49,
+              336,
+              1
+            ],
+            [
+              50,
+              336,
+              1
+            ],
+            [
+              51,
+              336,
+              1
+            ],
+            [
+              52,
+              336,
+              1
+            ],
+            [
+              53,
+              336,
+              1
+            ],
+            [
+              54,
+              336,
+              1
+            ],
+            [
+              55,
+              336,
+              1
+            ],
+            [
+              56,
+              336,
+              1
+            ],
+            [
+              57,
+              336,
+              1
+            ],
+            [
+              58,
+              336,
+              1
+            ],
+            [
+              59,
+              336,
+              1
+            ],
+            [
+              60,
+              336,
+              1
+            ],
+            [
+              61,
+              336,
+              1
+            ],
+            [
+              62,
+              336,
+              1
+            ],
+            [
+              63,
+              336,
+              1
+            ],
+            [
+              64,
+              336,
+              1
+            ],
+            [
+              65,
+              336,
+              2
+            ]
+          ]
+        },
+        {
+          "index": 3,
+          "live": [
+            [
+              1,
+              336,
+              1
+            ],
+            [
+              2,
+              336,
+              1
+            ],
+            [
+              3,
+              336,
+              1
+            ],
+            [
+              4,
+              336,
+              1
+            ],
+            [
+              5,
+              336,
+              1
+            ],
+            [
+              6,
+              336,
+              1
+            ],
+            [
+              7,
+              336,
+              1
+            ],
+            [
+              8,
+              336,
+              1
+            ],
+            [
+              9,
+              336,
+              1
+            ],
+            [
+              10,
+              336,
+              1
+            ],
+            [
+              11,
+              336,
+              1
+            ],
+            [
+              12,
+              336,
+              1
+            ],
+            [
+              13,
+              336,
+              1
+            ],
+            [
+              14,
+              336,
+              1
+            ],
+            [
+              15,
+              336,
+              1
+            ],
+            [
+              16,
+              336,
+              1
+            ],
+            [
+              17,
+              336,
+              1
+            ],
+            [
+              18,
+              336,
+              1
+            ],
+            [
+              19,
+              336,
+              1
+            ],
+            [
+              20,
+              336,
+              1
+            ],
+            [
+              21,
+              336,
+              1
+            ],
+            [
+              22,
+              336,
+              1
+            ],
+            [
+              23,
+              336,
+              1
+            ],
+            [
+              24,
+              336,
+              1
+            ],
+            [
+              25,
+              336,
+              1
+            ],
+            [
+              26,
+              336,
+              1
+            ],
+            [
+              27,
+              336,
+              1
+            ],
+            [
+              28,
+              336,
+              1
+            ],
+            [
+              29,
+              336,
+              1
+            ],
+            [
+              30,
+              336,
+              1
+            ],
+            [
+              31,
+              336,
+              1
+            ],
+            [
+              32,
+              336,
+              1
+            ],
+            [
+              33,
+              336,
+              1
+            ],
+            [
+              34,
+              336,
+              1
+            ],
+            [
+              35,
+              336,
+              1
+            ],
+            [
+              36,
+              336,
+              1
+            ],
+            [
+              37,
+              336,
+              1
+            ],
+            [
+              38,
+              336,
+              1
+            ],
+            [
+              39,
+              336,
+              1
+            ],
+            [
+              40,
+              336,
+              1
+            ],
+            [
+              41,
+              336,
+              1
+            ],
+            [
+              42,
+              336,
+              1
+            ],
+            [
+              43,
+              336,
+              1
+            ],
+            [
+              44,
+              336,
+              1
+            ],
+            [
+              45,
+              336,
+              1
+            ],
+            [
+              46,
+              336,
+              1
+            ],
+            [
+              47,
+              336,
+              1
+            ],
+            [
+              48,
+              336,
+              1
+            ],
+            [
+              49,
+              336,
+              1
+            ],
+            [
+              50,
+              336,
+              1
+            ],
+            [
+              51,
+              336,
+              1
+            ],
+            [
+              52,
+              336,
+              1
+            ],
+            [
+              53,
+              336,
+              1
+            ],
+            [
+              54,
+              336,
+              1
+            ],
+            [
+              55,
+              336,
+              1
+            ],
+            [
+              56,
+              336,
+              1
+            ],
+            [
+              57,
+              336,
+              1
+            ],
+            [
+              58,
+              336,
+              1
+            ],
+            [
+              59,
+              336,
+              1
+            ],
+            [
+              60,
+              336,
+              1
+            ],
+            [
+              61,
+              336,
+              1
+            ],
+            [
+              62,
+              336,
+              1
+            ],
+            [
+              63,
+              336,
+              1
+            ],
+            [
+              64,
+              336,
+              1
+            ],
+            [
+              65,
+              336,
+              2
+            ]
+          ]
+        }
+      ],
+      "sites": [
+        {
+          "id": 1,
+          "frames": [
+            "__rustc::__rust_alloc",
+            "<alloc::alloc::Global>::alloc_impl_runtime",
+            "alloc::boxed::box_new_uninit",
+            "<alloc::sync::Arc<tokio::sync::watch::Shared<()>>>::new",
+            "tokio::sync::watch::channel::<()>",
+            "<tokio::signal::registry::EventInfo as core::default::Default>::default",
+            "<tokio::signal::unix::SignalInfo as core::default::Default>::default",
+            "<<tokio::signal::unix::SignalInfo as core::default::Default>::default as core::ops::function::FnMut<()>>::call_mut",
+            "<core::iter::sources::repeat_with::RepeatWith<<tokio::signal::unix::SignalInfo as core::default::Default>::default> as core::iter::traits::iterator::Iterator>::try_fold::<usize, <core::iter::adapters::take::Take<_> as core::iter::adapters::",
+            "<core::iter::adapters::take::Take<core::iter::sources::repeat_with::RepeatWith<<tokio::signal::unix::SignalInfo as core::default::Default>::default>> as core::iter::adapters::take::SpecTake>::spec_for_each::<<alloc::vec::Vec<tokio::signal::",
+            "<core::iter::adapters::take::Take<core::iter::sources::repeat_with::RepeatWith<<tokio::signal::unix::SignalInfo as core::default::Default>::default>> as core::iter::traits::iterator::Iterator>::for_each::<<alloc::vec::Vec<tokio::signal::uni",
+            "<alloc::vec::Vec<tokio::signal::unix::SignalInfo>>::extend_trusted::<core::iter::adapters::take::Take<core::iter::sources::repeat_with::RepeatWith<<tokio::signal::unix::SignalInfo as core::default::Default>::default>>>",
+            "<alloc::vec::Vec<tokio::signal::unix::SignalInfo> as alloc::vec::spec_extend::SpecExtend<tokio::signal::unix::SignalInfo, core::iter::adapters::take::Take<core::iter::sources::repeat_with::RepeatWith<<tokio::signal::unix::SignalInfo as core",
+            "<alloc::vec::Vec<tokio::signal::unix::SignalInfo> as alloc::vec::spec_from_iter_nested::SpecFromIterNested<tokio::signal::unix::SignalInfo, core::iter::adapters::take::Take<core::iter::sources::repeat_with::RepeatWith<<tokio::signal::unix::",
+            "<alloc::vec::Vec<tokio::signal::unix::SignalInfo> as alloc::vec::spec_from_iter::SpecFromIter<tokio::signal::unix::SignalInfo, core::iter::adapters::take::Take<core::iter::sources::repeat_with::RepeatWith<<tokio::signal::unix::SignalInfo as",
+            "<alloc::vec::Vec<tokio::signal::unix::SignalInfo> as core::iter::traits::collect::FromIterator<tokio::signal::unix::SignalInfo>>::from_iter::<core::iter::adapters::take::Take<core::iter::sources::repeat_with::RepeatWith<<tokio::signal::unix",
+            "<core::iter::adapters::take::Take<core::iter::sources::repeat_with::RepeatWith<<tokio::signal::unix::SignalInfo as core::default::Default>::default>> as core::iter::traits::iterator::Iterator>::collect::<alloc::vec::Vec<tokio::signal::unix:",
+            "<alloc::boxed::Box<[tokio::signal::unix::SignalInfo]> as core::iter::traits::collect::FromIterator<tokio::signal::unix::SignalInfo>>::from_iter::<core::iter::adapters::take::Take<core::iter::sources::repeat_with::RepeatWith<<tokio::signal::",
+            "<core::iter::adapters::take::Take<core::iter::sources::repeat_with::RepeatWith<<tokio::signal::unix::SignalInfo as core::default::Default>::default>> as core::iter::traits::iterator::Iterator>::collect::<alloc::boxed::Box<[tokio::signal::un",
+            "<tokio::signal::unix::OsStorage as core::default::Default>::default",
+            "tokio::signal::registry::globals_init",
+            "<tokio::signal::registry::globals_init as core::ops::function::FnOnce<()>>::call_once",
+            "<std::sync::once_lock::OnceLock<tokio::signal::registry::Globals>>::get_or_init::<tokio::signal::registry::globals_init>::{closure#0}",
+            "<std::sync::once_lock::OnceLock<tokio::signal::registry::Globals>>::initialize::<<std::sync::once_lock::OnceLock<tokio::signal::registry::Globals>>::get_or_init<tokio::signal::registry::globals_init>::{closure#0}, !>::{closure#0}"
+          ]
+        },
+        {
+          "id": 2,
+          "frames": [
+            "__rustc::__rust_alloc",
+            "<alloc::alloc::Global>::alloc_impl_runtime",
+            "alloc::boxed::box_new_uninit",
+            "<alloc::rc::Rc<core::cell::UnsafeCell<rand_core::block::BlockRng<rand::rngs::thread::ReseedingCore>>>>::new",
+            "rand::rngs::thread::THREAD_RNG_KEY::__rust_std_internal_init_fn",
+            "<rand::rngs::thread::THREAD_RNG_KEY::__rust_std_internal_init_fn as core::ops::function::FnOnce<()>>::call_once",
+            "<std::sys::thread_local::native::lazy::Storage<alloc::rc::Rc<core::cell::UnsafeCell<rand_core::block::BlockRng<rand::rngs::thread::ReseedingCore>>>, ()>>::get_or_init_slow::<rand::rngs::thread::THREAD_RNG_KEY::__rust_std_internal_init_fn>",
+            "<std::sys::thread_local::native::lazy::Storage<alloc::rc::Rc<core::cell::UnsafeCell<rand_core::block::BlockRng<rand::rngs::thread::ReseedingCore>>>, ()>>::get_or_init::<rand::rngs::thread::THREAD_RNG_KEY::__rust_std_internal_init_fn>",
+            "rand::rngs::thread::THREAD_RNG_KEY::{K#0}::{closure#0}",
+            "<rand::rngs::thread::THREAD_RNG_KEY::{K#0}::{closure#0} as core::ops::function::FnOnce<(core::option::Option<&mut core::option::Option<alloc::rc::Rc<core::cell::UnsafeCell<rand_core::block::BlockRng<rand::rngs::thread::ReseedingCore>>>>>,)>",
+            "<std::thread::local::LocalKey<alloc::rc::Rc<core::cell::UnsafeCell<rand_core::block::BlockRng<rand::rngs::thread::ReseedingCore>>>>>::try_with::<rand::rngs::thread::rng::{closure#0}, alloc::rc::Rc<core::cell::UnsafeCell<rand_core::block::Bl",
+            "<std::thread::local::LocalKey<alloc::rc::Rc<core::cell::UnsafeCell<rand_core::block::BlockRng<rand::rngs::thread::ReseedingCore>>>>>::with::<rand::rngs::thread::rng::{closure#0}, alloc::rc::Rc<core::cell::UnsafeCell<rand_core::block::BlockR",
+            "rand::rngs::thread::rng",
+            "<quinn_proto::config::ServerConfig>::with_crypto",
+            "<libp2p_quic::config::QuinnConfig as core::convert::From<libp2p_quic::config::Config>>::from",
+            "<libp2p_quic::config::Config as core::convert::Into<libp2p_quic::config::QuinnConfig>>::into",
+            "<libp2p_quic::transport::GenTransport<libp2p_quic::provider::tokio::Provider>>::new",
+            "<libp2p::builder::SwarmBuilder<libp2p::builder::phase::provider::Tokio, libp2p::builder::phase::quic::QuicPhase<libp2p_core::transport::map::Map<libp2p_core::transport::upgrade::Multiplexed<libp2p_core::transport::and_then::AndThen<libp2p_c",
+            "<libp2p::builder::SwarmBuilder<libp2p::builder::phase::provider::Tokio, libp2p::builder::phase::quic::QuicPhase<libp2p_core::transport::map::Map<libp2p_core::transport::upgrade::Multiplexed<libp2p_core::transport::and_then::AndThen<libp2p_c",
+            "p2p_vpn::runtime::p2p::build_node_with_dial_observer::<p2p_vpn::runtime::p2p::build_node::{closure#0}>",
+            "p2p_vpn::runtime::p2p::build_node",
+            "tun_namespace::run_ready_node::{closure#0}",
+            "<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>> as core::future::future::Future>::poll",
+            "<tokio::runtime::park::CachedParkThread>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>::{closure#0}"
+          ]
+        },
+        {
+          "id": 3,
+          "frames": [
+            "__rustc::__rust_alloc",
+            "<alloc::alloc::Global>::alloc_impl_runtime",
+            "alloc::boxed::box_new_uninit",
+            "<futures_channel::mpsc::queue::Node<(libp2p_request_response::InboundRequestId, p2p_vpn::runtime::control::ControlRequest, futures_channel::oneshot::Sender<p2p_vpn::runtime::control::ControlResponse>)>>::new",
+            "<futures_channel::mpsc::queue::Queue<(libp2p_request_response::InboundRequestId, p2p_vpn::runtime::control::ControlRequest, futures_channel::oneshot::Sender<p2p_vpn::runtime::control::ControlResponse>)>>::new",
+            "futures_channel::mpsc::channel::<(libp2p_request_response::InboundRequestId, p2p_vpn::runtime::control::ControlRequest, futures_channel::oneshot::Sender<p2p_vpn::runtime::control::ControlResponse>)>",
+            "<libp2p_request_response::handler::Handler<p2p_vpn::runtime::control::ControlCodec>>::new",
+            "<libp2p_request_response::Behaviour<p2p_vpn::runtime::control::ControlCodec> as libp2p_swarm::behaviour::NetworkBehaviour>::handle_established_outbound_connection",
+            "<p2p_vpn::runtime::p2p::Behaviour as libp2p_swarm::behaviour::NetworkBehaviour>::handle_established_outbound_connection",
+            "<libp2p_swarm::Swarm<p2p_vpn::runtime::p2p::Behaviour>>::handle_pool_event",
+            "<libp2p_swarm::Swarm<p2p_vpn::runtime::p2p::Behaviour>>::poll_next_event",
+            "<libp2p_swarm::Swarm<p2p_vpn::runtime::p2p::Behaviour> as futures_core::stream::Stream>::poll_next",
+            "<libp2p_swarm::Swarm<p2p_vpn::runtime::p2p::Behaviour> as futures_util::stream::stream::StreamExt>::poll_next_unpin",
+            "<futures_util::stream::stream::select_next_some::SelectNextSome<libp2p_swarm::Swarm<p2p_vpn::runtime::p2p::Behaviour>> as core::future::future::Future>::poll",
+            "p2p_vpn::runtime::runner::run_node_until_with_membership_state::<core::future::pending::Pending<p2p_vpn::runtime::runner::ShutdownReason>>::{closure#0}::{closure#8}",
+            "<core::future::poll_fn::PollFn<p2p_vpn::runtime::runner::run_node_until_with_membership_state<core::future::pending::Pending<p2p_vpn::runtime::runner::ShutdownReason>>::{closure#0}::{closure#8}> as core::future::future::Future>::poll",
+            "p2p_vpn::runtime::runner::run_node_until_with_membership_state::<core::future::pending::Pending<p2p_vpn::runtime::runner::ShutdownReason>>::{closure#0}",
+            "<core::pin::Pin<alloc::boxed::Box<p2p_vpn::runtime::runner::run_node_until_with_membership_state<core::future::pending::Pending<p2p_vpn::runtime::runner::ShutdownReason>>::{closure#0}>> as core::future::future::Future>::poll",
+            "p2p_vpn::runtime::runner::run_node_until_with_platform::<core::future::pending::Pending<p2p_vpn::runtime::runner::ShutdownReason>, p2p_vpn::runtime::runner::LinuxTunRoutes>::{closure#0}",
+            "<core::pin::Pin<alloc::boxed::Box<p2p_vpn::runtime::runner::run_node_until_with_platform<core::future::pending::Pending<p2p_vpn::runtime::runner::ShutdownReason>, p2p_vpn::runtime::runner::LinuxTunRoutes>::{closure#0}>> as core::future::fut",
+            "p2p_vpn::runtime::runner::run_node_until::<core::future::pending::Pending<p2p_vpn::runtime::runner::ShutdownReason>>::{closure#0}",
+            "<core::pin::Pin<alloc::boxed::Box<p2p_vpn::runtime::runner::run_node_until<core::future::pending::Pending<p2p_vpn::runtime::runner::ShutdownReason>>::{closure#0}>> as core::future::future::Future>::poll",
+            "<core::pin::Pin<&mut core::pin::Pin<alloc::boxed::Box<p2p_vpn::runtime::runner::run_node_until<core::future::pending::Pending<p2p_vpn::runtime::runner::ShutdownReason>>::{closure#0}>>> as core::future::future::Future>::poll",
+            "<&mut core::pin::Pin<&mut core::pin::Pin<alloc::boxed::Box<p2p_vpn::runtime::runner::run_node_until<core::future::pending::Pending<p2p_vpn::runtime::runner::ShutdownReason>>::{closure#0}>>> as core::future::future::Future>::poll"
+          ]
+        },
+        {
+          "id": 4,
+          "frames": [
+            "__rustc::__rust_alloc",
+            "<alloc::alloc::Global>::alloc_impl_runtime",
+            "alloc::boxed::box_new_uninit",
+            "<libp2p_ping::protocol::recv_ping<libp2p_swarm::stream::Stream>::{closure#0} as futures_util::future::future::FutureExt>::boxed",
+            "<libp2p_ping::handler::Handler as libp2p_swarm::handler::ConnectionHandler>::on_connection_event",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<p2p_vpn::runtime::c",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::connection::Connection<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::Connec",
+            "libp2p_swarm::connection::pool::task::new_for_established_connection::<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp",
+            "<futures_util::future::poll_fn::PollFn<libp2p_swarm::connection::pool::task::new_for_established_connection<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler:"
+          ]
+        },
+        {
+          "id": 5,
+          "frames": [
+            "__rustc::__rust_alloc",
+            "<alloc::alloc::Global>::alloc_impl_runtime",
+            "alloc::boxed::box_new_uninit",
+            "<libp2p_ping::protocol::recv_ping<libp2p_swarm::stream::Stream>::{closure#0} as futures_util::future::future::FutureExt>::boxed",
+            "<libp2p_ping::handler::Handler as libp2p_swarm::handler::ConnectionHandler>::poll",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<p2p_vpn::runtime::c",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::connection::Connection<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::Connec",
+            "libp2p_swarm::connection::pool::task::new_for_established_connection::<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp",
+            "<futures_util::future::poll_fn::PollFn<libp2p_swarm::connection::pool::task::new_for_established_connection<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler:"
+          ]
+        },
+        {
+          "id": 6,
+          "frames": [
+            "__rustc::__rust_alloc",
+            "<alloc::alloc::Global>::alloc_impl_runtime",
+            "alloc::boxed::box_new_uninit",
+            "<futures_channel::mpsc::queue::Node<(libp2p_request_response::InboundRequestId, p2p_vpn::runtime::control::ControlRequest, futures_channel::oneshot::Sender<p2p_vpn::runtime::control::ControlResponse>)>>::new",
+            "<futures_channel::mpsc::queue::Queue<(libp2p_request_response::InboundRequestId, p2p_vpn::runtime::control::ControlRequest, futures_channel::oneshot::Sender<p2p_vpn::runtime::control::ControlResponse>)>>::push",
+            "<futures_channel::mpsc::BoundedSenderInner<(libp2p_request_response::InboundRequestId, p2p_vpn::runtime::control::ControlRequest, futures_channel::oneshot::Sender<p2p_vpn::runtime::control::ControlResponse>)>>::queue_push_and_signal",
+            "<futures_channel::mpsc::BoundedSenderInner<(libp2p_request_response::InboundRequestId, p2p_vpn::runtime::control::ControlRequest, futures_channel::oneshot::Sender<p2p_vpn::runtime::control::ControlResponse>)>>::do_send_b",
+            "<futures_channel::mpsc::BoundedSenderInner<(libp2p_request_response::InboundRequestId, p2p_vpn::runtime::control::ControlRequest, futures_channel::oneshot::Sender<p2p_vpn::runtime::control::ControlResponse>)>>::try_send",
+            "<futures_channel::mpsc::Sender<(libp2p_request_response::InboundRequestId, p2p_vpn::runtime::control::ControlRequest, futures_channel::oneshot::Sender<p2p_vpn::runtime::control::ControlResponse>)>>::try_send",
+            "<futures_channel::mpsc::Sender<(libp2p_request_response::InboundRequestId, p2p_vpn::runtime::control::ControlRequest, futures_channel::oneshot::Sender<p2p_vpn::runtime::control::ControlResponse>)>>::start_send",
+            "<futures_channel::mpsc::Sender<(libp2p_request_response::InboundRequestId, p2p_vpn::runtime::control::ControlRequest, futures_channel::oneshot::Sender<p2p_vpn::runtime::control::ControlResponse>)> as futures_sink::Sink<(libp2p_request_respo",
+            "<&mut futures_channel::mpsc::Sender<(libp2p_request_response::InboundRequestId, p2p_vpn::runtime::control::ControlRequest, futures_channel::oneshot::Sender<p2p_vpn::runtime::control::ControlResponse>)> as futures_sink::Sink<(libp2p_request_",
+            "<futures_util::sink::feed::Feed<futures_channel::mpsc::Sender<(libp2p_request_response::InboundRequestId, p2p_vpn::runtime::control::ControlRequest, futures_channel::oneshot::Sender<p2p_vpn::runtime::control::ControlResponse>)>, (libp2p_req",
+            "<futures_util::sink::send::Send<futures_channel::mpsc::Sender<(libp2p_request_response::InboundRequestId, p2p_vpn::runtime::control::ControlRequest, futures_channel::oneshot::Sender<p2p_vpn::runtime::control::ControlResponse>)>, (libp2p_req",
+            "<libp2p_request_response::handler::Handler<p2p_vpn::runtime::control::ControlCodec>>::on_fully_negotiated_inbound::{closure#0}",
+            "<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<libp2p_request_response::handler::Event<p2p_vpn::runtime::control::ControlCodec>, std::io::error::Error>> + core::marker::Send>> as core::futur",
+            "<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<libp2p_request_response::handler::Event<p2p_vpn::runtime::control::ControlCodec>, std::io::error::Error>> + core::marker::Send>> as core::futur",
+            "<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<libp2p_request_response::handler::Event<p2p_vpn::runtime::control::ControlCodec>, std::io::error::Error>> + core::marker::Send>> as futures_uti",
+            "<futures_bounded::futures_map::TimeoutFuture<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<libp2p_request_response::handler::Event<p2p_vpn::runtime::control::ControlCodec>, std::io::error::E",
+            "<futures_bounded::futures_map::TimeoutFuture<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<libp2p_request_response::handler::Event<p2p_vpn::runtime::control::ControlCodec>, std::io::error::E",
+            "<futures_bounded::futures_map::TaggedFuture<libp2p_request_response::handler::RequestId, futures_bounded::futures_map::TimeoutFuture<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<libp2p_requ",
+            "<futures_util::stream::futures_unordered::FuturesUnordered<futures_bounded::futures_map::TaggedFuture<libp2p_request_response::handler::RequestId, futures_bounded::futures_map::TimeoutFuture<core::pin::Pin<alloc::boxed::Box<dyn core::future",
+            "<futures_util::stream::futures_unordered::FuturesUnordered<futures_bounded::futures_map::TaggedFuture<libp2p_request_response::handler::RequestId, futures_bounded::futures_map::TimeoutFuture<core::pin::Pin<alloc::boxed::Box<dyn core::future",
+            "<futures_bounded::futures_map::FuturesMap<libp2p_request_response::handler::RequestId, core::result::Result<libp2p_request_response::handler::Event<p2p_vpn::runtime::control::ControlCodec>, std::io::error::Error>>>::poll_unpin"
+          ]
+        }
+      ],
+      "summary": [
+        {
+          "allocated": 69,
+          "freed": 5,
+          "live": [
+            [
+              1,
+              336,
+              1
+            ],
+            [
+              2,
+              336,
+              1
+            ],
+            [
+              3,
+              336,
+              1
+            ],
+            [
+              4,
+              336,
+              1
+            ],
+            [
+              5,
+              336,
+              1
+            ],
+            [
+              6,
+              336,
+              1
+            ],
+            [
+              7,
+              336,
+              1
+            ],
+            [
+              8,
+              336,
+              1
+            ],
+            [
+              9,
+              336,
+              1
+            ],
+            [
+              10,
+              336,
+              1
+            ],
+            [
+              11,
+              336,
+              1
+            ],
+            [
+              12,
+              336,
+              1
+            ],
+            [
+              13,
+              336,
+              1
+            ],
+            [
+              14,
+              336,
+              1
+            ],
+            [
+              15,
+              336,
+              1
+            ],
+            [
+              16,
+              336,
+              1
+            ],
+            [
+              17,
+              336,
+              1
+            ],
+            [
+              18,
+              336,
+              1
+            ],
+            [
+              19,
+              336,
+              1
+            ],
+            [
+              20,
+              336,
+              1
+            ],
+            [
+              21,
+              336,
+              1
+            ],
+            [
+              22,
+              336,
+              1
+            ],
+            [
+              23,
+              336,
+              1
+            ],
+            [
+              24,
+              336,
+              1
+            ],
+            [
+              25,
+              336,
+              1
+            ],
+            [
+              26,
+              336,
+              1
+            ],
+            [
+              27,
+              336,
+              1
+            ],
+            [
+              28,
+              336,
+              1
+            ],
+            [
+              29,
+              336,
+              1
+            ],
+            [
+              30,
+              336,
+              1
+            ],
+            [
+              31,
+              336,
+              1
+            ],
+            [
+              32,
+              336,
+              1
+            ],
+            [
+              33,
+              336,
+              1
+            ],
+            [
+              34,
+              336,
+              1
+            ],
+            [
+              35,
+              336,
+              1
+            ],
+            [
+              36,
+              336,
+              1
+            ],
+            [
+              37,
+              336,
+              1
+            ],
+            [
+              38,
+              336,
+              1
+            ],
+            [
+              39,
+              336,
+              1
+            ],
+            [
+              40,
+              336,
+              1
+            ],
+            [
+              41,
+              336,
+              1
+            ],
+            [
+              42,
+              336,
+              1
+            ],
+            [
+              43,
+              336,
+              1
+            ],
+            [
+              44,
+              336,
+              1
+            ],
+            [
+              45,
+              336,
+              1
+            ],
+            [
+              46,
+              336,
+              1
+            ],
+            [
+              47,
+              336,
+              1
+            ],
+            [
+              48,
+              336,
+              1
+            ],
+            [
+              49,
+              336,
+              1
+            ],
+            [
+              50,
+              336,
+              1
+            ],
+            [
+              51,
+              336,
+              1
+            ],
+            [
+              52,
+              336,
+              1
+            ],
+            [
+              53,
+              336,
+              1
+            ],
+            [
+              54,
+              336,
+              1
+            ],
+            [
+              55,
+              336,
+              1
+            ],
+            [
+              56,
+              336,
+              1
+            ],
+            [
+              57,
+              336,
+              1
+            ],
+            [
+              58,
+              336,
+              1
+            ],
+            [
+              59,
+              336,
+              1
+            ],
+            [
+              60,
+              336,
+              1
+            ],
+            [
+              61,
+              336,
+              1
+            ],
+            [
+              62,
+              336,
+              1
+            ],
+            [
+              63,
+              336,
+              1
+            ],
+            [
+              64,
+              336,
+              1
+            ]
+          ],
+          "snapshots": 3,
+          "sites": 6,
+          "failures": [],
+          "exit_code": 0
+        }
+      ],
+      "lifecycle": [
+        {
+          "stage": "before_child",
+          "pid": 48,
+          "unix_millis": 1789039515275,
+          "elapsed_millis": 0,
+          "allocations": 618,
+          "deallocations": 195,
+          "reallocations": 22,
+          "bytes_allocated": 74274,
+          "bytes_deallocated": 52675,
+          "bytes_reallocated": 6366,
+          "live_bytes": 21599,
+          "live_blocks": 423
+        },
+        {
+          "stage": "child_returned",
+          "pid": 48,
+          "unix_millis": 1789039530490,
+          "elapsed_millis": 15214,
+          "allocations": 14146,
+          "deallocations": 13633,
+          "reallocations": 5365,
+          "bytes_allocated": 4554894,
+          "bytes_deallocated": 4492494,
+          "bytes_reallocated": 679794,
+          "live_bytes": 62400,
+          "live_blocks": 513
+        },
+        {
+          "stage": "child_settled",
+          "pid": 48,
+          "unix_millis": 1789039530591,
+          "elapsed_millis": 15316,
+          "allocations": 14146,
+          "deallocations": 13633,
+          "reallocations": 5365,
+          "bytes_allocated": 4554894,
+          "bytes_deallocated": 4492494,
+          "bytes_reallocated": 679794,
+          "live_bytes": 62400,
+          "live_blocks": 513
+        }
+      ],
+      "outer_log": "/tmp/p2p-vpn-daemon-336-2.log",
+      "artifacts": [
+        {
+          "sha256": "1bfcea089487917d9495097ae648cc1cdf4de9b37696f78925f2d465b7544cea",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.c6ef55fdd4bd2072/node-a.log"
+        },
+        {
+          "sha256": "b24d6d33736ecd5604a4b17bc9c6481039fac362bb7df044ef1c10a2bfd21db6",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.c6ef55fdd4bd2072/ready-b"
+        },
+        {
+          "sha256": "6e16ee589ddda0963e62ccdcf2db332caa650a588c2338af64cead3fc16ad73a",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.c6ef55fdd4bd2072/repro-metadata.txt"
+        },
+        {
+          "sha256": "cced28c6dc3f99c2396a5eaad732bf6b28142335892b1cd0e6af6cdb53f5ccfa",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.c6ef55fdd4bd2072/start-a"
+        },
+        {
+          "sha256": "b24d6d33736ecd5604a4b17bc9c6481039fac362bb7df044ef1c10a2bfd21db6",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.c6ef55fdd4bd2072/ready-a"
+        },
+        {
+          "sha256": "cced28c6dc3f99c2396a5eaad732bf6b28142335892b1cd0e6af6cdb53f5ccfa",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.c6ef55fdd4bd2072/start-b"
+        },
+        {
+          "sha256": "45317155aee580c62c8122c55fd577f88a556c7d5e83b59b8a2ff9e59b6ae0b5",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.c6ef55fdd4bd2072/node-b.log"
+        },
+        {
+          "sha256": "79590a633eeed6509ec5fd56f880a6b72240d770227b24d986873b5dc3280c56",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.c6ef55fdd4bd2072/repro-commands.sh"
+        },
+        {
+          "sha256": "65e36968686c036cb98c870c1e1214551fe50b156cc6cdd8f7a16348e151ad76",
+          "path": "/tmp/p2p-vpn-daemon-336-2.log"
+        }
+      ]
+    },
+    {
+      "dir": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.c82998b1cf1516d9",
+      "checkpoints": [
+        {
+          "index": 1,
+          "live": []
+        },
+        {
+          "index": 2,
+          "live": [
+            [
+              1,
+              336,
+              1
+            ],
+            [
+              2,
+              336,
+              1
+            ],
+            [
+              3,
+              336,
+              1
+            ],
+            [
+              4,
+              336,
+              1
+            ],
+            [
+              5,
+              336,
+              1
+            ],
+            [
+              6,
+              336,
+              1
+            ],
+            [
+              7,
+              336,
+              1
+            ],
+            [
+              8,
+              336,
+              1
+            ],
+            [
+              9,
+              336,
+              1
+            ],
+            [
+              10,
+              336,
+              1
+            ],
+            [
+              11,
+              336,
+              1
+            ],
+            [
+              12,
+              336,
+              1
+            ],
+            [
+              13,
+              336,
+              1
+            ],
+            [
+              14,
+              336,
+              1
+            ],
+            [
+              15,
+              336,
+              1
+            ],
+            [
+              16,
+              336,
+              1
+            ],
+            [
+              17,
+              336,
+              1
+            ],
+            [
+              18,
+              336,
+              1
+            ],
+            [
+              19,
+              336,
+              1
+            ],
+            [
+              20,
+              336,
+              1
+            ],
+            [
+              21,
+              336,
+              1
+            ],
+            [
+              22,
+              336,
+              1
+            ],
+            [
+              23,
+              336,
+              1
+            ],
+            [
+              24,
+              336,
+              1
+            ],
+            [
+              25,
+              336,
+              1
+            ],
+            [
+              26,
+              336,
+              1
+            ],
+            [
+              27,
+              336,
+              1
+            ],
+            [
+              28,
+              336,
+              1
+            ],
+            [
+              29,
+              336,
+              1
+            ],
+            [
+              30,
+              336,
+              1
+            ],
+            [
+              31,
+              336,
+              1
+            ],
+            [
+              32,
+              336,
+              1
+            ],
+            [
+              33,
+              336,
+              1
+            ],
+            [
+              34,
+              336,
+              1
+            ],
+            [
+              35,
+              336,
+              1
+            ],
+            [
+              36,
+              336,
+              1
+            ],
+            [
+              37,
+              336,
+              1
+            ],
+            [
+              38,
+              336,
+              1
+            ],
+            [
+              39,
+              336,
+              1
+            ],
+            [
+              40,
+              336,
+              1
+            ],
+            [
+              41,
+              336,
+              1
+            ],
+            [
+              42,
+              336,
+              1
+            ],
+            [
+              43,
+              336,
+              1
+            ],
+            [
+              44,
+              336,
+              1
+            ],
+            [
+              45,
+              336,
+              1
+            ],
+            [
+              46,
+              336,
+              1
+            ],
+            [
+              47,
+              336,
+              1
+            ],
+            [
+              48,
+              336,
+              1
+            ],
+            [
+              49,
+              336,
+              1
+            ],
+            [
+              50,
+              336,
+              1
+            ],
+            [
+              51,
+              336,
+              1
+            ],
+            [
+              52,
+              336,
+              1
+            ],
+            [
+              53,
+              336,
+              1
+            ],
+            [
+              54,
+              336,
+              1
+            ],
+            [
+              55,
+              336,
+              1
+            ],
+            [
+              56,
+              336,
+              1
+            ],
+            [
+              57,
+              336,
+              1
+            ],
+            [
+              58,
+              336,
+              1
+            ],
+            [
+              59,
+              336,
+              1
+            ],
+            [
+              60,
+              336,
+              1
+            ],
+            [
+              61,
+              336,
+              1
+            ],
+            [
+              62,
+              336,
+              1
+            ],
+            [
+              63,
+              336,
+              1
+            ],
+            [
+              64,
+              336,
+              1
+            ],
+            [
+              65,
+              336,
+              2
+            ]
+          ]
+        },
+        {
+          "index": 3,
+          "live": [
+            [
+              1,
+              336,
+              1
+            ],
+            [
+              2,
+              336,
+              1
+            ],
+            [
+              3,
+              336,
+              1
+            ],
+            [
+              4,
+              336,
+              1
+            ],
+            [
+              5,
+              336,
+              1
+            ],
+            [
+              6,
+              336,
+              1
+            ],
+            [
+              7,
+              336,
+              1
+            ],
+            [
+              8,
+              336,
+              1
+            ],
+            [
+              9,
+              336,
+              1
+            ],
+            [
+              10,
+              336,
+              1
+            ],
+            [
+              11,
+              336,
+              1
+            ],
+            [
+              12,
+              336,
+              1
+            ],
+            [
+              13,
+              336,
+              1
+            ],
+            [
+              14,
+              336,
+              1
+            ],
+            [
+              15,
+              336,
+              1
+            ],
+            [
+              16,
+              336,
+              1
+            ],
+            [
+              17,
+              336,
+              1
+            ],
+            [
+              18,
+              336,
+              1
+            ],
+            [
+              19,
+              336,
+              1
+            ],
+            [
+              20,
+              336,
+              1
+            ],
+            [
+              21,
+              336,
+              1
+            ],
+            [
+              22,
+              336,
+              1
+            ],
+            [
+              23,
+              336,
+              1
+            ],
+            [
+              24,
+              336,
+              1
+            ],
+            [
+              25,
+              336,
+              1
+            ],
+            [
+              26,
+              336,
+              1
+            ],
+            [
+              27,
+              336,
+              1
+            ],
+            [
+              28,
+              336,
+              1
+            ],
+            [
+              29,
+              336,
+              1
+            ],
+            [
+              30,
+              336,
+              1
+            ],
+            [
+              31,
+              336,
+              1
+            ],
+            [
+              32,
+              336,
+              1
+            ],
+            [
+              33,
+              336,
+              1
+            ],
+            [
+              34,
+              336,
+              1
+            ],
+            [
+              35,
+              336,
+              1
+            ],
+            [
+              36,
+              336,
+              1
+            ],
+            [
+              37,
+              336,
+              1
+            ],
+            [
+              38,
+              336,
+              1
+            ],
+            [
+              39,
+              336,
+              1
+            ],
+            [
+              40,
+              336,
+              1
+            ],
+            [
+              41,
+              336,
+              1
+            ],
+            [
+              42,
+              336,
+              1
+            ],
+            [
+              43,
+              336,
+              1
+            ],
+            [
+              44,
+              336,
+              1
+            ],
+            [
+              45,
+              336,
+              1
+            ],
+            [
+              46,
+              336,
+              1
+            ],
+            [
+              47,
+              336,
+              1
+            ],
+            [
+              48,
+              336,
+              1
+            ],
+            [
+              49,
+              336,
+              1
+            ],
+            [
+              50,
+              336,
+              1
+            ],
+            [
+              51,
+              336,
+              1
+            ],
+            [
+              52,
+              336,
+              1
+            ],
+            [
+              53,
+              336,
+              1
+            ],
+            [
+              54,
+              336,
+              1
+            ],
+            [
+              55,
+              336,
+              1
+            ],
+            [
+              56,
+              336,
+              1
+            ],
+            [
+              57,
+              336,
+              1
+            ],
+            [
+              58,
+              336,
+              1
+            ],
+            [
+              59,
+              336,
+              1
+            ],
+            [
+              60,
+              336,
+              1
+            ],
+            [
+              61,
+              336,
+              1
+            ],
+            [
+              62,
+              336,
+              1
+            ],
+            [
+              63,
+              336,
+              1
+            ],
+            [
+              64,
+              336,
+              1
+            ],
+            [
+              65,
+              336,
+              2
+            ]
+          ]
+        }
+      ],
+      "sites": [
+        {
+          "id": 1,
+          "frames": [
+            "__rustc::__rust_alloc",
+            "<alloc::alloc::Global>::alloc_impl_runtime",
+            "alloc::boxed::box_new_uninit",
+            "<alloc::sync::Arc<tokio::sync::watch::Shared<()>>>::new",
+            "tokio::sync::watch::channel::<()>",
+            "<tokio::signal::registry::EventInfo as core::default::Default>::default",
+            "<tokio::signal::unix::SignalInfo as core::default::Default>::default",
+            "<<tokio::signal::unix::SignalInfo as core::default::Default>::default as core::ops::function::FnMut<()>>::call_mut",
+            "<core::iter::sources::repeat_with::RepeatWith<<tokio::signal::unix::SignalInfo as core::default::Default>::default> as core::iter::traits::iterator::Iterator>::try_fold::<usize, <core::iter::adapters::take::Take<_> as core::iter::adapters::",
+            "<core::iter::adapters::take::Take<core::iter::sources::repeat_with::RepeatWith<<tokio::signal::unix::SignalInfo as core::default::Default>::default>> as core::iter::adapters::take::SpecTake>::spec_for_each::<<alloc::vec::Vec<tokio::signal::",
+            "<core::iter::adapters::take::Take<core::iter::sources::repeat_with::RepeatWith<<tokio::signal::unix::SignalInfo as core::default::Default>::default>> as core::iter::traits::iterator::Iterator>::for_each::<<alloc::vec::Vec<tokio::signal::uni",
+            "<alloc::vec::Vec<tokio::signal::unix::SignalInfo>>::extend_trusted::<core::iter::adapters::take::Take<core::iter::sources::repeat_with::RepeatWith<<tokio::signal::unix::SignalInfo as core::default::Default>::default>>>",
+            "<alloc::vec::Vec<tokio::signal::unix::SignalInfo> as alloc::vec::spec_extend::SpecExtend<tokio::signal::unix::SignalInfo, core::iter::adapters::take::Take<core::iter::sources::repeat_with::RepeatWith<<tokio::signal::unix::SignalInfo as core",
+            "<alloc::vec::Vec<tokio::signal::unix::SignalInfo> as alloc::vec::spec_from_iter_nested::SpecFromIterNested<tokio::signal::unix::SignalInfo, core::iter::adapters::take::Take<core::iter::sources::repeat_with::RepeatWith<<tokio::signal::unix::",
+            "<alloc::vec::Vec<tokio::signal::unix::SignalInfo> as alloc::vec::spec_from_iter::SpecFromIter<tokio::signal::unix::SignalInfo, core::iter::adapters::take::Take<core::iter::sources::repeat_with::RepeatWith<<tokio::signal::unix::SignalInfo as",
+            "<alloc::vec::Vec<tokio::signal::unix::SignalInfo> as core::iter::traits::collect::FromIterator<tokio::signal::unix::SignalInfo>>::from_iter::<core::iter::adapters::take::Take<core::iter::sources::repeat_with::RepeatWith<<tokio::signal::unix",
+            "<core::iter::adapters::take::Take<core::iter::sources::repeat_with::RepeatWith<<tokio::signal::unix::SignalInfo as core::default::Default>::default>> as core::iter::traits::iterator::Iterator>::collect::<alloc::vec::Vec<tokio::signal::unix:",
+            "<alloc::boxed::Box<[tokio::signal::unix::SignalInfo]> as core::iter::traits::collect::FromIterator<tokio::signal::unix::SignalInfo>>::from_iter::<core::iter::adapters::take::Take<core::iter::sources::repeat_with::RepeatWith<<tokio::signal::",
+            "<core::iter::adapters::take::Take<core::iter::sources::repeat_with::RepeatWith<<tokio::signal::unix::SignalInfo as core::default::Default>::default>> as core::iter::traits::iterator::Iterator>::collect::<alloc::boxed::Box<[tokio::signal::un",
+            "<tokio::signal::unix::OsStorage as core::default::Default>::default",
+            "tokio::signal::registry::globals_init",
+            "<tokio::signal::registry::globals_init as core::ops::function::FnOnce<()>>::call_once",
+            "<std::sync::once_lock::OnceLock<tokio::signal::registry::Globals>>::get_or_init::<tokio::signal::registry::globals_init>::{closure#0}",
+            "<std::sync::once_lock::OnceLock<tokio::signal::registry::Globals>>::initialize::<<std::sync::once_lock::OnceLock<tokio::signal::registry::Globals>>::get_or_init<tokio::signal::registry::globals_init>::{closure#0}, !>::{closure#0}"
+          ]
+        },
+        {
+          "id": 2,
+          "frames": [
+            "__rustc::__rust_alloc",
+            "<alloc::alloc::Global>::alloc_impl_runtime",
+            "alloc::boxed::box_new_uninit",
+            "<alloc::rc::Rc<core::cell::UnsafeCell<rand_core::block::BlockRng<rand::rngs::thread::ReseedingCore>>>>::new",
+            "rand::rngs::thread::THREAD_RNG_KEY::__rust_std_internal_init_fn",
+            "<rand::rngs::thread::THREAD_RNG_KEY::__rust_std_internal_init_fn as core::ops::function::FnOnce<()>>::call_once",
+            "<std::sys::thread_local::native::lazy::Storage<alloc::rc::Rc<core::cell::UnsafeCell<rand_core::block::BlockRng<rand::rngs::thread::ReseedingCore>>>, ()>>::get_or_init_slow::<rand::rngs::thread::THREAD_RNG_KEY::__rust_std_internal_init_fn>",
+            "<std::sys::thread_local::native::lazy::Storage<alloc::rc::Rc<core::cell::UnsafeCell<rand_core::block::BlockRng<rand::rngs::thread::ReseedingCore>>>, ()>>::get_or_init::<rand::rngs::thread::THREAD_RNG_KEY::__rust_std_internal_init_fn>",
+            "rand::rngs::thread::THREAD_RNG_KEY::{K#0}::{closure#0}",
+            "<rand::rngs::thread::THREAD_RNG_KEY::{K#0}::{closure#0} as core::ops::function::FnOnce<(core::option::Option<&mut core::option::Option<alloc::rc::Rc<core::cell::UnsafeCell<rand_core::block::BlockRng<rand::rngs::thread::ReseedingCore>>>>>,)>",
+            "<std::thread::local::LocalKey<alloc::rc::Rc<core::cell::UnsafeCell<rand_core::block::BlockRng<rand::rngs::thread::ReseedingCore>>>>>::try_with::<rand::rngs::thread::rng::{closure#0}, alloc::rc::Rc<core::cell::UnsafeCell<rand_core::block::Bl",
+            "<std::thread::local::LocalKey<alloc::rc::Rc<core::cell::UnsafeCell<rand_core::block::BlockRng<rand::rngs::thread::ReseedingCore>>>>>::with::<rand::rngs::thread::rng::{closure#0}, alloc::rc::Rc<core::cell::UnsafeCell<rand_core::block::BlockR",
+            "rand::rngs::thread::rng",
+            "<quinn_proto::config::ServerConfig>::with_crypto",
+            "<libp2p_quic::config::QuinnConfig as core::convert::From<libp2p_quic::config::Config>>::from",
+            "<libp2p_quic::config::Config as core::convert::Into<libp2p_quic::config::QuinnConfig>>::into",
+            "<libp2p_quic::transport::GenTransport<libp2p_quic::provider::tokio::Provider>>::new",
+            "<libp2p::builder::SwarmBuilder<libp2p::builder::phase::provider::Tokio, libp2p::builder::phase::quic::QuicPhase<libp2p_core::transport::map::Map<libp2p_core::transport::upgrade::Multiplexed<libp2p_core::transport::and_then::AndThen<libp2p_c",
+            "<libp2p::builder::SwarmBuilder<libp2p::builder::phase::provider::Tokio, libp2p::builder::phase::quic::QuicPhase<libp2p_core::transport::map::Map<libp2p_core::transport::upgrade::Multiplexed<libp2p_core::transport::and_then::AndThen<libp2p_c",
+            "p2p_vpn::runtime::p2p::build_node_with_dial_observer::<p2p_vpn::runtime::p2p::build_node::{closure#0}>",
+            "p2p_vpn::runtime::p2p::build_node",
+            "tun_namespace::run_ready_node::{closure#0}",
+            "<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>> as core::future::future::Future>::poll",
+            "<tokio::runtime::park::CachedParkThread>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>::{closure#0}"
+          ]
+        },
+        {
+          "id": 3,
+          "frames": [
+            "__rustc::__rust_alloc",
+            "<alloc::alloc::Global>::alloc_impl_runtime",
+            "alloc::boxed::box_new_uninit",
+            "<futures_channel::mpsc::queue::Node<(libp2p_request_response::InboundRequestId, p2p_vpn::runtime::control::ControlRequest, futures_channel::oneshot::Sender<p2p_vpn::runtime::control::ControlResponse>)>>::new",
+            "<futures_channel::mpsc::queue::Queue<(libp2p_request_response::InboundRequestId, p2p_vpn::runtime::control::ControlRequest, futures_channel::oneshot::Sender<p2p_vpn::runtime::control::ControlResponse>)>>::new",
+            "futures_channel::mpsc::channel::<(libp2p_request_response::InboundRequestId, p2p_vpn::runtime::control::ControlRequest, futures_channel::oneshot::Sender<p2p_vpn::runtime::control::ControlResponse>)>",
+            "<libp2p_request_response::handler::Handler<p2p_vpn::runtime::control::ControlCodec>>::new",
+            "<libp2p_request_response::Behaviour<p2p_vpn::runtime::control::ControlCodec> as libp2p_swarm::behaviour::NetworkBehaviour>::handle_established_outbound_connection",
+            "<p2p_vpn::runtime::p2p::Behaviour as libp2p_swarm::behaviour::NetworkBehaviour>::handle_established_outbound_connection",
+            "<libp2p_swarm::Swarm<p2p_vpn::runtime::p2p::Behaviour>>::handle_pool_event",
+            "<libp2p_swarm::Swarm<p2p_vpn::runtime::p2p::Behaviour>>::poll_next_event",
+            "<libp2p_swarm::Swarm<p2p_vpn::runtime::p2p::Behaviour> as futures_core::stream::Stream>::poll_next",
+            "<libp2p_swarm::Swarm<p2p_vpn::runtime::p2p::Behaviour> as futures_util::stream::stream::StreamExt>::poll_next_unpin",
+            "<futures_util::stream::stream::select_next_some::SelectNextSome<libp2p_swarm::Swarm<p2p_vpn::runtime::p2p::Behaviour>> as core::future::future::Future>::poll",
+            "tun_namespace::wait_for_listen_address::{closure#0}",
+            "tun_namespace::wait_for_node_ready::{closure#0}",
+            "tun_namespace::run_ready_node::{closure#0}",
+            "<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>> as core::future::future::Future>::poll",
+            "<tokio::runtime::park::CachedParkThread>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>::{closure#0}",
+            "<tokio::runtime::park::CachedParkThread>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>",
+            "<tokio::runtime::context::blocking::BlockingRegionGuard>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>",
+            "<tokio::runtime::scheduler::multi_thread::MultiThread>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>::{closure#0}",
+            "tokio::runtime::context::runtime::enter_runtime::<<tokio::runtime::scheduler::multi_thread::MultiThread>::block_on<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>::{closure#0}, core::result::Result<(), p2p_vpn",
+            "<tokio::runtime::scheduler::multi_thread::MultiThread>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>"
+          ]
+        },
+        {
+          "id": 4,
+          "frames": [
+            "__rustc::__rust_alloc",
+            "<alloc::alloc::Global>::alloc_impl_runtime",
+            "alloc::boxed::box_new_uninit",
+            "<libp2p_ping::protocol::recv_ping<libp2p_swarm::stream::Stream>::{closure#0} as futures_util::future::future::FutureExt>::boxed",
+            "<libp2p_ping::handler::Handler as libp2p_swarm::handler::ConnectionHandler>::on_connection_event",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<p2p_vpn::runtime::c",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::connection::Connection<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::Connec",
+            "libp2p_swarm::connection::pool::task::new_for_established_connection::<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp",
+            "<futures_util::future::poll_fn::PollFn<libp2p_swarm::connection::pool::task::new_for_established_connection<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler:"
+          ]
+        },
+        {
+          "id": 5,
+          "frames": [
+            "__rustc::__rust_alloc",
+            "<alloc::alloc::Global>::alloc_impl_runtime",
+            "alloc::boxed::box_new_uninit",
+            "<libp2p_ping::protocol::recv_ping<libp2p_swarm::stream::Stream>::{closure#0} as futures_util::future::future::FutureExt>::boxed",
+            "<libp2p_ping::handler::Handler as libp2p_swarm::handler::ConnectionHandler>::poll",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<p2p_vpn::runtime::c",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handl",
+            "<libp2p_swarm::connection::Connection<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::Connec",
+            "libp2p_swarm::connection::pool::task::new_for_established_connection::<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp",
+            "<futures_util::future::poll_fn::PollFn<libp2p_swarm::connection::pool::task::new_for_established_connection<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler:"
+          ]
+        },
+        {
+          "id": 6,
+          "frames": [
+            "__rustc::__rust_alloc",
+            "<alloc::alloc::Global>::alloc_impl_runtime",
+            "alloc::boxed::box_new_uninit",
+            "<futures_channel::mpsc::queue::Node<(libp2p_request_response::InboundRequestId, p2p_vpn::runtime::control::ControlRequest, futures_channel::oneshot::Sender<p2p_vpn::runtime::control::ControlResponse>)>>::new",
+            "<futures_channel::mpsc::queue::Queue<(libp2p_request_response::InboundRequestId, p2p_vpn::runtime::control::ControlRequest, futures_channel::oneshot::Sender<p2p_vpn::runtime::control::ControlResponse>)>>::push",
+            "<futures_channel::mpsc::BoundedSenderInner<(libp2p_request_response::InboundRequestId, p2p_vpn::runtime::control::ControlRequest, futures_channel::oneshot::Sender<p2p_vpn::runtime::control::ControlResponse>)>>::queue_push_and_signal",
+            "<futures_channel::mpsc::BoundedSenderInner<(libp2p_request_response::InboundRequestId, p2p_vpn::runtime::control::ControlRequest, futures_channel::oneshot::Sender<p2p_vpn::runtime::control::ControlResponse>)>>::do_send_b",
+            "<futures_channel::mpsc::BoundedSenderInner<(libp2p_request_response::InboundRequestId, p2p_vpn::runtime::control::ControlRequest, futures_channel::oneshot::Sender<p2p_vpn::runtime::control::ControlResponse>)>>::try_send",
+            "<futures_channel::mpsc::Sender<(libp2p_request_response::InboundRequestId, p2p_vpn::runtime::control::ControlRequest, futures_channel::oneshot::Sender<p2p_vpn::runtime::control::ControlResponse>)>>::try_send",
+            "<futures_channel::mpsc::Sender<(libp2p_request_response::InboundRequestId, p2p_vpn::runtime::control::ControlRequest, futures_channel::oneshot::Sender<p2p_vpn::runtime::control::ControlResponse>)>>::start_send",
+            "<futures_channel::mpsc::Sender<(libp2p_request_response::InboundRequestId, p2p_vpn::runtime::control::ControlRequest, futures_channel::oneshot::Sender<p2p_vpn::runtime::control::ControlResponse>)> as futures_sink::Sink<(libp2p_request_respo",
+            "<&mut futures_channel::mpsc::Sender<(libp2p_request_response::InboundRequestId, p2p_vpn::runtime::control::ControlRequest, futures_channel::oneshot::Sender<p2p_vpn::runtime::control::ControlResponse>)> as futures_sink::Sink<(libp2p_request_",
+            "<futures_util::sink::feed::Feed<futures_channel::mpsc::Sender<(libp2p_request_response::InboundRequestId, p2p_vpn::runtime::control::ControlRequest, futures_channel::oneshot::Sender<p2p_vpn::runtime::control::ControlResponse>)>, (libp2p_req",
+            "<futures_util::sink::send::Send<futures_channel::mpsc::Sender<(libp2p_request_response::InboundRequestId, p2p_vpn::runtime::control::ControlRequest, futures_channel::oneshot::Sender<p2p_vpn::runtime::control::ControlResponse>)>, (libp2p_req",
+            "<libp2p_request_response::handler::Handler<p2p_vpn::runtime::control::ControlCodec>>::on_fully_negotiated_inbound::{closure#0}",
+            "<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<libp2p_request_response::handler::Event<p2p_vpn::runtime::control::ControlCodec>, std::io::error::Error>> + core::marker::Send>> as core::futur",
+            "<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<libp2p_request_response::handler::Event<p2p_vpn::runtime::control::ControlCodec>, std::io::error::Error>> + core::marker::Send>> as core::futur",
+            "<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<libp2p_request_response::handler::Event<p2p_vpn::runtime::control::ControlCodec>, std::io::error::Error>> + core::marker::Send>> as futures_uti",
+            "<futures_bounded::futures_map::TimeoutFuture<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<libp2p_request_response::handler::Event<p2p_vpn::runtime::control::ControlCodec>, std::io::error::E",
+            "<futures_bounded::futures_map::TimeoutFuture<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<libp2p_request_response::handler::Event<p2p_vpn::runtime::control::ControlCodec>, std::io::error::E",
+            "<futures_bounded::futures_map::TaggedFuture<libp2p_request_response::handler::RequestId, futures_bounded::futures_map::TimeoutFuture<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<libp2p_requ",
+            "<futures_util::stream::futures_unordered::FuturesUnordered<futures_bounded::futures_map::TaggedFuture<libp2p_request_response::handler::RequestId, futures_bounded::futures_map::TimeoutFuture<core::pin::Pin<alloc::boxed::Box<dyn core::future",
+            "<futures_util::stream::futures_unordered::FuturesUnordered<futures_bounded::futures_map::TaggedFuture<libp2p_request_response::handler::RequestId, futures_bounded::futures_map::TimeoutFuture<core::pin::Pin<alloc::boxed::Box<dyn core::future",
+            "<futures_bounded::futures_map::FuturesMap<libp2p_request_response::handler::RequestId, core::result::Result<libp2p_request_response::handler::Event<p2p_vpn::runtime::control::ControlCodec>, std::io::error::Error>>>::poll_unpin"
+          ]
+        },
+        {
+          "id": 7,
+          "frames": [
+            "__rustc::__rust_alloc",
+            "<alloc::alloc::Global>::alloc_impl_runtime",
+            "alloc::boxed::box_new_uninit",
+            "<futures_channel::mpsc::queue::Node<(libp2p_request_response::InboundRequestId, p2p_vpn::runtime::control::ControlRequest, futures_channel::oneshot::Sender<p2p_vpn::runtime::control::ControlResponse>)>>::new",
+            "<futures_channel::mpsc::queue::Queue<(libp2p_request_response::InboundRequestId, p2p_vpn::runtime::control::ControlRequest, futures_channel::oneshot::Sender<p2p_vpn::runtime::control::ControlResponse>)>>::new",
+            "futures_channel::mpsc::channel::<(libp2p_request_response::InboundRequestId, p2p_vpn::runtime::control::ControlRequest, futures_channel::oneshot::Sender<p2p_vpn::runtime::control::ControlResponse>)>",
+            "<libp2p_request_response::handler::Handler<p2p_vpn::runtime::control::ControlCodec>>::new",
+            "<libp2p_request_response::Behaviour<p2p_vpn::runtime::control::ControlCodec> as libp2p_swarm::behaviour::NetworkBehaviour>::handle_established_outbound_connection",
+            "<p2p_vpn::runtime::p2p::Behaviour as libp2p_swarm::behaviour::NetworkBehaviour>::handle_established_outbound_connection",
+            "<libp2p_swarm::Swarm<p2p_vpn::runtime::p2p::Behaviour>>::handle_pool_event",
+            "<libp2p_swarm::Swarm<p2p_vpn::runtime::p2p::Behaviour>>::poll_next_event",
+            "<libp2p_swarm::Swarm<p2p_vpn::runtime::p2p::Behaviour> as futures_core::stream::Stream>::poll_next",
+            "<libp2p_swarm::Swarm<p2p_vpn::runtime::p2p::Behaviour> as futures_util::stream::stream::StreamExt>::poll_next_unpin",
+            "<futures_util::stream::stream::select_next_some::SelectNextSome<libp2p_swarm::Swarm<p2p_vpn::runtime::p2p::Behaviour>> as core::future::future::Future>::poll",
+            "p2p_vpn::runtime::runner::run_node_until_with_membership_state::<core::future::pending::Pending<p2p_vpn::runtime::runner::ShutdownReason>>::{closure#0}::{closure#8}",
+            "<core::future::poll_fn::PollFn<p2p_vpn::runtime::runner::run_node_until_with_membership_state<core::future::pending::Pending<p2p_vpn::runtime::runner::ShutdownReason>>::{closure#0}::{closure#8}> as core::future::future::Future>::poll",
+            "p2p_vpn::runtime::runner::run_node_until_with_membership_state::<core::future::pending::Pending<p2p_vpn::runtime::runner::ShutdownReason>>::{closure#0}",
+            "<core::pin::Pin<alloc::boxed::Box<p2p_vpn::runtime::runner::run_node_until_with_membership_state<core::future::pending::Pending<p2p_vpn::runtime::runner::ShutdownReason>>::{closure#0}>> as core::future::future::Future>::poll",
+            "p2p_vpn::runtime::runner::run_node_until_with_platform::<core::future::pending::Pending<p2p_vpn::runtime::runner::ShutdownReason>, p2p_vpn::runtime::runner::LinuxTunRoutes>::{closure#0}",
+            "<core::pin::Pin<alloc::boxed::Box<p2p_vpn::runtime::runner::run_node_until_with_platform<core::future::pending::Pending<p2p_vpn::runtime::runner::ShutdownReason>, p2p_vpn::runtime::runner::LinuxTunRoutes>::{closure#0}>> as core::future::fut",
+            "p2p_vpn::runtime::runner::run_node_until::<core::future::pending::Pending<p2p_vpn::runtime::runner::ShutdownReason>>::{closure#0}",
+            "<core::pin::Pin<alloc::boxed::Box<p2p_vpn::runtime::runner::run_node_until<core::future::pending::Pending<p2p_vpn::runtime::runner::ShutdownReason>>::{closure#0}>> as core::future::future::Future>::poll",
+            "<core::pin::Pin<&mut core::pin::Pin<alloc::boxed::Box<p2p_vpn::runtime::runner::run_node_until<core::future::pending::Pending<p2p_vpn::runtime::runner::ShutdownReason>>::{closure#0}>>> as core::future::future::Future>::poll",
+            "<&mut core::pin::Pin<&mut core::pin::Pin<alloc::boxed::Box<p2p_vpn::runtime::runner::run_node_until<core::future::pending::Pending<p2p_vpn::runtime::runner::ShutdownReason>>::{closure#0}>>> as core::future::future::Future>::poll"
+          ]
+        }
+      ],
+      "summary": [
+        {
+          "allocated": 79,
+          "freed": 15,
+          "live": [
+            [
+              1,
+              336,
+              1
+            ],
+            [
+              2,
+              336,
+              1
+            ],
+            [
+              3,
+              336,
+              1
+            ],
+            [
+              4,
+              336,
+              1
+            ],
+            [
+              5,
+              336,
+              1
+            ],
+            [
+              6,
+              336,
+              1
+            ],
+            [
+              7,
+              336,
+              1
+            ],
+            [
+              8,
+              336,
+              1
+            ],
+            [
+              9,
+              336,
+              1
+            ],
+            [
+              10,
+              336,
+              1
+            ],
+            [
+              11,
+              336,
+              1
+            ],
+            [
+              12,
+              336,
+              1
+            ],
+            [
+              13,
+              336,
+              1
+            ],
+            [
+              14,
+              336,
+              1
+            ],
+            [
+              15,
+              336,
+              1
+            ],
+            [
+              16,
+              336,
+              1
+            ],
+            [
+              17,
+              336,
+              1
+            ],
+            [
+              18,
+              336,
+              1
+            ],
+            [
+              19,
+              336,
+              1
+            ],
+            [
+              20,
+              336,
+              1
+            ],
+            [
+              21,
+              336,
+              1
+            ],
+            [
+              22,
+              336,
+              1
+            ],
+            [
+              23,
+              336,
+              1
+            ],
+            [
+              24,
+              336,
+              1
+            ],
+            [
+              25,
+              336,
+              1
+            ],
+            [
+              26,
+              336,
+              1
+            ],
+            [
+              27,
+              336,
+              1
+            ],
+            [
+              28,
+              336,
+              1
+            ],
+            [
+              29,
+              336,
+              1
+            ],
+            [
+              30,
+              336,
+              1
+            ],
+            [
+              31,
+              336,
+              1
+            ],
+            [
+              32,
+              336,
+              1
+            ],
+            [
+              33,
+              336,
+              1
+            ],
+            [
+              34,
+              336,
+              1
+            ],
+            [
+              35,
+              336,
+              1
+            ],
+            [
+              36,
+              336,
+              1
+            ],
+            [
+              37,
+              336,
+              1
+            ],
+            [
+              38,
+              336,
+              1
+            ],
+            [
+              39,
+              336,
+              1
+            ],
+            [
+              40,
+              336,
+              1
+            ],
+            [
+              41,
+              336,
+              1
+            ],
+            [
+              42,
+              336,
+              1
+            ],
+            [
+              43,
+              336,
+              1
+            ],
+            [
+              44,
+              336,
+              1
+            ],
+            [
+              45,
+              336,
+              1
+            ],
+            [
+              46,
+              336,
+              1
+            ],
+            [
+              47,
+              336,
+              1
+            ],
+            [
+              48,
+              336,
+              1
+            ],
+            [
+              49,
+              336,
+              1
+            ],
+            [
+              50,
+              336,
+              1
+            ],
+            [
+              51,
+              336,
+              1
+            ],
+            [
+              52,
+              336,
+              1
+            ],
+            [
+              53,
+              336,
+              1
+            ],
+            [
+              54,
+              336,
+              1
+            ],
+            [
+              55,
+              336,
+              1
+            ],
+            [
+              56,
+              336,
+              1
+            ],
+            [
+              57,
+              336,
+              1
+            ],
+            [
+              58,
+              336,
+              1
+            ],
+            [
+              59,
+              336,
+              1
+            ],
+            [
+              60,
+              336,
+              1
+            ],
+            [
+              61,
+              336,
+              1
+            ],
+            [
+              62,
+              336,
+              1
+            ],
+            [
+              63,
+              336,
+              1
+            ],
+            [
+              64,
+              336,
+              1
+            ]
+          ],
+          "snapshots": 3,
+          "sites": 7,
+          "failures": [],
+          "exit_code": 0
+        }
+      ],
+      "lifecycle": [
+        {
+          "stage": "before_child",
+          "pid": 48,
+          "unix_millis": 1789039542371,
+          "elapsed_millis": 0,
+          "allocations": 618,
+          "deallocations": 195,
+          "reallocations": 22,
+          "bytes_allocated": 74274,
+          "bytes_deallocated": 52675,
+          "bytes_reallocated": 6366,
+          "live_bytes": 21599,
+          "live_blocks": 423
+        },
+        {
+          "stage": "child_returned",
+          "pid": 48,
+          "unix_millis": 1789039597165,
+          "elapsed_millis": 54793,
+          "allocations": 40666,
+          "deallocations": 40153,
+          "reallocations": 22982,
+          "bytes_allocated": 8216857,
+          "bytes_deallocated": 8154457,
+          "bytes_reallocated": 2622812,
+          "live_bytes": 62400,
+          "live_blocks": 513
+        },
+        {
+          "stage": "child_settled",
+          "pid": 48,
+          "unix_millis": 1789039597267,
+          "elapsed_millis": 54895,
+          "allocations": 40666,
+          "deallocations": 40153,
+          "reallocations": 22982,
+          "bytes_allocated": 8216857,
+          "bytes_deallocated": 8154457,
+          "bytes_reallocated": 2622812,
+          "live_bytes": 62400,
+          "live_blocks": 513
+        }
+      ],
+      "outer_log": "/tmp/p2p-vpn-daemon-336-3.log",
+      "artifacts": [
+        {
+          "sha256": "8946ee8672719cc3af54a9317cc8f8616119996219fe4c64f3de7f0fddacc4e8",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.c82998b1cf1516d9/node-a.log"
+        },
+        {
+          "sha256": "b24d6d33736ecd5604a4b17bc9c6481039fac362bb7df044ef1c10a2bfd21db6",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.c82998b1cf1516d9/ready-b"
+        },
+        {
+          "sha256": "6a5634bfa51c31004f89666a7782e7a98b7c45df0f66ed52068a4610370ba7a5",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.c82998b1cf1516d9/repro-metadata.txt"
+        },
+        {
+          "sha256": "cced28c6dc3f99c2396a5eaad732bf6b28142335892b1cd0e6af6cdb53f5ccfa",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.c82998b1cf1516d9/start-a"
+        },
+        {
+          "sha256": "b24d6d33736ecd5604a4b17bc9c6481039fac362bb7df044ef1c10a2bfd21db6",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.c82998b1cf1516d9/ready-a"
+        },
+        {
+          "sha256": "cced28c6dc3f99c2396a5eaad732bf6b28142335892b1cd0e6af6cdb53f5ccfa",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.c82998b1cf1516d9/start-b"
+        },
+        {
+          "sha256": "ff0f3570ca26dcdc2ffa4b3caf9eb1d2729bbda773c0491e77c02b8a5adbf48f",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.c82998b1cf1516d9/node-b.log"
+        },
+        {
+          "sha256": "6d1cff7e9695c868e9e43ac09e45de95908c527484bebed7f6198603cdd8aab5",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.c82998b1cf1516d9/repro-commands.sh"
+        },
+        {
+          "sha256": "ff45fcb9bf66dd3f241963014608437f7c1993a210b7e2df82cfae1b9ffdb4f9",
+          "path": "/tmp/p2p-vpn-daemon-336-3.log"
+        }
+      ]
+    }
+  ],
+  "durations_seconds": [
+    16.28,
+    55.85
+  ],
+  "remaining_post_child": {
+    "bytes": 18961,
+    "blocks": 25
+  },
+  "limitations": [
+    "Selected-size ownership only, not whole heap profiling.",
+    "Namespace handle is GDB PID, not inferior PID; no process-resource comparison is made.",
+    "Excluded first run used an ineffective worker-count environment variable.",
+    "Debugger durations are not performance baselines."
+  ]
+}

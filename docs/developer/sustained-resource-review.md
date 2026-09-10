@@ -48,6 +48,7 @@ No physical device or deployed host is authorized for this work.
 | [Graceful reconnect captures](graceful-churn-results.md) | Both ten-cycle captures pass; all four post-child residuals match the short direct-UDP admission | Live retention and residual ownership |
 | [Allocation size inventory](allocation-size-review.md) | Four direct daemons reproduce the original residual as the same 17 allocation sizes | Allocating-stack ownership and live retention |
 | [Retained 336-byte owners](retained-336-review.md) | Two constructor traces identify 64 process-global signal channels and one thread-local RNG allocation | Full-daemon correspondence and remaining owners |
+| [Daemon 336-byte correspondence](daemon-336-review.md) | Two direct fixtures trace the same registry/RNG owners through graceful shutdown | Remaining 18961 bytes / 25 blocks and live reconnect growth |
 | [Sustained traffic fixture](sustained-traffic-review.md) | Two full captures: 30000/30000, stable descriptors, CPU settles below 0.2% per node after load | Broader allocation attribution and multi-network workloads remain open |
 | [Capability retirement](capability-retirement-review.md) | Retry gap reproduced; guarded correction and dispatch regressions pass | Live follow-ups pass but did not exercise the retry branch |
 | [Lifecycle churn results](lifecycle-churn-results.md) | Both ten-cycle captures pass; queues drain and recovery descriptor counts stay stable | RSS attribution and multi-network isolation remain open |
