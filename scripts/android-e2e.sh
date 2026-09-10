@@ -62,7 +62,7 @@ Options:
   --scenario NAME        Select boot-smoke, profile-persistence, always-on,
                          pairing-traffic, underlay-recovery, network-workflow,
                          multi-network, multi-network-resource-admission, multi-network-resource-controls,
-                         multi-network-resource-idle,
+                         multi-network-resource-idle, multi-network-resource-thread-controls,
                          multi-network-resource-load, multi-network-resource-load-smoke,
                          process-sample-smoke, or process-thread-sample-smoke.
   --path-mode MODE       Select automatic, quic-stream, tcp-stream, owned-quic, relay-only,
@@ -142,7 +142,7 @@ done
 pairing_scenario=0
 case "$scenario" in
   boot-smoke|profile-persistence|always-on|process-sample-smoke|process-thread-sample-smoke) ;;
-  pairing-traffic|underlay-recovery|network-workflow|multi-network|multi-network-resource-admission|multi-network-resource-controls|multi-network-resource-idle|multi-network-resource-load|multi-network-resource-load-smoke) pairing_scenario=1 ;;
+  pairing-traffic|underlay-recovery|network-workflow|multi-network|multi-network-resource-admission|multi-network-resource-controls|multi-network-resource-idle|multi-network-resource-load|multi-network-resource-load-smoke|multi-network-resource-thread-controls) pairing_scenario=1 ;;
   *)
     echo "unsupported Android E2E scenario: $scenario" >&2
     exit 2
@@ -2339,6 +2339,11 @@ start_main_activity() {
     >/dev/null
 }
 
+prepare_android_resource_permissions() {
+  [[ "$scenario" != multi-network-resource-* ]] ||
+    adb_run shell pm grant org.hermeticfoundation.p2pvpn.debug android.permission.POST_NOTIFICATIONS
+}
+
 bound_file() {
   local path="$1"
   [[ -f "$path" ]] || return 0
@@ -3468,6 +3473,7 @@ adb=("$adb_command" -s "$emulator_serial")
 # A cached launcher may preinstall a different APK than the selected test artifact.
 if [[ "$scenario" != boot-smoke ]]; then
   if ! adb_run install -r "$android_apk" >/dev/null \
+    || ! prepare_android_resource_permissions >/dev/null \
     || ! adb_run shell am start -W \
       -n org.hermeticfoundation.p2pvpn.debug/org.hermeticfoundation.p2pvpn.MainActivity >/dev/null; then
     outcome=failed

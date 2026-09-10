@@ -36,4 +36,21 @@ done
 result=0
 resource_control_window invalid "$root/invalid" 60 || result=$?
 [[ "$result" == 2 ]]
+for detail in invalid threads; do
+  result=0
+  resource_control_window off "$root/invalid" 60 idle "$detail" || result=$?
+  [[ "$result" == 2 ]]
+done
+valid='{"thread_scan":{"listed":1,"observed":1,"skipped":0,"threads":[{"tid":42,"start_ticks":1,"user_ticks":0,"system_ticks":0,"voluntary_context_switches":0,"involuntary_context_switches":0}]}}'
+resource_thread_samples_valid <(printf '%s\n' "$valid")
+for filter in '.thread_scan.skipped=1' '.thread_scan.listed=257' \
+  '.thread_scan.threads[0].start_ticks=0' \
+  '.thread_scan.threads[0].user_ticks=null' \
+  '.thread_scan.threads[0].voluntary_context_switches=null' \
+  '.thread_scan.threads += .thread_scan.threads | .thread_scan.listed=2 | .thread_scan.observed=2'; do
+  if resource_thread_samples_valid <(jq "$filter" <<<"$valid"); then
+    echo "Incomplete or ambiguous thread evidence accepted: $filter" >&2
+    exit 1
+  fi
+done
 echo 'Synthetic 60/300-second window scaling and duration rejection checks passed.'

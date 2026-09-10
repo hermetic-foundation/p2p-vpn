@@ -76,13 +76,29 @@ resource_ping_leg() (
     (.finished_millis-.started_millis) <= (($duration+10)*1000)' "$prefix.json" >/dev/null
 )
 
+resource_thread_samples_valid() {
+  jq -es 'length > 0 and all(.[];
+    .thread_scan.listed >= 1 and .thread_scan.listed <= 256 and
+    .thread_scan.observed == .thread_scan.listed and .thread_scan.skipped == 0 and
+    .thread_scan.observed == (.thread_scan.threads | length) and
+    ([.thread_scan.threads[].tid] | unique | length) == .thread_scan.observed and
+    all(.thread_scan.threads[]; .tid > 0 and .start_ticks > 0 and
+      .user_ticks != null and .user_ticks >= 0 and .system_ticks != null and .system_ticks >= 0 and
+      .voluntary_context_switches != null and .voluntary_context_switches >= 0 and
+      .involuntary_context_switches != null and .involuntary_context_switches >= 0))' "$1" >/dev/null
+}
+
 resource_control_window() (
   local mode="$1" prefix="$2" duration="${3:-60}" started deadline sampler="" status=0
   local traffic="${4:-idle}" worker
+  local detail="${5:-process}"
+  local -a collector_arguments=()
   local -a traffic_workers=()
   [[ "$duration" == 60 || "$duration" == 300 ]] || exit 2
   [[ "$mode" == on || "$mode" == off ]] || exit 2
   [[ "$traffic" == idle || ("$traffic" == load && "$mode" == on) ]] || exit 2
+  [[ "$detail" == process || ("$detail" == threads && "$mode" == on) ]] || exit 2
+  [[ "$detail" != threads ]] || collector_arguments+=(--threads)
   trap 'for worker in "${traffic_workers[@]}" "$sampler"; do [[ -z "$worker" ]] || { kill "$worker" 2>/dev/null || true; wait "$worker" 2>/dev/null || true; }; done' EXIT
   resource_native_sample "$prefix-boundary-before.jsonl" || exit 1
   adb_run shell -T sh -s -- "$resource_app_pid" 1 <"$resource_collector" \
@@ -103,7 +119,7 @@ resource_control_window() (
   fi
   if [[ "$mode" == on ]]; then
     timeout --signal=TERM --kill-after=2s "$((duration + 15))" "${adb[@]}" shell -T sh -s \
-      -- "$resource_app_pid" "$duration" <"$resource_collector" >"$prefix-process.jsonl" &
+      -- "$resource_app_pid" "$duration" "${collector_arguments[@]}" <"$resource_collector" >"$prefix-process.jsonl" &
     sampler=$!
     for index in $(seq 0 "$((duration / 5 - 1))"); do
       resource_sleep_until "$((started + index * 5000))"
@@ -127,9 +143,10 @@ resource_control_window() (
   cat /proc/loadavg >"$prefix-host-load-after.txt"
   resource_native_sample "$prefix-boundary-after.jsonl" || exit 1
   jq -n --arg mode "$mode" --argjson started "$started" \
+    --arg detail "$detail" \
     --argjson duration "$duration" \
     --argjson finished "$(monotonic_millis)" \
-    '{mode:$mode, started_millis:$started, finished_millis:$finished, requested_window_millis:($duration * 1000)}' \
+    '{mode:$mode, detail:$detail, started_millis:$started, finished_millis:$finished, requested_window_millis:($duration * 1000)}' \
     >"$prefix-window.json"
   for process in process emulator; do
     jq -es --argjson duration "$duration" 'length == 2 and .[0].pid == .[1].pid and .[0].start_ticks == .[1].start_ticks and
@@ -149,12 +166,15 @@ resource_control_window() (
         ($rows[.].started_millis - $rows[. - 1].started_millis) >= 4500 and
         ($rows[.].started_millis - $rows[. - 1].started_millis) <= 5500))' \
       "$prefix-runtime.jsonl" >/dev/null || exit 1
+    if [[ "$detail" == threads ]]; then
+      resource_thread_samples_valid "$prefix-process.jsonl" || exit 1
+    fi
   fi
 )
 
 run_android_resource_controls() {
   local resource_collector="${P2P_VPN_ANDROID_PROCESS_COLLECTOR:-$(dirname "$0")/android-process-sample.sh}"
-  local resource_app_pid resource_emulator_pid index=0 mode phase duration traffic
+  local resource_app_pid resource_emulator_pid index=0 mode phase duration traffic detail
   adb_run root >"$output_dir/resource-root.txt" || return 1
   adb_run wait-for-device || return 1
   [[ "$(adb_run shell id -u | tr -d '\r')" == 0 ]] || return 1
@@ -168,6 +188,15 @@ run_android_resource_controls() {
   sleep 30
   adb_run shell dumpsys power >"$output_dir/resource-power.txt" || return 1
   resource_power_is_background "$output_dir/resource-power.txt" || return 1
+  if [[ "${scenario:-}" == multi-network-resource-thread-controls ]]; then
+    for detail in process threads threads process; do
+      index=$((index + 1))
+      record_step "thread_control_$index" started "Fixed 60-second idle window; $detail sampling"
+      resource_control_window on "$output_dir/thread-control-$index-$detail" 60 idle "$detail" || return 1
+      record_step "thread_control_$index" passed "Process, runtime and selected thread observations verified"
+    done
+    return 0
+  fi
   if [[ "${scenario:-}" == multi-network-resource-idle ]]; then
     record_step sustained_idle started "Two background networks; fixed 300-second idle window"
     resource_control_window on "$output_dir/sustained-idle" 300 || return 1

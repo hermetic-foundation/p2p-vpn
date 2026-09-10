@@ -57,3 +57,20 @@ evidence before changing startup behavior; keyguard is only a hypothesis.
 Attempt 3 added bounded activity/power capture on failure but passed setup without
 a startup fix. It therefore did not capture the failing activity state. See
 [load results](android-sustained-load.md); the intermittent setup issue remains open.
+
+## Permission-dialog Cause
+
+The later [thread-control setup failure](android-thread-controls.md) captured the
+permission controller as the resumed activity, while the screen was awake and
+keyguard was false. This supersedes the earlier keyguard hypothesis.
+
+- `MainActivity.onCreate` requests notification permission on fresh installs.
+- The resource harness had never resolved that dialog before force-stop/restart.
+- Without a resumed app/service snapshot, debug status attempted a prohibited background start.
+- Resource-only setup now grants notifications before launching the selected APK.
+- Corrected admission passed migration and both networks' bidirectional traffic checks.
+- Non-resource permission workflows and production startup behavior remain unchanged.
+
+This identifies and corrects the observed test prerequisite omission. It is not
+proof of arbitrary background-start behavior, and future control repetitions still
+need to verify stable setup under the now-explicit notification state.

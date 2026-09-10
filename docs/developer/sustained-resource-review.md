@@ -82,11 +82,14 @@ Repeat each capture twice; retain failed attempts separately from successful dat
 Android [load compatibility](android-sustained-load.md) passed four 3000-packet
 streams with resource sampling. One full idle/load/drain sequence also passed,
 with 60000/60000 replies and CPU returning to idle. Repetition, independent
-transitions, CPU attribution and the [setup failure](android-migration-resource-investigation.md) remain open.
+transitions and CPU attribution remain open. The [setup failure](android-migration-resource-investigation.md)
+was traced to an unresolved notification dialog; corrected resource admission passed.
 
 Optional [thread sampling](android-thread-sampling.md) passed Android compatibility,
 including thread identity and scheduling counters. Its observer cost and sustained
 connected attribution remain open; main-thread counters are not process-wide wakeups.
+The [paired thread-control workload](android-thread-controls.md) is prepared but has
+not yet produced four completed control windows.
 
 Freeze packet size/rate, transition schedules and transport settings in each
 fixture manifest before its first capture. Select supported controls from source
