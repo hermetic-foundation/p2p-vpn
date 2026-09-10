@@ -165,3 +165,68 @@ The 8192- and 20480-byte residual blocks are candidates for retained timer
 capacity, based on the existing heap/index storage layout. Size coincidence is
 not ownership evidence. A targeted allocation trace is still needed before
 assigning those blocks; do not repeat the round-count campaign to answer that.
+
+## Targeted Pressure Owner Trace
+
+- One original one-round packet-profile fixture; same cached size-inventory
+  executable, natural identities, recovery/shutdown gates and 480-second outer limit.
+- Attach to original node A after verifying executable, role, namespace PID and
+  process start identity. No wrapper replaces the measured daemon process.
+- Validated explicit-return observer selects only 8192 and 20480 bytes, follows
+  resizes/frees and records opaque IDs plus allocating stacks, not payloads.
+- Retain existing quotas: 4096 allocations, 64 sites, 24 frames/site, 240 characters
+  per frame; 128 pending and 16384 total returns; 1 MiB debugger log.
+- Require normal fixture/inferior exits, at least three periodic/lifecycle
+  checkpoints, no missing returns or tracker failures, and both post-child snapshots.
+- Existing allocations before attachment are outside coverage. If target blocks
+  precede attachment, report missing evidence rather than assigning their owners.
+
+One diagnostic is prescribed. This traces ownership; it is not a replacement
+for the completed unobserved pressure/resource comparisons or a CPU measurement.
+
+### Startup Attachment Follow-Up
+
+The first trace passes in 51.38 seconds: three transient allocations and matching
+frees, nine checkpoints, zero tracker failures. Native inventory still contains
+the target residual, but the trace records no surviving target owner. Attachment
+occurred after those allocations; this is incomplete attribution, not a leak fix.
+
+Run one startup-attached follow-up with the same observer and workload. A bounded
+local driver detects the original node process immediately after launch and
+attaches without a human/tool-roundtrip delay. Preserve executable/role/start
+verification and all original limits; do not pause or manually rescue the runtime.
+
+### Owner Results
+
+The startup trace passes in 62.60 seconds, with 11 tracked allocations, nine frees,
+16 checkpoints, six sites, no tracker failures and no pending returns. Both the
+fixture and debugger exit zero. No matching fixture/debugger process remains.
+
+| Surviving ID | Bytes | Allocating Owner |
+| --- | ---: | --- |
+| 4 | 8192 | `futures_timer::native::heap::Heap` index vector of `SlabSlot<usize>` |
+| 5 | 20480 | The same heap's vector of `(HeapTimer, usize)` items |
+
+Both IDs persist through the two post-child checkpoints and test process exit.
+The target allocations are now identified by allocating stacks and lifetime,
+not guessed from equal-sized buckets. Other selected buffers free normally.
+
+The pinned `futures-timer` 3.0.4 heap reuses removed index slots and uses
+`Vec::swap_remove` for items; removing a timer does not shrink either vector.
+Its process-global helper owns the heap after VPN runtime teardown. The measured
+28,672 bytes therefore represent reusable global timer capacity in this workload.
+
+| Pinned Source | SHA-256 |
+| --- | --- |
+| `src/native/heap.rs` | `fd8d6751b3f581c7d8c1e8b1613048f6253b4d3c6a7aca63653c968d890c2047` |
+| `src/native/global.rs` | `a7b152c2ea6f2684ca76ff854bb5b04b65aa922dcc81389089824ffc98381ef0` |
+
+[Trace evidence](pressure-owner-results.json) preserves both attempts, exact
+observer/startup-driver scripts, original process identities, all stack sites,
+lifecycle inventories and 42 raw artifact hashes. The late-attachment attempt
+remains incomplete attribution even though its workload and observer passed.
+
+The eight-daemon matrix independently shows no residual-size increase from one
+to five rounds. Together with this owner trace and prior timer-capacity controls,
+the pressure investigation is complete within its stated workload. No production
+flushing or capacity-shrinking change is justified, nor a universal heap bound claimed.

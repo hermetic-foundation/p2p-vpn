@@ -1,0 +1,2244 @@
+{
+  "schema_version": 1,
+  "baseline": "62fb5ca3",
+  "observer_script": "set pagination off\nset confirm off\nset debuginfod enabled off\nset auto-load off\nset print frame-arguments none\nset print address off\nset language c\npython\nimport gdb, json, time\nlive = {}\nsites = []\nallocated = 0\nfreed = 0\nsnapshots = 0\nfailures = []\nexit_code = None\nselected = {8192, 20480}\nsizes = set(selected)\ndef fail(message):\n    failures.append(message)\n    raise gdb.GdbError(message)\ndef filters():\n    free_bp.condition = \" || \".join(\"$rsi == %d\" % s for s in sorted(sizes))\n    resize_bp.condition = \"(\" + free_bp.condition + \") || \" + \" || \".join(\"$rcx == %d\" % s for s in sorted(selected))\npending = {}\nreturn_calls = 0\ndef Returned(owner, old=None):\n    global return_calls\n    return_calls += 1\n    if return_calls > 16384 or len(pending) >= 128:\n        fail(\"return tracking quota exceeded\")\n    ident = return_calls\n    sp = int(gdb.parse_and_eval(\"$rsp\"))\n    address = int(gdb.parse_and_eval(\"*(unsigned long long*)$rsp\"))\n    bp = gdb.Breakpoint(\"*%d\" % address, internal=True)\n    bp.thread = gdb.selected_thread().global_num\n    bp.condition = \"$rsp == %d\" % (sp + 8)\n    pending[ident] = (bp, owner, old)\n    bp.commands = \"silent\\npython returned(%d)\\ncontinue\\n\" % ident\ndef returned(ident):\n    bp, owner, old = pending.pop(ident)\n    bp.delete()\n    address = int(gdb.parse_and_eval(\"$rax\"))\n    if not address:\n        fail(\"allocation or resize failed; old owner retained\")\n    if old is not None:\n        live.pop(old, None)\n    if address in live:\n        fail(\"duplicate live allocation address\")\n    live[address] = owner\ndef stack_site():\n    frames = []\n    frame = gdb.newest_frame()\n    for _ in range(24):\n        if frame is None:\n            break\n        frames.append((frame.name() or \"?\")[:240])\n        frame = frame.older()\n    if frames not in sites:\n        if len(sites) >= 64:\n            fail(\"site quota exceeded\")\n        sites.append(frames)\n        print(\"SITE\", json.dumps({\"id\": len(sites), \"frames\": frames}))\n    return sites.index(frames) + 1\ndef new_owner(size):\n    global allocated\n    allocated += 1\n    if allocated > 4096:\n        fail(\"allocation quota exceeded\")\n    return (allocated, size, stack_site())\ndef allocate():\n    size = int(gdb.parse_and_eval(\"$rdi\"))\n    if size not in selected:\n        fail(\"allocation filter mismatch\")\n    Returned(new_owner(size))\ndef deallocate():\n    global freed\n    address = int(gdb.parse_and_eval(\"$rdi\"))\n    if address in live:\n        freed += 1\n        live.pop(address)\ndef resize():\n    address = int(gdb.parse_and_eval(\"$rdi\"))\n    size = int(gdb.parse_and_eval(\"$rcx\"))\n    if address in live:\n        ident, _, site = live[address]\n        if size not in sizes:\n            sizes.add(size)\n            filters()\n        Returned((ident, size, site), address)\n    elif size in selected:\n        Returned(new_owner(size))\ndef checkpoint():\n    global snapshots\n    snapshots += 1\n    print(\"CHECKPOINT\", json.dumps({\"index\": snapshots, \"unix_millis\": int(time.time()*1000), \"live\": sorted(live.values())}))\nfor symbol in (\"__rust_alloc\", \"__rust_alloc_zeroed\"):\n    bp = gdb.Breakpoint(\"*'__rustc::\" + symbol + \"'\", internal=True)\n    bp.condition = \" || \".join(\"$rdi == %d\" % s for s in sorted(selected))\n    bp.commands = \"silent\\npython allocate()\\ncontinue\\n\"\nfree_bp = gdb.Breakpoint(\"*'__rustc::__rust_dealloc'\", internal=True)\nfree_bp.commands = \"silent\\npython deallocate()\\ncontinue\\n\"\nresize_bp = gdb.Breakpoint(\"*'__rustc::__rust_realloc'\", internal=True)\nresize_bp.commands = \"silent\\npython resize()\\ncontinue\\n\"\nfilters()\nfor symbol in (\"tun_namespace::allocation_sample::emit\", \"tun_namespace::allocation_sample::emit_sizes\"):\n    bp = gdb.Breakpoint(symbol, internal=True)\n    bp.commands = \"silent\\npython checkpoint()\\ncontinue\\n\"\nprint(\"TRACE_READY\", json.dumps({\"pid\": gdb.selected_inferior().pid, \"unix_millis\": int(time.time()*1000)}))\ndef ended(event):\n    global exit_code\n    exit_code = getattr(event, \"exit_code\", None)\n    print(\"TRACE_SUMMARY\", json.dumps({\"allocated\": allocated, \"freed\": freed, \"live\": sorted(live.values()), \"snapshots\": snapshots, \"sites\": len(sites), \"failures\": failures, \"exit_code\": exit_code, \"pending_returns\": len(pending), \"return_calls\": return_calls}))\ngdb.events.exited.connect(ended)\n\nend\ncontinue\npython assert exit_code == 0 and snapshots >= 3 and not failures and not pending, \"incomplete trace\"\nquit\n",
+  "startup_driver": "#!/usr/bin/env bash\nset -euo pipefail\nbinary=/tmp/p2p-vpn-review-target/debug/deps/tun_namespace-92e26a895f071361\nenv -u P2P_VPN_TUN_E2E_PRESSURE_INITIATOR -u P2P_VPN_TUN_E2E_ORCHESTRATOR_TIMEOUT_SECONDS -u P2P_VPN_TUN_E2E_WAIT_SCALE \\\n  P2P_VPN_REVIEW_GRACEFUL_SHUTDOWN=1 P2P_VPN_TUN_E2E_KEEP_TEMP=1 TOKIO_WORKER_THREADS=2 RUST_MIN_STACK=8388608 \\\n  P2P_VPN_TUN_E2E_PRESSURE_LIMIT=packets P2P_VPN_TUN_E2E_PRESSURE_ROUNDS=1 \\\n  timeout --signal=TERM --kill-after=10s 480 prlimit --fsize=8388608:8388608 -- \"$binary\" \\\n  tun_namespace_recovers_after_tcp_queue_pressure --ignored --exact --nocapture --test-threads=1 \\\n  > /tmp/p2p-vpn-pressure-owner-2.log 2>&1 &\nfixture=$!\ntarget=\nfor attempt in {1..1000}; do\n  for pid in $(pgrep -f tun_namespace-92e26a895f071361 || true); do\n    if [[ $(readlink \"/proc/$pid/exe\" || true) == \"$binary\" ]] &&\n      tr '\\0' '\\n' < \"/proc/$pid/environ\" | grep -qx 'P2P_VPN_TUN_E2E_ROLE=a'; then\n      target=$pid\n      break\n    fi\n  done\n  [[ -n $target ]] && break\n  kill -0 \"$fixture\" 2>/dev/null || break\n  sleep 0.01\ndone\ndebugger_status=1\nif [[ -n $target ]]; then\n  namespace_pid=$(awk '/^NSpid:/ {print $NF}' \"/proc/$target/status\")\n  printf 'HOST_PID=%s NAMESPACE_PID=%s\\n' \"$target\" \"$namespace_pid\"\n  awk '{print \"START_TICKS=\" $22}' \"/proc/$target/stat\"\n  tr '\\0' '\\n' < \"/proc/$target/environ\" | grep -E '^P2P_VPN_TUN_E2E_(ROLE|MODE|TEMP)='\n  set +e\n  timeout --signal=TERM --kill-after=2s 240 nsenter --target \"$target\" --user --net --mount --pid --preserve-credentials -- \\\n    prlimit --fsize=1048576:1048576 -- /nix/store/bg2bp1zmii5spb2hkgv5xn6mzva7nx9r-gdb-17.2/bin/gdb \\\n    -q -nx -batch -ex \"attach $namespace_pid\" -x /tmp/p2p-vpn-pressure-owner.gdb \\\n    > /tmp/p2p-vpn-pressure-owner-gdb-2.log 2>&1\n  debugger_status=$?\n  set -e\nfi\nset +e\nwait \"$fixture\"\nfixture_status=$?\nset -e\nprintf 'FIXTURE_EXIT=%s DEBUGGER_EXIT=%s\\n' \"$fixture_status\" \"$debugger_status\"\n[[ $fixture_status == 0 && $debugger_status == 0 ]]\n",
+  "runs": [
+    {
+      "dir": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.4e94b8faede3078e",
+      "fixture_exit": 0,
+      "debugger_exit": 0,
+      "seconds": 51.38,
+      "identity": {
+        "host_pid": 2089371,
+        "namespace_pid": 18,
+        "start_ticks": 91902326
+      },
+      "trace": [
+        {
+          "kind": "TRACE_READY",
+          "data": {
+            "pid": 18,
+            "unix_millis": 1789046113671
+          }
+        },
+        {
+          "kind": "CHECKPOINT",
+          "data": {
+            "index": 1,
+            "unix_millis": 1789046115112,
+            "live": []
+          }
+        },
+        {
+          "kind": "SITE",
+          "data": {
+            "id": 1,
+            "frames": [
+              "__rustc::__rust_alloc",
+              "<alloc::raw_vec::RawVecInner>::try_allocate_in",
+              "<alloc::raw_vec::RawVecInner>::with_capacity_in",
+              "<alloc::vec::Vec<u8>>::with_capacity",
+              "<bytes::bytes_mut::BytesMut>::with_capacity",
+              "asynchronous_codec::framed_read::framed_read_2::<asynchronous_codec::framed_write::FramedWrite2<asynchronous_codec::fuse::Fuse<multistream_select::negotiated::Negotiated<libp2p_tcp::provider::tokio::TcpStream>, libp2p_noise::io::framed::Cod",
+              "<core::option::Option<bytes::bytes_mut::BytesMut>>::unwrap_or_else::<asynchronous_codec::framed_read::framed_read_2<asynchronous_codec::framed_write::FramedWrite2<asynchronous_codec::fuse::Fuse<multistream_select::negotiated::Negotiated<lib",
+              "asynchronous_codec::framed_read::framed_read_2::<asynchronous_codec::framed_write::FramedWrite2<asynchronous_codec::fuse::Fuse<multistream_select::negotiated::Negotiated<libp2p_tcp::provider::tokio::TcpStream>, libp2p_noise::io::framed::Cod",
+              "<asynchronous_codec::framed::Framed<multistream_select::negotiated::Negotiated<libp2p_tcp::provider::tokio::TcpStream>, libp2p_noise::io::framed::Codec<snow::handshakestate::HandshakeState>>>::new",
+              "<libp2p_noise::io::handshake::State<multistream_select::negotiated::Negotiated<libp2p_tcp::provider::tokio::TcpStream>>>::new",
+              "<libp2p_noise::Config>::into_initiator::<multistream_select::negotiated::Negotiated<libp2p_tcp::provider::tokio::TcpStream>>",
+              "<libp2p_noise::Config as libp2p_core::upgrade::OutboundConnectionUpgrade<multistream_select::negotiated::Negotiated<libp2p_tcp::provider::tokio::TcpStream>>>::upgrade_outbound::{closure#0}",
+              "<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<(libp2p_identity::peer_id::PeerId, libp2p_noise::io::Output<multistream_select::negotiated::Negotiated<libp2p_tcp::provider::tokio::TcpStream>>",
+              "<core::pin::Pin<alloc::boxed::Box<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<(libp2p_identity::peer_id::PeerId, libp2p_noise::io::Output<multistream_select::negotiated::Negotiated<libp2p_",
+              "<libp2p_core::upgrade::apply::OutboundUpgradeApply<libp2p_tcp::provider::tokio::TcpStream, libp2p_noise::Config> as core::future::future::Future>::poll",
+              "<futures_util::future::either::Either<libp2p_core::upgrade::apply::InboundUpgradeApply<libp2p_tcp::provider::tokio::TcpStream, libp2p_noise::Config>, libp2p_core::upgrade::apply::OutboundUpgradeApply<libp2p_tcp::provider::tokio::TcpStream, ",
+              "<libp2p_core::transport::upgrade::Authenticate<libp2p_tcp::provider::tokio::TcpStream, libp2p_noise::Config> as core::future::future::Future>::poll",
+              "<libp2p_core::transport::upgrade::Authenticate<libp2p_tcp::provider::tokio::TcpStream, libp2p_noise::Config> as futures_core::future::TryFuture>::try_poll",
+              "<libp2p_core::transport::and_then::AndThenFuture<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<libp2p_tcp::provider::tokio::TcpStream, std::io::error::Error>> + core::marker::Send>>, <libp2p",
+              "<libp2p_core::transport::and_then::AndThenFuture<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<libp2p_tcp::provider::tokio::TcpStream, std::io::error::Error>> + core::marker::Send>>, <libp2p",
+              "<libp2p_core::transport::and_then::AndThenFuture<libp2p_core::transport::and_then::AndThenFuture<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<libp2p_tcp::provider::tokio::TcpStream, std::io",
+              "<libp2p_core::transport::and_then::AndThenFuture<libp2p_core::transport::and_then::AndThenFuture<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<libp2p_tcp::provider::tokio::TcpStream, std::io",
+              "<libp2p_core::transport::map::MapFuture<libp2p_core::transport::and_then::AndThenFuture<libp2p_core::transport::and_then::AndThenFuture<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<libp2p_t",
+              "<libp2p_core::transport::map::MapFuture<libp2p_core::transport::and_then::AndThenFuture<libp2p_core::transport::and_then::AndThenFuture<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<libp2p_t"
+            ]
+          }
+        },
+        {
+          "kind": "SITE",
+          "data": {
+            "id": 2,
+            "frames": [
+              "__rustc::__rust_alloc",
+              "<alloc::raw_vec::RawVecInner>::try_allocate_in",
+              "<alloc::raw_vec::RawVecInner>::with_capacity_in",
+              "<alloc::vec::Vec<u8>>::with_capacity",
+              "<bytes::bytes_mut::BytesMut>::with_capacity",
+              "asynchronous_codec::framed_read::framed_read_2::<asynchronous_codec::framed_write::FramedWrite2<asynchronous_codec::fuse::Fuse<multistream_select::negotiated::Negotiated<libp2p_tcp::provider::tokio::TcpStream>, libp2p_noise::io::framed::Cod",
+              "<core::option::Option<bytes::bytes_mut::BytesMut>>::unwrap_or_else::<asynchronous_codec::framed_read::framed_read_2<asynchronous_codec::framed_write::FramedWrite2<asynchronous_codec::fuse::Fuse<multistream_select::negotiated::Negotiated<lib",
+              "asynchronous_codec::framed_read::framed_read_2::<asynchronous_codec::framed_write::FramedWrite2<asynchronous_codec::fuse::Fuse<multistream_select::negotiated::Negotiated<libp2p_tcp::provider::tokio::TcpStream>, libp2p_noise::io::framed::Cod",
+              "<asynchronous_codec::framed::Framed<multistream_select::negotiated::Negotiated<libp2p_tcp::provider::tokio::TcpStream>, libp2p_noise::io::framed::Codec<snow::handshakestate::HandshakeState>>>::new",
+              "<libp2p_noise::io::handshake::State<multistream_select::negotiated::Negotiated<libp2p_tcp::provider::tokio::TcpStream>>>::new",
+              "<libp2p_noise::Config>::into_responder::<multistream_select::negotiated::Negotiated<libp2p_tcp::provider::tokio::TcpStream>>",
+              "<libp2p_noise::Config as libp2p_core::upgrade::InboundConnectionUpgrade<multistream_select::negotiated::Negotiated<libp2p_tcp::provider::tokio::TcpStream>>>::upgrade_inbound::{closure#0}",
+              "<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<(libp2p_identity::peer_id::PeerId, libp2p_noise::io::Output<multistream_select::negotiated::Negotiated<libp2p_tcp::provider::tokio::TcpStream>>",
+              "<core::pin::Pin<alloc::boxed::Box<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<(libp2p_identity::peer_id::PeerId, libp2p_noise::io::Output<multistream_select::negotiated::Negotiated<libp2p_",
+              "<libp2p_core::upgrade::apply::InboundUpgradeApply<libp2p_tcp::provider::tokio::TcpStream, libp2p_noise::Config> as core::future::future::Future>::poll",
+              "<futures_util::future::either::Either<libp2p_core::upgrade::apply::InboundUpgradeApply<libp2p_tcp::provider::tokio::TcpStream, libp2p_noise::Config>, libp2p_core::upgrade::apply::OutboundUpgradeApply<libp2p_tcp::provider::tokio::TcpStream, ",
+              "<libp2p_core::transport::upgrade::Authenticate<libp2p_tcp::provider::tokio::TcpStream, libp2p_noise::Config> as core::future::future::Future>::poll",
+              "<libp2p_core::transport::upgrade::Authenticate<libp2p_tcp::provider::tokio::TcpStream, libp2p_noise::Config> as futures_core::future::TryFuture>::try_poll",
+              "<libp2p_core::transport::and_then::AndThenFuture<futures_util::future::ready::Ready<core::result::Result<libp2p_tcp::provider::tokio::TcpStream, std::io::error::Error>>, <libp2p_core::transport::upgrade::Builder<libp2p_tcp::Transport<libp2p",
+              "<libp2p_core::transport::and_then::AndThenFuture<futures_util::future::ready::Ready<core::result::Result<libp2p_tcp::provider::tokio::TcpStream, std::io::error::Error>>, <libp2p_core::transport::upgrade::Builder<libp2p_tcp::Transport<libp2p",
+              "<libp2p_core::transport::and_then::AndThenFuture<libp2p_core::transport::and_then::AndThenFuture<futures_util::future::ready::Ready<core::result::Result<libp2p_tcp::provider::tokio::TcpStream, std::io::error::Error>>, <libp2p_core::transpor",
+              "<libp2p_core::transport::and_then::AndThenFuture<libp2p_core::transport::and_then::AndThenFuture<futures_util::future::ready::Ready<core::result::Result<libp2p_tcp::provider::tokio::TcpStream, std::io::error::Error>>, <libp2p_core::transpor",
+              "<libp2p_core::transport::map::MapFuture<libp2p_core::transport::and_then::AndThenFuture<libp2p_core::transport::and_then::AndThenFuture<futures_util::future::ready::Ready<core::result::Result<libp2p_tcp::provider::tokio::TcpStream, std::io:",
+              "<libp2p_core::transport::map::MapFuture<libp2p_core::transport::and_then::AndThenFuture<libp2p_core::transport::and_then::AndThenFuture<futures_util::future::ready::Ready<core::result::Result<libp2p_tcp::provider::tokio::TcpStream, std::io:"
+            ]
+          }
+        },
+        {
+          "kind": "CHECKPOINT",
+          "data": {
+            "index": 2,
+            "unix_millis": 1789046119947,
+            "live": [
+              [
+                2,
+                8192,
+                2
+              ]
+            ]
+          }
+        },
+        {
+          "kind": "SITE",
+          "data": {
+            "id": 3,
+            "frames": [
+              "__rustc::__rust_alloc",
+              "<alloc::raw_vec::RawVecInner>::try_allocate_in",
+              "<alloc::raw_vec::RawVecInner>::with_capacity_in",
+              "<alloc::vec::Vec<u8>>::with_capacity",
+              "<bytes::bytes_mut::BytesMut>::with_capacity",
+              "asynchronous_codec::framed_read::framed_read_2::<asynchronous_codec::fuse::Fuse<libp2p_swarm::stream::Stream, quick_protobuf_codec::Codec<libp2p_identify::proto::structs::Identify>>>::{closure#0}",
+              "<core::option::Option<bytes::bytes_mut::BytesMut>>::unwrap_or_else::<asynchronous_codec::framed_read::framed_read_2<asynchronous_codec::fuse::Fuse<libp2p_swarm::stream::Stream, quick_protobuf_codec::Codec<libp2p_identify::proto::structs::Id",
+              "asynchronous_codec::framed_read::framed_read_2::<asynchronous_codec::fuse::Fuse<libp2p_swarm::stream::Stream, quick_protobuf_codec::Codec<libp2p_identify::proto::structs::Identify>>>",
+              "<asynchronous_codec::framed_read::FramedRead<libp2p_swarm::stream::Stream, quick_protobuf_codec::Codec<libp2p_identify::proto::structs::Identify>>>::new",
+              "libp2p_identify::protocol::recv::<libp2p_swarm::stream::Stream>::{closure#0}",
+              "libp2p_identify::protocol::recv_identify::<libp2p_swarm::stream::Stream>::{closure#0}",
+              "<libp2p_identify::protocol::recv_identify<libp2p_swarm::stream::Stream>::{closure#0} as futures_core::future::TryFuture>::try_poll",
+              "<futures_util::future::try_future::into_future::IntoFuture<libp2p_identify::protocol::recv_identify<libp2p_swarm::stream::Stream>::{closure#0}> as core::future::future::Future>::poll",
+              "<futures_util::future::future::map::Map<futures_util::future::try_future::into_future::IntoFuture<libp2p_identify::protocol::recv_identify<libp2p_swarm::stream::Stream>::{closure#0}>, futures_util::fns::MapOkFn<libp2p_identify::handler::Suc",
+              "<futures_util::future::future::Map<futures_util::future::try_future::into_future::IntoFuture<libp2p_identify::protocol::recv_identify<libp2p_swarm::stream::Stream>::{closure#0}>, futures_util::fns::MapOkFn<libp2p_identify::handler::Success:",
+              "<futures_util::future::try_future::MapOk<libp2p_identify::protocol::recv_identify<libp2p_swarm::stream::Stream>::{closure#0}, libp2p_identify::handler::Success::ReceivedIdentify> as core::future::future::Future>::poll",
+              "<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<libp2p_identify::handler::Success, libp2p_identify::protocol::UpgradeError>> + core::marker::Send>> as core::future::future::Future>::poll",
+              "<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<libp2p_identify::handler::Success, libp2p_identify::protocol::UpgradeError>> + core::marker::Send>> as futures_util::future::future::FutureExt>",
+              "<futures_bounded::futures_map::TimeoutFuture<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<libp2p_identify::handler::Success, libp2p_identify::protocol::UpgradeError>> + core::marker::Send>>",
+              "<futures_bounded::futures_map::TimeoutFuture<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<libp2p_identify::handler::Success, libp2p_identify::protocol::UpgradeError>> + core::marker::Send>>",
+              "<futures_bounded::futures_map::TaggedFuture<u32, futures_bounded::futures_map::TimeoutFuture<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<libp2p_identify::handler::Success, libp2p_identify:",
+              "<futures_util::stream::futures_unordered::FuturesUnordered<futures_bounded::futures_map::TaggedFuture<u32, futures_bounded::futures_map::TimeoutFuture<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::",
+              "<futures_util::stream::futures_unordered::FuturesUnordered<futures_bounded::futures_map::TaggedFuture<u32, futures_bounded::futures_map::TimeoutFuture<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::",
+              "<futures_bounded::futures_map::FuturesMap<u32, core::result::Result<libp2p_identify::handler::Success, libp2p_identify::protocol::UpgradeError>>>::poll_unpin"
+            ]
+          }
+        },
+        {
+          "kind": "CHECKPOINT",
+          "data": {
+            "index": 3,
+            "unix_millis": 1789046125020,
+            "live": [
+              [
+                2,
+                8192,
+                2
+              ]
+            ]
+          }
+        },
+        {
+          "kind": "CHECKPOINT",
+          "data": {
+            "index": 4,
+            "unix_millis": 1789046130147,
+            "live": [
+              [
+                2,
+                16384,
+                2
+              ]
+            ]
+          }
+        },
+        {
+          "kind": "CHECKPOINT",
+          "data": {
+            "index": 5,
+            "unix_millis": 1789046135018,
+            "live": [
+              [
+                2,
+                16384,
+                2
+              ]
+            ]
+          }
+        },
+        {
+          "kind": "CHECKPOINT",
+          "data": {
+            "index": 6,
+            "unix_millis": 1789046139950,
+            "live": [
+              [
+                2,
+                16384,
+                2
+              ]
+            ]
+          }
+        },
+        {
+          "kind": "CHECKPOINT",
+          "data": {
+            "index": 7,
+            "unix_millis": 1789046144366,
+            "live": []
+          }
+        },
+        {
+          "kind": "CHECKPOINT",
+          "data": {
+            "index": 8,
+            "unix_millis": 1789046144395,
+            "live": []
+          }
+        },
+        {
+          "kind": "CHECKPOINT",
+          "data": {
+            "index": 9,
+            "unix_millis": 1789046144497,
+            "live": []
+          }
+        },
+        {
+          "kind": "TRACE_SUMMARY",
+          "data": {
+            "allocated": 3,
+            "freed": 3,
+            "live": [],
+            "snapshots": 9,
+            "sites": 3,
+            "failures": [],
+            "exit_code": 0,
+            "pending_returns": 0,
+            "return_calls": 4
+          }
+        }
+      ],
+      "inventory": [
+        {
+          "stage": "before_child",
+          "pid": 18,
+          "rows": [
+            [
+              1,
+              7
+            ],
+            [
+              2,
+              24
+            ],
+            [
+              3,
+              69
+            ],
+            [
+              4,
+              61
+            ],
+            [
+              5,
+              41
+            ],
+            [
+              6,
+              53
+            ],
+            [
+              7,
+              101
+            ],
+            [
+              8,
+              15
+            ],
+            [
+              9,
+              2
+            ],
+            [
+              10,
+              3
+            ],
+            [
+              11,
+              1
+            ],
+            [
+              12,
+              1
+            ],
+            [
+              13,
+              1
+            ],
+            [
+              14,
+              1
+            ],
+            [
+              16,
+              3
+            ],
+            [
+              17,
+              6
+            ],
+            [
+              18,
+              1
+            ],
+            [
+              19,
+              1
+            ],
+            [
+              21,
+              1
+            ],
+            [
+              22,
+              1
+            ],
+            [
+              24,
+              1
+            ],
+            [
+              47,
+              3
+            ],
+            [
+              48,
+              5
+            ],
+            [
+              52,
+              1
+            ],
+            [
+              62,
+              1
+            ],
+            [
+              63,
+              1
+            ],
+            [
+              68,
+              1
+            ],
+            [
+              92,
+              1
+            ],
+            [
+              93,
+              1
+            ],
+            [
+              96,
+              2
+            ],
+            [
+              120,
+              1
+            ],
+            [
+              136,
+              1
+            ],
+            [
+              148,
+              1
+            ],
+            [
+              184,
+              1
+            ],
+            [
+              312,
+              1
+            ],
+            [
+              512,
+              1
+            ],
+            [
+              544,
+              2
+            ],
+            [
+              608,
+              1
+            ],
+            [
+              640,
+              1
+            ],
+            [
+              1024,
+              1
+            ],
+            [
+              1072,
+              1
+            ],
+            [
+              12560,
+              1
+            ]
+          ],
+          "oversized_blocks": 0,
+          "oversized_bytes": 0,
+          "total_blocks": 423,
+          "total_bytes": 21615,
+          "failures": 0,
+          "coherent": true,
+          "truncated": false
+        },
+        {
+          "stage": "child_returned",
+          "pid": 18,
+          "rows": [
+            [
+              1,
+              7
+            ],
+            [
+              2,
+              24
+            ],
+            [
+              3,
+              69
+            ],
+            [
+              4,
+              61
+            ],
+            [
+              5,
+              41
+            ],
+            [
+              6,
+              53
+            ],
+            [
+              7,
+              101
+            ],
+            [
+              8,
+              15
+            ],
+            [
+              9,
+              2
+            ],
+            [
+              10,
+              3
+            ],
+            [
+              11,
+              1
+            ],
+            [
+              12,
+              1
+            ],
+            [
+              13,
+              2
+            ],
+            [
+              14,
+              2
+            ],
+            [
+              16,
+              3
+            ],
+            [
+              17,
+              6
+            ],
+            [
+              18,
+              1
+            ],
+            [
+              19,
+              1
+            ],
+            [
+              21,
+              1
+            ],
+            [
+              22,
+              1
+            ],
+            [
+              24,
+              3
+            ],
+            [
+              32,
+              2
+            ],
+            [
+              40,
+              1
+            ],
+            [
+              47,
+              3
+            ],
+            [
+              48,
+              7
+            ],
+            [
+              52,
+              1
+            ],
+            [
+              62,
+              1
+            ],
+            [
+              63,
+              1
+            ],
+            [
+              68,
+              1
+            ],
+            [
+              92,
+              1
+            ],
+            [
+              93,
+              1
+            ],
+            [
+              96,
+              2
+            ],
+            [
+              112,
+              1
+            ],
+            [
+              120,
+              1
+            ],
+            [
+              136,
+              1
+            ],
+            [
+              148,
+              1
+            ],
+            [
+              184,
+              1
+            ],
+            [
+              312,
+              1
+            ],
+            [
+              336,
+              65
+            ],
+            [
+              352,
+              1
+            ],
+            [
+              368,
+              1
+            ],
+            [
+              512,
+              1
+            ],
+            [
+              544,
+              2
+            ],
+            [
+              608,
+              1
+            ],
+            [
+              640,
+              2
+            ],
+            [
+              1024,
+              2
+            ],
+            [
+              1072,
+              1
+            ],
+            [
+              2048,
+              1
+            ],
+            [
+              2072,
+              1
+            ],
+            [
+              2304,
+              1
+            ],
+            [
+              8192,
+              1
+            ],
+            [
+              12560,
+              1
+            ],
+            [
+              20480,
+              1
+            ]
+          ],
+          "oversized_blocks": 0,
+          "oversized_bytes": 0,
+          "total_blocks": 507,
+          "total_bytes": 81322,
+          "failures": 0,
+          "coherent": true,
+          "truncated": false
+        },
+        {
+          "stage": "child_settled",
+          "pid": 18,
+          "rows": [
+            [
+              1,
+              7
+            ],
+            [
+              2,
+              24
+            ],
+            [
+              3,
+              69
+            ],
+            [
+              4,
+              61
+            ],
+            [
+              5,
+              41
+            ],
+            [
+              6,
+              53
+            ],
+            [
+              7,
+              101
+            ],
+            [
+              8,
+              15
+            ],
+            [
+              9,
+              2
+            ],
+            [
+              10,
+              3
+            ],
+            [
+              11,
+              1
+            ],
+            [
+              12,
+              1
+            ],
+            [
+              13,
+              2
+            ],
+            [
+              14,
+              2
+            ],
+            [
+              16,
+              3
+            ],
+            [
+              17,
+              6
+            ],
+            [
+              18,
+              1
+            ],
+            [
+              19,
+              1
+            ],
+            [
+              21,
+              1
+            ],
+            [
+              22,
+              1
+            ],
+            [
+              24,
+              3
+            ],
+            [
+              32,
+              2
+            ],
+            [
+              40,
+              1
+            ],
+            [
+              47,
+              3
+            ],
+            [
+              48,
+              7
+            ],
+            [
+              52,
+              1
+            ],
+            [
+              62,
+              1
+            ],
+            [
+              63,
+              1
+            ],
+            [
+              68,
+              1
+            ],
+            [
+              92,
+              1
+            ],
+            [
+              93,
+              1
+            ],
+            [
+              96,
+              2
+            ],
+            [
+              112,
+              1
+            ],
+            [
+              120,
+              1
+            ],
+            [
+              136,
+              1
+            ],
+            [
+              148,
+              1
+            ],
+            [
+              184,
+              1
+            ],
+            [
+              312,
+              1
+            ],
+            [
+              336,
+              65
+            ],
+            [
+              352,
+              1
+            ],
+            [
+              368,
+              1
+            ],
+            [
+              512,
+              1
+            ],
+            [
+              544,
+              2
+            ],
+            [
+              608,
+              1
+            ],
+            [
+              640,
+              2
+            ],
+            [
+              1024,
+              2
+            ],
+            [
+              1072,
+              1
+            ],
+            [
+              2048,
+              1
+            ],
+            [
+              2072,
+              1
+            ],
+            [
+              2304,
+              1
+            ],
+            [
+              8192,
+              1
+            ],
+            [
+              12560,
+              1
+            ],
+            [
+              20480,
+              1
+            ]
+          ],
+          "oversized_blocks": 0,
+          "oversized_bytes": 0,
+          "total_blocks": 507,
+          "total_bytes": 81322,
+          "failures": 0,
+          "coherent": true,
+          "truncated": false
+        }
+      ],
+      "artifacts": [
+        {
+          "sha256": "2efa023387a1b471274a3536f0562dd4bfb40936b03ab4a08eb4fc63d077929c",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.4e94b8faede3078e/queue-pressure.json"
+        },
+        {
+          "sha256": "7ccb0c9f95a019474a004fd9c96e23e3fff208abb0f47dbbfa4e0298ae93f854",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.4e94b8faede3078e/recovery-ping-a.stdout"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.4e94b8faede3078e/recovery-ping-b.stderr"
+        },
+        {
+          "sha256": "1f0e7e028cb0d7d2846e535f33922608be4a2067feed328588adb5ed94f3a12e",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.4e94b8faede3078e/pressure-ping.log"
+        },
+        {
+          "sha256": "068c293c374c7e37aa9c64e97618020c88d9ca9e03dfbc546444e7832cefc7f5",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.4e94b8faede3078e/recovery-ping-b.stdout"
+        },
+        {
+          "sha256": "16f3c016ad101e633701fc5635ef48e23168bce5e9dec6e396ea69354a7c2976",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.4e94b8faede3078e/node-a.log"
+        },
+        {
+          "sha256": "b24d6d33736ecd5604a4b17bc9c6481039fac362bb7df044ef1c10a2bfd21db6",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.4e94b8faede3078e/ready-b"
+        },
+        {
+          "sha256": "9998983e78b96d780cbdd1b8273a677328307cd4f54b9cd3cd62b9edb9b8c174",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.4e94b8faede3078e/repro-metadata.txt"
+        },
+        {
+          "sha256": "3c0952e5e7053f16b72abe9d6e775f4ad50f1189aa51f17518e4b7e31c01ee7f",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.4e94b8faede3078e/queue-pressure-partial.json"
+        },
+        {
+          "sha256": "cced28c6dc3f99c2396a5eaad732bf6b28142335892b1cd0e6af6cdb53f5ccfa",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.4e94b8faede3078e/start-a"
+        },
+        {
+          "sha256": "b24d6d33736ecd5604a4b17bc9c6481039fac362bb7df044ef1c10a2bfd21db6",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.4e94b8faede3078e/ready-a"
+        },
+        {
+          "sha256": "f1ae89066ee492c9387f80308f325ef6d4b1f6c766d033c5de0f1107c6d0111e",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.4e94b8faede3078e/queue-pressure-drain.json"
+        },
+        {
+          "sha256": "cced28c6dc3f99c2396a5eaad732bf6b28142335892b1cd0e6af6cdb53f5ccfa",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.4e94b8faede3078e/start-b"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.4e94b8faede3078e/recovery-ping-a.stderr"
+        },
+        {
+          "sha256": "554962fdeef5b24b8e3e794499fe36a291537cdc3ebc73d9d9ed2f6affcb6a62",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.4e94b8faede3078e/recovery-ping-a.json"
+        },
+        {
+          "sha256": "791e597c843b32d129d799d4355a20d69f9a7748439ce59db8b00e910e3ad447",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.4e94b8faede3078e/node-b.log"
+        },
+        {
+          "sha256": "7f0762149ba653735e9290a47ad55d92fc993505482829923bd61eecf7561dab",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.4e94b8faede3078e/recovery-ping-b.json"
+        },
+        {
+          "sha256": "6607bdb2bf2184693bf00a170c648f3dc2938f09fbf70edd5063cb2c987c6501",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.4e94b8faede3078e/repro-commands.sh"
+        },
+        {
+          "sha256": "bbfff534c94270f448f17dcbbe6f9c96381b8a84adff120369a93d4105372af7",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.4e94b8faede3078e/queue-pressure-series.json"
+        },
+        {
+          "sha256": "c3e20d17df96911e355eace177c90a3a50a8aec3e192f2c5ae47dfdea1e39f18",
+          "path": "/tmp/p2p-vpn-pressure-owner-1.log"
+        },
+        {
+          "sha256": "b991d04d0d16bea0cbefddf6ef92b6904eab684b15c9f3385a397776315b9442",
+          "path": "/tmp/p2p-vpn-pressure-owner-gdb-1.log"
+        }
+      ]
+    },
+    {
+      "dir": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.591391b409b05c36",
+      "fixture_exit": 0,
+      "debugger_exit": 0,
+      "seconds": 62.6,
+      "identity": {
+        "host_pid": 2091862,
+        "namespace_pid": 18,
+        "start_ticks": 91919199
+      },
+      "trace": [
+        {
+          "kind": "TRACE_READY",
+          "data": {
+            "pid": 18,
+            "unix_millis": 1789046262815
+          }
+        },
+        {
+          "kind": "SITE",
+          "data": {
+            "id": 1,
+            "frames": [
+              "__rustc::__rust_alloc",
+              "<alloc::raw_vec::RawVecInner>::try_allocate_in",
+              "<alloc::boxed::Box<[u8]>>::new_uninit_slice",
+              "<std::io::buffered::bufreader::BufReader<std::fs::File>>::with_capacity",
+              "<std::io::buffered::bufreader::BufReader<std::fs::File>>::new",
+              "<hickory_resolver::hosts::Hosts>::read_hosts_conf::<std::fs::File>",
+              "<hickory_resolver::hosts::Hosts>::from_file::<&str>",
+              "<hickory_resolver::hosts::Hosts>::from_system",
+              "<hickory_resolver::resolver::ResolverBuilder<hickory_resolver::name_server::connection_provider::GenericConnector<hickory_proto::runtime::tokio_runtime::TokioRuntimeProvider>>>::build",
+              "<libp2p_dns::Transport<libp2p_core::transport::map::Map<libp2p_core::transport::choice::OrTransport<libp2p_core::transport::map::Map<libp2p_core::transport::upgrade::Multiplexed<libp2p_core::transport::and_then::AndThen<libp2p_core::transpo",
+              "<libp2p::builder::SwarmBuilder<libp2p::builder::phase::provider::Tokio, libp2p::builder::phase::dns::DnsPhase<libp2p_core::transport::map::Map<libp2p_core::transport::choice::OrTransport<libp2p_core::transport::map::Map<libp2p_core::transpo",
+              "<libp2p::builder::SwarmBuilder<libp2p::builder::phase::provider::Tokio, libp2p::builder::phase::other_transport::OtherTransportPhase<libp2p_core::transport::map::Map<libp2p_core::transport::choice::OrTransport<libp2p_core::transport::map::M",
+              "p2p_vpn::runtime::p2p::build_node_with_dial_observer::<p2p_vpn::runtime::p2p::build_node::{closure#0}>",
+              "p2p_vpn::runtime::p2p::build_node",
+              "tun_namespace::run_ready_node::{closure#0}",
+              "<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>> as core::future::future::Future>::poll",
+              "<tokio::runtime::park::CachedParkThread>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>::{closure#0}",
+              "<tokio::runtime::park::CachedParkThread>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>",
+              "<tokio::runtime::context::blocking::BlockingRegionGuard>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>",
+              "<tokio::runtime::scheduler::multi_thread::MultiThread>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>::{closure#0}",
+              "tokio::runtime::context::runtime::enter_runtime::<<tokio::runtime::scheduler::multi_thread::MultiThread>::block_on<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>::{closure#0}, core::result::Result<(), p2p_vpn",
+              "<tokio::runtime::scheduler::multi_thread::MultiThread>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>",
+              "<tokio::runtime::runtime::Runtime>::block_on_inner::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>",
+              "<tokio::runtime::runtime::Runtime>::block_on::<tun_namespace::run_ready_node::{closure#0}>"
+            ]
+          }
+        },
+        {
+          "kind": "SITE",
+          "data": {
+            "id": 2,
+            "frames": [
+              "__rustc::__rust_alloc",
+              "<alloc::raw_vec::RawVecInner>::try_allocate_in",
+              "<alloc::raw_vec::RawVecInner>::with_capacity_in",
+              "<alloc::vec::Vec<u8>>::with_capacity",
+              "<bytes::bytes_mut::BytesMut>::with_capacity",
+              "asynchronous_codec::framed_read::framed_read_2::<asynchronous_codec::framed_write::FramedWrite2<asynchronous_codec::fuse::Fuse<multistream_select::negotiated::Negotiated<libp2p_tcp::provider::tokio::TcpStream>, libp2p_noise::io::framed::Cod",
+              "<core::option::Option<bytes::bytes_mut::BytesMut>>::unwrap_or_else::<asynchronous_codec::framed_read::framed_read_2<asynchronous_codec::framed_write::FramedWrite2<asynchronous_codec::fuse::Fuse<multistream_select::negotiated::Negotiated<lib",
+              "asynchronous_codec::framed_read::framed_read_2::<asynchronous_codec::framed_write::FramedWrite2<asynchronous_codec::fuse::Fuse<multistream_select::negotiated::Negotiated<libp2p_tcp::provider::tokio::TcpStream>, libp2p_noise::io::framed::Cod",
+              "<asynchronous_codec::framed::Framed<multistream_select::negotiated::Negotiated<libp2p_tcp::provider::tokio::TcpStream>, libp2p_noise::io::framed::Codec<snow::handshakestate::HandshakeState>>>::new",
+              "<libp2p_noise::io::handshake::State<multistream_select::negotiated::Negotiated<libp2p_tcp::provider::tokio::TcpStream>>>::new",
+              "<libp2p_noise::Config>::into_initiator::<multistream_select::negotiated::Negotiated<libp2p_tcp::provider::tokio::TcpStream>>",
+              "<libp2p_noise::Config as libp2p_core::upgrade::OutboundConnectionUpgrade<multistream_select::negotiated::Negotiated<libp2p_tcp::provider::tokio::TcpStream>>>::upgrade_outbound::{closure#0}",
+              "<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<(libp2p_identity::peer_id::PeerId, libp2p_noise::io::Output<multistream_select::negotiated::Negotiated<libp2p_tcp::provider::tokio::TcpStream>>",
+              "<core::pin::Pin<alloc::boxed::Box<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<(libp2p_identity::peer_id::PeerId, libp2p_noise::io::Output<multistream_select::negotiated::Negotiated<libp2p_",
+              "<libp2p_core::upgrade::apply::OutboundUpgradeApply<libp2p_tcp::provider::tokio::TcpStream, libp2p_noise::Config> as core::future::future::Future>::poll",
+              "<futures_util::future::either::Either<libp2p_core::upgrade::apply::InboundUpgradeApply<libp2p_tcp::provider::tokio::TcpStream, libp2p_noise::Config>, libp2p_core::upgrade::apply::OutboundUpgradeApply<libp2p_tcp::provider::tokio::TcpStream, ",
+              "<libp2p_core::transport::upgrade::Authenticate<libp2p_tcp::provider::tokio::TcpStream, libp2p_noise::Config> as core::future::future::Future>::poll",
+              "<libp2p_core::transport::upgrade::Authenticate<libp2p_tcp::provider::tokio::TcpStream, libp2p_noise::Config> as futures_core::future::TryFuture>::try_poll",
+              "<libp2p_core::transport::and_then::AndThenFuture<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<libp2p_tcp::provider::tokio::TcpStream, std::io::error::Error>> + core::marker::Send>>, <libp2p",
+              "<libp2p_core::transport::and_then::AndThenFuture<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<libp2p_tcp::provider::tokio::TcpStream, std::io::error::Error>> + core::marker::Send>>, <libp2p",
+              "<libp2p_core::transport::and_then::AndThenFuture<libp2p_core::transport::and_then::AndThenFuture<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<libp2p_tcp::provider::tokio::TcpStream, std::io",
+              "<libp2p_core::transport::and_then::AndThenFuture<libp2p_core::transport::and_then::AndThenFuture<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<libp2p_tcp::provider::tokio::TcpStream, std::io",
+              "<libp2p_core::transport::map::MapFuture<libp2p_core::transport::and_then::AndThenFuture<libp2p_core::transport::and_then::AndThenFuture<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<libp2p_t",
+              "<libp2p_core::transport::map::MapFuture<libp2p_core::transport::and_then::AndThenFuture<libp2p_core::transport::and_then::AndThenFuture<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<libp2p_t"
+            ]
+          }
+        },
+        {
+          "kind": "CHECKPOINT",
+          "data": {
+            "index": 1,
+            "unix_millis": 1789046263834,
+            "live": [
+              [
+                2,
+                8192,
+                2
+              ]
+            ]
+          }
+        },
+        {
+          "kind": "SITE",
+          "data": {
+            "id": 3,
+            "frames": [
+              "__rustc::__rust_alloc",
+              "<alloc::raw_vec::RawVecInner>::try_allocate_in",
+              "<alloc::raw_vec::RawVecInner>::with_capacity_in",
+              "<alloc::vec::Vec<u8>>::with_capacity",
+              "<bytes::bytes_mut::BytesMut>::with_capacity",
+              "asynchronous_codec::framed_read::framed_read_2::<asynchronous_codec::fuse::Fuse<libp2p_swarm::stream::Stream, quick_protobuf_codec::Codec<libp2p_identify::proto::structs::Identify>>>::{closure#0}",
+              "<core::option::Option<bytes::bytes_mut::BytesMut>>::unwrap_or_else::<asynchronous_codec::framed_read::framed_read_2<asynchronous_codec::fuse::Fuse<libp2p_swarm::stream::Stream, quick_protobuf_codec::Codec<libp2p_identify::proto::structs::Id",
+              "asynchronous_codec::framed_read::framed_read_2::<asynchronous_codec::fuse::Fuse<libp2p_swarm::stream::Stream, quick_protobuf_codec::Codec<libp2p_identify::proto::structs::Identify>>>",
+              "<asynchronous_codec::framed_read::FramedRead<libp2p_swarm::stream::Stream, quick_protobuf_codec::Codec<libp2p_identify::proto::structs::Identify>>>::new",
+              "libp2p_identify::protocol::recv::<libp2p_swarm::stream::Stream>::{closure#0}",
+              "libp2p_identify::protocol::recv_identify::<libp2p_swarm::stream::Stream>::{closure#0}",
+              "<libp2p_identify::protocol::recv_identify<libp2p_swarm::stream::Stream>::{closure#0} as futures_core::future::TryFuture>::try_poll",
+              "<futures_util::future::try_future::into_future::IntoFuture<libp2p_identify::protocol::recv_identify<libp2p_swarm::stream::Stream>::{closure#0}> as core::future::future::Future>::poll",
+              "<futures_util::future::future::map::Map<futures_util::future::try_future::into_future::IntoFuture<libp2p_identify::protocol::recv_identify<libp2p_swarm::stream::Stream>::{closure#0}>, futures_util::fns::MapOkFn<libp2p_identify::handler::Suc",
+              "<futures_util::future::future::Map<futures_util::future::try_future::into_future::IntoFuture<libp2p_identify::protocol::recv_identify<libp2p_swarm::stream::Stream>::{closure#0}>, futures_util::fns::MapOkFn<libp2p_identify::handler::Success:",
+              "<futures_util::future::try_future::MapOk<libp2p_identify::protocol::recv_identify<libp2p_swarm::stream::Stream>::{closure#0}, libp2p_identify::handler::Success::ReceivedIdentify> as core::future::future::Future>::poll",
+              "<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<libp2p_identify::handler::Success, libp2p_identify::protocol::UpgradeError>> + core::marker::Send>> as core::future::future::Future>::poll",
+              "<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<libp2p_identify::handler::Success, libp2p_identify::protocol::UpgradeError>> + core::marker::Send>> as futures_util::future::future::FutureExt>",
+              "<futures_bounded::futures_map::TimeoutFuture<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<libp2p_identify::handler::Success, libp2p_identify::protocol::UpgradeError>> + core::marker::Send>>",
+              "<futures_bounded::futures_map::TimeoutFuture<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<libp2p_identify::handler::Success, libp2p_identify::protocol::UpgradeError>> + core::marker::Send>>",
+              "<futures_bounded::futures_map::TaggedFuture<u32, futures_bounded::futures_map::TimeoutFuture<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<libp2p_identify::handler::Success, libp2p_identify:",
+              "<futures_util::stream::futures_unordered::FuturesUnordered<futures_bounded::futures_map::TaggedFuture<u32, futures_bounded::futures_map::TimeoutFuture<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::",
+              "<futures_util::stream::futures_unordered::FuturesUnordered<futures_bounded::futures_map::TaggedFuture<u32, futures_bounded::futures_map::TimeoutFuture<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::",
+              "<futures_bounded::futures_map::FuturesMap<u32, core::result::Result<libp2p_identify::handler::Success, libp2p_identify::protocol::UpgradeError>>>::poll_unpin"
+            ]
+          }
+        },
+        {
+          "kind": "CHECKPOINT",
+          "data": {
+            "index": 2,
+            "unix_millis": 1789046268834,
+            "live": [
+              [
+                2,
+                8192,
+                2
+              ]
+            ]
+          }
+        },
+        {
+          "kind": "CHECKPOINT",
+          "data": {
+            "index": 3,
+            "unix_millis": 1789046273834,
+            "live": [
+              [
+                2,
+                8192,
+                2
+              ]
+            ]
+          }
+        },
+        {
+          "kind": "SITE",
+          "data": {
+            "id": 4,
+            "frames": [
+              "__rustc::__rust_realloc",
+              "<alloc::raw_vec::RawVecInner>::finish_grow",
+              "<alloc::raw_vec::RawVecInner>::grow_amortized",
+              "<alloc::raw_vec::RawVec<futures_timer::native::heap::SlabSlot<usize>>>::grow_one",
+              "<alloc::vec::Vec<futures_timer::native::heap::SlabSlot<usize>>>::push_mut",
+              "<alloc::vec::Vec<futures_timer::native::heap::SlabSlot<usize>>>::push",
+              "<futures_timer::native::heap::Heap<futures_timer::native::heap_timer::HeapTimer>>::push",
+              "<futures_timer::native::timer::Timer>::update_or_add",
+              "<futures_timer::native::timer::Timer as core::future::future::Future>::poll",
+              "futures_timer::native::global::run",
+              "<futures_timer::native::global::HelperThread>::new::{closure#0}",
+              "std::sys::backtrace::__rust_begin_short_backtrace::<<futures_timer::native::global::HelperThread>::new::{closure#0}, ()>",
+              "std::thread::lifecycle::spawn_unchecked::<<futures_timer::native::global::HelperThread>::new::{closure#0}, ()>::{closure#1}::{closure#0}",
+              "<core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked<<futures_timer::native::global::HelperThread>::new::{closure#0}, ()>::{closure#1}::{closure#0}> as core::ops::function::FnOnce<()>>::call_once",
+              "std::panicking::catch_unwind::do_call::<core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked<<futures_timer::native::global::HelperThread>::new::{closure#0}, ()>::{closure#1}::{closure#0}>, ()>",
+              "__rust_try",
+              "std::thread::lifecycle::spawn_unchecked::<<futures_timer::native::global::HelperThread>::new::{closure#0}, ()>::{closure#1}",
+              "<std::thread::lifecycle::spawn_unchecked<<futures_timer::native::global::HelperThread>::new::{closure#0}, ()>::{closure#1} as core::ops::function::FnOnce<()>>::call_once::{shim:vtable#0}",
+              "<std::sys::thread::unix::Thread>::new::thread_start",
+              "start_thread",
+              "__clone3"
+            ]
+          }
+        },
+        {
+          "kind": "SITE",
+          "data": {
+            "id": 5,
+            "frames": [
+              "__rustc::__rust_realloc",
+              "<alloc::raw_vec::RawVecInner>::finish_grow",
+              "<alloc::raw_vec::RawVecInner>::grow_amortized",
+              "<alloc::raw_vec::RawVec<(futures_timer::native::heap_timer::HeapTimer, usize)>>::grow_one",
+              "<alloc::vec::Vec<(futures_timer::native::heap_timer::HeapTimer, usize)>>::push_mut",
+              "<alloc::vec::Vec<(futures_timer::native::heap_timer::HeapTimer, usize)>>::push",
+              "<futures_timer::native::heap::Heap<futures_timer::native::heap_timer::HeapTimer>>::push",
+              "<futures_timer::native::timer::Timer>::update_or_add",
+              "<futures_timer::native::timer::Timer as core::future::future::Future>::poll",
+              "futures_timer::native::global::run",
+              "<futures_timer::native::global::HelperThread>::new::{closure#0}",
+              "std::sys::backtrace::__rust_begin_short_backtrace::<<futures_timer::native::global::HelperThread>::new::{closure#0}, ()>",
+              "std::thread::lifecycle::spawn_unchecked::<<futures_timer::native::global::HelperThread>::new::{closure#0}, ()>::{closure#1}::{closure#0}",
+              "<core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked<<futures_timer::native::global::HelperThread>::new::{closure#0}, ()>::{closure#1}::{closure#0}> as core::ops::function::FnOnce<()>>::call_once",
+              "std::panicking::catch_unwind::do_call::<core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked<<futures_timer::native::global::HelperThread>::new::{closure#0}, ()>::{closure#1}::{closure#0}>, ()>",
+              "__rust_try",
+              "std::thread::lifecycle::spawn_unchecked::<<futures_timer::native::global::HelperThread>::new::{closure#0}, ()>::{closure#1}",
+              "<std::thread::lifecycle::spawn_unchecked<<futures_timer::native::global::HelperThread>::new::{closure#0}, ()>::{closure#1} as core::ops::function::FnOnce<()>>::call_once::{shim:vtable#0}",
+              "<std::sys::thread::unix::Thread>::new::thread_start",
+              "start_thread",
+              "__clone3"
+            ]
+          }
+        },
+        {
+          "kind": "CHECKPOINT",
+          "data": {
+            "index": 4,
+            "unix_millis": 1789046278834,
+            "live": [
+              [
+                2,
+                8192,
+                2
+              ],
+              [
+                4,
+                8192,
+                4
+              ],
+              [
+                5,
+                20480,
+                5
+              ]
+            ]
+          }
+        },
+        {
+          "kind": "CHECKPOINT",
+          "data": {
+            "index": 5,
+            "unix_millis": 1789046283841,
+            "live": [
+              [
+                2,
+                8192,
+                2
+              ],
+              [
+                4,
+                8192,
+                4
+              ],
+              [
+                5,
+                20480,
+                5
+              ]
+            ]
+          }
+        },
+        {
+          "kind": "SITE",
+          "data": {
+            "id": 6,
+            "frames": [
+              "__rustc::__rust_alloc",
+              "<alloc::raw_vec::RawVecInner>::try_allocate_in",
+              "<alloc::raw_vec::RawVecInner>::with_capacity_in",
+              "<alloc::vec::Vec<u8>>::with_capacity",
+              "<bytes::bytes_mut::BytesMut>::with_capacity",
+              "asynchronous_codec::framed_read::framed_read_2::<asynchronous_codec::framed_write::FramedWrite2<asynchronous_codec::fuse::Fuse<multistream_select::negotiated::Negotiated<libp2p_tcp::provider::tokio::TcpStream>, libp2p_noise::io::framed::Cod",
+              "<core::option::Option<bytes::bytes_mut::BytesMut>>::unwrap_or_else::<asynchronous_codec::framed_read::framed_read_2<asynchronous_codec::framed_write::FramedWrite2<asynchronous_codec::fuse::Fuse<multistream_select::negotiated::Negotiated<lib",
+              "asynchronous_codec::framed_read::framed_read_2::<asynchronous_codec::framed_write::FramedWrite2<asynchronous_codec::fuse::Fuse<multistream_select::negotiated::Negotiated<libp2p_tcp::provider::tokio::TcpStream>, libp2p_noise::io::framed::Cod",
+              "<asynchronous_codec::framed::Framed<multistream_select::negotiated::Negotiated<libp2p_tcp::provider::tokio::TcpStream>, libp2p_noise::io::framed::Codec<snow::handshakestate::HandshakeState>>>::new",
+              "<libp2p_noise::io::handshake::State<multistream_select::negotiated::Negotiated<libp2p_tcp::provider::tokio::TcpStream>>>::new",
+              "<libp2p_noise::Config>::into_responder::<multistream_select::negotiated::Negotiated<libp2p_tcp::provider::tokio::TcpStream>>",
+              "<libp2p_noise::Config as libp2p_core::upgrade::InboundConnectionUpgrade<multistream_select::negotiated::Negotiated<libp2p_tcp::provider::tokio::TcpStream>>>::upgrade_inbound::{closure#0}",
+              "<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<(libp2p_identity::peer_id::PeerId, libp2p_noise::io::Output<multistream_select::negotiated::Negotiated<libp2p_tcp::provider::tokio::TcpStream>>",
+              "<core::pin::Pin<alloc::boxed::Box<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<(libp2p_identity::peer_id::PeerId, libp2p_noise::io::Output<multistream_select::negotiated::Negotiated<libp2p_",
+              "<libp2p_core::upgrade::apply::InboundUpgradeApply<libp2p_tcp::provider::tokio::TcpStream, libp2p_noise::Config> as core::future::future::Future>::poll",
+              "<futures_util::future::either::Either<libp2p_core::upgrade::apply::InboundUpgradeApply<libp2p_tcp::provider::tokio::TcpStream, libp2p_noise::Config>, libp2p_core::upgrade::apply::OutboundUpgradeApply<libp2p_tcp::provider::tokio::TcpStream, ",
+              "<libp2p_core::transport::upgrade::Authenticate<libp2p_tcp::provider::tokio::TcpStream, libp2p_noise::Config> as core::future::future::Future>::poll",
+              "<libp2p_core::transport::upgrade::Authenticate<libp2p_tcp::provider::tokio::TcpStream, libp2p_noise::Config> as futures_core::future::TryFuture>::try_poll",
+              "<libp2p_core::transport::and_then::AndThenFuture<futures_util::future::ready::Ready<core::result::Result<libp2p_tcp::provider::tokio::TcpStream, std::io::error::Error>>, <libp2p_core::transport::upgrade::Builder<libp2p_tcp::Transport<libp2p",
+              "<libp2p_core::transport::and_then::AndThenFuture<futures_util::future::ready::Ready<core::result::Result<libp2p_tcp::provider::tokio::TcpStream, std::io::error::Error>>, <libp2p_core::transport::upgrade::Builder<libp2p_tcp::Transport<libp2p",
+              "<libp2p_core::transport::and_then::AndThenFuture<libp2p_core::transport::and_then::AndThenFuture<futures_util::future::ready::Ready<core::result::Result<libp2p_tcp::provider::tokio::TcpStream, std::io::error::Error>>, <libp2p_core::transpor",
+              "<libp2p_core::transport::and_then::AndThenFuture<libp2p_core::transport::and_then::AndThenFuture<futures_util::future::ready::Ready<core::result::Result<libp2p_tcp::provider::tokio::TcpStream, std::io::error::Error>>, <libp2p_core::transpor",
+              "<libp2p_core::transport::map::MapFuture<libp2p_core::transport::and_then::AndThenFuture<libp2p_core::transport::and_then::AndThenFuture<futures_util::future::ready::Ready<core::result::Result<libp2p_tcp::provider::tokio::TcpStream, std::io:",
+              "<libp2p_core::transport::map::MapFuture<libp2p_core::transport::and_then::AndThenFuture<libp2p_core::transport::and_then::AndThenFuture<futures_util::future::ready::Ready<core::result::Result<libp2p_tcp::provider::tokio::TcpStream, std::io:"
+            ]
+          }
+        },
+        {
+          "kind": "CHECKPOINT",
+          "data": {
+            "index": 6,
+            "unix_millis": 1789046289103,
+            "live": [
+              [
+                4,
+                8192,
+                4
+              ],
+              [
+                5,
+                20480,
+                5
+              ],
+              [
+                7,
+                8192,
+                6
+              ]
+            ]
+          }
+        },
+        {
+          "kind": "CHECKPOINT",
+          "data": {
+            "index": 7,
+            "unix_millis": 1789046293835,
+            "live": [
+              [
+                4,
+                8192,
+                4
+              ],
+              [
+                5,
+                20480,
+                5
+              ],
+              [
+                7,
+                8192,
+                6
+              ]
+            ]
+          }
+        },
+        {
+          "kind": "CHECKPOINT",
+          "data": {
+            "index": 8,
+            "unix_millis": 1789046299022,
+            "live": [
+              [
+                4,
+                8192,
+                4
+              ],
+              [
+                5,
+                20480,
+                5
+              ],
+              [
+                7,
+                16384,
+                6
+              ]
+            ]
+          }
+        },
+        {
+          "kind": "CHECKPOINT",
+          "data": {
+            "index": 9,
+            "unix_millis": 1789046303956,
+            "live": [
+              [
+                4,
+                8192,
+                4
+              ],
+              [
+                5,
+                20480,
+                5
+              ]
+            ]
+          }
+        },
+        {
+          "kind": "CHECKPOINT",
+          "data": {
+            "index": 10,
+            "unix_millis": 1789046308835,
+            "live": [
+              [
+                4,
+                8192,
+                4
+              ],
+              [
+                5,
+                20480,
+                5
+              ]
+            ]
+          }
+        },
+        {
+          "kind": "CHECKPOINT",
+          "data": {
+            "index": 11,
+            "unix_millis": 1789046313835,
+            "live": [
+              [
+                4,
+                8192,
+                4
+              ],
+              [
+                5,
+                20480,
+                5
+              ],
+              [
+                10,
+                8192,
+                6
+              ]
+            ]
+          }
+        },
+        {
+          "kind": "CHECKPOINT",
+          "data": {
+            "index": 12,
+            "unix_millis": 1789046318834,
+            "live": [
+              [
+                4,
+                8192,
+                4
+              ],
+              [
+                5,
+                20480,
+                5
+              ],
+              [
+                10,
+                8192,
+                6
+              ]
+            ]
+          }
+        },
+        {
+          "kind": "CHECKPOINT",
+          "data": {
+            "index": 13,
+            "unix_millis": 1789046323834,
+            "live": [
+              [
+                4,
+                8192,
+                4
+              ],
+              [
+                5,
+                20480,
+                5
+              ],
+              [
+                10,
+                8192,
+                6
+              ]
+            ]
+          }
+        },
+        {
+          "kind": "CHECKPOINT",
+          "data": {
+            "index": 14,
+            "unix_millis": 1789046324285,
+            "live": [
+              [
+                4,
+                8192,
+                4
+              ],
+              [
+                5,
+                20480,
+                5
+              ]
+            ]
+          }
+        },
+        {
+          "kind": "CHECKPOINT",
+          "data": {
+            "index": 15,
+            "unix_millis": 1789046324365,
+            "live": [
+              [
+                4,
+                8192,
+                4
+              ],
+              [
+                5,
+                20480,
+                5
+              ]
+            ]
+          }
+        },
+        {
+          "kind": "CHECKPOINT",
+          "data": {
+            "index": 16,
+            "unix_millis": 1789046324467,
+            "live": [
+              [
+                4,
+                8192,
+                4
+              ],
+              [
+                5,
+                20480,
+                5
+              ]
+            ]
+          }
+        },
+        {
+          "kind": "TRACE_SUMMARY",
+          "data": {
+            "allocated": 11,
+            "freed": 9,
+            "live": [
+              [
+                4,
+                8192,
+                4
+              ],
+              [
+                5,
+                20480,
+                5
+              ]
+            ],
+            "snapshots": 16,
+            "sites": 6,
+            "failures": [],
+            "exit_code": 0,
+            "pending_returns": 0,
+            "return_calls": 12
+          }
+        }
+      ],
+      "inventory": [
+        {
+          "stage": "before_child",
+          "pid": 18,
+          "rows": [
+            [
+              1,
+              7
+            ],
+            [
+              2,
+              24
+            ],
+            [
+              3,
+              69
+            ],
+            [
+              4,
+              61
+            ],
+            [
+              5,
+              41
+            ],
+            [
+              6,
+              53
+            ],
+            [
+              7,
+              101
+            ],
+            [
+              8,
+              15
+            ],
+            [
+              9,
+              2
+            ],
+            [
+              10,
+              3
+            ],
+            [
+              11,
+              1
+            ],
+            [
+              12,
+              1
+            ],
+            [
+              13,
+              1
+            ],
+            [
+              14,
+              1
+            ],
+            [
+              16,
+              3
+            ],
+            [
+              17,
+              6
+            ],
+            [
+              18,
+              1
+            ],
+            [
+              19,
+              1
+            ],
+            [
+              21,
+              1
+            ],
+            [
+              22,
+              1
+            ],
+            [
+              24,
+              1
+            ],
+            [
+              47,
+              3
+            ],
+            [
+              48,
+              5
+            ],
+            [
+              52,
+              1
+            ],
+            [
+              62,
+              1
+            ],
+            [
+              63,
+              1
+            ],
+            [
+              68,
+              1
+            ],
+            [
+              92,
+              1
+            ],
+            [
+              93,
+              1
+            ],
+            [
+              96,
+              2
+            ],
+            [
+              120,
+              1
+            ],
+            [
+              136,
+              1
+            ],
+            [
+              148,
+              1
+            ],
+            [
+              184,
+              1
+            ],
+            [
+              312,
+              1
+            ],
+            [
+              512,
+              1
+            ],
+            [
+              544,
+              2
+            ],
+            [
+              608,
+              1
+            ],
+            [
+              640,
+              1
+            ],
+            [
+              1024,
+              1
+            ],
+            [
+              1072,
+              1
+            ],
+            [
+              12560,
+              1
+            ]
+          ],
+          "oversized_blocks": 0,
+          "oversized_bytes": 0,
+          "total_blocks": 423,
+          "total_bytes": 21615,
+          "failures": 0,
+          "coherent": true,
+          "truncated": false
+        },
+        {
+          "stage": "child_returned",
+          "pid": 18,
+          "rows": [
+            [
+              1,
+              7
+            ],
+            [
+              2,
+              24
+            ],
+            [
+              3,
+              69
+            ],
+            [
+              4,
+              61
+            ],
+            [
+              5,
+              41
+            ],
+            [
+              6,
+              53
+            ],
+            [
+              7,
+              101
+            ],
+            [
+              8,
+              15
+            ],
+            [
+              9,
+              2
+            ],
+            [
+              10,
+              3
+            ],
+            [
+              11,
+              1
+            ],
+            [
+              12,
+              1
+            ],
+            [
+              13,
+              2
+            ],
+            [
+              14,
+              2
+            ],
+            [
+              16,
+              3
+            ],
+            [
+              17,
+              6
+            ],
+            [
+              18,
+              1
+            ],
+            [
+              19,
+              1
+            ],
+            [
+              21,
+              1
+            ],
+            [
+              22,
+              1
+            ],
+            [
+              24,
+              3
+            ],
+            [
+              32,
+              2
+            ],
+            [
+              40,
+              1
+            ],
+            [
+              47,
+              3
+            ],
+            [
+              48,
+              7
+            ],
+            [
+              52,
+              1
+            ],
+            [
+              62,
+              1
+            ],
+            [
+              63,
+              1
+            ],
+            [
+              68,
+              1
+            ],
+            [
+              92,
+              1
+            ],
+            [
+              93,
+              1
+            ],
+            [
+              96,
+              2
+            ],
+            [
+              112,
+              1
+            ],
+            [
+              120,
+              1
+            ],
+            [
+              136,
+              1
+            ],
+            [
+              148,
+              1
+            ],
+            [
+              184,
+              1
+            ],
+            [
+              312,
+              1
+            ],
+            [
+              336,
+              65
+            ],
+            [
+              352,
+              1
+            ],
+            [
+              368,
+              1
+            ],
+            [
+              512,
+              1
+            ],
+            [
+              544,
+              2
+            ],
+            [
+              608,
+              1
+            ],
+            [
+              640,
+              2
+            ],
+            [
+              1024,
+              2
+            ],
+            [
+              1072,
+              1
+            ],
+            [
+              2048,
+              1
+            ],
+            [
+              2072,
+              1
+            ],
+            [
+              2304,
+              1
+            ],
+            [
+              8192,
+              1
+            ],
+            [
+              12560,
+              1
+            ],
+            [
+              20480,
+              1
+            ]
+          ],
+          "oversized_blocks": 0,
+          "oversized_bytes": 0,
+          "total_blocks": 507,
+          "total_bytes": 81322,
+          "failures": 0,
+          "coherent": true,
+          "truncated": false
+        },
+        {
+          "stage": "child_settled",
+          "pid": 18,
+          "rows": [
+            [
+              1,
+              7
+            ],
+            [
+              2,
+              24
+            ],
+            [
+              3,
+              69
+            ],
+            [
+              4,
+              61
+            ],
+            [
+              5,
+              41
+            ],
+            [
+              6,
+              53
+            ],
+            [
+              7,
+              101
+            ],
+            [
+              8,
+              15
+            ],
+            [
+              9,
+              2
+            ],
+            [
+              10,
+              3
+            ],
+            [
+              11,
+              1
+            ],
+            [
+              12,
+              1
+            ],
+            [
+              13,
+              2
+            ],
+            [
+              14,
+              2
+            ],
+            [
+              16,
+              3
+            ],
+            [
+              17,
+              6
+            ],
+            [
+              18,
+              1
+            ],
+            [
+              19,
+              1
+            ],
+            [
+              21,
+              1
+            ],
+            [
+              22,
+              1
+            ],
+            [
+              24,
+              3
+            ],
+            [
+              32,
+              2
+            ],
+            [
+              40,
+              1
+            ],
+            [
+              47,
+              3
+            ],
+            [
+              48,
+              7
+            ],
+            [
+              52,
+              1
+            ],
+            [
+              62,
+              1
+            ],
+            [
+              63,
+              1
+            ],
+            [
+              68,
+              1
+            ],
+            [
+              92,
+              1
+            ],
+            [
+              93,
+              1
+            ],
+            [
+              96,
+              2
+            ],
+            [
+              112,
+              1
+            ],
+            [
+              120,
+              1
+            ],
+            [
+              136,
+              1
+            ],
+            [
+              148,
+              1
+            ],
+            [
+              184,
+              1
+            ],
+            [
+              312,
+              1
+            ],
+            [
+              336,
+              65
+            ],
+            [
+              352,
+              1
+            ],
+            [
+              368,
+              1
+            ],
+            [
+              512,
+              1
+            ],
+            [
+              544,
+              2
+            ],
+            [
+              608,
+              1
+            ],
+            [
+              640,
+              2
+            ],
+            [
+              1024,
+              2
+            ],
+            [
+              1072,
+              1
+            ],
+            [
+              2048,
+              1
+            ],
+            [
+              2072,
+              1
+            ],
+            [
+              2304,
+              1
+            ],
+            [
+              8192,
+              1
+            ],
+            [
+              12560,
+              1
+            ],
+            [
+              20480,
+              1
+            ]
+          ],
+          "oversized_blocks": 0,
+          "oversized_bytes": 0,
+          "total_blocks": 507,
+          "total_bytes": 81322,
+          "failures": 0,
+          "coherent": true,
+          "truncated": false
+        }
+      ],
+      "artifacts": [
+        {
+          "sha256": "4a47aa7ea1ff82e1096a2cf15de075b4d9f5a49435b9f3c7c3ced43a5cf6d002",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.591391b409b05c36/queue-pressure.json"
+        },
+        {
+          "sha256": "288cbc066fb721bd455474478370634b14a7fff5d7c48d51c9025ef2dc67a25d",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.591391b409b05c36/recovery-ping-a.stdout"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.591391b409b05c36/recovery-ping-b.stderr"
+        },
+        {
+          "sha256": "9b77f95b5c30e34fc5bf9dca08f6acd620a77628ebbf6f8dc0cf030b8a1e9d6a",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.591391b409b05c36/pressure-ping.log"
+        },
+        {
+          "sha256": "20b26e297257247aede305b362c68c594a70ba116fb230a40802c8ea564b6e4a",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.591391b409b05c36/recovery-ping-b.stdout"
+        },
+        {
+          "sha256": "13ef802a19b2ba10a1bdee941084cd6da7822620a7588beb86ab01c87ad9fe7a",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.591391b409b05c36/node-a.log"
+        },
+        {
+          "sha256": "b24d6d33736ecd5604a4b17bc9c6481039fac362bb7df044ef1c10a2bfd21db6",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.591391b409b05c36/ready-b"
+        },
+        {
+          "sha256": "d475557264a74560e019e672aae62d2edc67a6db7872e78463fc703c5ca722a2",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.591391b409b05c36/repro-metadata.txt"
+        },
+        {
+          "sha256": "08614079766a57af58e8d3303a3fe7ee3b70fefdf92b9b2c8d653e152a0fd344",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.591391b409b05c36/queue-pressure-partial.json"
+        },
+        {
+          "sha256": "cced28c6dc3f99c2396a5eaad732bf6b28142335892b1cd0e6af6cdb53f5ccfa",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.591391b409b05c36/start-a"
+        },
+        {
+          "sha256": "b24d6d33736ecd5604a4b17bc9c6481039fac362bb7df044ef1c10a2bfd21db6",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.591391b409b05c36/ready-a"
+        },
+        {
+          "sha256": "4f5b1b469bd0f55a4e0a9d7e6a7d08879c0a2d164ce21a1024dc16a404f0e380",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.591391b409b05c36/queue-pressure-drain.json"
+        },
+        {
+          "sha256": "cced28c6dc3f99c2396a5eaad732bf6b28142335892b1cd0e6af6cdb53f5ccfa",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.591391b409b05c36/start-b"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.591391b409b05c36/recovery-ping-a.stderr"
+        },
+        {
+          "sha256": "ac8403aff14a1bddfc17583575516961aa95350670d8efd9c6dc520a6e333ae7",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.591391b409b05c36/recovery-ping-a.json"
+        },
+        {
+          "sha256": "b7d4ceea0f2202c68d4322b6a4b864ac2ddbce9ad7dc3f1a722ae933ee14ddfc",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.591391b409b05c36/node-b.log"
+        },
+        {
+          "sha256": "30f3db7eb6518bc1a5acc4e96a9f0afc0f142067501cf63c36d00a8dc70cbaf6",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.591391b409b05c36/recovery-ping-b.json"
+        },
+        {
+          "sha256": "4b4d83faff06ca74e2e5db3f70c594fd4017a20e0db27260cacfeff011c3ab06",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.591391b409b05c36/repro-commands.sh"
+        },
+        {
+          "sha256": "ee64571b404df8a51cdd6eab3ed5e3f362539a6872d38c6f3b84cf1fdc706b0e",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.591391b409b05c36/queue-pressure-series.json"
+        },
+        {
+          "sha256": "a109e704c417fca53e0ee4254989f92cad26165c6a04d43467c117abd8da8ac3",
+          "path": "/tmp/p2p-vpn-pressure-owner-2.log"
+        },
+        {
+          "sha256": "6abc1e7fba6ec604475865ce36e8ae2d8be495b09ce2042710fb0ebab5a5e6ab",
+          "path": "/tmp/p2p-vpn-pressure-owner-gdb-2.log"
+        }
+      ]
+    }
+  ],
+  "conclusion": "Startup trace assigns surviving IDs 4 and 5 to futures-timer global index and heap vectors; late attachment misses those allocations.",
+  "limitations": [
+    "No arbitrary workload or native-heap bound.",
+    "First trace is valid but incomplete target attribution.",
+    "No production cache shrinking or timer flush introduced."
+  ]
+}
