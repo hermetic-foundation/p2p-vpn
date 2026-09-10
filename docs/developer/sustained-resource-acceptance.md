@@ -271,6 +271,9 @@ not permission to declare unexplained growth harmless.
 
 ### Required Follow-Up Boundary
 
+The [follow-up manifest](resource-followup-manifest.md) pins cached binaries,
+commands, comparison controls and budgets before the remaining captures.
+
 1. Verify the full temporary-storage total before captures. A read-only elevated
    total has been requested; do not delete evidence or alter directory permissions.
 2. Establish final-code moderate-load/drain comparison using the existing S3
