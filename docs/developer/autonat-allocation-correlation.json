@@ -1,0 +1,928 @@
+{
+  "schema_version": 1,
+  "status": "correlation_not_causal_attribution",
+  "runtime_revision": "7b59625f",
+  "fixture_revision": "691a2455",
+  "source_sha256": {
+    "libp2p-autonat-0.15.0/src/v1/behaviour.rs": "980f37b281e603718431d76f27214feea2c1c460f06cf3b90f5ce4e1ef1cd887",
+    "libp2p-autonat-0.15.0/src/v1/behaviour/as_client.rs": "aeaba239925b886e54898df967b671b1b3df6f06a18f5f53bcfc120b86583981",
+    "libp2p-autonat-0.15.0/src/v1/behaviour/as_server.rs": "c1eff1468cadf734980477908e1a285b5cea60a674cc3241ece93b6bdb6090e6",
+    "libp2p-request-response-0.29.0/src/lib.rs": "a600455fa63912a7aef65b9956e82b1f7219a997068058b1cb34e2271b50d983"
+  },
+  "log_sha256": [
+    {
+      "run": 1,
+      "a": "1855fb86e935efb7284a600c9e8c18028ff61113b4d20ad5ed471b0cfa491f0d",
+      "b": "0bfdd601bcbc55e9e0584e09eface3e0f4065b3451a108558c57e58e474ad365"
+    },
+    {
+      "run": 2,
+      "a": "5478939a4a0347a50d67246f40d599e3cdf78c447f66425f3815ff8c83a9e937",
+      "b": "29bb23d2283f994bf5343c884da88e3b6c428a073b81c6294b3c77cfa05ea9a7"
+    }
+  ],
+  "series": [
+    {
+      "run": 1,
+      "role": "a",
+      "exact_step_windows": [
+        {
+          "start_elapsed_millis": 385002,
+          "end_elapsed_millis": 390004,
+          "live_byte_delta": 1460,
+          "live_block_delta": 3,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Request { probe_id: ProbeId(9), peer: PeerId(\\\"12D3KooWSdnNnM745Qj7Pbw4Spn1fF4PdYuNmHcq5YmfH7wSUr7H\\\") }\"",
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(9), peer: Some(PeerId(\\\"12D3KooWSdnNnM745Qj7Pbw4Spn1fF4PdYuNmHcq5YmfH7wSUr7H\\\")), error: Response(DialRefused) }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 475003,
+          "end_elapsed_millis": 480003,
+          "live_byte_delta": 1460,
+          "live_block_delta": 3,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Request { probe_id: ProbeId(11), peer: PeerId(\\\"12D3KooWSdnNnM745Qj7Pbw4Spn1fF4PdYuNmHcq5YmfH7wSUr7H\\\") }\"",
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(11), peer: Some(PeerId(\\\"12D3KooWSdnNnM745Qj7Pbw4Spn1fF4PdYuNmHcq5YmfH7wSUr7H\\\")), error: Response(DialRefused) }\""
+          ]
+        }
+      ],
+      "autonat_windows": [
+        {
+          "start_elapsed_millis": 0,
+          "end_elapsed_millis": 5004,
+          "live_byte_delta": 239007,
+          "live_block_delta": 424,
+          "events": [
+            "level=info event=autonat_enabled",
+            "level=info event=autonat_servers_registered count=1"
+          ]
+        },
+        {
+          "start_elapsed_millis": 10003,
+          "end_elapsed_millis": 15001,
+          "live_byte_delta": 13612,
+          "live_block_delta": 22,
+          "events": [
+            "level=info event=autonat_inbound_probe event=\"Error { probe_id: ProbeId(0), peer: PeerId(\\\"12D3KooWSdnNnM745Qj7Pbw4Spn1fF4PdYuNmHcq5YmfH7wSUr7H\\\"), error: Response(DialRefused) }\"",
+            "level=info event=autonat_outbound_probe event=\"Request { probe_id: ProbeId(1), peer: PeerId(\\\"12D3KooWSdnNnM745Qj7Pbw4Spn1fF4PdYuNmHcq5YmfH7wSUr7H\\\") }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 15001,
+          "end_elapsed_millis": 20001,
+          "live_byte_delta": -9456,
+          "live_block_delta": -14,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(1), peer: Some(PeerId(\\\"12D3KooWSdnNnM745Qj7Pbw4Spn1fF4PdYuNmHcq5YmfH7wSUr7H\\\")), error: Response(DialRefused) }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 100001,
+          "end_elapsed_millis": 105001,
+          "live_byte_delta": 3134,
+          "live_block_delta": 17,
+          "events": [
+            "level=info event=autonat_inbound_probe event=\"Error { probe_id: ProbeId(2), peer: PeerId(\\\"12D3KooWSdnNnM745Qj7Pbw4Spn1fF4PdYuNmHcq5YmfH7wSUr7H\\\"), error: Response(DialRefused) }\"",
+            "level=info event=autonat_outbound_probe event=\"Request { probe_id: ProbeId(3), peer: PeerId(\\\"12D3KooWSdnNnM745Qj7Pbw4Spn1fF4PdYuNmHcq5YmfH7wSUr7H\\\") }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 105001,
+          "end_elapsed_millis": 110004,
+          "live_byte_delta": -1530,
+          "live_block_delta": -13,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(3), peer: Some(PeerId(\\\"12D3KooWSdnNnM745Qj7Pbw4Spn1fF4PdYuNmHcq5YmfH7wSUr7H\\\")), error: Response(DialRefused) }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 190001,
+          "end_elapsed_millis": 195002,
+          "live_byte_delta": 2990,
+          "live_block_delta": 16,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Request { probe_id: ProbeId(4), peer: PeerId(\\\"12D3KooWSdnNnM745Qj7Pbw4Spn1fF4PdYuNmHcq5YmfH7wSUr7H\\\") }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 200003,
+          "end_elapsed_millis": 205001,
+          "live_byte_delta": -1050,
+          "live_block_delta": -12,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(4), peer: Some(PeerId(\\\"12D3KooWSdnNnM745Qj7Pbw4Spn1fF4PdYuNmHcq5YmfH7wSUr7H\\\")), error: OutboundRequest(Timeout) }\"",
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(5), peer: None, error: NoServer }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 290004,
+          "end_elapsed_millis": 295002,
+          "live_byte_delta": 1979,
+          "live_block_delta": 9,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Request { probe_id: ProbeId(6), peer: PeerId(\\\"12D3KooWSdnNnM745Qj7Pbw4Spn1fF4PdYuNmHcq5YmfH7wSUr7H\\\") }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 295002,
+          "end_elapsed_millis": 300003,
+          "live_byte_delta": -78668,
+          "live_block_delta": -199,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(6), peer: Some(PeerId(\\\"12D3KooWSdnNnM745Qj7Pbw4Spn1fF4PdYuNmHcq5YmfH7wSUr7H\\\")), error: OutboundRequest(ConnectionClosed) }\"",
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(7), peer: None, error: NoServer }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 380001,
+          "end_elapsed_millis": 385002,
+          "live_byte_delta": 144,
+          "live_block_delta": 1,
+          "events": [
+            "level=info event=autonat_inbound_probe event=\"Error { probe_id: ProbeId(8), peer: PeerId(\\\"12D3KooWSdnNnM745Qj7Pbw4Spn1fF4PdYuNmHcq5YmfH7wSUr7H\\\"), error: Response(DialRefused) }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 385002,
+          "end_elapsed_millis": 390004,
+          "live_byte_delta": 1460,
+          "live_block_delta": 3,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Request { probe_id: ProbeId(9), peer: PeerId(\\\"12D3KooWSdnNnM745Qj7Pbw4Spn1fF4PdYuNmHcq5YmfH7wSUr7H\\\") }\"",
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(9), peer: Some(PeerId(\\\"12D3KooWSdnNnM745Qj7Pbw4Spn1fF4PdYuNmHcq5YmfH7wSUr7H\\\")), error: Response(DialRefused) }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 470001,
+          "end_elapsed_millis": 475003,
+          "live_byte_delta": 144,
+          "live_block_delta": 1,
+          "events": [
+            "level=info event=autonat_inbound_probe event=\"Error { probe_id: ProbeId(10), peer: PeerId(\\\"12D3KooWSdnNnM745Qj7Pbw4Spn1fF4PdYuNmHcq5YmfH7wSUr7H\\\"), error: Response(DialRefused) }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 475003,
+          "end_elapsed_millis": 480003,
+          "live_byte_delta": 1460,
+          "live_block_delta": 3,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Request { probe_id: ProbeId(11), peer: PeerId(\\\"12D3KooWSdnNnM745Qj7Pbw4Spn1fF4PdYuNmHcq5YmfH7wSUr7H\\\") }\"",
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(11), peer: Some(PeerId(\\\"12D3KooWSdnNnM745Qj7Pbw4Spn1fF4PdYuNmHcq5YmfH7wSUr7H\\\")), error: Response(DialRefused) }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 565001,
+          "end_elapsed_millis": 570003,
+          "live_byte_delta": 3646,
+          "live_block_delta": 17,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Request { probe_id: ProbeId(12), peer: PeerId(\\\"12D3KooWSdnNnM745Qj7Pbw4Spn1fF4PdYuNmHcq5YmfH7wSUr7H\\\") }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 575002,
+          "end_elapsed_millis": 580001,
+          "live_byte_delta": -1058,
+          "live_block_delta": -12,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(12), peer: Some(PeerId(\\\"12D3KooWSdnNnM745Qj7Pbw4Spn1fF4PdYuNmHcq5YmfH7wSUr7H\\\")), error: OutboundRequest(Timeout) }\"",
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(13), peer: None, error: NoServer }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 665002,
+          "end_elapsed_millis": 670001,
+          "live_byte_delta": -68077,
+          "live_block_delta": -191,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Request { probe_id: ProbeId(14), peer: PeerId(\\\"12D3KooWSdnNnM745Qj7Pbw4Spn1fF4PdYuNmHcq5YmfH7wSUr7H\\\") }\"",
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(14), peer: Some(PeerId(\\\"12D3KooWSdnNnM745Qj7Pbw4Spn1fF4PdYuNmHcq5YmfH7wSUr7H\\\")), error: OutboundRequest(DialFailure) }\"",
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(15), peer: None, error: NoServer }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 750001,
+          "end_elapsed_millis": 755001,
+          "live_byte_delta": 72387,
+          "live_block_delta": 175,
+          "events": [
+            "level=info event=autonat_inbound_probe event=\"Error { probe_id: ProbeId(16), peer: PeerId(\\\"12D3KooWSdnNnM745Qj7Pbw4Spn1fF4PdYuNmHcq5YmfH7wSUr7H\\\"), error: Response(DialRefused) }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 755001,
+          "end_elapsed_millis": 760001,
+          "live_byte_delta": 1672,
+          "live_block_delta": 4,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Request { probe_id: ProbeId(17), peer: PeerId(\\\"12D3KooWSdnNnM745Qj7Pbw4Spn1fF4PdYuNmHcq5YmfH7wSUr7H\\\") }\"",
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(17), peer: Some(PeerId(\\\"12D3KooWSdnNnM745Qj7Pbw4Spn1fF4PdYuNmHcq5YmfH7wSUr7H\\\")), error: Response(DialRefused) }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 840003,
+          "end_elapsed_millis": 845002,
+          "live_byte_delta": 0,
+          "live_block_delta": 0,
+          "events": [
+            "level=info event=autonat_inbound_probe event=\"Error { probe_id: ProbeId(18), peer: PeerId(\\\"12D3KooWSdnNnM745Qj7Pbw4Spn1fF4PdYuNmHcq5YmfH7wSUr7H\\\"), error: Response(DialRefused) }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 845002,
+          "end_elapsed_millis": 850003,
+          "live_byte_delta": 0,
+          "live_block_delta": 0,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Request { probe_id: ProbeId(19), peer: PeerId(\\\"12D3KooWSdnNnM745Qj7Pbw4Spn1fF4PdYuNmHcq5YmfH7wSUr7H\\\") }\"",
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(19), peer: Some(PeerId(\\\"12D3KooWSdnNnM745Qj7Pbw4Spn1fF4PdYuNmHcq5YmfH7wSUr7H\\\")), error: Response(DialRefused) }\""
+          ]
+        }
+      ]
+    },
+    {
+      "run": 1,
+      "role": "b",
+      "exact_step_windows": [
+        {
+          "start_elapsed_millis": 65001,
+          "end_elapsed_millis": 70000,
+          "live_byte_delta": 52,
+          "live_block_delta": 1,
+          "events": []
+        }
+      ],
+      "autonat_windows": [
+        {
+          "start_elapsed_millis": 0,
+          "end_elapsed_millis": 5000,
+          "live_byte_delta": 199492,
+          "live_block_delta": 370,
+          "events": [
+            "level=info event=autonat_enabled"
+          ]
+        },
+        {
+          "start_elapsed_millis": 10000,
+          "end_elapsed_millis": 15000,
+          "live_byte_delta": 5514,
+          "live_block_delta": 19,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Request { probe_id: ProbeId(0), peer: PeerId(\\\"12D3KooWJGUSCZCWcsM1TPr4ah5eKRJxwX7Mgu3Aehsj9RCCLNG4\\\") }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 15000,
+          "end_elapsed_millis": 20001,
+          "live_byte_delta": -1478,
+          "live_block_delta": -12,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(0), peer: Some(PeerId(\\\"12D3KooWJGUSCZCWcsM1TPr4ah5eKRJxwX7Mgu3Aehsj9RCCLNG4\\\")), error: Response(DialRefused) }\"",
+            "level=info event=autonat_inbound_probe event=\"Error { probe_id: ProbeId(1), peer: PeerId(\\\"12D3KooWJGUSCZCWcsM1TPr4ah5eKRJxwX7Mgu3Aehsj9RCCLNG4\\\"), error: Response(DialRefused) }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 100000,
+          "end_elapsed_millis": 105000,
+          "live_byte_delta": 78510,
+          "live_block_delta": 195,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Request { probe_id: ProbeId(2), peer: PeerId(\\\"12D3KooWJGUSCZCWcsM1TPr4ah5eKRJxwX7Mgu3Aehsj9RCCLNG4\\\") }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 105000,
+          "end_elapsed_millis": 110000,
+          "live_byte_delta": -1358,
+          "live_block_delta": -11,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(2), peer: Some(PeerId(\\\"12D3KooWJGUSCZCWcsM1TPr4ah5eKRJxwX7Mgu3Aehsj9RCCLNG4\\\")), error: Response(DialRefused) }\"",
+            "level=info event=autonat_inbound_probe event=\"Error { probe_id: ProbeId(3), peer: PeerId(\\\"12D3KooWJGUSCZCWcsM1TPr4ah5eKRJxwX7Mgu3Aehsj9RCCLNG4\\\"), error: Response(DialRefused) }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 190000,
+          "end_elapsed_millis": 195000,
+          "live_byte_delta": 788,
+          "live_block_delta": 3,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Request { probe_id: ProbeId(4), peer: PeerId(\\\"12D3KooWJGUSCZCWcsM1TPr4ah5eKRJxwX7Mgu3Aehsj9RCCLNG4\\\") }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 205000,
+          "end_elapsed_millis": 210000,
+          "live_byte_delta": -79215,
+          "live_block_delta": -219,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(4), peer: Some(PeerId(\\\"12D3KooWJGUSCZCWcsM1TPr4ah5eKRJxwX7Mgu3Aehsj9RCCLNG4\\\")), error: OutboundRequest(Timeout) }\"",
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(5), peer: None, error: NoServer }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 295000,
+          "end_elapsed_millis": 300001,
+          "live_byte_delta": 7444,
+          "live_block_delta": 1,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Request { probe_id: ProbeId(6), peer: PeerId(\\\"12D3KooWJGUSCZCWcsM1TPr4ah5eKRJxwX7Mgu3Aehsj9RCCLNG4\\\") }\"",
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(6), peer: Some(PeerId(\\\"12D3KooWJGUSCZCWcsM1TPr4ah5eKRJxwX7Mgu3Aehsj9RCCLNG4\\\")), error: OutboundRequest(DialFailure) }\"",
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(7), peer: None, error: NoServer }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 385000,
+          "end_elapsed_millis": 390000,
+          "live_byte_delta": 1512,
+          "live_block_delta": 4,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Request { probe_id: ProbeId(8), peer: PeerId(\\\"12D3KooWJGUSCZCWcsM1TPr4ah5eKRJxwX7Mgu3Aehsj9RCCLNG4\\\") }\"",
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(8), peer: Some(PeerId(\\\"12D3KooWJGUSCZCWcsM1TPr4ah5eKRJxwX7Mgu3Aehsj9RCCLNG4\\\")), error: Response(DialRefused) }\"",
+            "level=info event=autonat_inbound_probe event=\"Error { probe_id: ProbeId(9), peer: PeerId(\\\"12D3KooWJGUSCZCWcsM1TPr4ah5eKRJxwX7Mgu3Aehsj9RCCLNG4\\\"), error: Response(DialRefused) }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 475000,
+          "end_elapsed_millis": 480001,
+          "live_byte_delta": 1512,
+          "live_block_delta": 4,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Request { probe_id: ProbeId(10), peer: PeerId(\\\"12D3KooWJGUSCZCWcsM1TPr4ah5eKRJxwX7Mgu3Aehsj9RCCLNG4\\\") }\"",
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(10), peer: Some(PeerId(\\\"12D3KooWJGUSCZCWcsM1TPr4ah5eKRJxwX7Mgu3Aehsj9RCCLNG4\\\")), error: Response(DialRefused) }\"",
+            "level=info event=autonat_inbound_probe event=\"Error { probe_id: ProbeId(11), peer: PeerId(\\\"12D3KooWJGUSCZCWcsM1TPr4ah5eKRJxwX7Mgu3Aehsj9RCCLNG4\\\"), error: Response(DialRefused) }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 565000,
+          "end_elapsed_millis": 570001,
+          "live_byte_delta": 4925,
+          "live_block_delta": 32,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Request { probe_id: ProbeId(12), peer: PeerId(\\\"12D3KooWJGUSCZCWcsM1TPr4ah5eKRJxwX7Mgu3Aehsj9RCCLNG4\\\") }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 575001,
+          "end_elapsed_millis": 580000,
+          "live_byte_delta": -79920,
+          "live_block_delta": -219,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(12), peer: Some(PeerId(\\\"12D3KooWJGUSCZCWcsM1TPr4ah5eKRJxwX7Mgu3Aehsj9RCCLNG4\\\")), error: OutboundRequest(ConnectionClosed) }\"",
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(13), peer: None, error: NoServer }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 665001,
+          "end_elapsed_millis": 670000,
+          "live_byte_delta": 0,
+          "live_block_delta": 0,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Request { probe_id: ProbeId(14), peer: PeerId(\\\"12D3KooWJGUSCZCWcsM1TPr4ah5eKRJxwX7Mgu3Aehsj9RCCLNG4\\\") }\"",
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(14), peer: Some(PeerId(\\\"12D3KooWJGUSCZCWcsM1TPr4ah5eKRJxwX7Mgu3Aehsj9RCCLNG4\\\")), error: OutboundRequest(DialFailure) }\"",
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(15), peer: None, error: NoServer }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 755000,
+          "end_elapsed_millis": 760000,
+          "live_byte_delta": 74064,
+          "live_block_delta": 177,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Request { probe_id: ProbeId(16), peer: PeerId(\\\"12D3KooWJGUSCZCWcsM1TPr4ah5eKRJxwX7Mgu3Aehsj9RCCLNG4\\\") }\"",
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(16), peer: Some(PeerId(\\\"12D3KooWJGUSCZCWcsM1TPr4ah5eKRJxwX7Mgu3Aehsj9RCCLNG4\\\")), error: Response(DialRefused) }\"",
+            "level=info event=autonat_inbound_probe event=\"Error { probe_id: ProbeId(17), peer: PeerId(\\\"12D3KooWJGUSCZCWcsM1TPr4ah5eKRJxwX7Mgu3Aehsj9RCCLNG4\\\"), error: Response(DialRefused) }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 845000,
+          "end_elapsed_millis": 850001,
+          "live_byte_delta": 0,
+          "live_block_delta": 0,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Request { probe_id: ProbeId(18), peer: PeerId(\\\"12D3KooWJGUSCZCWcsM1TPr4ah5eKRJxwX7Mgu3Aehsj9RCCLNG4\\\") }\"",
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(18), peer: Some(PeerId(\\\"12D3KooWJGUSCZCWcsM1TPr4ah5eKRJxwX7Mgu3Aehsj9RCCLNG4\\\")), error: Response(DialRefused) }\"",
+            "level=info event=autonat_inbound_probe event=\"Error { probe_id: ProbeId(19), peer: PeerId(\\\"12D3KooWJGUSCZCWcsM1TPr4ah5eKRJxwX7Mgu3Aehsj9RCCLNG4\\\"), error: Response(DialRefused) }\""
+          ]
+        }
+      ]
+    },
+    {
+      "run": 2,
+      "role": "a",
+      "exact_step_windows": [
+        {
+          "start_elapsed_millis": 175000,
+          "end_elapsed_millis": 180001,
+          "live_byte_delta": 52,
+          "live_block_delta": 1,
+          "events": []
+        },
+        {
+          "start_elapsed_millis": 565001,
+          "end_elapsed_millis": 570003,
+          "live_byte_delta": 1460,
+          "live_block_delta": 3,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Request { probe_id: ProbeId(12), peer: PeerId(\\\"12D3KooWCeNiJCUeDGPBQ3GGqbVuxsKE7bVrwJuyf2xqNvwJmeXe\\\") }\"",
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(12), peer: Some(PeerId(\\\"12D3KooWCeNiJCUeDGPBQ3GGqbVuxsKE7bVrwJuyf2xqNvwJmeXe\\\")), error: Response(DialRefused) }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 645002,
+          "end_elapsed_millis": 650004,
+          "live_byte_delta": 52,
+          "live_block_delta": 1,
+          "events": [
+            "level=info event=autonat_inbound_probe event=\"Error { probe_id: ProbeId(13), peer: PeerId(\\\"12D3KooWCeNiJCUeDGPBQ3GGqbVuxsKE7bVrwJuyf2xqNvwJmeXe\\\"), error: Response(DialRefused) }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 655002,
+          "end_elapsed_millis": 660003,
+          "live_byte_delta": 1460,
+          "live_block_delta": 3,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Request { probe_id: ProbeId(14), peer: PeerId(\\\"12D3KooWCeNiJCUeDGPBQ3GGqbVuxsKE7bVrwJuyf2xqNvwJmeXe\\\") }\"",
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(14), peer: Some(PeerId(\\\"12D3KooWCeNiJCUeDGPBQ3GGqbVuxsKE7bVrwJuyf2xqNvwJmeXe\\\")), error: Response(DialRefused) }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 835000,
+          "end_elapsed_millis": 840001,
+          "live_byte_delta": 52,
+          "live_block_delta": 1,
+          "events": [
+            "level=info event=autonat_inbound_probe event=\"Error { probe_id: ProbeId(17), peer: PeerId(\\\"12D3KooWCeNiJCUeDGPBQ3GGqbVuxsKE7bVrwJuyf2xqNvwJmeXe\\\"), error: Response(DialRefused) }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 845002,
+          "end_elapsed_millis": 850003,
+          "live_byte_delta": 1460,
+          "live_block_delta": 3,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Request { probe_id: ProbeId(18), peer: PeerId(\\\"12D3KooWCeNiJCUeDGPBQ3GGqbVuxsKE7bVrwJuyf2xqNvwJmeXe\\\") }\"",
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(18), peer: Some(PeerId(\\\"12D3KooWCeNiJCUeDGPBQ3GGqbVuxsKE7bVrwJuyf2xqNvwJmeXe\\\")), error: Response(DialRefused) }\""
+          ]
+        }
+      ],
+      "autonat_windows": [
+        {
+          "start_elapsed_millis": 0,
+          "end_elapsed_millis": 5000,
+          "live_byte_delta": 172473,
+          "live_block_delta": 323,
+          "events": [
+            "level=info event=autonat_enabled",
+            "level=info event=autonat_servers_registered count=1"
+          ]
+        },
+        {
+          "start_elapsed_millis": 10000,
+          "end_elapsed_millis": 15001,
+          "live_byte_delta": 6399,
+          "live_block_delta": 23,
+          "events": [
+            "level=info event=autonat_inbound_probe event=\"Error { probe_id: ProbeId(0), peer: PeerId(\\\"12D3KooWCeNiJCUeDGPBQ3GGqbVuxsKE7bVrwJuyf2xqNvwJmeXe\\\"), error: Response(DialRefused) }\"",
+            "level=info event=autonat_outbound_probe event=\"Request { probe_id: ProbeId(1), peer: PeerId(\\\"12D3KooWCeNiJCUeDGPBQ3GGqbVuxsKE7bVrwJuyf2xqNvwJmeXe\\\") }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 15001,
+          "end_elapsed_millis": 20000,
+          "live_byte_delta": -2363,
+          "live_block_delta": -16,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(1), peer: Some(PeerId(\\\"12D3KooWCeNiJCUeDGPBQ3GGqbVuxsKE7bVrwJuyf2xqNvwJmeXe\\\")), error: Response(DialRefused) }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 100001,
+          "end_elapsed_millis": 105000,
+          "live_byte_delta": 4535,
+          "live_block_delta": 2,
+          "events": [
+            "level=info event=autonat_inbound_probe event=\"Error { probe_id: ProbeId(2), peer: PeerId(\\\"12D3KooWCeNiJCUeDGPBQ3GGqbVuxsKE7bVrwJuyf2xqNvwJmeXe\\\"), error: Response(DialRefused) }\"",
+            "level=info event=autonat_outbound_probe event=\"Request { probe_id: ProbeId(3), peer: PeerId(\\\"12D3KooWCeNiJCUeDGPBQ3GGqbVuxsKE7bVrwJuyf2xqNvwJmeXe\\\") }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 105000,
+          "end_elapsed_millis": 110003,
+          "live_byte_delta": -398,
+          "live_block_delta": -10,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(3), peer: Some(PeerId(\\\"12D3KooWCeNiJCUeDGPBQ3GGqbVuxsKE7bVrwJuyf2xqNvwJmeXe\\\")), error: Response(DialRefused) }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 190002,
+          "end_elapsed_millis": 195002,
+          "live_byte_delta": 9373,
+          "live_block_delta": 4,
+          "events": [
+            "level=info event=autonat_inbound_probe event=\"Error { probe_id: ProbeId(4), peer: PeerId(\\\"12D3KooWCeNiJCUeDGPBQ3GGqbVuxsKE7bVrwJuyf2xqNvwJmeXe\\\"), error: Response(DialRefused) }\"",
+            "level=info event=autonat_outbound_probe event=\"Request { probe_id: ProbeId(5), peer: PeerId(\\\"12D3KooWCeNiJCUeDGPBQ3GGqbVuxsKE7bVrwJuyf2xqNvwJmeXe\\\") }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 195002,
+          "end_elapsed_millis": 200001,
+          "live_byte_delta": -9456,
+          "live_block_delta": -14,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(5), peer: Some(PeerId(\\\"12D3KooWCeNiJCUeDGPBQ3GGqbVuxsKE7bVrwJuyf2xqNvwJmeXe\\\")), error: Response(DialRefused) }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 280001,
+          "end_elapsed_millis": 285001,
+          "live_byte_delta": 3042,
+          "live_block_delta": 17,
+          "events": [
+            "level=info event=autonat_inbound_probe event=\"Error { probe_id: ProbeId(6), peer: PeerId(\\\"12D3KooWCeNiJCUeDGPBQ3GGqbVuxsKE7bVrwJuyf2xqNvwJmeXe\\\"), error: Response(DialRefused) }\"",
+            "level=info event=autonat_outbound_probe event=\"Request { probe_id: ProbeId(7), peer: PeerId(\\\"12D3KooWCeNiJCUeDGPBQ3GGqbVuxsKE7bVrwJuyf2xqNvwJmeXe\\\") }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 285001,
+          "end_elapsed_millis": 290001,
+          "live_byte_delta": -1530,
+          "live_block_delta": -13,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(7), peer: Some(PeerId(\\\"12D3KooWCeNiJCUeDGPBQ3GGqbVuxsKE7bVrwJuyf2xqNvwJmeXe\\\")), error: Response(DialRefused) }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 370000,
+          "end_elapsed_millis": 375001,
+          "live_byte_delta": 3638,
+          "live_block_delta": 17,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Request { probe_id: ProbeId(8), peer: PeerId(\\\"12D3KooWCeNiJCUeDGPBQ3GGqbVuxsKE7bVrwJuyf2xqNvwJmeXe\\\") }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 385001,
+          "end_elapsed_millis": 390002,
+          "live_byte_delta": 1205,
+          "live_block_delta": 2,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(8), peer: Some(PeerId(\\\"12D3KooWCeNiJCUeDGPBQ3GGqbVuxsKE7bVrwJuyf2xqNvwJmeXe\\\")), error: OutboundRequest(Timeout) }\"",
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(9), peer: None, error: NoServer }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 475002,
+          "end_elapsed_millis": 480002,
+          "live_byte_delta": 76568,
+          "live_block_delta": 170,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Request { probe_id: ProbeId(10), peer: PeerId(\\\"12D3KooWCeNiJCUeDGPBQ3GGqbVuxsKE7bVrwJuyf2xqNvwJmeXe\\\") }\"",
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(10), peer: Some(PeerId(\\\"12D3KooWCeNiJCUeDGPBQ3GGqbVuxsKE7bVrwJuyf2xqNvwJmeXe\\\")), error: Response(DialRefused) }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 555000,
+          "end_elapsed_millis": 560003,
+          "live_byte_delta": 73796,
+          "live_block_delta": 187,
+          "events": [
+            "level=info event=autonat_inbound_probe event=\"Error { probe_id: ProbeId(11), peer: PeerId(\\\"12D3KooWCeNiJCUeDGPBQ3GGqbVuxsKE7bVrwJuyf2xqNvwJmeXe\\\"), error: Response(DialRefused) }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 565001,
+          "end_elapsed_millis": 570003,
+          "live_byte_delta": 1460,
+          "live_block_delta": 3,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Request { probe_id: ProbeId(12), peer: PeerId(\\\"12D3KooWCeNiJCUeDGPBQ3GGqbVuxsKE7bVrwJuyf2xqNvwJmeXe\\\") }\"",
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(12), peer: Some(PeerId(\\\"12D3KooWCeNiJCUeDGPBQ3GGqbVuxsKE7bVrwJuyf2xqNvwJmeXe\\\")), error: Response(DialRefused) }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 645002,
+          "end_elapsed_millis": 650004,
+          "live_byte_delta": 52,
+          "live_block_delta": 1,
+          "events": [
+            "level=info event=autonat_inbound_probe event=\"Error { probe_id: ProbeId(13), peer: PeerId(\\\"12D3KooWCeNiJCUeDGPBQ3GGqbVuxsKE7bVrwJuyf2xqNvwJmeXe\\\"), error: Response(DialRefused) }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 655002,
+          "end_elapsed_millis": 660003,
+          "live_byte_delta": 1460,
+          "live_block_delta": 3,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Request { probe_id: ProbeId(14), peer: PeerId(\\\"12D3KooWCeNiJCUeDGPBQ3GGqbVuxsKE7bVrwJuyf2xqNvwJmeXe\\\") }\"",
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(14), peer: Some(PeerId(\\\"12D3KooWCeNiJCUeDGPBQ3GGqbVuxsKE7bVrwJuyf2xqNvwJmeXe\\\")), error: Response(DialRefused) }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 745000,
+          "end_elapsed_millis": 750001,
+          "live_byte_delta": 2998,
+          "live_block_delta": 16,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Request { probe_id: ProbeId(15), peer: PeerId(\\\"12D3KooWCeNiJCUeDGPBQ3GGqbVuxsKE7bVrwJuyf2xqNvwJmeXe\\\") }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 755000,
+          "end_elapsed_millis": 760002,
+          "live_byte_delta": -859,
+          "live_block_delta": -9,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(15), peer: Some(PeerId(\\\"12D3KooWCeNiJCUeDGPBQ3GGqbVuxsKE7bVrwJuyf2xqNvwJmeXe\\\")), error: OutboundRequest(Timeout) }\"",
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(16), peer: None, error: NoServer }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 835000,
+          "end_elapsed_millis": 840001,
+          "live_byte_delta": 52,
+          "live_block_delta": 1,
+          "events": [
+            "level=info event=autonat_inbound_probe event=\"Error { probe_id: ProbeId(17), peer: PeerId(\\\"12D3KooWCeNiJCUeDGPBQ3GGqbVuxsKE7bVrwJuyf2xqNvwJmeXe\\\"), error: Response(DialRefused) }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 845002,
+          "end_elapsed_millis": 850003,
+          "live_byte_delta": 1460,
+          "live_block_delta": 3,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Request { probe_id: ProbeId(18), peer: PeerId(\\\"12D3KooWCeNiJCUeDGPBQ3GGqbVuxsKE7bVrwJuyf2xqNvwJmeXe\\\") }\"",
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(18), peer: Some(PeerId(\\\"12D3KooWCeNiJCUeDGPBQ3GGqbVuxsKE7bVrwJuyf2xqNvwJmeXe\\\")), error: Response(DialRefused) }\""
+          ]
+        }
+      ]
+    },
+    {
+      "run": 2,
+      "role": "b",
+      "exact_step_windows": [
+        {
+          "start_elapsed_millis": 90001,
+          "end_elapsed_millis": 95002,
+          "live_byte_delta": 52,
+          "live_block_delta": 1,
+          "events": []
+        },
+        {
+          "start_elapsed_millis": 565002,
+          "end_elapsed_millis": 570001,
+          "live_byte_delta": 52,
+          "live_block_delta": 1,
+          "events": [
+            "level=info event=autonat_inbound_probe event=\"Error { probe_id: ProbeId(14), peer: PeerId(\\\"12D3KooWMktr1DTkdKRc6pwCfQ9n8kUHh7yTFASspaBVDrv9MfvG\\\"), error: Response(DialRefused) }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 650000,
+          "end_elapsed_millis": 655000,
+          "live_byte_delta": 1460,
+          "live_block_delta": 3,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Request { probe_id: ProbeId(15), peer: PeerId(\\\"12D3KooWMktr1DTkdKRc6pwCfQ9n8kUHh7yTFASspaBVDrv9MfvG\\\") }\"",
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(15), peer: Some(PeerId(\\\"12D3KooWMktr1DTkdKRc6pwCfQ9n8kUHh7yTFASspaBVDrv9MfvG\\\")), error: Response(DialRefused) }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 655000,
+          "end_elapsed_millis": 660003,
+          "live_byte_delta": 52,
+          "live_block_delta": 1,
+          "events": [
+            "level=info event=autonat_inbound_probe event=\"Error { probe_id: ProbeId(16), peer: PeerId(\\\"12D3KooWMktr1DTkdKRc6pwCfQ9n8kUHh7yTFASspaBVDrv9MfvG\\\"), error: Response(DialRefused) }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 840001,
+          "end_elapsed_millis": 845001,
+          "live_byte_delta": 1460,
+          "live_block_delta": 3,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Request { probe_id: ProbeId(19), peer: PeerId(\\\"12D3KooWMktr1DTkdKRc6pwCfQ9n8kUHh7yTFASspaBVDrv9MfvG\\\") }\"",
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(19), peer: Some(PeerId(\\\"12D3KooWMktr1DTkdKRc6pwCfQ9n8kUHh7yTFASspaBVDrv9MfvG\\\")), error: Response(DialRefused) }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 845001,
+          "end_elapsed_millis": 850000,
+          "live_byte_delta": 52,
+          "live_block_delta": 1,
+          "events": [
+            "level=info event=autonat_inbound_probe event=\"Error { probe_id: ProbeId(20), peer: PeerId(\\\"12D3KooWMktr1DTkdKRc6pwCfQ9n8kUHh7yTFASspaBVDrv9MfvG\\\"), error: Response(DialRefused) }\""
+          ]
+        }
+      ],
+      "autonat_windows": [
+        {
+          "start_elapsed_millis": 0,
+          "end_elapsed_millis": 5000,
+          "live_byte_delta": 198156,
+          "live_block_delta": 362,
+          "events": [
+            "level=info event=autonat_enabled"
+          ]
+        },
+        {
+          "start_elapsed_millis": 10002,
+          "end_elapsed_millis": 15000,
+          "live_byte_delta": 4801,
+          "live_block_delta": 17,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Request { probe_id: ProbeId(0), peer: PeerId(\\\"12D3KooWMktr1DTkdKRc6pwCfQ9n8kUHh7yTFASspaBVDrv9MfvG\\\") }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 15000,
+          "end_elapsed_millis": 20002,
+          "live_byte_delta": -1381,
+          "live_block_delta": -10,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(0), peer: Some(PeerId(\\\"12D3KooWMktr1DTkdKRc6pwCfQ9n8kUHh7yTFASspaBVDrv9MfvG\\\")), error: Response(DialRefused) }\"",
+            "level=info event=autonat_inbound_probe event=\"Error { probe_id: ProbeId(1), peer: PeerId(\\\"12D3KooWMktr1DTkdKRc6pwCfQ9n8kUHh7yTFASspaBVDrv9MfvG\\\"), error: Response(DialRefused) }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 100002,
+          "end_elapsed_millis": 105001,
+          "live_byte_delta": 35274,
+          "live_block_delta": 40,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Request { probe_id: ProbeId(2), peer: PeerId(\\\"12D3KooWMktr1DTkdKRc6pwCfQ9n8kUHh7yTFASspaBVDrv9MfvG\\\") }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 105001,
+          "end_elapsed_millis": 110001,
+          "live_byte_delta": 47639,
+          "live_block_delta": 141,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(2), peer: Some(PeerId(\\\"12D3KooWMktr1DTkdKRc6pwCfQ9n8kUHh7yTFASspaBVDrv9MfvG\\\")), error: Response(DialRefused) }\"",
+            "level=info event=autonat_inbound_probe event=\"Error { probe_id: ProbeId(3), peer: PeerId(\\\"12D3KooWMktr1DTkdKRc6pwCfQ9n8kUHh7yTFASspaBVDrv9MfvG\\\"), error: Response(DialRefused) }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 190003,
+          "end_elapsed_millis": 195000,
+          "live_byte_delta": 54769,
+          "live_block_delta": 141,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Request { probe_id: ProbeId(4), peer: PeerId(\\\"12D3KooWMktr1DTkdKRc6pwCfQ9n8kUHh7yTFASspaBVDrv9MfvG\\\") }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 195000,
+          "end_elapsed_millis": 200002,
+          "live_byte_delta": -1478,
+          "live_block_delta": -12,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(4), peer: Some(PeerId(\\\"12D3KooWMktr1DTkdKRc6pwCfQ9n8kUHh7yTFASspaBVDrv9MfvG\\\")), error: Response(DialRefused) }\"",
+            "level=info event=autonat_inbound_probe event=\"Error { probe_id: ProbeId(5), peer: PeerId(\\\"12D3KooWMktr1DTkdKRc6pwCfQ9n8kUHh7yTFASspaBVDrv9MfvG\\\"), error: Response(DialRefused) }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 280003,
+          "end_elapsed_millis": 285000,
+          "live_byte_delta": 2990,
+          "live_block_delta": 16,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Request { probe_id: ProbeId(6), peer: PeerId(\\\"12D3KooWMktr1DTkdKRc6pwCfQ9n8kUHh7yTFASspaBVDrv9MfvG\\\") }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 285000,
+          "end_elapsed_millis": 290000,
+          "live_byte_delta": -1478,
+          "live_block_delta": -12,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(6), peer: Some(PeerId(\\\"12D3KooWMktr1DTkdKRc6pwCfQ9n8kUHh7yTFASspaBVDrv9MfvG\\\")), error: Response(DialRefused) }\"",
+            "level=info event=autonat_inbound_probe event=\"Error { probe_id: ProbeId(7), peer: PeerId(\\\"12D3KooWMktr1DTkdKRc6pwCfQ9n8kUHh7yTFASspaBVDrv9MfvG\\\"), error: Response(DialRefused) }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 370000,
+          "end_elapsed_millis": 375000,
+          "live_byte_delta": 3031,
+          "live_block_delta": 18,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Request { probe_id: ProbeId(8), peer: PeerId(\\\"12D3KooWMktr1DTkdKRc6pwCfQ9n8kUHh7yTFASspaBVDrv9MfvG\\\") }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 380000,
+          "end_elapsed_millis": 385000,
+          "live_byte_delta": -79216,
+          "live_block_delta": -219,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(8), peer: Some(PeerId(\\\"12D3KooWMktr1DTkdKRc6pwCfQ9n8kUHh7yTFASspaBVDrv9MfvG\\\")), error: OutboundRequest(ConnectionClosed) }\"",
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(9), peer: None, error: NoServer }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 470002,
+          "end_elapsed_millis": 475000,
+          "live_byte_delta": 84,
+          "live_block_delta": 1,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Request { probe_id: ProbeId(10), peer: PeerId(\\\"12D3KooWMktr1DTkdKRc6pwCfQ9n8kUHh7yTFASspaBVDrv9MfvG\\\") }\"",
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(10), peer: Some(PeerId(\\\"12D3KooWMktr1DTkdKRc6pwCfQ9n8kUHh7yTFASspaBVDrv9MfvG\\\")), error: OutboundRequest(DialFailure) }\"",
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(11), peer: None, error: NoServer }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 475000,
+          "end_elapsed_millis": 480003,
+          "live_byte_delta": 72581,
+          "live_block_delta": 177,
+          "events": [
+            "level=info event=autonat_inbound_probe event=\"Error { probe_id: ProbeId(12), peer: PeerId(\\\"12D3KooWMktr1DTkdKRc6pwCfQ9n8kUHh7yTFASspaBVDrv9MfvG\\\"), error: Response(DialRefused) }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 560001,
+          "end_elapsed_millis": 565002,
+          "live_byte_delta": 73449,
+          "live_block_delta": 173,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Request { probe_id: ProbeId(13), peer: PeerId(\\\"12D3KooWMktr1DTkdKRc6pwCfQ9n8kUHh7yTFASspaBVDrv9MfvG\\\") }\"",
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(13), peer: Some(PeerId(\\\"12D3KooWMktr1DTkdKRc6pwCfQ9n8kUHh7yTFASspaBVDrv9MfvG\\\")), error: Response(DialRefused) }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 565002,
+          "end_elapsed_millis": 570001,
+          "live_byte_delta": 52,
+          "live_block_delta": 1,
+          "events": [
+            "level=info event=autonat_inbound_probe event=\"Error { probe_id: ProbeId(14), peer: PeerId(\\\"12D3KooWMktr1DTkdKRc6pwCfQ9n8kUHh7yTFASspaBVDrv9MfvG\\\"), error: Response(DialRefused) }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 650000,
+          "end_elapsed_millis": 655000,
+          "live_byte_delta": 1460,
+          "live_block_delta": 3,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Request { probe_id: ProbeId(15), peer: PeerId(\\\"12D3KooWMktr1DTkdKRc6pwCfQ9n8kUHh7yTFASspaBVDrv9MfvG\\\") }\"",
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(15), peer: Some(PeerId(\\\"12D3KooWMktr1DTkdKRc6pwCfQ9n8kUHh7yTFASspaBVDrv9MfvG\\\")), error: Response(DialRefused) }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 655000,
+          "end_elapsed_millis": 660003,
+          "live_byte_delta": 52,
+          "live_block_delta": 1,
+          "events": [
+            "level=info event=autonat_inbound_probe event=\"Error { probe_id: ProbeId(16), peer: PeerId(\\\"12D3KooWMktr1DTkdKRc6pwCfQ9n8kUHh7yTFASspaBVDrv9MfvG\\\"), error: Response(DialRefused) }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 740003,
+          "end_elapsed_millis": 745001,
+          "live_byte_delta": 5136,
+          "live_block_delta": 29,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Request { probe_id: ProbeId(17), peer: PeerId(\\\"12D3KooWMktr1DTkdKRc6pwCfQ9n8kUHh7yTFASspaBVDrv9MfvG\\\") }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 750001,
+          "end_elapsed_millis": 755002,
+          "live_byte_delta": -80145,
+          "live_block_delta": -220,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(17), peer: Some(PeerId(\\\"12D3KooWMktr1DTkdKRc6pwCfQ9n8kUHh7yTFASspaBVDrv9MfvG\\\")), error: OutboundRequest(ConnectionClosed) }\"",
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(18), peer: None, error: NoServer }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 840001,
+          "end_elapsed_millis": 845001,
+          "live_byte_delta": 1460,
+          "live_block_delta": 3,
+          "events": [
+            "level=info event=autonat_outbound_probe event=\"Request { probe_id: ProbeId(19), peer: PeerId(\\\"12D3KooWMktr1DTkdKRc6pwCfQ9n8kUHh7yTFASspaBVDrv9MfvG\\\") }\"",
+            "level=info event=autonat_outbound_probe event=\"Error { probe_id: ProbeId(19), peer: Some(PeerId(\\\"12D3KooWMktr1DTkdKRc6pwCfQ9n8kUHh7yTFASspaBVDrv9MfvG\\\")), error: Response(DialRefused) }\""
+          ]
+        },
+        {
+          "start_elapsed_millis": 845001,
+          "end_elapsed_millis": 850000,
+          "live_byte_delta": 52,
+          "live_block_delta": 1,
+          "events": [
+            "level=info event=autonat_inbound_probe event=\"Error { probe_id: ProbeId(20), peer: PeerId(\\\"12D3KooWMktr1DTkdKRc6pwCfQ9n8kUHh7yTFASspaBVDrv9MfvG\\\"), error: Response(DialRefused) }\""
+          ]
+        }
+      ]
+    }
+  ]
+}

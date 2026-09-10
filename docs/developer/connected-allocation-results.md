@@ -163,6 +163,7 @@ repeat therefore confirms that RSS settling is not sufficient allocation evidenc
 
 ## Interpretation and Next Gates
 
+- [AutoNAT event correlation](autonat-allocation-investigation.md) narrows recurring steps; causal owner isolation remains pending.
 - Both nodes' final three recovered RSS checkpoints increase; final-minute flatness does not resolve that growth.
 - Live requested bytes also grow overall, so RSS allocator high-water behavior alone is not a sufficient explanation.
 - Step-like increases might reflect retained capacity, but no specific owner is causally established yet.
