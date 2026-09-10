@@ -1,0 +1,3802 @@
+{
+  "schema_version": 1,
+  "baseline": "a58da953",
+  "initial_source": "use crossbeam_epoch::{Collector, default_collector};\nuse stats_alloc::{INSTRUMENTED_SYSTEM, StatsAlloc};\nuse std::{\n    alloc::System,\n    sync::atomic::{AtomicUsize, Ordering},\n    time::Duration,\n};\n\n#[global_allocator]\nstatic ALLOCATOR: &StatsAlloc<System> = &INSTRUMENTED_SYSTEM;\nstatic RELEASED: AtomicUsize = AtomicUsize::new(0);\n\n#[derive(Clone, Copy, Default)]\nstruct Sample {\n    bytes: i128,\n    blocks: i128,\n    released: usize,\n}\n\nfn sample() -> Sample {\n    let stats = ALLOCATOR.stats();\n    Sample {\n        bytes: stats.bytes_allocated as i128 - stats.bytes_deallocated as i128,\n        blocks: stats.allocations as i128 - stats.deallocations as i128,\n        released: RELEASED.load(Ordering::SeqCst),\n    }\n}\n\nfn retire_three(collector: &Collector) {\n    let handles: [_; 3] = std::array::from_fn(|_| collector.register());\n    for handle in &handles {\n        let payload = Box::new([17_u8; 64]);\n        std::hint::black_box(&payload);\n        handle.pin().defer(move || {\n            drop(payload);\n            RELEASED.fetch_add(1, Ordering::SeqCst);\n        });\n    }\n    drop(handles);\n}\n\nfn main() {\n    let mode = std::env::args().nth(1).expect(\"private, idle or active\");\n    assert!(matches!(mode.as_str(), \"private\" | \"idle\" | \"active\"));\n    // The persistent handle is outside the measured cycles in both global modes.\n    let anchor = (mode != \"private\").then(|| default_collector().register());\n    let baseline = sample();\n    let mut rows = [(Sample::default(), Sample::default(), Sample::default()); 10];\n    for (index, row) in rows.iter_mut().enumerate() {\n        if mode == \"private\" {\n            let collector = Collector::new();\n            retire_three(&collector);\n            drop(collector);\n        } else {\n            retire_three(default_collector());\n        }\n        let retired = sample();\n        std::thread::sleep(Duration::from_millis(100));\n        let idle = sample();\n        if mode == \"active\" {\n            for _ in 0..1024 {\n                drop(anchor.as_ref().unwrap().pin());\n            }\n        }\n        let active = sample();\n        *row = (retired, idle, active);\n        assert_eq!(retired.bytes, idle.bytes, \"idle changed requested bytes\");\n        assert_eq!(retired.blocks, idle.blocks, \"idle changed requested blocks\");\n        assert_eq!(retired.released, idle.released, \"idle reclaimed a payload\");\n        if mode == \"private\" {\n            assert_eq!(active.bytes, baseline.bytes, \"collector retained bytes\");\n            assert_eq!(active.blocks, baseline.blocks, \"collector retained blocks\");\n            assert_eq!(active.released, (index + 1) * 3);\n        }\n        if mode == \"active\" {\n            assert_eq!(\n                active.released,\n                (index + 1) * 3,\n                \"pins did not reclaim payloads\"\n            );\n        }\n    }\n    // Formatting starts only after all measured snapshots.\n    for (index, row) in rows.iter().enumerate() {\n        for (stage, value) in [(\"retired\", row.0), (\"idle\", row.1), (\"active\", row.2)] {\n            println!(\n                \"{{\\\"mode\\\":\\\"{}\\\",\\\"cycle\\\":{},\\\"stage\\\":\\\"{}\\\",\\\"bytes\\\":{},\\\"blocks\\\":{},\\\"released\\\":{}}}\",\n                mode,\n                index + 1,\n                stage,\n                value.bytes - baseline.bytes,\n                value.blocks - baseline.blocks,\n                value.released,\n            );\n        }\n    }\n}\n",
+  "source_sha256": "44e9e0cf541bf74eb26730d8aa058385fd2f39610cc6c5035a58f17b18b2b734",
+  "initial_binary_sha256": "8ebcc70e436b4c57be7ece657242308343879adef6fca5cd4fc0ed05c818f159",
+  "final_binary_sha256": "6046982c8d6ae9efd8e66ec11902b5af74859afdea6446bebbd68f1b4361e321",
+  "compile_command": "env PATH=/nix/store/3d1c302vw7kc8a5vknhmn34c0pd7zm6m-gcc-wrapper-15.3.0/bin:$PATH /nix/store/hjh2pcv59jhxwh6japwx1v437w4yrbp1-rustc-1.97.1/bin/rustc --edition=2024 tests/diagnostics/epoch_retention.rs -L dependency=/tmp/p2p-vpn-review-target/debug/deps --extern crossbeam_epoch=/tmp/p2p-vpn-review-target/debug/deps/libcrossbeam_epoch-77a7b761f9f94157.rlib --extern stats_alloc=/tmp/p2p-vpn-review-target/debug/deps/libstats_alloc-e03cd3d805ac65ec.rlib -o /tmp/p2p-vpn-epoch-retention-bags",
+  "run_template": "timeout --signal=TERM --kill-after=2s 15 prlimit --fsize=262144:262144 -- /tmp/p2p-vpn-epoch-retention-bags MODE CYCLES > FRESH_LOG 2>&1",
+  "dependencies": [
+    {
+      "path": "/tmp/p2p-vpn-review-target/debug/deps/libcrossbeam_epoch-77a7b761f9f94157.rlib",
+      "sha256": "f8d162a2caf4f18627de9578c58d58dbeb75fa82a602645c647cc44ee800802b"
+    },
+    {
+      "path": "/tmp/p2p-vpn-review-target/debug/deps/libstats_alloc-e03cd3d805ac65ec.rlib",
+      "sha256": "e63e936d51c1889d5d6b0a3fda7f4194eafcfac98fb02599387ccac17a52534e"
+    }
+  ],
+  "records": [
+    {
+      "path": "/tmp/p2p-vpn-epoch-private-1.log",
+      "sha256": "4714d95eaea660d3916142bbbef77a567a50d368bc25df563e9fe7882a9f0153",
+      "exit_code": 0,
+      "rows": [
+        {
+          "mode": "private",
+          "cycle": 1,
+          "stage": "retired",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 3
+        },
+        {
+          "mode": "private",
+          "cycle": 1,
+          "stage": "idle",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 3
+        },
+        {
+          "mode": "private",
+          "cycle": 1,
+          "stage": "active",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 3
+        },
+        {
+          "mode": "private",
+          "cycle": 2,
+          "stage": "retired",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 6
+        },
+        {
+          "mode": "private",
+          "cycle": 2,
+          "stage": "idle",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 6
+        },
+        {
+          "mode": "private",
+          "cycle": 2,
+          "stage": "active",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 6
+        },
+        {
+          "mode": "private",
+          "cycle": 3,
+          "stage": "retired",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 9
+        },
+        {
+          "mode": "private",
+          "cycle": 3,
+          "stage": "idle",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 9
+        },
+        {
+          "mode": "private",
+          "cycle": 3,
+          "stage": "active",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 9
+        },
+        {
+          "mode": "private",
+          "cycle": 4,
+          "stage": "retired",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 12
+        },
+        {
+          "mode": "private",
+          "cycle": 4,
+          "stage": "idle",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 12
+        },
+        {
+          "mode": "private",
+          "cycle": 4,
+          "stage": "active",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 12
+        },
+        {
+          "mode": "private",
+          "cycle": 5,
+          "stage": "retired",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 15
+        },
+        {
+          "mode": "private",
+          "cycle": 5,
+          "stage": "idle",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 15
+        },
+        {
+          "mode": "private",
+          "cycle": 5,
+          "stage": "active",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 15
+        },
+        {
+          "mode": "private",
+          "cycle": 6,
+          "stage": "retired",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 18
+        },
+        {
+          "mode": "private",
+          "cycle": 6,
+          "stage": "idle",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 18
+        },
+        {
+          "mode": "private",
+          "cycle": 6,
+          "stage": "active",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 18
+        },
+        {
+          "mode": "private",
+          "cycle": 7,
+          "stage": "retired",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 21
+        },
+        {
+          "mode": "private",
+          "cycle": 7,
+          "stage": "idle",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 21
+        },
+        {
+          "mode": "private",
+          "cycle": 7,
+          "stage": "active",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 21
+        },
+        {
+          "mode": "private",
+          "cycle": 8,
+          "stage": "retired",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 24
+        },
+        {
+          "mode": "private",
+          "cycle": 8,
+          "stage": "idle",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 24
+        },
+        {
+          "mode": "private",
+          "cycle": 8,
+          "stage": "active",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 24
+        },
+        {
+          "mode": "private",
+          "cycle": 9,
+          "stage": "retired",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 27
+        },
+        {
+          "mode": "private",
+          "cycle": 9,
+          "stage": "idle",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 27
+        },
+        {
+          "mode": "private",
+          "cycle": 9,
+          "stage": "active",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 27
+        },
+        {
+          "mode": "private",
+          "cycle": 10,
+          "stage": "retired",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 30
+        },
+        {
+          "mode": "private",
+          "cycle": 10,
+          "stage": "idle",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 30
+        },
+        {
+          "mode": "private",
+          "cycle": 10,
+          "stage": "active",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 30
+        }
+      ]
+    },
+    {
+      "path": "/tmp/p2p-vpn-epoch-private-2.log",
+      "sha256": "4714d95eaea660d3916142bbbef77a567a50d368bc25df563e9fe7882a9f0153",
+      "exit_code": 0,
+      "rows": [
+        {
+          "mode": "private",
+          "cycle": 1,
+          "stage": "retired",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 3
+        },
+        {
+          "mode": "private",
+          "cycle": 1,
+          "stage": "idle",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 3
+        },
+        {
+          "mode": "private",
+          "cycle": 1,
+          "stage": "active",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 3
+        },
+        {
+          "mode": "private",
+          "cycle": 2,
+          "stage": "retired",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 6
+        },
+        {
+          "mode": "private",
+          "cycle": 2,
+          "stage": "idle",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 6
+        },
+        {
+          "mode": "private",
+          "cycle": 2,
+          "stage": "active",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 6
+        },
+        {
+          "mode": "private",
+          "cycle": 3,
+          "stage": "retired",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 9
+        },
+        {
+          "mode": "private",
+          "cycle": 3,
+          "stage": "idle",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 9
+        },
+        {
+          "mode": "private",
+          "cycle": 3,
+          "stage": "active",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 9
+        },
+        {
+          "mode": "private",
+          "cycle": 4,
+          "stage": "retired",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 12
+        },
+        {
+          "mode": "private",
+          "cycle": 4,
+          "stage": "idle",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 12
+        },
+        {
+          "mode": "private",
+          "cycle": 4,
+          "stage": "active",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 12
+        },
+        {
+          "mode": "private",
+          "cycle": 5,
+          "stage": "retired",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 15
+        },
+        {
+          "mode": "private",
+          "cycle": 5,
+          "stage": "idle",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 15
+        },
+        {
+          "mode": "private",
+          "cycle": 5,
+          "stage": "active",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 15
+        },
+        {
+          "mode": "private",
+          "cycle": 6,
+          "stage": "retired",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 18
+        },
+        {
+          "mode": "private",
+          "cycle": 6,
+          "stage": "idle",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 18
+        },
+        {
+          "mode": "private",
+          "cycle": 6,
+          "stage": "active",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 18
+        },
+        {
+          "mode": "private",
+          "cycle": 7,
+          "stage": "retired",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 21
+        },
+        {
+          "mode": "private",
+          "cycle": 7,
+          "stage": "idle",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 21
+        },
+        {
+          "mode": "private",
+          "cycle": 7,
+          "stage": "active",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 21
+        },
+        {
+          "mode": "private",
+          "cycle": 8,
+          "stage": "retired",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 24
+        },
+        {
+          "mode": "private",
+          "cycle": 8,
+          "stage": "idle",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 24
+        },
+        {
+          "mode": "private",
+          "cycle": 8,
+          "stage": "active",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 24
+        },
+        {
+          "mode": "private",
+          "cycle": 9,
+          "stage": "retired",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 27
+        },
+        {
+          "mode": "private",
+          "cycle": 9,
+          "stage": "idle",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 27
+        },
+        {
+          "mode": "private",
+          "cycle": 9,
+          "stage": "active",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 27
+        },
+        {
+          "mode": "private",
+          "cycle": 10,
+          "stage": "retired",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 30
+        },
+        {
+          "mode": "private",
+          "cycle": 10,
+          "stage": "idle",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 30
+        },
+        {
+          "mode": "private",
+          "cycle": 10,
+          "stage": "active",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 30
+        }
+      ]
+    },
+    {
+      "path": "/tmp/p2p-vpn-epoch-private-final.log",
+      "sha256": "4714d95eaea660d3916142bbbef77a567a50d368bc25df563e9fe7882a9f0153",
+      "exit_code": 0,
+      "rows": [
+        {
+          "mode": "private",
+          "cycle": 1,
+          "stage": "retired",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 3
+        },
+        {
+          "mode": "private",
+          "cycle": 1,
+          "stage": "idle",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 3
+        },
+        {
+          "mode": "private",
+          "cycle": 1,
+          "stage": "active",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 3
+        },
+        {
+          "mode": "private",
+          "cycle": 2,
+          "stage": "retired",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 6
+        },
+        {
+          "mode": "private",
+          "cycle": 2,
+          "stage": "idle",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 6
+        },
+        {
+          "mode": "private",
+          "cycle": 2,
+          "stage": "active",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 6
+        },
+        {
+          "mode": "private",
+          "cycle": 3,
+          "stage": "retired",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 9
+        },
+        {
+          "mode": "private",
+          "cycle": 3,
+          "stage": "idle",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 9
+        },
+        {
+          "mode": "private",
+          "cycle": 3,
+          "stage": "active",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 9
+        },
+        {
+          "mode": "private",
+          "cycle": 4,
+          "stage": "retired",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 12
+        },
+        {
+          "mode": "private",
+          "cycle": 4,
+          "stage": "idle",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 12
+        },
+        {
+          "mode": "private",
+          "cycle": 4,
+          "stage": "active",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 12
+        },
+        {
+          "mode": "private",
+          "cycle": 5,
+          "stage": "retired",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 15
+        },
+        {
+          "mode": "private",
+          "cycle": 5,
+          "stage": "idle",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 15
+        },
+        {
+          "mode": "private",
+          "cycle": 5,
+          "stage": "active",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 15
+        },
+        {
+          "mode": "private",
+          "cycle": 6,
+          "stage": "retired",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 18
+        },
+        {
+          "mode": "private",
+          "cycle": 6,
+          "stage": "idle",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 18
+        },
+        {
+          "mode": "private",
+          "cycle": 6,
+          "stage": "active",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 18
+        },
+        {
+          "mode": "private",
+          "cycle": 7,
+          "stage": "retired",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 21
+        },
+        {
+          "mode": "private",
+          "cycle": 7,
+          "stage": "idle",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 21
+        },
+        {
+          "mode": "private",
+          "cycle": 7,
+          "stage": "active",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 21
+        },
+        {
+          "mode": "private",
+          "cycle": 8,
+          "stage": "retired",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 24
+        },
+        {
+          "mode": "private",
+          "cycle": 8,
+          "stage": "idle",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 24
+        },
+        {
+          "mode": "private",
+          "cycle": 8,
+          "stage": "active",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 24
+        },
+        {
+          "mode": "private",
+          "cycle": 9,
+          "stage": "retired",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 27
+        },
+        {
+          "mode": "private",
+          "cycle": 9,
+          "stage": "idle",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 27
+        },
+        {
+          "mode": "private",
+          "cycle": 9,
+          "stage": "active",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 27
+        },
+        {
+          "mode": "private",
+          "cycle": 10,
+          "stage": "retired",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 30
+        },
+        {
+          "mode": "private",
+          "cycle": 10,
+          "stage": "idle",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 30
+        },
+        {
+          "mode": "private",
+          "cycle": 10,
+          "stage": "active",
+          "bytes": 0,
+          "blocks": 0,
+          "released": 30
+        }
+      ]
+    },
+    {
+      "path": "/tmp/p2p-vpn-epoch-idle-1.log",
+      "sha256": "b4f4051ba6f5e3bc1d9aa582b3b09aed976cc2456a832114447788da362b2826",
+      "exit_code": 0,
+      "rows": [
+        {
+          "mode": "idle",
+          "cycle": 1,
+          "stage": "retired",
+          "bytes": 13320,
+          "blocks": 9,
+          "released": 0
+        },
+        {
+          "mode": "idle",
+          "cycle": 1,
+          "stage": "idle",
+          "bytes": 13320,
+          "blocks": 9,
+          "released": 0
+        },
+        {
+          "mode": "idle",
+          "cycle": 1,
+          "stage": "active",
+          "bytes": 13320,
+          "blocks": 9,
+          "released": 0
+        },
+        {
+          "mode": "idle",
+          "cycle": 2,
+          "stage": "retired",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 3
+        },
+        {
+          "mode": "idle",
+          "cycle": 2,
+          "stage": "idle",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 3
+        },
+        {
+          "mode": "idle",
+          "cycle": 2,
+          "stage": "active",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 3
+        },
+        {
+          "mode": "idle",
+          "cycle": 3,
+          "stage": "retired",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 6
+        },
+        {
+          "mode": "idle",
+          "cycle": 3,
+          "stage": "idle",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 6
+        },
+        {
+          "mode": "idle",
+          "cycle": 3,
+          "stage": "active",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 6
+        },
+        {
+          "mode": "idle",
+          "cycle": 4,
+          "stage": "retired",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 9
+        },
+        {
+          "mode": "idle",
+          "cycle": 4,
+          "stage": "idle",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 9
+        },
+        {
+          "mode": "idle",
+          "cycle": 4,
+          "stage": "active",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 9
+        },
+        {
+          "mode": "idle",
+          "cycle": 5,
+          "stage": "retired",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 12
+        },
+        {
+          "mode": "idle",
+          "cycle": 5,
+          "stage": "idle",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 12
+        },
+        {
+          "mode": "idle",
+          "cycle": 5,
+          "stage": "active",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 12
+        },
+        {
+          "mode": "idle",
+          "cycle": 6,
+          "stage": "retired",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 15
+        },
+        {
+          "mode": "idle",
+          "cycle": 6,
+          "stage": "idle",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 15
+        },
+        {
+          "mode": "idle",
+          "cycle": 6,
+          "stage": "active",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 15
+        },
+        {
+          "mode": "idle",
+          "cycle": 7,
+          "stage": "retired",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 18
+        },
+        {
+          "mode": "idle",
+          "cycle": 7,
+          "stage": "idle",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 18
+        },
+        {
+          "mode": "idle",
+          "cycle": 7,
+          "stage": "active",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 18
+        },
+        {
+          "mode": "idle",
+          "cycle": 8,
+          "stage": "retired",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 21
+        },
+        {
+          "mode": "idle",
+          "cycle": 8,
+          "stage": "idle",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 21
+        },
+        {
+          "mode": "idle",
+          "cycle": 8,
+          "stage": "active",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 21
+        },
+        {
+          "mode": "idle",
+          "cycle": 9,
+          "stage": "retired",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 24
+        },
+        {
+          "mode": "idle",
+          "cycle": 9,
+          "stage": "idle",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 24
+        },
+        {
+          "mode": "idle",
+          "cycle": 9,
+          "stage": "active",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 24
+        },
+        {
+          "mode": "idle",
+          "cycle": 10,
+          "stage": "retired",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 27
+        },
+        {
+          "mode": "idle",
+          "cycle": 10,
+          "stage": "idle",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 27
+        },
+        {
+          "mode": "idle",
+          "cycle": 10,
+          "stage": "active",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 27
+        }
+      ]
+    },
+    {
+      "path": "/tmp/p2p-vpn-epoch-idle-2.log",
+      "sha256": "b4f4051ba6f5e3bc1d9aa582b3b09aed976cc2456a832114447788da362b2826",
+      "exit_code": 0,
+      "rows": [
+        {
+          "mode": "idle",
+          "cycle": 1,
+          "stage": "retired",
+          "bytes": 13320,
+          "blocks": 9,
+          "released": 0
+        },
+        {
+          "mode": "idle",
+          "cycle": 1,
+          "stage": "idle",
+          "bytes": 13320,
+          "blocks": 9,
+          "released": 0
+        },
+        {
+          "mode": "idle",
+          "cycle": 1,
+          "stage": "active",
+          "bytes": 13320,
+          "blocks": 9,
+          "released": 0
+        },
+        {
+          "mode": "idle",
+          "cycle": 2,
+          "stage": "retired",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 3
+        },
+        {
+          "mode": "idle",
+          "cycle": 2,
+          "stage": "idle",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 3
+        },
+        {
+          "mode": "idle",
+          "cycle": 2,
+          "stage": "active",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 3
+        },
+        {
+          "mode": "idle",
+          "cycle": 3,
+          "stage": "retired",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 6
+        },
+        {
+          "mode": "idle",
+          "cycle": 3,
+          "stage": "idle",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 6
+        },
+        {
+          "mode": "idle",
+          "cycle": 3,
+          "stage": "active",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 6
+        },
+        {
+          "mode": "idle",
+          "cycle": 4,
+          "stage": "retired",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 9
+        },
+        {
+          "mode": "idle",
+          "cycle": 4,
+          "stage": "idle",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 9
+        },
+        {
+          "mode": "idle",
+          "cycle": 4,
+          "stage": "active",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 9
+        },
+        {
+          "mode": "idle",
+          "cycle": 5,
+          "stage": "retired",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 12
+        },
+        {
+          "mode": "idle",
+          "cycle": 5,
+          "stage": "idle",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 12
+        },
+        {
+          "mode": "idle",
+          "cycle": 5,
+          "stage": "active",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 12
+        },
+        {
+          "mode": "idle",
+          "cycle": 6,
+          "stage": "retired",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 15
+        },
+        {
+          "mode": "idle",
+          "cycle": 6,
+          "stage": "idle",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 15
+        },
+        {
+          "mode": "idle",
+          "cycle": 6,
+          "stage": "active",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 15
+        },
+        {
+          "mode": "idle",
+          "cycle": 7,
+          "stage": "retired",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 18
+        },
+        {
+          "mode": "idle",
+          "cycle": 7,
+          "stage": "idle",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 18
+        },
+        {
+          "mode": "idle",
+          "cycle": 7,
+          "stage": "active",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 18
+        },
+        {
+          "mode": "idle",
+          "cycle": 8,
+          "stage": "retired",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 21
+        },
+        {
+          "mode": "idle",
+          "cycle": 8,
+          "stage": "idle",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 21
+        },
+        {
+          "mode": "idle",
+          "cycle": 8,
+          "stage": "active",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 21
+        },
+        {
+          "mode": "idle",
+          "cycle": 9,
+          "stage": "retired",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 24
+        },
+        {
+          "mode": "idle",
+          "cycle": 9,
+          "stage": "idle",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 24
+        },
+        {
+          "mode": "idle",
+          "cycle": 9,
+          "stage": "active",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 24
+        },
+        {
+          "mode": "idle",
+          "cycle": 10,
+          "stage": "retired",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 27
+        },
+        {
+          "mode": "idle",
+          "cycle": 10,
+          "stage": "idle",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 27
+        },
+        {
+          "mode": "idle",
+          "cycle": 10,
+          "stage": "active",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 27
+        }
+      ]
+    },
+    {
+      "path": "/tmp/p2p-vpn-epoch-idle-final.log",
+      "sha256": "b4f4051ba6f5e3bc1d9aa582b3b09aed976cc2456a832114447788da362b2826",
+      "exit_code": 0,
+      "rows": [
+        {
+          "mode": "idle",
+          "cycle": 1,
+          "stage": "retired",
+          "bytes": 13320,
+          "blocks": 9,
+          "released": 0
+        },
+        {
+          "mode": "idle",
+          "cycle": 1,
+          "stage": "idle",
+          "bytes": 13320,
+          "blocks": 9,
+          "released": 0
+        },
+        {
+          "mode": "idle",
+          "cycle": 1,
+          "stage": "active",
+          "bytes": 13320,
+          "blocks": 9,
+          "released": 0
+        },
+        {
+          "mode": "idle",
+          "cycle": 2,
+          "stage": "retired",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 3
+        },
+        {
+          "mode": "idle",
+          "cycle": 2,
+          "stage": "idle",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 3
+        },
+        {
+          "mode": "idle",
+          "cycle": 2,
+          "stage": "active",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 3
+        },
+        {
+          "mode": "idle",
+          "cycle": 3,
+          "stage": "retired",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 6
+        },
+        {
+          "mode": "idle",
+          "cycle": 3,
+          "stage": "idle",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 6
+        },
+        {
+          "mode": "idle",
+          "cycle": 3,
+          "stage": "active",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 6
+        },
+        {
+          "mode": "idle",
+          "cycle": 4,
+          "stage": "retired",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 9
+        },
+        {
+          "mode": "idle",
+          "cycle": 4,
+          "stage": "idle",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 9
+        },
+        {
+          "mode": "idle",
+          "cycle": 4,
+          "stage": "active",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 9
+        },
+        {
+          "mode": "idle",
+          "cycle": 5,
+          "stage": "retired",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 12
+        },
+        {
+          "mode": "idle",
+          "cycle": 5,
+          "stage": "idle",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 12
+        },
+        {
+          "mode": "idle",
+          "cycle": 5,
+          "stage": "active",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 12
+        },
+        {
+          "mode": "idle",
+          "cycle": 6,
+          "stage": "retired",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 15
+        },
+        {
+          "mode": "idle",
+          "cycle": 6,
+          "stage": "idle",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 15
+        },
+        {
+          "mode": "idle",
+          "cycle": 6,
+          "stage": "active",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 15
+        },
+        {
+          "mode": "idle",
+          "cycle": 7,
+          "stage": "retired",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 18
+        },
+        {
+          "mode": "idle",
+          "cycle": 7,
+          "stage": "idle",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 18
+        },
+        {
+          "mode": "idle",
+          "cycle": 7,
+          "stage": "active",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 18
+        },
+        {
+          "mode": "idle",
+          "cycle": 8,
+          "stage": "retired",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 21
+        },
+        {
+          "mode": "idle",
+          "cycle": 8,
+          "stage": "idle",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 21
+        },
+        {
+          "mode": "idle",
+          "cycle": 8,
+          "stage": "active",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 21
+        },
+        {
+          "mode": "idle",
+          "cycle": 9,
+          "stage": "retired",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 24
+        },
+        {
+          "mode": "idle",
+          "cycle": 9,
+          "stage": "idle",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 24
+        },
+        {
+          "mode": "idle",
+          "cycle": 9,
+          "stage": "active",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 24
+        },
+        {
+          "mode": "idle",
+          "cycle": 10,
+          "stage": "retired",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 27
+        },
+        {
+          "mode": "idle",
+          "cycle": 10,
+          "stage": "idle",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 27
+        },
+        {
+          "mode": "idle",
+          "cycle": 10,
+          "stage": "active",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 27
+        }
+      ]
+    },
+    {
+      "path": "/tmp/p2p-vpn-epoch-active-1.log",
+      "sha256": "f6f7d09b5db58b6d17f3a685020642876dca96be1183d6e5e098919308ad24ac",
+      "exit_code": 0,
+      "rows": [
+        {
+          "mode": "active",
+          "cycle": 1,
+          "stage": "retired",
+          "bytes": 13320,
+          "blocks": 9,
+          "released": 0
+        },
+        {
+          "mode": "active",
+          "cycle": 1,
+          "stage": "idle",
+          "bytes": 13320,
+          "blocks": 9,
+          "released": 0
+        },
+        {
+          "mode": "active",
+          "cycle": 1,
+          "stage": "active",
+          "bytes": 13128,
+          "blocks": 6,
+          "released": 3
+        },
+        {
+          "mode": "active",
+          "cycle": 2,
+          "stage": "retired",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 3
+        },
+        {
+          "mode": "active",
+          "cycle": 2,
+          "stage": "idle",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 3
+        },
+        {
+          "mode": "active",
+          "cycle": 2,
+          "stage": "active",
+          "bytes": 26256,
+          "blocks": 12,
+          "released": 6
+        },
+        {
+          "mode": "active",
+          "cycle": 3,
+          "stage": "retired",
+          "bytes": 39576,
+          "blocks": 21,
+          "released": 6
+        },
+        {
+          "mode": "active",
+          "cycle": 3,
+          "stage": "idle",
+          "bytes": 39576,
+          "blocks": 21,
+          "released": 6
+        },
+        {
+          "mode": "active",
+          "cycle": 3,
+          "stage": "active",
+          "bytes": 39384,
+          "blocks": 18,
+          "released": 9
+        },
+        {
+          "mode": "active",
+          "cycle": 4,
+          "stage": "retired",
+          "bytes": 52704,
+          "blocks": 27,
+          "released": 9
+        },
+        {
+          "mode": "active",
+          "cycle": 4,
+          "stage": "idle",
+          "bytes": 52704,
+          "blocks": 27,
+          "released": 9
+        },
+        {
+          "mode": "active",
+          "cycle": 4,
+          "stage": "active",
+          "bytes": 52512,
+          "blocks": 24,
+          "released": 12
+        },
+        {
+          "mode": "active",
+          "cycle": 5,
+          "stage": "retired",
+          "bytes": 65832,
+          "blocks": 33,
+          "released": 12
+        },
+        {
+          "mode": "active",
+          "cycle": 5,
+          "stage": "idle",
+          "bytes": 65832,
+          "blocks": 33,
+          "released": 12
+        },
+        {
+          "mode": "active",
+          "cycle": 5,
+          "stage": "active",
+          "bytes": 65640,
+          "blocks": 30,
+          "released": 15
+        },
+        {
+          "mode": "active",
+          "cycle": 6,
+          "stage": "retired",
+          "bytes": 78960,
+          "blocks": 39,
+          "released": 15
+        },
+        {
+          "mode": "active",
+          "cycle": 6,
+          "stage": "idle",
+          "bytes": 78960,
+          "blocks": 39,
+          "released": 15
+        },
+        {
+          "mode": "active",
+          "cycle": 6,
+          "stage": "active",
+          "bytes": 78768,
+          "blocks": 36,
+          "released": 18
+        },
+        {
+          "mode": "active",
+          "cycle": 7,
+          "stage": "retired",
+          "bytes": 92088,
+          "blocks": 45,
+          "released": 18
+        },
+        {
+          "mode": "active",
+          "cycle": 7,
+          "stage": "idle",
+          "bytes": 92088,
+          "blocks": 45,
+          "released": 18
+        },
+        {
+          "mode": "active",
+          "cycle": 7,
+          "stage": "active",
+          "bytes": 91896,
+          "blocks": 42,
+          "released": 21
+        },
+        {
+          "mode": "active",
+          "cycle": 8,
+          "stage": "retired",
+          "bytes": 105216,
+          "blocks": 51,
+          "released": 21
+        },
+        {
+          "mode": "active",
+          "cycle": 8,
+          "stage": "idle",
+          "bytes": 105216,
+          "blocks": 51,
+          "released": 21
+        },
+        {
+          "mode": "active",
+          "cycle": 8,
+          "stage": "active",
+          "bytes": 105024,
+          "blocks": 48,
+          "released": 24
+        },
+        {
+          "mode": "active",
+          "cycle": 9,
+          "stage": "retired",
+          "bytes": 118344,
+          "blocks": 57,
+          "released": 24
+        },
+        {
+          "mode": "active",
+          "cycle": 9,
+          "stage": "idle",
+          "bytes": 118344,
+          "blocks": 57,
+          "released": 24
+        },
+        {
+          "mode": "active",
+          "cycle": 9,
+          "stage": "active",
+          "bytes": 118152,
+          "blocks": 54,
+          "released": 27
+        },
+        {
+          "mode": "active",
+          "cycle": 10,
+          "stage": "retired",
+          "bytes": 131472,
+          "blocks": 63,
+          "released": 27
+        },
+        {
+          "mode": "active",
+          "cycle": 10,
+          "stage": "idle",
+          "bytes": 131472,
+          "blocks": 63,
+          "released": 27
+        },
+        {
+          "mode": "active",
+          "cycle": 10,
+          "stage": "active",
+          "bytes": 131280,
+          "blocks": 60,
+          "released": 30
+        }
+      ]
+    },
+    {
+      "path": "/tmp/p2p-vpn-epoch-active-2.log",
+      "sha256": "f6f7d09b5db58b6d17f3a685020642876dca96be1183d6e5e098919308ad24ac",
+      "exit_code": 0,
+      "rows": [
+        {
+          "mode": "active",
+          "cycle": 1,
+          "stage": "retired",
+          "bytes": 13320,
+          "blocks": 9,
+          "released": 0
+        },
+        {
+          "mode": "active",
+          "cycle": 1,
+          "stage": "idle",
+          "bytes": 13320,
+          "blocks": 9,
+          "released": 0
+        },
+        {
+          "mode": "active",
+          "cycle": 1,
+          "stage": "active",
+          "bytes": 13128,
+          "blocks": 6,
+          "released": 3
+        },
+        {
+          "mode": "active",
+          "cycle": 2,
+          "stage": "retired",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 3
+        },
+        {
+          "mode": "active",
+          "cycle": 2,
+          "stage": "idle",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 3
+        },
+        {
+          "mode": "active",
+          "cycle": 2,
+          "stage": "active",
+          "bytes": 26256,
+          "blocks": 12,
+          "released": 6
+        },
+        {
+          "mode": "active",
+          "cycle": 3,
+          "stage": "retired",
+          "bytes": 39576,
+          "blocks": 21,
+          "released": 6
+        },
+        {
+          "mode": "active",
+          "cycle": 3,
+          "stage": "idle",
+          "bytes": 39576,
+          "blocks": 21,
+          "released": 6
+        },
+        {
+          "mode": "active",
+          "cycle": 3,
+          "stage": "active",
+          "bytes": 39384,
+          "blocks": 18,
+          "released": 9
+        },
+        {
+          "mode": "active",
+          "cycle": 4,
+          "stage": "retired",
+          "bytes": 52704,
+          "blocks": 27,
+          "released": 9
+        },
+        {
+          "mode": "active",
+          "cycle": 4,
+          "stage": "idle",
+          "bytes": 52704,
+          "blocks": 27,
+          "released": 9
+        },
+        {
+          "mode": "active",
+          "cycle": 4,
+          "stage": "active",
+          "bytes": 52512,
+          "blocks": 24,
+          "released": 12
+        },
+        {
+          "mode": "active",
+          "cycle": 5,
+          "stage": "retired",
+          "bytes": 65832,
+          "blocks": 33,
+          "released": 12
+        },
+        {
+          "mode": "active",
+          "cycle": 5,
+          "stage": "idle",
+          "bytes": 65832,
+          "blocks": 33,
+          "released": 12
+        },
+        {
+          "mode": "active",
+          "cycle": 5,
+          "stage": "active",
+          "bytes": 65640,
+          "blocks": 30,
+          "released": 15
+        },
+        {
+          "mode": "active",
+          "cycle": 6,
+          "stage": "retired",
+          "bytes": 78960,
+          "blocks": 39,
+          "released": 15
+        },
+        {
+          "mode": "active",
+          "cycle": 6,
+          "stage": "idle",
+          "bytes": 78960,
+          "blocks": 39,
+          "released": 15
+        },
+        {
+          "mode": "active",
+          "cycle": 6,
+          "stage": "active",
+          "bytes": 78768,
+          "blocks": 36,
+          "released": 18
+        },
+        {
+          "mode": "active",
+          "cycle": 7,
+          "stage": "retired",
+          "bytes": 92088,
+          "blocks": 45,
+          "released": 18
+        },
+        {
+          "mode": "active",
+          "cycle": 7,
+          "stage": "idle",
+          "bytes": 92088,
+          "blocks": 45,
+          "released": 18
+        },
+        {
+          "mode": "active",
+          "cycle": 7,
+          "stage": "active",
+          "bytes": 91896,
+          "blocks": 42,
+          "released": 21
+        },
+        {
+          "mode": "active",
+          "cycle": 8,
+          "stage": "retired",
+          "bytes": 105216,
+          "blocks": 51,
+          "released": 21
+        },
+        {
+          "mode": "active",
+          "cycle": 8,
+          "stage": "idle",
+          "bytes": 105216,
+          "blocks": 51,
+          "released": 21
+        },
+        {
+          "mode": "active",
+          "cycle": 8,
+          "stage": "active",
+          "bytes": 105024,
+          "blocks": 48,
+          "released": 24
+        },
+        {
+          "mode": "active",
+          "cycle": 9,
+          "stage": "retired",
+          "bytes": 118344,
+          "blocks": 57,
+          "released": 24
+        },
+        {
+          "mode": "active",
+          "cycle": 9,
+          "stage": "idle",
+          "bytes": 118344,
+          "blocks": 57,
+          "released": 24
+        },
+        {
+          "mode": "active",
+          "cycle": 9,
+          "stage": "active",
+          "bytes": 118152,
+          "blocks": 54,
+          "released": 27
+        },
+        {
+          "mode": "active",
+          "cycle": 10,
+          "stage": "retired",
+          "bytes": 131472,
+          "blocks": 63,
+          "released": 27
+        },
+        {
+          "mode": "active",
+          "cycle": 10,
+          "stage": "idle",
+          "bytes": 131472,
+          "blocks": 63,
+          "released": 27
+        },
+        {
+          "mode": "active",
+          "cycle": 10,
+          "stage": "active",
+          "bytes": 131280,
+          "blocks": 60,
+          "released": 30
+        }
+      ]
+    },
+    {
+      "path": "/tmp/p2p-vpn-epoch-active-final.log",
+      "sha256": "f6f7d09b5db58b6d17f3a685020642876dca96be1183d6e5e098919308ad24ac",
+      "exit_code": 0,
+      "rows": [
+        {
+          "mode": "active",
+          "cycle": 1,
+          "stage": "retired",
+          "bytes": 13320,
+          "blocks": 9,
+          "released": 0
+        },
+        {
+          "mode": "active",
+          "cycle": 1,
+          "stage": "idle",
+          "bytes": 13320,
+          "blocks": 9,
+          "released": 0
+        },
+        {
+          "mode": "active",
+          "cycle": 1,
+          "stage": "active",
+          "bytes": 13128,
+          "blocks": 6,
+          "released": 3
+        },
+        {
+          "mode": "active",
+          "cycle": 2,
+          "stage": "retired",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 3
+        },
+        {
+          "mode": "active",
+          "cycle": 2,
+          "stage": "idle",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 3
+        },
+        {
+          "mode": "active",
+          "cycle": 2,
+          "stage": "active",
+          "bytes": 26256,
+          "blocks": 12,
+          "released": 6
+        },
+        {
+          "mode": "active",
+          "cycle": 3,
+          "stage": "retired",
+          "bytes": 39576,
+          "blocks": 21,
+          "released": 6
+        },
+        {
+          "mode": "active",
+          "cycle": 3,
+          "stage": "idle",
+          "bytes": 39576,
+          "blocks": 21,
+          "released": 6
+        },
+        {
+          "mode": "active",
+          "cycle": 3,
+          "stage": "active",
+          "bytes": 39384,
+          "blocks": 18,
+          "released": 9
+        },
+        {
+          "mode": "active",
+          "cycle": 4,
+          "stage": "retired",
+          "bytes": 52704,
+          "blocks": 27,
+          "released": 9
+        },
+        {
+          "mode": "active",
+          "cycle": 4,
+          "stage": "idle",
+          "bytes": 52704,
+          "blocks": 27,
+          "released": 9
+        },
+        {
+          "mode": "active",
+          "cycle": 4,
+          "stage": "active",
+          "bytes": 52512,
+          "blocks": 24,
+          "released": 12
+        },
+        {
+          "mode": "active",
+          "cycle": 5,
+          "stage": "retired",
+          "bytes": 65832,
+          "blocks": 33,
+          "released": 12
+        },
+        {
+          "mode": "active",
+          "cycle": 5,
+          "stage": "idle",
+          "bytes": 65832,
+          "blocks": 33,
+          "released": 12
+        },
+        {
+          "mode": "active",
+          "cycle": 5,
+          "stage": "active",
+          "bytes": 65640,
+          "blocks": 30,
+          "released": 15
+        },
+        {
+          "mode": "active",
+          "cycle": 6,
+          "stage": "retired",
+          "bytes": 78960,
+          "blocks": 39,
+          "released": 15
+        },
+        {
+          "mode": "active",
+          "cycle": 6,
+          "stage": "idle",
+          "bytes": 78960,
+          "blocks": 39,
+          "released": 15
+        },
+        {
+          "mode": "active",
+          "cycle": 6,
+          "stage": "active",
+          "bytes": 78768,
+          "blocks": 36,
+          "released": 18
+        },
+        {
+          "mode": "active",
+          "cycle": 7,
+          "stage": "retired",
+          "bytes": 92088,
+          "blocks": 45,
+          "released": 18
+        },
+        {
+          "mode": "active",
+          "cycle": 7,
+          "stage": "idle",
+          "bytes": 92088,
+          "blocks": 45,
+          "released": 18
+        },
+        {
+          "mode": "active",
+          "cycle": 7,
+          "stage": "active",
+          "bytes": 91896,
+          "blocks": 42,
+          "released": 21
+        },
+        {
+          "mode": "active",
+          "cycle": 8,
+          "stage": "retired",
+          "bytes": 105216,
+          "blocks": 51,
+          "released": 21
+        },
+        {
+          "mode": "active",
+          "cycle": 8,
+          "stage": "idle",
+          "bytes": 105216,
+          "blocks": 51,
+          "released": 21
+        },
+        {
+          "mode": "active",
+          "cycle": 8,
+          "stage": "active",
+          "bytes": 105024,
+          "blocks": 48,
+          "released": 24
+        },
+        {
+          "mode": "active",
+          "cycle": 9,
+          "stage": "retired",
+          "bytes": 118344,
+          "blocks": 57,
+          "released": 24
+        },
+        {
+          "mode": "active",
+          "cycle": 9,
+          "stage": "idle",
+          "bytes": 118344,
+          "blocks": 57,
+          "released": 24
+        },
+        {
+          "mode": "active",
+          "cycle": 9,
+          "stage": "active",
+          "bytes": 118152,
+          "blocks": 54,
+          "released": 27
+        },
+        {
+          "mode": "active",
+          "cycle": 10,
+          "stage": "retired",
+          "bytes": 131472,
+          "blocks": 63,
+          "released": 27
+        },
+        {
+          "mode": "active",
+          "cycle": 10,
+          "stage": "idle",
+          "bytes": 131472,
+          "blocks": 63,
+          "released": 27
+        },
+        {
+          "mode": "active",
+          "cycle": 10,
+          "stage": "active",
+          "bytes": 131280,
+          "blocks": 60,
+          "released": 30
+        }
+      ]
+    },
+    {
+      "path": "/tmp/p2p-vpn-epoch-active-32-1.log",
+      "sha256": "6137a3eda6746cc2e9bf0289b4d6e6d124287787e4f78470bc5928c6f23ada19",
+      "exit_code": 0,
+      "rows": [
+        {
+          "mode": "active",
+          "cycle": 1,
+          "stage": "retired",
+          "bytes": 13320,
+          "blocks": 9,
+          "released": 0
+        },
+        {
+          "mode": "active",
+          "cycle": 1,
+          "stage": "idle",
+          "bytes": 13320,
+          "blocks": 9,
+          "released": 0
+        },
+        {
+          "mode": "active",
+          "cycle": 1,
+          "stage": "active",
+          "bytes": 13128,
+          "blocks": 6,
+          "released": 3
+        },
+        {
+          "mode": "active",
+          "cycle": 2,
+          "stage": "retired",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 3
+        },
+        {
+          "mode": "active",
+          "cycle": 2,
+          "stage": "idle",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 3
+        },
+        {
+          "mode": "active",
+          "cycle": 2,
+          "stage": "active",
+          "bytes": 26256,
+          "blocks": 12,
+          "released": 6
+        },
+        {
+          "mode": "active",
+          "cycle": 3,
+          "stage": "retired",
+          "bytes": 39576,
+          "blocks": 21,
+          "released": 6
+        },
+        {
+          "mode": "active",
+          "cycle": 3,
+          "stage": "idle",
+          "bytes": 39576,
+          "blocks": 21,
+          "released": 6
+        },
+        {
+          "mode": "active",
+          "cycle": 3,
+          "stage": "active",
+          "bytes": 39384,
+          "blocks": 18,
+          "released": 9
+        },
+        {
+          "mode": "active",
+          "cycle": 4,
+          "stage": "retired",
+          "bytes": 52704,
+          "blocks": 27,
+          "released": 9
+        },
+        {
+          "mode": "active",
+          "cycle": 4,
+          "stage": "idle",
+          "bytes": 52704,
+          "blocks": 27,
+          "released": 9
+        },
+        {
+          "mode": "active",
+          "cycle": 4,
+          "stage": "active",
+          "bytes": 52512,
+          "blocks": 24,
+          "released": 12
+        },
+        {
+          "mode": "active",
+          "cycle": 5,
+          "stage": "retired",
+          "bytes": 65832,
+          "blocks": 33,
+          "released": 12
+        },
+        {
+          "mode": "active",
+          "cycle": 5,
+          "stage": "idle",
+          "bytes": 65832,
+          "blocks": 33,
+          "released": 12
+        },
+        {
+          "mode": "active",
+          "cycle": 5,
+          "stage": "active",
+          "bytes": 65640,
+          "blocks": 30,
+          "released": 15
+        },
+        {
+          "mode": "active",
+          "cycle": 6,
+          "stage": "retired",
+          "bytes": 78960,
+          "blocks": 39,
+          "released": 15
+        },
+        {
+          "mode": "active",
+          "cycle": 6,
+          "stage": "idle",
+          "bytes": 78960,
+          "blocks": 39,
+          "released": 15
+        },
+        {
+          "mode": "active",
+          "cycle": 6,
+          "stage": "active",
+          "bytes": 78768,
+          "blocks": 36,
+          "released": 18
+        },
+        {
+          "mode": "active",
+          "cycle": 7,
+          "stage": "retired",
+          "bytes": 92088,
+          "blocks": 45,
+          "released": 18
+        },
+        {
+          "mode": "active",
+          "cycle": 7,
+          "stage": "idle",
+          "bytes": 92088,
+          "blocks": 45,
+          "released": 18
+        },
+        {
+          "mode": "active",
+          "cycle": 7,
+          "stage": "active",
+          "bytes": 91896,
+          "blocks": 42,
+          "released": 21
+        },
+        {
+          "mode": "active",
+          "cycle": 8,
+          "stage": "retired",
+          "bytes": 105216,
+          "blocks": 51,
+          "released": 21
+        },
+        {
+          "mode": "active",
+          "cycle": 8,
+          "stage": "idle",
+          "bytes": 105216,
+          "blocks": 51,
+          "released": 21
+        },
+        {
+          "mode": "active",
+          "cycle": 8,
+          "stage": "active",
+          "bytes": 105024,
+          "blocks": 48,
+          "released": 24
+        },
+        {
+          "mode": "active",
+          "cycle": 9,
+          "stage": "retired",
+          "bytes": 118344,
+          "blocks": 57,
+          "released": 24
+        },
+        {
+          "mode": "active",
+          "cycle": 9,
+          "stage": "idle",
+          "bytes": 118344,
+          "blocks": 57,
+          "released": 24
+        },
+        {
+          "mode": "active",
+          "cycle": 9,
+          "stage": "active",
+          "bytes": 118152,
+          "blocks": 54,
+          "released": 27
+        },
+        {
+          "mode": "active",
+          "cycle": 10,
+          "stage": "retired",
+          "bytes": 131472,
+          "blocks": 63,
+          "released": 27
+        },
+        {
+          "mode": "active",
+          "cycle": 10,
+          "stage": "idle",
+          "bytes": 131472,
+          "blocks": 63,
+          "released": 27
+        },
+        {
+          "mode": "active",
+          "cycle": 10,
+          "stage": "active",
+          "bytes": 131280,
+          "blocks": 60,
+          "released": 30
+        },
+        {
+          "mode": "active",
+          "cycle": 11,
+          "stage": "retired",
+          "bytes": 144600,
+          "blocks": 69,
+          "released": 30
+        },
+        {
+          "mode": "active",
+          "cycle": 11,
+          "stage": "idle",
+          "bytes": 144600,
+          "blocks": 69,
+          "released": 30
+        },
+        {
+          "mode": "active",
+          "cycle": 11,
+          "stage": "active",
+          "bytes": 6216,
+          "blocks": 3,
+          "released": 33
+        },
+        {
+          "mode": "active",
+          "cycle": 12,
+          "stage": "retired",
+          "bytes": 19536,
+          "blocks": 12,
+          "released": 33
+        },
+        {
+          "mode": "active",
+          "cycle": 12,
+          "stage": "idle",
+          "bytes": 19536,
+          "blocks": 12,
+          "released": 33
+        },
+        {
+          "mode": "active",
+          "cycle": 12,
+          "stage": "active",
+          "bytes": 19344,
+          "blocks": 9,
+          "released": 36
+        },
+        {
+          "mode": "active",
+          "cycle": 13,
+          "stage": "retired",
+          "bytes": 32664,
+          "blocks": 18,
+          "released": 36
+        },
+        {
+          "mode": "active",
+          "cycle": 13,
+          "stage": "idle",
+          "bytes": 32664,
+          "blocks": 18,
+          "released": 36
+        },
+        {
+          "mode": "active",
+          "cycle": 13,
+          "stage": "active",
+          "bytes": 32472,
+          "blocks": 15,
+          "released": 39
+        },
+        {
+          "mode": "active",
+          "cycle": 14,
+          "stage": "retired",
+          "bytes": 45792,
+          "blocks": 24,
+          "released": 39
+        },
+        {
+          "mode": "active",
+          "cycle": 14,
+          "stage": "idle",
+          "bytes": 45792,
+          "blocks": 24,
+          "released": 39
+        },
+        {
+          "mode": "active",
+          "cycle": 14,
+          "stage": "active",
+          "bytes": 45600,
+          "blocks": 21,
+          "released": 42
+        },
+        {
+          "mode": "active",
+          "cycle": 15,
+          "stage": "retired",
+          "bytes": 58920,
+          "blocks": 30,
+          "released": 42
+        },
+        {
+          "mode": "active",
+          "cycle": 15,
+          "stage": "idle",
+          "bytes": 58920,
+          "blocks": 30,
+          "released": 42
+        },
+        {
+          "mode": "active",
+          "cycle": 15,
+          "stage": "active",
+          "bytes": 58728,
+          "blocks": 27,
+          "released": 45
+        },
+        {
+          "mode": "active",
+          "cycle": 16,
+          "stage": "retired",
+          "bytes": 72048,
+          "blocks": 36,
+          "released": 45
+        },
+        {
+          "mode": "active",
+          "cycle": 16,
+          "stage": "idle",
+          "bytes": 72048,
+          "blocks": 36,
+          "released": 45
+        },
+        {
+          "mode": "active",
+          "cycle": 16,
+          "stage": "active",
+          "bytes": 71856,
+          "blocks": 33,
+          "released": 48
+        },
+        {
+          "mode": "active",
+          "cycle": 17,
+          "stage": "retired",
+          "bytes": 85176,
+          "blocks": 42,
+          "released": 48
+        },
+        {
+          "mode": "active",
+          "cycle": 17,
+          "stage": "idle",
+          "bytes": 85176,
+          "blocks": 42,
+          "released": 48
+        },
+        {
+          "mode": "active",
+          "cycle": 17,
+          "stage": "active",
+          "bytes": 84984,
+          "blocks": 39,
+          "released": 51
+        },
+        {
+          "mode": "active",
+          "cycle": 18,
+          "stage": "retired",
+          "bytes": 98304,
+          "blocks": 48,
+          "released": 51
+        },
+        {
+          "mode": "active",
+          "cycle": 18,
+          "stage": "idle",
+          "bytes": 98304,
+          "blocks": 48,
+          "released": 51
+        },
+        {
+          "mode": "active",
+          "cycle": 18,
+          "stage": "active",
+          "bytes": 98112,
+          "blocks": 45,
+          "released": 54
+        },
+        {
+          "mode": "active",
+          "cycle": 19,
+          "stage": "retired",
+          "bytes": 111432,
+          "blocks": 54,
+          "released": 54
+        },
+        {
+          "mode": "active",
+          "cycle": 19,
+          "stage": "idle",
+          "bytes": 111432,
+          "blocks": 54,
+          "released": 54
+        },
+        {
+          "mode": "active",
+          "cycle": 19,
+          "stage": "active",
+          "bytes": 111240,
+          "blocks": 51,
+          "released": 57
+        },
+        {
+          "mode": "active",
+          "cycle": 20,
+          "stage": "retired",
+          "bytes": 124560,
+          "blocks": 60,
+          "released": 57
+        },
+        {
+          "mode": "active",
+          "cycle": 20,
+          "stage": "idle",
+          "bytes": 124560,
+          "blocks": 60,
+          "released": 57
+        },
+        {
+          "mode": "active",
+          "cycle": 20,
+          "stage": "active",
+          "bytes": 124368,
+          "blocks": 57,
+          "released": 60
+        },
+        {
+          "mode": "active",
+          "cycle": 21,
+          "stage": "retired",
+          "bytes": 137688,
+          "blocks": 66,
+          "released": 60
+        },
+        {
+          "mode": "active",
+          "cycle": 21,
+          "stage": "idle",
+          "bytes": 137688,
+          "blocks": 66,
+          "released": 60
+        },
+        {
+          "mode": "active",
+          "cycle": 21,
+          "stage": "active",
+          "bytes": 137496,
+          "blocks": 63,
+          "released": 63
+        },
+        {
+          "mode": "active",
+          "cycle": 22,
+          "stage": "retired",
+          "bytes": 150816,
+          "blocks": 72,
+          "released": 63
+        },
+        {
+          "mode": "active",
+          "cycle": 22,
+          "stage": "idle",
+          "bytes": 150816,
+          "blocks": 72,
+          "released": 63
+        },
+        {
+          "mode": "active",
+          "cycle": 22,
+          "stage": "active",
+          "bytes": 12896,
+          "blocks": 6,
+          "released": 66
+        },
+        {
+          "mode": "active",
+          "cycle": 23,
+          "stage": "retired",
+          "bytes": 26216,
+          "blocks": 15,
+          "released": 66
+        },
+        {
+          "mode": "active",
+          "cycle": 23,
+          "stage": "idle",
+          "bytes": 26216,
+          "blocks": 15,
+          "released": 66
+        },
+        {
+          "mode": "active",
+          "cycle": 23,
+          "stage": "active",
+          "bytes": 26024,
+          "blocks": 12,
+          "released": 69
+        },
+        {
+          "mode": "active",
+          "cycle": 24,
+          "stage": "retired",
+          "bytes": 39344,
+          "blocks": 21,
+          "released": 69
+        },
+        {
+          "mode": "active",
+          "cycle": 24,
+          "stage": "idle",
+          "bytes": 39344,
+          "blocks": 21,
+          "released": 69
+        },
+        {
+          "mode": "active",
+          "cycle": 24,
+          "stage": "active",
+          "bytes": 39152,
+          "blocks": 18,
+          "released": 72
+        },
+        {
+          "mode": "active",
+          "cycle": 25,
+          "stage": "retired",
+          "bytes": 52472,
+          "blocks": 27,
+          "released": 72
+        },
+        {
+          "mode": "active",
+          "cycle": 25,
+          "stage": "idle",
+          "bytes": 52472,
+          "blocks": 27,
+          "released": 72
+        },
+        {
+          "mode": "active",
+          "cycle": 25,
+          "stage": "active",
+          "bytes": 52280,
+          "blocks": 24,
+          "released": 75
+        },
+        {
+          "mode": "active",
+          "cycle": 26,
+          "stage": "retired",
+          "bytes": 65600,
+          "blocks": 33,
+          "released": 75
+        },
+        {
+          "mode": "active",
+          "cycle": 26,
+          "stage": "idle",
+          "bytes": 65600,
+          "blocks": 33,
+          "released": 75
+        },
+        {
+          "mode": "active",
+          "cycle": 26,
+          "stage": "active",
+          "bytes": 65408,
+          "blocks": 30,
+          "released": 78
+        },
+        {
+          "mode": "active",
+          "cycle": 27,
+          "stage": "retired",
+          "bytes": 78728,
+          "blocks": 39,
+          "released": 78
+        },
+        {
+          "mode": "active",
+          "cycle": 27,
+          "stage": "idle",
+          "bytes": 78728,
+          "blocks": 39,
+          "released": 78
+        },
+        {
+          "mode": "active",
+          "cycle": 27,
+          "stage": "active",
+          "bytes": 78536,
+          "blocks": 36,
+          "released": 81
+        },
+        {
+          "mode": "active",
+          "cycle": 28,
+          "stage": "retired",
+          "bytes": 91856,
+          "blocks": 45,
+          "released": 81
+        },
+        {
+          "mode": "active",
+          "cycle": 28,
+          "stage": "idle",
+          "bytes": 91856,
+          "blocks": 45,
+          "released": 81
+        },
+        {
+          "mode": "active",
+          "cycle": 28,
+          "stage": "active",
+          "bytes": 91664,
+          "blocks": 42,
+          "released": 84
+        },
+        {
+          "mode": "active",
+          "cycle": 29,
+          "stage": "retired",
+          "bytes": 104984,
+          "blocks": 51,
+          "released": 84
+        },
+        {
+          "mode": "active",
+          "cycle": 29,
+          "stage": "idle",
+          "bytes": 104984,
+          "blocks": 51,
+          "released": 84
+        },
+        {
+          "mode": "active",
+          "cycle": 29,
+          "stage": "active",
+          "bytes": 104792,
+          "blocks": 48,
+          "released": 87
+        },
+        {
+          "mode": "active",
+          "cycle": 30,
+          "stage": "retired",
+          "bytes": 118112,
+          "blocks": 57,
+          "released": 87
+        },
+        {
+          "mode": "active",
+          "cycle": 30,
+          "stage": "idle",
+          "bytes": 118112,
+          "blocks": 57,
+          "released": 87
+        },
+        {
+          "mode": "active",
+          "cycle": 30,
+          "stage": "active",
+          "bytes": 117920,
+          "blocks": 54,
+          "released": 90
+        },
+        {
+          "mode": "active",
+          "cycle": 31,
+          "stage": "retired",
+          "bytes": 131240,
+          "blocks": 63,
+          "released": 90
+        },
+        {
+          "mode": "active",
+          "cycle": 31,
+          "stage": "idle",
+          "bytes": 131240,
+          "blocks": 63,
+          "released": 90
+        },
+        {
+          "mode": "active",
+          "cycle": 31,
+          "stage": "active",
+          "bytes": 131048,
+          "blocks": 60,
+          "released": 93
+        },
+        {
+          "mode": "active",
+          "cycle": 32,
+          "stage": "retired",
+          "bytes": 144368,
+          "blocks": 69,
+          "released": 93
+        },
+        {
+          "mode": "active",
+          "cycle": 32,
+          "stage": "idle",
+          "bytes": 144368,
+          "blocks": 69,
+          "released": 93
+        },
+        {
+          "mode": "active",
+          "cycle": 32,
+          "stage": "active",
+          "bytes": 6216,
+          "blocks": 3,
+          "released": 96
+        }
+      ]
+    },
+    {
+      "path": "/tmp/p2p-vpn-epoch-active-32-2.log",
+      "sha256": "6137a3eda6746cc2e9bf0289b4d6e6d124287787e4f78470bc5928c6f23ada19",
+      "exit_code": 0,
+      "rows": [
+        {
+          "mode": "active",
+          "cycle": 1,
+          "stage": "retired",
+          "bytes": 13320,
+          "blocks": 9,
+          "released": 0
+        },
+        {
+          "mode": "active",
+          "cycle": 1,
+          "stage": "idle",
+          "bytes": 13320,
+          "blocks": 9,
+          "released": 0
+        },
+        {
+          "mode": "active",
+          "cycle": 1,
+          "stage": "active",
+          "bytes": 13128,
+          "blocks": 6,
+          "released": 3
+        },
+        {
+          "mode": "active",
+          "cycle": 2,
+          "stage": "retired",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 3
+        },
+        {
+          "mode": "active",
+          "cycle": 2,
+          "stage": "idle",
+          "bytes": 26448,
+          "blocks": 15,
+          "released": 3
+        },
+        {
+          "mode": "active",
+          "cycle": 2,
+          "stage": "active",
+          "bytes": 26256,
+          "blocks": 12,
+          "released": 6
+        },
+        {
+          "mode": "active",
+          "cycle": 3,
+          "stage": "retired",
+          "bytes": 39576,
+          "blocks": 21,
+          "released": 6
+        },
+        {
+          "mode": "active",
+          "cycle": 3,
+          "stage": "idle",
+          "bytes": 39576,
+          "blocks": 21,
+          "released": 6
+        },
+        {
+          "mode": "active",
+          "cycle": 3,
+          "stage": "active",
+          "bytes": 39384,
+          "blocks": 18,
+          "released": 9
+        },
+        {
+          "mode": "active",
+          "cycle": 4,
+          "stage": "retired",
+          "bytes": 52704,
+          "blocks": 27,
+          "released": 9
+        },
+        {
+          "mode": "active",
+          "cycle": 4,
+          "stage": "idle",
+          "bytes": 52704,
+          "blocks": 27,
+          "released": 9
+        },
+        {
+          "mode": "active",
+          "cycle": 4,
+          "stage": "active",
+          "bytes": 52512,
+          "blocks": 24,
+          "released": 12
+        },
+        {
+          "mode": "active",
+          "cycle": 5,
+          "stage": "retired",
+          "bytes": 65832,
+          "blocks": 33,
+          "released": 12
+        },
+        {
+          "mode": "active",
+          "cycle": 5,
+          "stage": "idle",
+          "bytes": 65832,
+          "blocks": 33,
+          "released": 12
+        },
+        {
+          "mode": "active",
+          "cycle": 5,
+          "stage": "active",
+          "bytes": 65640,
+          "blocks": 30,
+          "released": 15
+        },
+        {
+          "mode": "active",
+          "cycle": 6,
+          "stage": "retired",
+          "bytes": 78960,
+          "blocks": 39,
+          "released": 15
+        },
+        {
+          "mode": "active",
+          "cycle": 6,
+          "stage": "idle",
+          "bytes": 78960,
+          "blocks": 39,
+          "released": 15
+        },
+        {
+          "mode": "active",
+          "cycle": 6,
+          "stage": "active",
+          "bytes": 78768,
+          "blocks": 36,
+          "released": 18
+        },
+        {
+          "mode": "active",
+          "cycle": 7,
+          "stage": "retired",
+          "bytes": 92088,
+          "blocks": 45,
+          "released": 18
+        },
+        {
+          "mode": "active",
+          "cycle": 7,
+          "stage": "idle",
+          "bytes": 92088,
+          "blocks": 45,
+          "released": 18
+        },
+        {
+          "mode": "active",
+          "cycle": 7,
+          "stage": "active",
+          "bytes": 91896,
+          "blocks": 42,
+          "released": 21
+        },
+        {
+          "mode": "active",
+          "cycle": 8,
+          "stage": "retired",
+          "bytes": 105216,
+          "blocks": 51,
+          "released": 21
+        },
+        {
+          "mode": "active",
+          "cycle": 8,
+          "stage": "idle",
+          "bytes": 105216,
+          "blocks": 51,
+          "released": 21
+        },
+        {
+          "mode": "active",
+          "cycle": 8,
+          "stage": "active",
+          "bytes": 105024,
+          "blocks": 48,
+          "released": 24
+        },
+        {
+          "mode": "active",
+          "cycle": 9,
+          "stage": "retired",
+          "bytes": 118344,
+          "blocks": 57,
+          "released": 24
+        },
+        {
+          "mode": "active",
+          "cycle": 9,
+          "stage": "idle",
+          "bytes": 118344,
+          "blocks": 57,
+          "released": 24
+        },
+        {
+          "mode": "active",
+          "cycle": 9,
+          "stage": "active",
+          "bytes": 118152,
+          "blocks": 54,
+          "released": 27
+        },
+        {
+          "mode": "active",
+          "cycle": 10,
+          "stage": "retired",
+          "bytes": 131472,
+          "blocks": 63,
+          "released": 27
+        },
+        {
+          "mode": "active",
+          "cycle": 10,
+          "stage": "idle",
+          "bytes": 131472,
+          "blocks": 63,
+          "released": 27
+        },
+        {
+          "mode": "active",
+          "cycle": 10,
+          "stage": "active",
+          "bytes": 131280,
+          "blocks": 60,
+          "released": 30
+        },
+        {
+          "mode": "active",
+          "cycle": 11,
+          "stage": "retired",
+          "bytes": 144600,
+          "blocks": 69,
+          "released": 30
+        },
+        {
+          "mode": "active",
+          "cycle": 11,
+          "stage": "idle",
+          "bytes": 144600,
+          "blocks": 69,
+          "released": 30
+        },
+        {
+          "mode": "active",
+          "cycle": 11,
+          "stage": "active",
+          "bytes": 6216,
+          "blocks": 3,
+          "released": 33
+        },
+        {
+          "mode": "active",
+          "cycle": 12,
+          "stage": "retired",
+          "bytes": 19536,
+          "blocks": 12,
+          "released": 33
+        },
+        {
+          "mode": "active",
+          "cycle": 12,
+          "stage": "idle",
+          "bytes": 19536,
+          "blocks": 12,
+          "released": 33
+        },
+        {
+          "mode": "active",
+          "cycle": 12,
+          "stage": "active",
+          "bytes": 19344,
+          "blocks": 9,
+          "released": 36
+        },
+        {
+          "mode": "active",
+          "cycle": 13,
+          "stage": "retired",
+          "bytes": 32664,
+          "blocks": 18,
+          "released": 36
+        },
+        {
+          "mode": "active",
+          "cycle": 13,
+          "stage": "idle",
+          "bytes": 32664,
+          "blocks": 18,
+          "released": 36
+        },
+        {
+          "mode": "active",
+          "cycle": 13,
+          "stage": "active",
+          "bytes": 32472,
+          "blocks": 15,
+          "released": 39
+        },
+        {
+          "mode": "active",
+          "cycle": 14,
+          "stage": "retired",
+          "bytes": 45792,
+          "blocks": 24,
+          "released": 39
+        },
+        {
+          "mode": "active",
+          "cycle": 14,
+          "stage": "idle",
+          "bytes": 45792,
+          "blocks": 24,
+          "released": 39
+        },
+        {
+          "mode": "active",
+          "cycle": 14,
+          "stage": "active",
+          "bytes": 45600,
+          "blocks": 21,
+          "released": 42
+        },
+        {
+          "mode": "active",
+          "cycle": 15,
+          "stage": "retired",
+          "bytes": 58920,
+          "blocks": 30,
+          "released": 42
+        },
+        {
+          "mode": "active",
+          "cycle": 15,
+          "stage": "idle",
+          "bytes": 58920,
+          "blocks": 30,
+          "released": 42
+        },
+        {
+          "mode": "active",
+          "cycle": 15,
+          "stage": "active",
+          "bytes": 58728,
+          "blocks": 27,
+          "released": 45
+        },
+        {
+          "mode": "active",
+          "cycle": 16,
+          "stage": "retired",
+          "bytes": 72048,
+          "blocks": 36,
+          "released": 45
+        },
+        {
+          "mode": "active",
+          "cycle": 16,
+          "stage": "idle",
+          "bytes": 72048,
+          "blocks": 36,
+          "released": 45
+        },
+        {
+          "mode": "active",
+          "cycle": 16,
+          "stage": "active",
+          "bytes": 71856,
+          "blocks": 33,
+          "released": 48
+        },
+        {
+          "mode": "active",
+          "cycle": 17,
+          "stage": "retired",
+          "bytes": 85176,
+          "blocks": 42,
+          "released": 48
+        },
+        {
+          "mode": "active",
+          "cycle": 17,
+          "stage": "idle",
+          "bytes": 85176,
+          "blocks": 42,
+          "released": 48
+        },
+        {
+          "mode": "active",
+          "cycle": 17,
+          "stage": "active",
+          "bytes": 84984,
+          "blocks": 39,
+          "released": 51
+        },
+        {
+          "mode": "active",
+          "cycle": 18,
+          "stage": "retired",
+          "bytes": 98304,
+          "blocks": 48,
+          "released": 51
+        },
+        {
+          "mode": "active",
+          "cycle": 18,
+          "stage": "idle",
+          "bytes": 98304,
+          "blocks": 48,
+          "released": 51
+        },
+        {
+          "mode": "active",
+          "cycle": 18,
+          "stage": "active",
+          "bytes": 98112,
+          "blocks": 45,
+          "released": 54
+        },
+        {
+          "mode": "active",
+          "cycle": 19,
+          "stage": "retired",
+          "bytes": 111432,
+          "blocks": 54,
+          "released": 54
+        },
+        {
+          "mode": "active",
+          "cycle": 19,
+          "stage": "idle",
+          "bytes": 111432,
+          "blocks": 54,
+          "released": 54
+        },
+        {
+          "mode": "active",
+          "cycle": 19,
+          "stage": "active",
+          "bytes": 111240,
+          "blocks": 51,
+          "released": 57
+        },
+        {
+          "mode": "active",
+          "cycle": 20,
+          "stage": "retired",
+          "bytes": 124560,
+          "blocks": 60,
+          "released": 57
+        },
+        {
+          "mode": "active",
+          "cycle": 20,
+          "stage": "idle",
+          "bytes": 124560,
+          "blocks": 60,
+          "released": 57
+        },
+        {
+          "mode": "active",
+          "cycle": 20,
+          "stage": "active",
+          "bytes": 124368,
+          "blocks": 57,
+          "released": 60
+        },
+        {
+          "mode": "active",
+          "cycle": 21,
+          "stage": "retired",
+          "bytes": 137688,
+          "blocks": 66,
+          "released": 60
+        },
+        {
+          "mode": "active",
+          "cycle": 21,
+          "stage": "idle",
+          "bytes": 137688,
+          "blocks": 66,
+          "released": 60
+        },
+        {
+          "mode": "active",
+          "cycle": 21,
+          "stage": "active",
+          "bytes": 137496,
+          "blocks": 63,
+          "released": 63
+        },
+        {
+          "mode": "active",
+          "cycle": 22,
+          "stage": "retired",
+          "bytes": 150816,
+          "blocks": 72,
+          "released": 63
+        },
+        {
+          "mode": "active",
+          "cycle": 22,
+          "stage": "idle",
+          "bytes": 150816,
+          "blocks": 72,
+          "released": 63
+        },
+        {
+          "mode": "active",
+          "cycle": 22,
+          "stage": "active",
+          "bytes": 12896,
+          "blocks": 6,
+          "released": 66
+        },
+        {
+          "mode": "active",
+          "cycle": 23,
+          "stage": "retired",
+          "bytes": 26216,
+          "blocks": 15,
+          "released": 66
+        },
+        {
+          "mode": "active",
+          "cycle": 23,
+          "stage": "idle",
+          "bytes": 26216,
+          "blocks": 15,
+          "released": 66
+        },
+        {
+          "mode": "active",
+          "cycle": 23,
+          "stage": "active",
+          "bytes": 26024,
+          "blocks": 12,
+          "released": 69
+        },
+        {
+          "mode": "active",
+          "cycle": 24,
+          "stage": "retired",
+          "bytes": 39344,
+          "blocks": 21,
+          "released": 69
+        },
+        {
+          "mode": "active",
+          "cycle": 24,
+          "stage": "idle",
+          "bytes": 39344,
+          "blocks": 21,
+          "released": 69
+        },
+        {
+          "mode": "active",
+          "cycle": 24,
+          "stage": "active",
+          "bytes": 39152,
+          "blocks": 18,
+          "released": 72
+        },
+        {
+          "mode": "active",
+          "cycle": 25,
+          "stage": "retired",
+          "bytes": 52472,
+          "blocks": 27,
+          "released": 72
+        },
+        {
+          "mode": "active",
+          "cycle": 25,
+          "stage": "idle",
+          "bytes": 52472,
+          "blocks": 27,
+          "released": 72
+        },
+        {
+          "mode": "active",
+          "cycle": 25,
+          "stage": "active",
+          "bytes": 52280,
+          "blocks": 24,
+          "released": 75
+        },
+        {
+          "mode": "active",
+          "cycle": 26,
+          "stage": "retired",
+          "bytes": 65600,
+          "blocks": 33,
+          "released": 75
+        },
+        {
+          "mode": "active",
+          "cycle": 26,
+          "stage": "idle",
+          "bytes": 65600,
+          "blocks": 33,
+          "released": 75
+        },
+        {
+          "mode": "active",
+          "cycle": 26,
+          "stage": "active",
+          "bytes": 65408,
+          "blocks": 30,
+          "released": 78
+        },
+        {
+          "mode": "active",
+          "cycle": 27,
+          "stage": "retired",
+          "bytes": 78728,
+          "blocks": 39,
+          "released": 78
+        },
+        {
+          "mode": "active",
+          "cycle": 27,
+          "stage": "idle",
+          "bytes": 78728,
+          "blocks": 39,
+          "released": 78
+        },
+        {
+          "mode": "active",
+          "cycle": 27,
+          "stage": "active",
+          "bytes": 78536,
+          "blocks": 36,
+          "released": 81
+        },
+        {
+          "mode": "active",
+          "cycle": 28,
+          "stage": "retired",
+          "bytes": 91856,
+          "blocks": 45,
+          "released": 81
+        },
+        {
+          "mode": "active",
+          "cycle": 28,
+          "stage": "idle",
+          "bytes": 91856,
+          "blocks": 45,
+          "released": 81
+        },
+        {
+          "mode": "active",
+          "cycle": 28,
+          "stage": "active",
+          "bytes": 91664,
+          "blocks": 42,
+          "released": 84
+        },
+        {
+          "mode": "active",
+          "cycle": 29,
+          "stage": "retired",
+          "bytes": 104984,
+          "blocks": 51,
+          "released": 84
+        },
+        {
+          "mode": "active",
+          "cycle": 29,
+          "stage": "idle",
+          "bytes": 104984,
+          "blocks": 51,
+          "released": 84
+        },
+        {
+          "mode": "active",
+          "cycle": 29,
+          "stage": "active",
+          "bytes": 104792,
+          "blocks": 48,
+          "released": 87
+        },
+        {
+          "mode": "active",
+          "cycle": 30,
+          "stage": "retired",
+          "bytes": 118112,
+          "blocks": 57,
+          "released": 87
+        },
+        {
+          "mode": "active",
+          "cycle": 30,
+          "stage": "idle",
+          "bytes": 118112,
+          "blocks": 57,
+          "released": 87
+        },
+        {
+          "mode": "active",
+          "cycle": 30,
+          "stage": "active",
+          "bytes": 117920,
+          "blocks": 54,
+          "released": 90
+        },
+        {
+          "mode": "active",
+          "cycle": 31,
+          "stage": "retired",
+          "bytes": 131240,
+          "blocks": 63,
+          "released": 90
+        },
+        {
+          "mode": "active",
+          "cycle": 31,
+          "stage": "idle",
+          "bytes": 131240,
+          "blocks": 63,
+          "released": 90
+        },
+        {
+          "mode": "active",
+          "cycle": 31,
+          "stage": "active",
+          "bytes": 131048,
+          "blocks": 60,
+          "released": 93
+        },
+        {
+          "mode": "active",
+          "cycle": 32,
+          "stage": "retired",
+          "bytes": 144368,
+          "blocks": 69,
+          "released": 93
+        },
+        {
+          "mode": "active",
+          "cycle": 32,
+          "stage": "idle",
+          "bytes": 144368,
+          "blocks": 69,
+          "released": 93
+        },
+        {
+          "mode": "active",
+          "cycle": 32,
+          "stage": "active",
+          "bytes": 6216,
+          "blocks": 3,
+          "released": 96
+        }
+      ]
+    }
+  ],
+  "validation": {
+    "repeats_identical": true,
+    "final_source_ten_cycle_results_identical": true,
+    "format": "pass",
+    "clippy_required_groups": "pass"
+  },
+  "limitation": "Standalone dependency control with fixed handles and payloads, not proof that every full-daemon retention increment is Crossbeam bookkeeping."
+}
