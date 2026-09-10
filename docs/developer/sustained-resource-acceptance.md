@@ -288,15 +288,20 @@ direct bytes and 2088-byte reconnect bucket remain disclosed limitations; they
 are not automatically extra work merely because their stack names are unknown.
 Pressure's different residual still lacks sufficient comparison to close it.
 
-## Storage Verification Limit
+## Storage Verification And Cleanup
 
 The current unprivileged scan reports 9,728,584 KiB, but cannot read several
 root-owned evidence directories. This is a partial total, not proof that all
 `/tmp/p2p-vpn-*` remains below 10 GiB. `sudo -n` requires a password.
 
-Do not build, provision or start another large capture until the complete total
-is verified. Continue source/documentation audit without deleting evidence or
-changing directory permissions. No new capture or build ran in this pass.
+The user subsequently authorized elevated measurement and cache cleanup. The
+complete pre-cleanup total was 10,655,004 KiB, above the cap. Only `.rlib` and
+`.rmeta` intermediates from the two older `p2p-vpn-resource-*-target/release/deps`
+caches were removed after verifying no build used them.
+
+The complete post-cleanup total is 9,598,300 KiB. Both historical release
+executables retain their original hashes; current test binaries, raw captures
+and user files are preserved. The storage blocker is resolved without a rebuild.
 
 ## Next Audit Actions
 

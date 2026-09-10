@@ -1,0 +1,405 @@
+{
+  "schema_version": 1,
+  "complete": false,
+  "planned_captures": 2,
+  "runs": [
+    {
+      "dir": "/tmp/p2p-vpn-tun_namespace_measures_sustained_traffic_resources-1.5913788eae4e077f",
+      "seconds": 416.15,
+      "outcome": {
+        "complete": true,
+        "delivery_passed": true,
+        "drain_seconds": 60,
+        "final_pings": [
+          {
+            "output": "status: exit status: 0\nstdout:\nPING 100.64.62.0 (100.64.62.0) from 100.64.120.146 hse2ea: 56(84) bytes of data.\n64 bytes from 100.64.62.0: icmp_seq=1 ttl=64 time=2.08 ms\n64 bytes from 100.64.62.0: icmp_seq=2 ttl=64 time=2.72 ms\n64 bytes from 100.64.62.0: icmp_seq=3 ttl=64 time=2.51 ms\n64 bytes from 100.64.62.0: icmp_seq=4 ttl=64 time=2.88 ms\n64 bytes from 100.64.62.0: icmp_seq=5 ttl=64 time=2.23 ms\n\n--- 100.64.62.0 ping statistics ---\n5 packets transmitted, 5 received, 0% packet loss, time 4005ms\nrtt min/avg/max/mdev = 2.077/2.484/2.878/0.296 ms\n\nstderr:\n",
+            "role": "a",
+            "success": true
+          },
+          {
+            "output": "status: exit status: 0\nstdout:\nPING 10.41.0.9 (10.41.0.9) from 100.64.62.0 hse2eb: 56(84) bytes of data.\n64 bytes from 10.41.0.9: icmp_seq=1 ttl=64 time=1.59 ms\n64 bytes from 10.41.0.9: icmp_seq=2 ttl=64 time=2.87 ms\n64 bytes from 10.41.0.9: icmp_seq=3 ttl=64 time=2.48 ms\n64 bytes from 10.41.0.9: icmp_seq=4 ttl=64 time=2.38 ms\n64 bytes from 10.41.0.9: icmp_seq=5 ttl=64 time=2.49 ms\n\n--- 10.41.0.9 ping statistics ---\n5 packets transmitted, 5 received, 0% packet loss, time 4007ms\nrtt min/avg/max/mdev = 1.593/2.362/2.871/0.419 ms\n\nstderr:\n",
+            "role": "b",
+            "success": true
+          }
+        ],
+        "fixed_transport": true,
+        "generator": {
+          "duplicate_replies": 0,
+          "elapsed_seconds": 300.001071969,
+          "invalid_replies": 0,
+          "maximum_lateness_seconds": 0.003337331,
+          "received": 15000,
+          "sent": 15000,
+          "skipped_slots": 0
+        },
+        "generator_exit_wait_seconds": 0.000026109,
+        "payload_bytes": 512,
+        "process_after": [
+          {
+            "capture_seconds": 0.003588492,
+            "cpu_ticks": 2491,
+            "elapsed_seconds": 392.92705403,
+            "namespace_tcp_states": {
+              "01": 1,
+              "0A": 1
+            },
+            "pid": 18,
+            "process_tcp_states": {
+              "01": 1,
+              "0A": 1
+            },
+            "rss_kib": 35880,
+            "socket_fds": 14,
+            "socket_inodes": 13,
+            "start_ticks": 91732509,
+            "threads": 6,
+            "total_fds": 24,
+            "vanished_fds": 0
+          },
+          {
+            "capture_seconds": 0.002911021,
+            "cpu_ticks": 2256,
+            "elapsed_seconds": 392.929985159,
+            "namespace_tcp_states": {
+              "01": 1,
+              "0A": 1
+            },
+            "pid": 19,
+            "process_tcp_states": {
+              "01": 1,
+              "0A": 1
+            },
+            "rss_kib": 35856,
+            "socket_fds": 12,
+            "socket_inodes": 11,
+            "start_ticks": 91732509,
+            "threads": 6,
+            "total_fds": 22,
+            "vanished_fds": 0
+          }
+        ],
+        "process_before": [
+          {
+            "capture_seconds": 0.004768037,
+            "cpu_ticks": 15,
+            "elapsed_seconds": 0.004769839,
+            "namespace_tcp_states": {
+              "01": 1,
+              "0A": 1
+            },
+            "pid": 18,
+            "process_tcp_states": {
+              "01": 1,
+              "0A": 1
+            },
+            "rss_kib": 35812,
+            "socket_fds": 14,
+            "socket_inodes": 13,
+            "start_ticks": 91732509,
+            "threads": 6,
+            "total_fds": 24,
+            "vanished_fds": 0
+          },
+          {
+            "capture_seconds": 0.003961258,
+            "cpu_ticks": 12,
+            "elapsed_seconds": 0.008745324,
+            "namespace_tcp_states": {
+              "01": 1,
+              "0A": 1
+            },
+            "pid": 19,
+            "process_tcp_states": {
+              "01": 1,
+              "0A": 1
+            },
+            "rss_kib": 35776,
+            "socket_fds": 12,
+            "socket_inodes": 11,
+            "start_ticks": 91732509,
+            "threads": 6,
+            "total_fds": 22,
+            "vanished_fds": 0
+          }
+        ],
+        "proof_eligible": true,
+        "requested_traffic_seconds": 300,
+        "requests_per_second": 50,
+        "same_processes": true,
+        "schema_version": 1
+      },
+      "phases": [
+        {
+          "workload": "sustained_traffic",
+          "binary_sha256": "6516ee1bcb7b227fac264fabfd6e7a47a86d0f9fdba93e15819bea32953fa6ab",
+          "clock_ticks_per_second": 100,
+          "runtime_samples_complete": true,
+          "roles": [
+            {
+              "role": "a",
+              "count": 299,
+              "first": {
+                "capture_seconds": 0.002822661,
+                "cpu_ticks": 20,
+                "elapsed_seconds": 0.007469663,
+                "pid": 18,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "a",
+                "rss_kib": 35836,
+                "socket_fds": 14,
+                "start_ticks": 91732509,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 24,
+                "vanished_fds": 0
+              },
+              "last": {
+                "capture_seconds": 0.003951169,
+                "cpu_ticks": 2479,
+                "elapsed_seconds": 300.004115918,
+                "pid": 18,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "a",
+                "rss_kib": 35880,
+                "socket_fds": 14,
+                "start_ticks": 91732509,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 24,
+                "vanished_fds": 0
+              },
+              "cpu_percent": 8.196758299457208,
+              "threads": [
+                6
+              ],
+              "fds": [
+                24
+              ],
+              "runtime_rows": 60
+            },
+            {
+              "role": "b",
+              "count": 299,
+              "first": {
+                "capture_seconds": 0.002602589,
+                "cpu_ticks": 19,
+                "elapsed_seconds": 0.010083162,
+                "pid": 19,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "b",
+                "rss_kib": 35796,
+                "socket_fds": 12,
+                "start_ticks": 91732509,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 22,
+                "vanished_fds": 0
+              },
+              "last": {
+                "capture_seconds": 0.002794721,
+                "cpu_ticks": 2243,
+                "elapsed_seconds": 300.006925437,
+                "pid": 19,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "b",
+                "rss_kib": 35856,
+                "socket_fds": 12,
+                "start_ticks": 91732509,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 22,
+                "vanished_fds": 0
+              },
+              "cpu_percent": 7.413411365048009,
+              "threads": [
+                6
+              ],
+              "fds": [
+                22
+              ],
+              "runtime_rows": 60
+            }
+          ]
+        },
+        {
+          "workload": "sustained_traffic_drain",
+          "binary_sha256": "6516ee1bcb7b227fac264fabfd6e7a47a86d0f9fdba93e15819bea32953fa6ab",
+          "clock_ticks_per_second": 100,
+          "runtime_samples_complete": true,
+          "roles": [
+            {
+              "role": "a",
+              "count": 61,
+              "first": {
+                "capture_seconds": 0.002683613,
+                "cpu_ticks": 2480,
+                "elapsed_seconds": 0.00581246,
+                "pid": 18,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "a",
+                "rss_kib": 35880,
+                "socket_fds": 14,
+                "start_ticks": 91732509,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 24,
+                "vanished_fds": 0
+              },
+              "last": {
+                "capture_seconds": 0.0034222,
+                "cpu_ticks": 2491,
+                "elapsed_seconds": 60.003501134,
+                "pid": 18,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "a",
+                "rss_kib": 35880,
+                "socket_fds": 14,
+                "start_ticks": 91732509,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 24,
+                "vanished_fds": 0
+              },
+              "cpu_percent": 0.18334039599040172,
+              "threads": [
+                6
+              ],
+              "fds": [
+                24
+              ],
+              "runtime_rows": 12
+            },
+            {
+              "role": "b",
+              "count": 61,
+              "first": {
+                "capture_seconds": 0.002699492,
+                "cpu_ticks": 2243,
+                "elapsed_seconds": 0.008520899,
+                "pid": 19,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "b",
+                "rss_kib": 35856,
+                "socket_fds": 12,
+                "start_ticks": 91732509,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 22,
+                "vanished_fds": 0
+              },
+              "last": {
+                "capture_seconds": 0.002615747,
+                "cpu_ticks": 2256,
+                "elapsed_seconds": 60.006128222,
+                "pid": 19,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "b",
+                "rss_kib": 35856,
+                "socket_fds": 12,
+                "start_ticks": 91732509,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 22,
+                "vanished_fds": 0
+              },
+              "cpu_percent": 0.21667530723373477,
+              "threads": [
+                6
+              ],
+              "fds": [
+                22
+              ],
+              "runtime_rows": 12
+            }
+          ]
+        }
+      ],
+      "artifacts": [
+        {
+          "sha256": "ee64a938583079d700a5329c19e72c0a4772433c005b9061766cbf091b861350",
+          "path": "/tmp/p2p-vpn-tun_namespace_measures_sustained_traffic_resources-1.5913788eae4e077f/traffic-sample.json"
+        },
+        {
+          "sha256": "e42836913d067a0f1d1026199ab3ed4d5b0d891c30d7fb2eda5a4921ea10740f",
+          "path": "/tmp/p2p-vpn-tun_namespace_measures_sustained_traffic_resources-1.5913788eae4e077f/traffic-drain-sample.json"
+        },
+        {
+          "sha256": "a008e800ccc31ade6626c90f8e46c5794015e69e6b52460662bcca1e6bdbb9c5",
+          "path": "/tmp/p2p-vpn-tun_namespace_measures_sustained_traffic_resources-1.5913788eae4e077f/traffic-generator.json"
+        },
+        {
+          "sha256": "35c31eff8e3f10226609466eb768dd44641af61a71fc472a501bfd081c3cc55a",
+          "path": "/tmp/p2p-vpn-tun_namespace_measures_sustained_traffic_resources-1.5913788eae4e077f/sustained-traffic.json"
+        },
+        {
+          "sha256": "046546d8c3c41f5efc659315b9c433a5573c3b70e4ef8b34d5594eea18390cd2",
+          "path": "/tmp/p2p-vpn-tun_namespace_measures_sustained_traffic_resources-1.5913788eae4e077f/node-a.log"
+        },
+        {
+          "sha256": "ef971df9a1e5f71c5ad0c35f28f0329b06a20770d76ac28bf173a5c2c8ab137d",
+          "path": "/tmp/p2p-vpn-tun_namespace_measures_sustained_traffic_resources-1.5913788eae4e077f/node-b.log"
+        },
+        {
+          "sha256": "da60ee144ac07a5032c27b3646bd54505b401acd4e4fdbe005298aec0847d1ba",
+          "path": "/tmp/p2p-vpn-tun_namespace_measures_sustained_traffic_resources-1.5913788eae4e077f/repro-commands.sh"
+        },
+        {
+          "sha256": "2966deccfa0ffc6c31b7beb63f5d2f8c5329b0dd7eb5a3b3375a5441198142e8",
+          "path": "/tmp/p2p-vpn-tun_namespace_measures_sustained_traffic_resources-1.5913788eae4e077f/repro-metadata.txt"
+        },
+        {
+          "sha256": "1c55974d92dbd1714fcd9bab0db3ecb8f6d6c709a4547650e0fd4ed8f5752e5e",
+          "path": "/tmp/p2p-vpn-final-s3-1.log"
+        }
+      ]
+    }
+  ]
+}

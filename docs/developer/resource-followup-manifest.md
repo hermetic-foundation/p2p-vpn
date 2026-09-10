@@ -2,7 +2,8 @@
 
 ## Status
 
-Frozen at `489da6b5`; not executed. The full temporary-storage total is pending.
+Frozen at `489da6b5`. The first S3 capture has started after authorized cache
+cleanup and a complete elevated storage total of 9,598,300 KiB.
 This closes specific gaps from the [acceptance audit](sustained-resource-acceptance.md),
 not a new review or a repeat of the completed ten-cycle reconnect campaign.
 
@@ -53,6 +54,23 @@ before/after performance improvement or a release benchmark.
 S3 rejects the graceful-review option. Leave it unset; its ordinary owned-child
 cleanup is not post-runtime allocation-release evidence. Existing final-code
 graceful pressure and reconnect captures cover that distinct requirement.
+
+## First S3 Result
+
+First S3 result: [structured evidence](final-s3-results.json). The original
+fixture passed in 416.15 seconds with 15,000/15,000 replies, no skipped/invalid/
+duplicate packets, fixed transport and unchanged processes. No matching fixture
+process remained after normal test completion. The independent repeat is pending.
+
+| Phase | A CPU, % One Core | B CPU, % One Core | OS Rows Per Node | Runtime Rows Per Node |
+| --- | ---: | ---: | ---: | ---: |
+| Load | 8.197 | 7.413 | 299 | 60 |
+| Drain | 0.183 | 0.217 | 61 | 12 |
+
+CPU uses actual first/last sample timestamps and 100 Hz ticks. Each node retained
+six threads and its fixed descriptor count (A 24, B 22). RSS endpoints were
+unchanged during drain. These observations include allocation-review overhead;
+do not interpret the historical S3 difference as a measured TUN regression.
 
 ## Pressure Residual Inventory
 
