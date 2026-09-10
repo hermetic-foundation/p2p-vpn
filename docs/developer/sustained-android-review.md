@@ -95,6 +95,16 @@ or physical thermal evidence.
 
 ## Safe Execution Boundary
 
+The local wrapper now passes namespace/cleanup checks:
+
+```sh
+timeout --signal=TERM --kill-after=5s 1200 \
+  bash scripts/android-resource-isolation.sh -- <trusted-review-command>
+```
+
+This is a wrapper example, not an approved S7 workload command. Workload admission,
+collector controls and the final capture watchdog still need to be frozen.
+
 - Run only an owned cached emulator, selected explicitly by its serial; no physical-device commands.
 - Place emulator, private bootstrap fixtures and their ADB server in an isolated network namespace with no public route.
 - Confirm private endpoint reachability and absence of external routing before workload admission.
@@ -106,10 +116,41 @@ The cached launcher normally uses the host network and an ADB server. Private
 Kademlia protocol configuration alone is not an OS egress restriction. Do not
 launch the historical scenario unchanged for this goal's no-public-WAN boundary.
 
+### Wrapper Validation
+
+| Gate | Verified Result |
+| --- | --- |
+| User/network/mount/PID namespaces | Wrapper creates fresh namespaces and rejects matching parent namespace IDs |
+| Networking | Only loopback; IPv4/IPv6 routes use loopback only |
+| USB | Private empty mount hides `/dev/bus/usb`; host bus directory listing unchanged |
+| ADB | Dedicated loopback TCP server endpoint; inherited serial removed; automatic mDNS connect disabled |
+| KVM | Device remains present/readable/writable; emulator initialization not tested yet |
+| Process exit | Child exit 23 propagates; invalid invocation rejected |
+| Descendants | Tagged live descendant disappears after namespace init exits |
+| Timeout | External timeout returns 124 and leaves no tagged isolated command |
+| Static checks | ShellCheck and shfmt pass; both scripts added to the Nix Android structure check |
+| Nix | Structure-check derivation evaluates offline; full existing Android shell matrix not rerun |
+
+Run the opt-in local checks with:
+
+```sh
+timeout --signal=TERM --kill-after=2s 30 \
+  bash tests/android-resource-isolation.sh
+```
+
+Verified log: `/tmp/p2p-vpn-android-resource-isolation-verified-tests.log`, SHA-256
+`b209683f962c271678090b827e68977100c7c528cc301a42fdd29b6b75b683ff`.
+The earlier timeout attempt failed because multicall `sleep` rejected renamed
+`argv[0]`; the corrected test verifies a live tagged shell before checking cleanup.
+
+This runs trusted local review commands; it is not a filesystem sandbox for
+untrusted programs. The workspace remains shared. No Rust/Android source changed,
+so their build/test suites were not repeated for this shell-only addition.
+
 ## Next Work
 
 1. Preserve refreshed artifact hashes and verify them again before emulator admission.
-2. Add the cheap OS/resource collector and measured collector-on/off controls.
+2. Verify cached emulator boot inside the tested wrapper, then add the cheap OS/resource collector and collector-on/off controls.
 3. Freeze S7's 30-second warmup, 300-second idle/load windows, five independent transitions, actual offered load and watchdogs.
 4. Require healthy sibling traffic and identity continuity while the other network is disabled or unavailable.
 5. Run paired captures; audit cadence, recovery, teardown and storage cleanup before accepting results.
