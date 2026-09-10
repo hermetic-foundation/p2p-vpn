@@ -13,7 +13,7 @@ not replace the original acceptance criteria with a smaller workload.
 | 1. Source, manifests, budgets, exclusions | [Measurement plan](sustained-resource-review.md), per-workload manifests, source history | Final runtime matches graceful-capture revision; earlier Linux/Android reuse still needs reconciliation |
 | 2. Sustained resource coverage | S1-S7 captures, process/runtime series, collector controls | Paired graceful reconnect artifacts revalidated; remaining workload series need final audit |
 | 3. Retention and teardown | Ledger/queue controls, pressure/churn, allocation-owner traces | Reconnect teardown evidence verified; residual scope and pressure ownership conclusions still need reconciliation |
-| 4. Android scheduling and background work | [Thread controls](android-thread-controls.md), load/profile/isolation reports | Reports contain CPU and scheduling proxies; final source/artifact correspondence pending |
+| 4. Android scheduling and background work | [Thread controls](android-thread-controls.md), load/profile/isolation reports | Five captures' raw artifacts and historical harness versions verified; shared shutdown reuse limit explicit below |
 | 5. Reproduction and minimal corrections | Capability retirement, connection retirement, Linux TUN cancellation | Production-fix inventory and guarded regression sources inspected; workload reconciliation remains |
 | 6. Verification and invariant preservation | Workspace, Clippy, source parity, Android-native logs, regression sources | Final runtime terminal logs verified; source-parity inventories match; instrumentation gates still need reconciliation |
 | 7. Results and documentation | Structured results, historical failures, review index | Index contains superseded open items; reconcile after evidence audit |
@@ -125,6 +125,67 @@ inspected during this audit; they are not substitutes for test coverage review.
 | `churn-retirement-before-run.log` | `28dd77c9744d0b665c25517d6a8a4b3f5d57dd25335e6070f65037adacc05327` |
 | `churn-retirement-after-corrected.log` | `59d6ebf08c71f6d5a850a752e4dee65fa890b1a598441ebbc11ef53d7df0b5e8` |
 | `churn-retirement-guards.log` | `f1c510cc51ef71630f265a7789cfcc900db03a2f9adc9148e75274f3ff3d5d69` |
+
+## Android Evidence Reconciliation
+
+### Integrity And Source
+
+All 392 raw-file hash entries in the following five result sets match:
+
+- `android-thread-control-results.json`
+- `android-sustained-load-results.json`
+- `android-sustained-thread-results.json`
+- `android-resource-isolation-results.json`
+- `android-resource-isolation-repeat-results.json`
+
+Their five raw `evidence.json` files report successful completion and all six
+cleanup flags true. This verifies retained cleanup evidence, not present device
+state; no emulator or physical device was accessed for the audit.
+
+Ten checks against current harness files fail because those files changed later.
+All nine distinct recorded script hashes match historical committed contents:
+
+| Script | Matching Content Revisions |
+| --- | --- |
+| `android-e2e.sh` | `0067e3d3`, `08ecf113`, `d9ec9f16` |
+| `android-process-sample.sh` | `65690dcf`, `a71106db` |
+| `android-resource-controls.sh` | `d9ec9f16`, `06615d80`, `08ecf113`, `0067e3d3` |
+
+The portable results retain exact hashes. Each match was computed from
+`git show REVISION:scripts/FILE`, not inferred from the report's baseline label.
+Do not replace historical hashes with current ones to make a check pass.
+
+`git diff aa14357a fc95a4f4 -- android crates/p2p-vpn-android` is empty.
+The APK therefore retains unchanged Android source, but later shared Rust TUN
+worker shutdown changed. The final native build passes; this is not a final-source
+APK execution claim or permission to reuse unrelated platform results.
+
+### Measured Coverage
+
+| Workload | Established | Limit |
+| --- | --- | --- |
+| Sustained idle/load/drain | Both captures deliver 60,000/60,000 replies; 300/300/60-second phases | Different transports, permission setup and collector modes prevent a controlled cross-run transport comparison |
+| Thread-attributed sequence | CPU 2.115%, 96.223%, 2.116%; endpoint arithmetic recomputes exactly | Debug app, observer cost included; process endpoints outlast load thread scans |
+| Collector controls | Four windows; thread scanning adds 2.403 emulator CPU percentage points on average | One-boot estimate, not an exact correction or battery measurement |
+| Network isolation | Two five-cycle captures; all measured batches pass; disabled network probes receive no replies | Shared runtime restarts; not uninterrupted sibling traffic |
+| Scheduling | Stable-thread context-switch and tick deltas; sampled load concentrates in two threads | No hardware wakeup or physical energy counters |
+
+Raw files preserve process identity, queues, paths, memory, descriptors and
+private infrastructure counts separately from overlay peers. Empty sampled
+queues and overlapping RSS/PSS ranges do not prove allocation release.
+
+### Background Work And Limits
+
+- `AndroidTunReader` checks its stop flag around a 250 ms `poll`. This bounded
+  shutdown check is background work, not an event-only sleep or zero-wakeup claim.
+- Per-network `PortReader` uses the supervisor queue and does not implement the
+  new optional cancellation callback. Android retains supervisor-owned shutdown.
+- The [load profile](android-load-profile.md) attributes samples to native Tokio
+  workers; absent call chains prevent identifying a single causal optimization.
+- Permission-dialog setup and collector cadence failures remain recorded. The
+  successful later captures do not retroactively turn failed attempts into passes.
+- Physical battery/thermal behavior, release performance and WAN movement are
+  outside these emulator observations and remain separate acceptance work.
 
 ## Attribution Boundary
 
