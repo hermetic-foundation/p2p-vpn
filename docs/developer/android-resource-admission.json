@@ -1,0 +1,201 @@
+{
+  "status": "passed",
+  "detail": "Two isolated networks admitted; sustained measurements have not run",
+  "started_utc": "2026-09-10T04:17:06Z",
+  "finished_utc": "2026-09-10T04:18:47Z",
+  "steps": [
+    {
+      "name": "preflight",
+      "status": "passed",
+      "detail": "Required Android E2E capabilities are available",
+      "recorded_unix_millis": 1789013826973
+    },
+    {
+      "name": "fixture_start",
+      "status": "started",
+      "detail": "Waiting for private discovery and rootless Linux peer",
+      "recorded_unix_millis": 1789013826985
+    },
+    {
+      "name": "fixture_start",
+      "status": "passed",
+      "detail": "Private discovery and rootless Linux peer are ready",
+      "recorded_unix_millis": 1789013828027
+    },
+    {
+      "name": "secondary_fixture_start",
+      "status": "started",
+      "detail": "Waiting for secondary private discovery and rootless Linux peer",
+      "recorded_unix_millis": 1789013828033
+    },
+    {
+      "name": "secondary_fixture_start",
+      "status": "passed",
+      "detail": "secondary private discovery and rootless Linux peer is ready",
+      "recorded_unix_millis": 1789013829055
+    },
+    {
+      "name": "emulator_start",
+      "status": "started",
+      "detail": "Waiting for a clean API 35 emulator",
+      "recorded_unix_millis": 1789013829077
+    },
+    {
+      "name": "emulator_start",
+      "status": "passed",
+      "detail": "Emulator reported an ADB serial",
+      "recorded_unix_millis": 1789013851164
+    },
+    {
+      "name": "selected_apk",
+      "status": "passed",
+      "detail": "Installed and launched the selected APK before scenario checks",
+      "recorded_unix_millis": 1789013852155
+    },
+    {
+      "name": "device_contract",
+      "status": "passed",
+      "detail": "API 35 x86_64 device contract verified",
+      "recorded_unix_millis": 1789013852268
+    },
+    {
+      "name": "package",
+      "status": "passed",
+      "detail": "Debug package is installed",
+      "recorded_unix_millis": 1789013852272
+    },
+    {
+      "name": "activity",
+      "status": "passed",
+      "detail": "Main activity is running",
+      "recorded_unix_millis": 1789013852276
+    },
+    {
+      "name": "debug_automation",
+      "status": "passed",
+      "detail": "ADB-authorized structured status is available",
+      "recorded_unix_millis": 1789013852282
+    },
+    {
+      "name": "alpha_profile_creation",
+      "status": "passed",
+      "detail": "alpha was added with isolated discovery bootstrap configuration",
+      "recorded_unix_millis": 1789013852363
+    },
+    {
+      "name": "legacy_collection_migration",
+      "status": "passed",
+      "detail": "Encrypted legacy storage migrated disabled without changing identity or addresses",
+      "recorded_unix_millis": 1789013853724
+    },
+    {
+      "name": "vpn_consent",
+      "status": "passed",
+      "detail": "ADB authorized the normal VpnService consent gate",
+      "recorded_unix_millis": 1789013855882
+    },
+    {
+      "name": "vpn_connect",
+      "status": "passed",
+      "detail": "Enabling alpha started the shared Android VPN",
+      "recorded_unix_millis": 1789013855887
+    },
+    {
+      "name": "alpha_pairing",
+      "status": "passed",
+      "detail": "Android paired the selected alpha network without a configured overlay address",
+      "recorded_unix_millis": 1789013878887
+    },
+    {
+      "name": "beta_profile_creation",
+      "status": "passed",
+      "detail": "beta was added with isolated discovery bootstrap configuration",
+      "recorded_unix_millis": 1789013879972
+    },
+    {
+      "name": "beta_activation",
+      "status": "passed",
+      "detail": "The shared TUN activated two independently identified network runtimes",
+      "recorded_unix_millis": 1789013882074
+    },
+    {
+      "name": "beta_pairing",
+      "status": "passed",
+      "detail": "Android paired the selected beta network without a configured overlay address",
+      "recorded_unix_millis": 1789013916262
+    },
+    {
+      "name": "concurrent_activation",
+      "status": "passed",
+      "detail": "Both isolated runtimes are running behind one shared TUN",
+      "recorded_unix_millis": 1789013916304
+    },
+    {
+      "name": "concurrent_traffic_readiness",
+      "status": "passed",
+      "detail": "Both networks converged independently in both directions and address families",
+      "recorded_unix_millis": 1789013916469
+    },
+    {
+      "name": "initial_concurrent_traffic",
+      "status": "passed",
+      "detail": "Both networks carried 5 of 5 packets in every direction and address family during the initial shared-TUN measurement",
+      "recorded_unix_millis": 1789013920534
+    },
+    {
+      "name": "resource_admission",
+      "status": "passed",
+      "detail": "Two isolated networks admitted; sustained measurements have not run",
+      "recorded_unix_millis": 1789013920541
+    }
+  ],
+  "cleanup": {
+    "emulator_stopped": true,
+    "fixture_stopped": true,
+    "private_state_removed": true,
+    "logs_redacted": true,
+    "diagnostic_report_redacted": true,
+    "always_on_cleared": true
+  },
+  "admission": {
+    "runtime_generation": 4,
+    "connected": true,
+    "paths": {
+      "connected_peers": 2,
+      "direct_udp_datagram": 0,
+      "direct_quic_datagram": 0,
+      "direct_quic_stream": 2,
+      "direct_tcp_stream": 0,
+      "relay": 0,
+      "public_routing_peers": 2,
+      "packet_plane_quic_sessions": 0,
+      "outbound_quic_datagram_packets": 0,
+      "outbound_direct_tcp_stream_packets": 0,
+      "promotions_to_direct": 0
+    },
+    "networks": [
+      {
+        "id": "1f651549-d951-37d6-af8b-c751d53bb78e",
+        "name": "android-e2e-alpha",
+        "peer_id": "12D3KooWAPA1ofwExRDSxvhipnk9couRDvZ1Bctdhuo2eStTDDHc",
+        "addresses": [
+          "100.64.50.80/32",
+          "fd00:6879:7072:7370:6163:6500:3839:6a2b/128"
+        ],
+        "enabled": true,
+        "phase": "running"
+      },
+      {
+        "id": "53f01a5a-e271-4d5e-83b3-ee558896e88b",
+        "name": "android-e2e-beta",
+        "peer_id": "12D3KooWN2FLEfReTC7oNjKEvhPrJwSnxx5iuFSZJrjU3mKNGKzC",
+        "addresses": [
+          "100.64.177.180/32",
+          "fd00:6879:7072:7370:6163:6500:b8cc:693a/128"
+        ],
+        "enabled": true,
+        "phase": "running"
+      }
+    ]
+  }
+}

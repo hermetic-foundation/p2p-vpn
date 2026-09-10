@@ -48,6 +48,12 @@ adb_run() {
   timeout --signal=TERM --kill-after=2s "${adb_timeout_seconds}s" "${adb[@]}" "$@"
 }
 
+fixture_paths_fit() {
+  local socket_suffix=fixture/packet-control.sock
+  [[ "$2" != multi-network* ]] || socket_suffix=fixture-secondary/packet-control.sock
+  (( $(printf '%s' "$1/$socket_suffix" | wc -c) < 108 ))
+}
+
 usage() {
   cat <<'EOF'
 Usage: p2p-vpn-android-e2e [OPTIONS]
@@ -55,7 +61,8 @@ Usage: p2p-vpn-android-e2e [OPTIONS]
 Options:
   --scenario NAME        Select boot-smoke, profile-persistence, always-on,
                          pairing-traffic, underlay-recovery, network-workflow,
-                         multi-network, or process-sample-smoke.
+                         multi-network, multi-network-resource-admission,
+                         or process-sample-smoke.
   --path-mode MODE       Select automatic, quic-stream, tcp-stream, owned-quic, relay-only,
                          or relay-to-direct.
   --preflight            Check requirements without starting an emulator.
@@ -131,7 +138,7 @@ done
 pairing_scenario=0
 case "$scenario" in
   boot-smoke|profile-persistence|always-on|process-sample-smoke) ;;
-  pairing-traffic|underlay-recovery|network-workflow|multi-network) pairing_scenario=1 ;;
+  pairing-traffic|underlay-recovery|network-workflow|multi-network|multi-network-resource-admission) pairing_scenario=1 ;;
   *)
     echo "unsupported Android E2E scenario: $scenario" >&2
     exit 2
@@ -153,7 +160,7 @@ if [[ "$scenario" == underlay-recovery && "$path_mode" != automatic ]]; then
   echo "underlay-recovery requires --path-mode automatic" >&2
   exit 2
 fi
-if [[ "$scenario" == multi-network && "$path_mode" != automatic ]]; then
+if [[ "$scenario" == multi-network* && "$path_mode" != automatic ]]; then
   echo "multi-network requires --path-mode automatic" >&2
   exit 2
 fi
@@ -2186,6 +2193,16 @@ run_multi_network_scenario() {
     return 1
   fi
 
+  if [[ "$scenario" == multi-network-resource-admission ]]; then
+    jq '.value.snapshot | {runtime_generation, connected, paths,
+      networks: [.networks[] | {id, name, peer_id, addresses, enabled, phase}]}' \
+      "$both_running" > "$output_dir/resource-admission.json"
+    outcome=passed
+    outcome_detail="Two isolated networks admitted; sustained measurements have not run"
+    record_step resource_admission passed "$outcome_detail"
+    return 0
+  fi
+
   jq '
     .value.snapshot.networks |
     map({id, name, hostname, peer_id, addresses, enabled, selected})
@@ -3182,6 +3199,14 @@ if [[ "$preflight_only" -eq 1 ]]; then
 fi
 
 state_dir="$(mktemp -d -t p2p-vpn-android-e2e-state.XXXXXXXX)"
+if [[ "$pairing_scenario" -eq 1 ]]; then
+  if ! fixture_paths_fit "$state_dir" "$scenario"; then
+    outcome=failed
+    outcome_detail="Fixture Unix socket path is too long; use a shorter TMPDIR"
+    record_step fixture_paths failed "$outcome_detail"
+    exit 1
+  fi
+fi
 ready_file="$state_dir/emulator.ready"
 runtime_storage_failure_file="$state_dir/runtime-storage-failure"
 runtime_tmp_baseline_available_bytes="$tmp_available_bytes"
@@ -3214,7 +3239,7 @@ fixture_secondary_ipv6=""
 fixture_secondary_control_socket=""
 fixture_secondary_packet_socket=""
 
-if [[ "$scenario" == multi-network ]]; then
+if [[ "$scenario" == multi-network* ]]; then
   fixture_network="android-e2e-alpha"
 fi
 
@@ -3325,7 +3350,7 @@ if [[ "$pairing_scenario" -eq 1 ]]; then
   record_step fixture_start passed "Private discovery and rootless Linux peer are ready"
 fi
 
-if [[ "$scenario" == multi-network ]]; then
+if [[ "$scenario" == multi-network* ]]; then
   fixture_secondary_state_dir="$state_dir/fixture-secondary"
   if ! start_fixture_instance \
     secondary_fixture_start \
@@ -3533,7 +3558,7 @@ if [[ "$scenario" == network-workflow ]]; then
   exit 1
 fi
 
-if [[ "$scenario" == multi-network ]]; then
+if [[ "$scenario" == multi-network* ]]; then
   if run_multi_network_scenario; then
     exit 0
   fi

@@ -4,7 +4,8 @@
 
 Cached capability preflight passes. The APK and Linux fixture have now been
 refreshed, and the packaged JNI matches the selected native build. Isolated cached
-emulator boot now passes. No physical device was used; sustained capture has not begun.
+emulator boot, process collection and two-network traffic admission pass.
+No physical device was used; sustained capture has not begun.
 
 ## Capability Evidence
 
@@ -281,3 +282,63 @@ This boot-adjacent interval is compatibility evidence, not a plateau or CPU base
 ShellCheck passes. The large existing harness does not match current shfmt output;
 no whole-file formatting rewrite was applied. The small collector tests remain
 the local parsing gate; S7 and collector overhead controls are still outstanding.
+
+## Two-Network Admission
+
+`multi-network-resource-admission` reuses profile creation, pairing and shared-TUN
+activation from the lifecycle fixture, then stops after initial traffic checks.
+It is not a substitute for sustained load or independent network transitions.
+
+| Gate | Result |
+| --- | --- |
+| Networks | Alpha and beta both running; independent identities and addresses |
+| Transport snapshot | Two direct QUIC-stream paths; zero TCP, relay or owned-datagram paths |
+| Traffic | 5/5 packets on each of eight direction/address-family legs |
+| Infrastructure | Two private bootstrap peers; no public route in the namespace |
+| Cleanup | All six harness checks pass |
+
+The runtime field `public_routing_peers=2` counts the private fixture bootstrap
+peers in this topology. It is not evidence of connections to public IPFS peers.
+Traffic batches can retry for admission; they cannot prove fixed offered load.
+
+[Portable admission evidence](android-resource-admission.json) records the passing
+steps and snapshot. Raw captures remain under `/tmp/p2p-vpn-android-resource-admission-{1,2}`.
+
+### Path-Length Failure and Correction
+
+The first attempt stopped before emulator startup. Under the long dedicated
+`TMPDIR`, the second fixture's control socket path was 112 bytes; the first was
+102. A direct Rust `UnixListener::bind` check accepts 102 and rejects 112.
+
+- The initial Perl probe truncated the address and was unsuitable as negative evidence.
+- Rust reproducer: `/tmp/p2p-vpn-unix-path.rs`; cached compiler and linker, no Cargo build.
+- Retry used `/tmp/p2p-vpn-a`; no timeout increase or runtime recovery change.
+- The harness now checks the longest fixture socket path before starting processes.
+- `tests/android-fixture-path-budget.sh` verifies 107-byte acceptance and 108-byte rejection.
+
+| Evidence | SHA-256 |
+| --- | --- |
+| Initial readiness failure | `1820eb63d11d647d457473c0c5702127340145aef7028d55915be51602f069ed` |
+| Short-path admission pass | `bfae1e9268e195ed403f2b8a1b500070193bfbe94b0b405838d23e844c3663ca` |
+| Early path-guard failure | `9cc09db8b387c247f40f047d28d74aa6a2785fb57ef16f1e8b3d0c5f88f161d3` |
+| Admission snapshot | `a1ac00e588d2c35e795d6dd04d2255a7f443e381fcfa3d86c580c3320829ea60` |
+
+The guard capture is `/tmp/p2p-vpn-android-resource-path-guard`; it rejects the
+long path before starting fixtures or emulator and reports complete cleanup.
+The fixture's existing readiness error still obscures early task failures generally.
+
+### Frozen Admission Controls
+
+- 440-second inner timeout plus 15-second grace; 480-second outer timeout plus 20-second grace.
+- 1,258,291,200-byte runtime growth cap, same APK and fixture hashes recorded above.
+- CLI SHA-256: `b43c0dc2e8a81960901a4ed18fa2d1af67c7af995a2d0bfc21290df365a28313`.
+- Storage before first run: 9,119,032 KiB; before retry: 9,119,800 KiB, both below 10 GiB.
+- No concurrent builds or public networking; only owned emulator and private fixtures.
+
+The fixture probe is response-paced and reports requested count as `sent`.
+Do not use it as the S7 fixed-rate load generator. Sustained workload admission
+still needs actual paced packet counts, observer controls and per-network sampling.
+
+ShellCheck, the socket boundary regression and new-test formatting pass. The Nix
+structure derivation evaluates offline; its full existing shell matrix was not
+rerun. No production Rust/Android source changed or required rebuilding.
