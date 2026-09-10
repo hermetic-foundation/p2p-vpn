@@ -14,7 +14,7 @@ Acceptance remains incomplete. Local evidence does not certify physical Android 
 | Compatibility | Explicit UDP-only and stream-only current peers; override round trips; isolated relay payloads | Archived-release compatibility is not established |
 | Autonomous recovery | Four initiator orderings; namespace blocking; OnePlus QUIC block/re-promotion | Physical movement, residual loss and sustained settling |
 | MTU and isolation | 1,280-byte IPv4 fallback/recovery traffic; Android supervisor tests | Smaller-underlay MTU boundaries and physical multi-network behavior |
-| Verification | 1,526 workspace tests; required root Clippy groups; ARM64 build; fresh JVM tests; cached source parity | Full Nix package realization and remaining targeted scenarios |
+| Verification | 1,530 workspace tests at `8b4e8d55`; required root Clippy groups; ARM64 build; earlier fresh JVM tests; cached source parity | Full Nix package realization and remaining targeted scenarios |
 | Deployment | Verified debug APK upgrades on Pixel and OnePlus preserving profiles | Physical stability, fallback and recovery checks |
 | Delivery | Core and NixOS commits pushed to main | Final evidence review and requirement-by-requirement closeout |
 
@@ -22,6 +22,34 @@ Acceptance remains incomplete. Local evidence does not certify physical Android 
 - Namespace underlays are isolated fixtures, not substitutes for physical or public-NAT evidence.
 - The separate Android always-on process-restart finding is not claimed fixed here.
 - Remaining evidence gaps do not authorize deployment, underlay changes or personal-flake edits.
+
+### Latest Workspace And Movement Readiness
+
+- Source `8b4e8d55`: the session-ID fix now passes the full workspace/all-target run.
+  Result: 1,530 passed, 46 ignored, zero failures; core suite duration 47.31 seconds.
+- Command: `cargo test --offline --locked --workspace --all-targets -- --test-threads=2 --quiet`.
+  Evidence: `/tmp/p2p-vpn-session-entropy-workspace.log`; `RUST_MIN_STACK=8388608` was set.
+- Cached dependencies, two build jobs and disabled incremental/debug data were used.
+  Root-inclusive temporary storage measured 9,710,684 KiB during preparation, below 10 GiB.
+- OnePlus `1ebfe979` passed the read-only Android audit preflight: ARM64, API 36.
+  No profile, pairing, network or service changes were made for this preflight.
+- The latest Wi-Fi check delivered 5/5 full-MTU overlay pings against the restored Nix binary.
+  This is reachability evidence, not a new updated-pair QUIC or network-movement acceptance run.
+
+The next physical checkpoint requires coordinating an independent underlay with the user.
+Do not start an unattended waiting deployment or change the phone's underlay before coordination.
+Keep the updated Android identity/profile; temporarily deploy the matching Linux binary for measurement.
+
+| Checkpoint | Evidence required |
+| --- | --- |
+| Wi-Fi baseline | Bidirectional full-MTU traffic and owned-QUIC payload-counter deltas |
+| Independent underlay | Actual selection change; bounded automatic recovery; payload/backend counters |
+| LAN return | Another selection change; automatic local-path recovery and preferred payload transport |
+| Cleanup | Owned captures stopped; original Linux service restored; identity/profile preserved |
+
+Record transition times, runtime generations and path/counter snapshots throughout.
+USB remains management only; no manual endpoint updates or runtime rescue during either transition.
+Failed traffic and fallback use remain evidence, not grounds to extend a failed measurement deadline.
 
 ## Physical Pixel Check: September 10
 
