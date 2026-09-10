@@ -1,0 +1,6748 @@
+{
+  "schema_version": 1,
+  "status": "first_capture_passed_repeat_pending",
+  "binary_sha256": "6516ee1bcb7b227fac264fabfd6e7a47a86d0f9fdba93e15819bea32953fa6ab",
+  "dir": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591",
+  "phases": [
+    {
+      "name": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-01-outage.json",
+      "start": 1789034910548,
+      "end": 1789034940560,
+      "duration": 30,
+      "runtime_complete": true,
+      "runtime_rows": 12,
+      "mono_end": 30.008065681,
+      "process_first": [
+        {
+          "capture_seconds": 0.003154631,
+          "cpu_ticks": 21,
+          "elapsed_seconds": 0.008499764,
+          "pid": 18,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36196,
+          "socket_fds": 14,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 24,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.002518918,
+          "cpu_ticks": 18,
+          "elapsed_seconds": 0.011025645,
+          "pid": 19,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35436,
+          "socket_fds": 12,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 22,
+          "vanished_fds": 0
+        }
+      ],
+      "process_last": [
+        {
+          "capture_seconds": 0.004057992,
+          "cpu_ticks": 29,
+          "elapsed_seconds": 30.004148547,
+          "pid": 18,
+          "process_tcp_states": {
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36216,
+          "socket_fds": 13,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "04": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 23,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.003901665,
+          "cpu_ticks": 24,
+          "elapsed_seconds": 30.008065681,
+          "pid": 19,
+          "process_tcp_states": {
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35440,
+          "socket_fds": 11,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "04": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 21,
+          "vanished_fds": 0
+        }
+      ]
+    },
+    {
+      "name": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-01-recovery-sample.json",
+      "start": 1789034941916,
+      "end": 1789034981925,
+      "duration": 40,
+      "runtime_complete": true,
+      "runtime_rows": 16,
+      "mono_end": 40.005920167,
+      "process_first": [
+        {
+          "capture_seconds": 0.002679783,
+          "cpu_ticks": 30,
+          "elapsed_seconds": 0.005886231,
+          "pid": 18,
+          "process_tcp_states": {
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36220,
+          "socket_fds": 13,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "04": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 23,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.0026413,
+          "cpu_ticks": 25,
+          "elapsed_seconds": 0.00853237,
+          "pid": 19,
+          "process_tcp_states": {
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35440,
+          "socket_fds": 11,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "04": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 21,
+          "vanished_fds": 0
+        }
+      ],
+      "process_last": [
+        {
+          "capture_seconds": 0.003204201,
+          "cpu_ticks": 47,
+          "elapsed_seconds": 40.003296554,
+          "pid": 18,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36268,
+          "socket_fds": 14,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 24,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.002610519,
+          "cpu_ticks": 41,
+          "elapsed_seconds": 40.005920167,
+          "pid": 19,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35492,
+          "socket_fds": 12,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 22,
+          "vanished_fds": 0
+        }
+      ]
+    },
+    {
+      "name": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-02-outage.json",
+      "start": 1789034984352,
+      "end": 1789035014365,
+      "duration": 30,
+      "runtime_complete": true,
+      "runtime_rows": 12,
+      "mono_end": 30.008936268,
+      "process_first": [
+        {
+          "capture_seconds": 0.003509783,
+          "cpu_ticks": 47,
+          "elapsed_seconds": 0.008505671,
+          "pid": 18,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36268,
+          "socket_fds": 14,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 24,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.003244547,
+          "cpu_ticks": 42,
+          "elapsed_seconds": 0.011757412,
+          "pid": 19,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35500,
+          "socket_fds": 12,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 22,
+          "vanished_fds": 0
+        }
+      ],
+      "process_last": [
+        {
+          "capture_seconds": 0.004911594,
+          "cpu_ticks": 52,
+          "elapsed_seconds": 30.005022827,
+          "pid": 18,
+          "process_tcp_states": {
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36272,
+          "socket_fds": 13,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "04": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 23,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.003898643,
+          "cpu_ticks": 48,
+          "elapsed_seconds": 30.008936268,
+          "pid": 19,
+          "process_tcp_states": {
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35512,
+          "socket_fds": 11,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "04": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 21,
+          "vanished_fds": 0
+        }
+      ]
+    },
+    {
+      "name": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-02-recovery-sample.json",
+      "start": 1789035015714,
+      "end": 1789035055726,
+      "duration": 40,
+      "runtime_complete": true,
+      "runtime_rows": 16,
+      "mono_end": 40.008418705,
+      "process_first": [
+        {
+          "capture_seconds": 0.002617741,
+          "cpu_ticks": 53,
+          "elapsed_seconds": 0.005662084,
+          "pid": 18,
+          "process_tcp_states": {
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36272,
+          "socket_fds": 13,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "04": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 23,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.002595087,
+          "cpu_ticks": 48,
+          "elapsed_seconds": 0.008265758,
+          "pid": 19,
+          "process_tcp_states": {
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35512,
+          "socket_fds": 11,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "04": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 21,
+          "vanished_fds": 0
+        }
+      ],
+      "process_last": [
+        {
+          "capture_seconds": 0.004435934,
+          "cpu_ticks": 68,
+          "elapsed_seconds": 40.00455946,
+          "pid": 18,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36288,
+          "socket_fds": 14,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 24,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.003843505,
+          "cpu_ticks": 62,
+          "elapsed_seconds": 40.008418705,
+          "pid": 19,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35548,
+          "socket_fds": 12,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 22,
+          "vanished_fds": 0
+        }
+      ]
+    },
+    {
+      "name": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-03-outage.json",
+      "start": 1789035058151,
+      "end": 1789035088163,
+      "duration": 30,
+      "runtime_complete": true,
+      "runtime_rows": 12,
+      "mono_end": 30.008994383,
+      "process_first": [
+        {
+          "capture_seconds": 0.003533073,
+          "cpu_ticks": 68,
+          "elapsed_seconds": 0.008744545,
+          "pid": 18,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36288,
+          "socket_fds": 14,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 24,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.002525903,
+          "cpu_ticks": 62,
+          "elapsed_seconds": 0.011277822,
+          "pid": 19,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35548,
+          "socket_fds": 12,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 22,
+          "vanished_fds": 0
+        }
+      ],
+      "process_last": [
+        {
+          "capture_seconds": 0.00497091,
+          "cpu_ticks": 75,
+          "elapsed_seconds": 30.005087049,
+          "pid": 18,
+          "process_tcp_states": {
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36292,
+          "socket_fds": 13,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "04": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 23,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.003892155,
+          "cpu_ticks": 69,
+          "elapsed_seconds": 30.008994383,
+          "pid": 19,
+          "process_tcp_states": {
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35560,
+          "socket_fds": 11,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "04": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 21,
+          "vanished_fds": 0
+        }
+      ]
+    },
+    {
+      "name": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-03-recovery-sample.json",
+      "start": 1789035089516,
+      "end": 1789035129529,
+      "duration": 40,
+      "runtime_complete": true,
+      "runtime_rows": 16,
+      "mono_end": 40.008730806,
+      "process_first": [
+        {
+          "capture_seconds": 0.002532955,
+          "cpu_ticks": 75,
+          "elapsed_seconds": 0.005549563,
+          "pid": 18,
+          "process_tcp_states": {
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36292,
+          "socket_fds": 13,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "04": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 23,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.002525281,
+          "cpu_ticks": 70,
+          "elapsed_seconds": 0.008081607,
+          "pid": 19,
+          "process_tcp_states": {
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35560,
+          "socket_fds": 11,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "04": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 21,
+          "vanished_fds": 0
+        }
+      ],
+      "process_last": [
+        {
+          "capture_seconds": 0.004571286,
+          "cpu_ticks": 95,
+          "elapsed_seconds": 40.004769101,
+          "pid": 18,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36336,
+          "socket_fds": 14,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 24,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.003946797,
+          "cpu_ticks": 88,
+          "elapsed_seconds": 40.008730806,
+          "pid": 19,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35604,
+          "socket_fds": 12,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 22,
+          "vanished_fds": 0
+        }
+      ]
+    },
+    {
+      "name": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-04-outage.json",
+      "start": 1789035131950,
+      "end": 1789035161960,
+      "duration": 30,
+      "runtime_complete": true,
+      "runtime_rows": 12,
+      "mono_end": 30.007089421,
+      "process_first": [
+        {
+          "capture_seconds": 0.002790434,
+          "cpu_ticks": 95,
+          "elapsed_seconds": 0.006762058,
+          "pid": 18,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36336,
+          "socket_fds": 14,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 24,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.002844478,
+          "cpu_ticks": 88,
+          "elapsed_seconds": 0.009644828,
+          "pid": 19,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35604,
+          "socket_fds": 12,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 22,
+          "vanished_fds": 0
+        }
+      ],
+      "process_last": [
+        {
+          "capture_seconds": 0.004387013,
+          "cpu_ticks": 100,
+          "elapsed_seconds": 30.004496054,
+          "pid": 18,
+          "process_tcp_states": {
+            "02": 1,
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36336,
+          "socket_fds": 14,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "02": 1,
+            "04": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 24,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.002581716,
+          "cpu_ticks": 94,
+          "elapsed_seconds": 30.007089421,
+          "pid": 19,
+          "process_tcp_states": {
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35608,
+          "socket_fds": 11,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "04": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 21,
+          "vanished_fds": 0
+        }
+      ]
+    },
+    {
+      "name": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-04-recovery-sample.json",
+      "start": 1789035163308,
+      "end": 1789035203321,
+      "duration": 40,
+      "runtime_complete": true,
+      "runtime_rows": 16,
+      "mono_end": 40.009098086,
+      "process_first": [
+        {
+          "capture_seconds": 0.002551708,
+          "cpu_ticks": 101,
+          "elapsed_seconds": 0.005578521,
+          "pid": 18,
+          "process_tcp_states": {
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36340,
+          "socket_fds": 13,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "04": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 23,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.002555125,
+          "cpu_ticks": 94,
+          "elapsed_seconds": 0.008141181,
+          "pid": 19,
+          "process_tcp_states": {
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35608,
+          "socket_fds": 11,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "04": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 21,
+          "vanished_fds": 0
+        }
+      ],
+      "process_last": [
+        {
+          "capture_seconds": 0.005050673,
+          "cpu_ticks": 116,
+          "elapsed_seconds": 40.005167925,
+          "pid": 18,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36348,
+          "socket_fds": 14,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 24,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.003914651,
+          "cpu_ticks": 109,
+          "elapsed_seconds": 40.009098086,
+          "pid": 19,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35608,
+          "socket_fds": 12,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 22,
+          "vanished_fds": 0
+        }
+      ]
+    },
+    {
+      "name": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-05-outage.json",
+      "start": 1789035205740,
+      "end": 1789035235753,
+      "duration": 30,
+      "runtime_complete": true,
+      "runtime_rows": 12,
+      "mono_end": 30.00933225,
+      "process_first": [
+        {
+          "capture_seconds": 0.003822656,
+          "cpu_ticks": 116,
+          "elapsed_seconds": 0.008781014,
+          "pid": 18,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36352,
+          "socket_fds": 14,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 24,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.002632722,
+          "cpu_ticks": 110,
+          "elapsed_seconds": 0.011425668,
+          "pid": 19,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35608,
+          "socket_fds": 12,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 22,
+          "vanished_fds": 0
+        }
+      ],
+      "process_last": [
+        {
+          "capture_seconds": 0.004833518,
+          "cpu_ticks": 124,
+          "elapsed_seconds": 30.005411669,
+          "pid": 18,
+          "process_tcp_states": {
+            "02": 1,
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36356,
+          "socket_fds": 14,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "02": 1,
+            "04": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 24,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.003905573,
+          "cpu_ticks": 117,
+          "elapsed_seconds": 30.00933225,
+          "pid": 19,
+          "process_tcp_states": {
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35616,
+          "socket_fds": 11,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "04": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 21,
+          "vanished_fds": 0
+        }
+      ]
+    },
+    {
+      "name": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-05-recovery-sample.json",
+      "start": 1789035237116,
+      "end": 1789035277125,
+      "duration": 40,
+      "runtime_complete": true,
+      "runtime_rows": 16,
+      "mono_end": 40.006042444,
+      "process_first": [
+        {
+          "capture_seconds": 0.002685711,
+          "cpu_ticks": 124,
+          "elapsed_seconds": 0.005844783,
+          "pid": 18,
+          "process_tcp_states": {
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36364,
+          "socket_fds": 13,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "04": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 23,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.002654141,
+          "cpu_ticks": 117,
+          "elapsed_seconds": 0.008509995,
+          "pid": 19,
+          "process_tcp_states": {
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35616,
+          "socket_fds": 11,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "04": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 21,
+          "vanished_fds": 0
+        }
+      ],
+      "process_last": [
+        {
+          "capture_seconds": 0.003428032,
+          "cpu_ticks": 140,
+          "elapsed_seconds": 40.003495519,
+          "pid": 18,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36392,
+          "socket_fds": 14,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 24,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.002535323,
+          "cpu_ticks": 131,
+          "elapsed_seconds": 40.006042444,
+          "pid": 19,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35632,
+          "socket_fds": 12,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 22,
+          "vanished_fds": 0
+        }
+      ]
+    },
+    {
+      "name": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-06-outage.json",
+      "start": 1789035279542,
+      "end": 1789035309555,
+      "duration": 30,
+      "runtime_complete": true,
+      "runtime_rows": 12,
+      "mono_end": 30.009321173,
+      "process_first": [
+        {
+          "capture_seconds": 0.00397355,
+          "cpu_ticks": 140,
+          "elapsed_seconds": 0.009450941,
+          "pid": 18,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36392,
+          "socket_fds": 14,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 24,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.002882123,
+          "cpu_ticks": 132,
+          "elapsed_seconds": 0.012343634,
+          "pid": 19,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35640,
+          "socket_fds": 12,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 22,
+          "vanished_fds": 0
+        }
+      ],
+      "process_last": [
+        {
+          "capture_seconds": 0.004437421,
+          "cpu_ticks": 146,
+          "elapsed_seconds": 30.005361271,
+          "pid": 18,
+          "process_tcp_states": {
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36396,
+          "socket_fds": 13,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "04": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 23,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.003944233,
+          "cpu_ticks": 137,
+          "elapsed_seconds": 30.009321173,
+          "pid": 19,
+          "process_tcp_states": {
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35644,
+          "socket_fds": 11,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "04": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 21,
+          "vanished_fds": 0
+        }
+      ]
+    },
+    {
+      "name": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-06-recovery-sample.json",
+      "start": 1789035310901,
+      "end": 1789035350914,
+      "duration": 40,
+      "runtime_complete": true,
+      "runtime_rows": 16,
+      "mono_end": 40.009106427,
+      "process_first": [
+        {
+          "capture_seconds": 0.00262365,
+          "cpu_ticks": 146,
+          "elapsed_seconds": 0.00565673,
+          "pid": 18,
+          "process_tcp_states": {
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36396,
+          "socket_fds": 13,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "04": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 23,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.002623721,
+          "cpu_ticks": 137,
+          "elapsed_seconds": 0.008289819,
+          "pid": 19,
+          "process_tcp_states": {
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35644,
+          "socket_fds": 11,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "04": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 21,
+          "vanished_fds": 0
+        }
+      ],
+      "process_last": [
+        {
+          "capture_seconds": 0.004624585,
+          "cpu_ticks": 160,
+          "elapsed_seconds": 40.005187815,
+          "pid": 18,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36408,
+          "socket_fds": 14,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 24,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.003903523,
+          "cpu_ticks": 152,
+          "elapsed_seconds": 40.009106427,
+          "pid": 19,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35656,
+          "socket_fds": 12,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 22,
+          "vanished_fds": 0
+        }
+      ]
+    },
+    {
+      "name": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-07-outage.json",
+      "start": 1789035353338,
+      "end": 1789035383351,
+      "duration": 30,
+      "runtime_complete": true,
+      "runtime_rows": 12,
+      "mono_end": 30.009204386,
+      "process_first": [
+        {
+          "capture_seconds": 0.004007241,
+          "cpu_ticks": 161,
+          "elapsed_seconds": 0.009365481,
+          "pid": 18,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36408,
+          "socket_fds": 14,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 24,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.003401599,
+          "cpu_ticks": 153,
+          "elapsed_seconds": 0.012779473,
+          "pid": 19,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35656,
+          "socket_fds": 12,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 22,
+          "vanished_fds": 0
+        }
+      ],
+      "process_last": [
+        {
+          "capture_seconds": 0.005092844,
+          "cpu_ticks": 167,
+          "elapsed_seconds": 30.005169895,
+          "pid": 18,
+          "process_tcp_states": {
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36412,
+          "socket_fds": 13,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "04": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 23,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.004000867,
+          "cpu_ticks": 159,
+          "elapsed_seconds": 30.009204386,
+          "pid": 19,
+          "process_tcp_states": {
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35664,
+          "socket_fds": 11,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "04": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 21,
+          "vanished_fds": 0
+        }
+      ]
+    },
+    {
+      "name": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-07-recovery-sample.json",
+      "start": 1789035384702,
+      "end": 1789035424714,
+      "duration": 40,
+      "runtime_complete": true,
+      "runtime_rows": 16,
+      "mono_end": 40.008956718,
+      "process_first": [
+        {
+          "capture_seconds": 0.002588872,
+          "cpu_ticks": 168,
+          "elapsed_seconds": 0.005610187,
+          "pid": 18,
+          "process_tcp_states": {
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36412,
+          "socket_fds": 13,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "04": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 23,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.002572201,
+          "cpu_ticks": 160,
+          "elapsed_seconds": 0.008191716,
+          "pid": 19,
+          "process_tcp_states": {
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35664,
+          "socket_fds": 11,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "04": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 21,
+          "vanished_fds": 0
+        }
+      ],
+      "process_last": [
+        {
+          "capture_seconds": 0.004872623,
+          "cpu_ticks": 186,
+          "elapsed_seconds": 40.004985368,
+          "pid": 18,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36428,
+          "socket_fds": 14,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 24,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.003954478,
+          "cpu_ticks": 177,
+          "elapsed_seconds": 40.008956718,
+          "pid": 19,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35676,
+          "socket_fds": 12,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 22,
+          "vanished_fds": 0
+        }
+      ]
+    },
+    {
+      "name": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-08-outage.json",
+      "start": 1789035427145,
+      "end": 1789035457158,
+      "duration": 30,
+      "runtime_complete": true,
+      "runtime_rows": 12,
+      "mono_end": 30.009438363,
+      "process_first": [
+        {
+          "capture_seconds": 0.00394545,
+          "cpu_ticks": 187,
+          "elapsed_seconds": 0.009696253,
+          "pid": 18,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36428,
+          "socket_fds": 14,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 24,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.003230241,
+          "cpu_ticks": 178,
+          "elapsed_seconds": 0.012937285,
+          "pid": 19,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35684,
+          "socket_fds": 12,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 22,
+          "vanished_fds": 0
+        }
+      ],
+      "process_last": [
+        {
+          "capture_seconds": 0.005417708,
+          "cpu_ticks": 193,
+          "elapsed_seconds": 30.005524214,
+          "pid": 18,
+          "process_tcp_states": {
+            "02": 1,
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36428,
+          "socket_fds": 14,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "02": 1,
+            "04": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 24,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.003899062,
+          "cpu_ticks": 184,
+          "elapsed_seconds": 30.009438363,
+          "pid": 19,
+          "process_tcp_states": {
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35688,
+          "socket_fds": 11,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "04": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 21,
+          "vanished_fds": 0
+        }
+      ]
+    },
+    {
+      "name": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-08-recovery-sample.json",
+      "start": 1789035458507,
+      "end": 1789035498517,
+      "duration": 40,
+      "runtime_complete": true,
+      "runtime_rows": 16,
+      "mono_end": 40.006956309,
+      "process_first": [
+        {
+          "capture_seconds": 0.00255665,
+          "cpu_ticks": 194,
+          "elapsed_seconds": 0.005587581,
+          "pid": 18,
+          "process_tcp_states": {
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36432,
+          "socket_fds": 13,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "04": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 23,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.002521843,
+          "cpu_ticks": 184,
+          "elapsed_seconds": 0.008116327,
+          "pid": 19,
+          "process_tcp_states": {
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35688,
+          "socket_fds": 11,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "04": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 21,
+          "vanished_fds": 0
+        }
+      ],
+      "process_last": [
+        {
+          "capture_seconds": 0.004188039,
+          "cpu_ticks": 208,
+          "elapsed_seconds": 40.004346479,
+          "pid": 18,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36436,
+          "socket_fds": 14,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 24,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.002598058,
+          "cpu_ticks": 200,
+          "elapsed_seconds": 40.006956309,
+          "pid": 19,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35700,
+          "socket_fds": 12,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 22,
+          "vanished_fds": 0
+        }
+      ]
+    },
+    {
+      "name": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-09-outage.json",
+      "start": 1789035500938,
+      "end": 1789035530952,
+      "duration": 30,
+      "runtime_complete": true,
+      "runtime_rows": 12,
+      "mono_end": 30.010224817,
+      "process_first": [
+        {
+          "capture_seconds": 0.003978381,
+          "cpu_ticks": 208,
+          "elapsed_seconds": 0.009101246,
+          "pid": 18,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36436,
+          "socket_fds": 14,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 24,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.003359625,
+          "cpu_ticks": 201,
+          "elapsed_seconds": 0.012472393,
+          "pid": 19,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35700,
+          "socket_fds": 12,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 22,
+          "vanished_fds": 0
+        }
+      ],
+      "process_last": [
+        {
+          "capture_seconds": 0.005556439,
+          "cpu_ticks": 214,
+          "elapsed_seconds": 30.006687044,
+          "pid": 18,
+          "process_tcp_states": {
+            "02": 1,
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36448,
+          "socket_fds": 14,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "02": 1,
+            "04": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 24,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.003522674,
+          "cpu_ticks": 208,
+          "elapsed_seconds": 30.010224817,
+          "pid": 19,
+          "process_tcp_states": {
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35712,
+          "socket_fds": 11,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "04": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 21,
+          "vanished_fds": 0
+        }
+      ]
+    },
+    {
+      "name": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-09-recovery-sample.json",
+      "start": 1789035532301,
+      "end": 1789035572314,
+      "duration": 40,
+      "runtime_complete": true,
+      "runtime_rows": 16,
+      "mono_end": 40.008680491,
+      "process_first": [
+        {
+          "capture_seconds": 0.002557861,
+          "cpu_ticks": 215,
+          "elapsed_seconds": 0.00630476,
+          "pid": 18,
+          "process_tcp_states": {
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36452,
+          "socket_fds": 13,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "04": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 23,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.0025418,
+          "cpu_ticks": 208,
+          "elapsed_seconds": 0.008856299,
+          "pid": 19,
+          "process_tcp_states": {
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35712,
+          "socket_fds": 11,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "04": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 21,
+          "vanished_fds": 0
+        }
+      ],
+      "process_last": [
+        {
+          "capture_seconds": 0.00462646,
+          "cpu_ticks": 233,
+          "elapsed_seconds": 40.004743601,
+          "pid": 18,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36468,
+          "socket_fds": 14,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 24,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.003921942,
+          "cpu_ticks": 226,
+          "elapsed_seconds": 40.008680491,
+          "pid": 19,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35732,
+          "socket_fds": 12,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 22,
+          "vanished_fds": 0
+        }
+      ]
+    },
+    {
+      "name": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-10-outage.json",
+      "start": 1789035574732,
+      "end": 1789035604744,
+      "duration": 30,
+      "runtime_complete": true,
+      "runtime_rows": 12,
+      "mono_end": 30.008668213,
+      "process_first": [
+        {
+          "capture_seconds": 0.003492826,
+          "cpu_ticks": 234,
+          "elapsed_seconds": 0.008441728,
+          "pid": 18,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36468,
+          "socket_fds": 14,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 24,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.002568089,
+          "cpu_ticks": 226,
+          "elapsed_seconds": 0.011018394,
+          "pid": 19,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35732,
+          "socket_fds": 12,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 22,
+          "vanished_fds": 0
+        }
+      ],
+      "process_last": [
+        {
+          "capture_seconds": 0.004627341,
+          "cpu_ticks": 240,
+          "elapsed_seconds": 30.004752605,
+          "pid": 18,
+          "process_tcp_states": {
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36472,
+          "socket_fds": 13,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "04": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 23,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.003900771,
+          "cpu_ticks": 232,
+          "elapsed_seconds": 30.008668213,
+          "pid": 19,
+          "process_tcp_states": {
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35736,
+          "socket_fds": 11,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "04": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 21,
+          "vanished_fds": 0
+        }
+      ]
+    },
+    {
+      "name": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-10-recovery-sample.json",
+      "start": 1789035606100,
+      "end": 1789035646108,
+      "duration": 40,
+      "runtime_complete": true,
+      "runtime_rows": 16,
+      "mono_end": 40.005420155,
+      "process_first": [
+        {
+          "capture_seconds": 0.002750976,
+          "cpu_ticks": 240,
+          "elapsed_seconds": 0.005978237,
+          "pid": 18,
+          "process_tcp_states": {
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36472,
+          "socket_fds": 13,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "04": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 23,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.002644954,
+          "cpu_ticks": 232,
+          "elapsed_seconds": 0.008631648,
+          "pid": 19,
+          "process_tcp_states": {
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35736,
+          "socket_fds": 12,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "04": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 22,
+          "vanished_fds": 0
+        }
+      ],
+      "process_last": [
+        {
+          "capture_seconds": 0.002752889,
+          "cpu_ticks": 254,
+          "elapsed_seconds": 40.002819234,
+          "pid": 18,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36484,
+          "socket_fds": 14,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 24,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.002588928,
+          "cpu_ticks": 247,
+          "elapsed_seconds": 40.005420155,
+          "pid": 19,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35740,
+          "socket_fds": 12,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 22,
+          "vanished_fds": 0
+        }
+      ]
+    },
+    {
+      "name": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-settle.json",
+      "start": 1789035647442,
+      "end": 1789035707455,
+      "duration": 60,
+      "runtime_complete": true,
+      "runtime_rows": 24,
+      "mono_end": 60.008828728,
+      "process_first": [
+        {
+          "capture_seconds": 0.002589118,
+          "cpu_ticks": 255,
+          "elapsed_seconds": 0.00560157,
+          "pid": 18,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36484,
+          "socket_fds": 14,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 24,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.002587244,
+          "cpu_ticks": 247,
+          "elapsed_seconds": 0.008196128,
+          "pid": 19,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35740,
+          "socket_fds": 12,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 22,
+          "vanished_fds": 0
+        }
+      ],
+      "process_last": [
+        {
+          "capture_seconds": 0.004773135,
+          "cpu_ticks": 267,
+          "elapsed_seconds": 60.004881461,
+          "pid": 18,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36484,
+          "socket_fds": 14,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 24,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.003931787,
+          "cpu_ticks": 259,
+          "elapsed_seconds": 60.008828728,
+          "pid": 19,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35740,
+          "socket_fds": 12,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 22,
+          "vanished_fds": 0
+        }
+      ]
+    }
+  ],
+  "roles": {
+    "a": {
+      "lifecycle": [
+        {
+          "stage": "before_child",
+          "pid": 18,
+          "unix_millis": 1789034863436,
+          "elapsed_millis": 0,
+          "allocations": 617,
+          "deallocations": 194,
+          "reallocations": 22,
+          "bytes_allocated": 74140,
+          "bytes_deallocated": 52521,
+          "bytes_reallocated": 6366,
+          "live_bytes": 21619,
+          "live_blocks": 423
+        },
+        {
+          "stage": "child_returned",
+          "pid": 18,
+          "unix_millis": 1789035715625,
+          "elapsed_millis": 852189,
+          "allocations": 178153,
+          "deallocations": 177640,
+          "reallocations": 70336,
+          "bytes_allocated": 32670000,
+          "bytes_deallocated": 32607580,
+          "bytes_reallocated": 10437348,
+          "live_bytes": 62420,
+          "live_blocks": 513
+        },
+        {
+          "stage": "child_settled",
+          "pid": 18,
+          "unix_millis": 1789035715725,
+          "elapsed_millis": 852289,
+          "allocations": 178153,
+          "deallocations": 177640,
+          "reallocations": 70336,
+          "bytes_allocated": 32670000,
+          "bytes_deallocated": 32607580,
+          "bytes_reallocated": 10437348,
+          "live_bytes": 62420,
+          "live_blocks": 513
+        }
+      ],
+      "samples": [
+        {
+          "unix_millis": 1789034864704,
+          "elapsed_millis": 0,
+          "stage": "started",
+          "live_bytes": 2304375,
+          "live_blocks": 1142,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789034869709,
+          "elapsed_millis": 5004,
+          "stage": "periodic",
+          "live_bytes": 2517628,
+          "live_blocks": 1517,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789034874705,
+          "elapsed_millis": 10000,
+          "stage": "periodic",
+          "live_bytes": 2524654,
+          "live_blocks": 1534,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789034879704,
+          "elapsed_millis": 15000,
+          "stage": "periodic",
+          "live_bytes": 2530049,
+          "live_blocks": 1556,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789034884705,
+          "elapsed_millis": 20001,
+          "stage": "periodic",
+          "live_bytes": 2528690,
+          "live_blocks": 1541,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789034889707,
+          "elapsed_millis": 25002,
+          "stage": "periodic",
+          "live_bytes": 2528690,
+          "live_blocks": 1541,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789034894708,
+          "elapsed_millis": 30004,
+          "stage": "periodic",
+          "live_bytes": 2528690,
+          "live_blocks": 1541,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789034899706,
+          "elapsed_millis": 35001,
+          "stage": "periodic",
+          "live_bytes": 2528690,
+          "live_blocks": 1541,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789034904705,
+          "elapsed_millis": 40001,
+          "stage": "periodic",
+          "live_bytes": 2528690,
+          "live_blocks": 1541,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789034909706,
+          "elapsed_millis": 45001,
+          "stage": "periodic",
+          "live_bytes": 2528690,
+          "live_blocks": 1541,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789034914705,
+          "elapsed_millis": 50000,
+          "stage": "periodic",
+          "live_bytes": 2529338,
+          "live_blocks": 1542,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789034919707,
+          "elapsed_millis": 55002,
+          "stage": "periodic",
+          "live_bytes": 2529338,
+          "live_blocks": 1542,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789034924705,
+          "elapsed_millis": 60001,
+          "stage": "periodic",
+          "live_bytes": 2529338,
+          "live_blocks": 1542,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789034929705,
+          "elapsed_millis": 65000,
+          "stage": "periodic",
+          "live_bytes": 2530933,
+          "live_blocks": 1556,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789034934705,
+          "elapsed_millis": 70001,
+          "stage": "periodic",
+          "live_bytes": 2531124,
+          "live_blocks": 1559,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789034939707,
+          "elapsed_millis": 75003,
+          "stage": "periodic",
+          "live_bytes": 2469217,
+          "live_blocks": 1394,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789034944705,
+          "elapsed_millis": 80001,
+          "stage": "periodic",
+          "live_bytes": 2461173,
+          "live_blocks": 1368,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789034949707,
+          "elapsed_millis": 85002,
+          "stage": "periodic",
+          "live_bytes": 2536546,
+          "live_blocks": 1549,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789034954705,
+          "elapsed_millis": 90001,
+          "stage": "periodic",
+          "live_bytes": 2535925,
+          "live_blocks": 1547,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789034959706,
+          "elapsed_millis": 95001,
+          "stage": "periodic",
+          "live_bytes": 2535805,
+          "live_blocks": 1546,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789034964706,
+          "elapsed_millis": 100001,
+          "stage": "periodic",
+          "live_bytes": 2535805,
+          "live_blocks": 1546,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789034969705,
+          "elapsed_millis": 105000,
+          "stage": "periodic",
+          "live_bytes": 2538847,
+          "live_blocks": 1563,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789034974705,
+          "elapsed_millis": 110000,
+          "stage": "periodic",
+          "live_bytes": 2537317,
+          "live_blocks": 1550,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789034979705,
+          "elapsed_millis": 115000,
+          "stage": "periodic",
+          "live_bytes": 2537317,
+          "live_blocks": 1550,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789034984705,
+          "elapsed_millis": 120001,
+          "stage": "periodic",
+          "live_bytes": 2537317,
+          "live_blocks": 1550,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789034989705,
+          "elapsed_millis": 125001,
+          "stage": "periodic",
+          "live_bytes": 2537317,
+          "live_blocks": 1550,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789034994707,
+          "elapsed_millis": 130003,
+          "stage": "periodic",
+          "live_bytes": 2537965,
+          "live_blocks": 1551,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789034999707,
+          "elapsed_millis": 135002,
+          "stage": "periodic",
+          "live_bytes": 2541639,
+          "live_blocks": 1570,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035004707,
+          "elapsed_millis": 140002,
+          "stage": "periodic",
+          "live_bytes": 2540220,
+          "live_blocks": 1565,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035009706,
+          "elapsed_millis": 145001,
+          "stage": "periodic",
+          "live_bytes": 2540982,
+          "live_blocks": 1576,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035014705,
+          "elapsed_millis": 150001,
+          "stage": "periodic",
+          "live_bytes": 2463293,
+          "live_blocks": 1371,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035019705,
+          "elapsed_millis": 155001,
+          "stage": "periodic",
+          "live_bytes": 2463377,
+          "live_blocks": 1372,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035024706,
+          "elapsed_millis": 160001,
+          "stage": "periodic",
+          "live_bytes": 2463293,
+          "live_blocks": 1371,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035029705,
+          "elapsed_millis": 165000,
+          "stage": "periodic",
+          "live_bytes": 2463377,
+          "live_blocks": 1372,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035034706,
+          "elapsed_millis": 170001,
+          "stage": "periodic",
+          "live_bytes": 2535899,
+          "live_blocks": 1547,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035039705,
+          "elapsed_millis": 175000,
+          "stage": "periodic",
+          "live_bytes": 2535991,
+          "live_blocks": 1547,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035044706,
+          "elapsed_millis": 180001,
+          "stage": "periodic",
+          "live_bytes": 2535991,
+          "live_blocks": 1547,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035049705,
+          "elapsed_millis": 185000,
+          "stage": "periodic",
+          "live_bytes": 2535991,
+          "live_blocks": 1547,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035054705,
+          "elapsed_millis": 190000,
+          "stage": "periodic",
+          "live_bytes": 2535991,
+          "live_blocks": 1547,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035059705,
+          "elapsed_millis": 195000,
+          "stage": "periodic",
+          "live_bytes": 2538981,
+          "live_blocks": 1563,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035064705,
+          "elapsed_millis": 200000,
+          "stage": "periodic",
+          "live_bytes": 2539629,
+          "live_blocks": 1564,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035069705,
+          "elapsed_millis": 205000,
+          "stage": "periodic",
+          "live_bytes": 2539629,
+          "live_blocks": 1564,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035074705,
+          "elapsed_millis": 210000,
+          "stage": "periodic",
+          "live_bytes": 2538579,
+          "live_blocks": 1552,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035079705,
+          "elapsed_millis": 215001,
+          "stage": "periodic",
+          "live_bytes": 2540085,
+          "live_blocks": 1564,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035084708,
+          "elapsed_millis": 220003,
+          "stage": "periodic",
+          "live_bytes": 2540289,
+          "live_blocks": 1568,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035089705,
+          "elapsed_millis": 225001,
+          "stage": "periodic",
+          "live_bytes": 2463477,
+          "live_blocks": 1375,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035094704,
+          "elapsed_millis": 230000,
+          "stage": "periodic",
+          "live_bytes": 2536839,
+          "live_blocks": 1552,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035099705,
+          "elapsed_millis": 235001,
+          "stage": "periodic",
+          "live_bytes": 2536931,
+          "live_blocks": 1552,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035104705,
+          "elapsed_millis": 240001,
+          "stage": "periodic",
+          "live_bytes": 2536931,
+          "live_blocks": 1552,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035109705,
+          "elapsed_millis": 245000,
+          "stage": "periodic",
+          "live_bytes": 2536931,
+          "live_blocks": 1552,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035114708,
+          "elapsed_millis": 250004,
+          "stage": "periodic",
+          "live_bytes": 2536931,
+          "live_blocks": 1552,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035119705,
+          "elapsed_millis": 255000,
+          "stage": "periodic",
+          "live_bytes": 2536931,
+          "live_blocks": 1552,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035124705,
+          "elapsed_millis": 260001,
+          "stage": "periodic",
+          "live_bytes": 2536931,
+          "live_blocks": 1552,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035129705,
+          "elapsed_millis": 265000,
+          "stage": "periodic",
+          "live_bytes": 2536931,
+          "live_blocks": 1552,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035134705,
+          "elapsed_millis": 270001,
+          "stage": "periodic",
+          "live_bytes": 2536931,
+          "live_blocks": 1552,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035139705,
+          "elapsed_millis": 275001,
+          "stage": "periodic",
+          "live_bytes": 2537579,
+          "live_blocks": 1553,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035144705,
+          "elapsed_millis": 280000,
+          "stage": "periodic",
+          "live_bytes": 2537579,
+          "live_blocks": 1553,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035149705,
+          "elapsed_millis": 285000,
+          "stage": "periodic",
+          "live_bytes": 2537579,
+          "live_blocks": 1553,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035154705,
+          "elapsed_millis": 290001,
+          "stage": "periodic",
+          "live_bytes": 2539085,
+          "live_blocks": 1565,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035159704,
+          "elapsed_millis": 295000,
+          "stage": "periodic",
+          "live_bytes": 2539276,
+          "live_blocks": 1568,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035164705,
+          "elapsed_millis": 300001,
+          "stage": "periodic",
+          "live_bytes": 2463574,
+          "live_blocks": 1377,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035169705,
+          "elapsed_millis": 305000,
+          "stage": "periodic",
+          "live_bytes": 2463574,
+          "live_blocks": 1377,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035174705,
+          "elapsed_millis": 310000,
+          "stage": "periodic",
+          "live_bytes": 2463490,
+          "live_blocks": 1376,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035179706,
+          "elapsed_millis": 315001,
+          "stage": "periodic",
+          "live_bytes": 2463574,
+          "live_blocks": 1377,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035184705,
+          "elapsed_millis": 320000,
+          "stage": "periodic",
+          "live_bytes": 2535910,
+          "live_blocks": 1551,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035189707,
+          "elapsed_millis": 325002,
+          "stage": "periodic",
+          "live_bytes": 2536002,
+          "live_blocks": 1551,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035194709,
+          "elapsed_millis": 330004,
+          "stage": "periodic",
+          "live_bytes": 2536002,
+          "live_blocks": 1551,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035199705,
+          "elapsed_millis": 335001,
+          "stage": "periodic",
+          "live_bytes": 2536002,
+          "live_blocks": 1551,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035204705,
+          "elapsed_millis": 340001,
+          "stage": "periodic",
+          "live_bytes": 2536002,
+          "live_blocks": 1551,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035209705,
+          "elapsed_millis": 345000,
+          "stage": "periodic",
+          "live_bytes": 2536002,
+          "live_blocks": 1551,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035214706,
+          "elapsed_millis": 350001,
+          "stage": "periodic",
+          "live_bytes": 2536650,
+          "live_blocks": 1552,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035219705,
+          "elapsed_millis": 355000,
+          "stage": "periodic",
+          "live_bytes": 2536650,
+          "live_blocks": 1552,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035224704,
+          "elapsed_millis": 360000,
+          "stage": "periodic",
+          "live_bytes": 2538156,
+          "live_blocks": 1564,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035229705,
+          "elapsed_millis": 365001,
+          "stage": "periodic",
+          "live_bytes": 2539667,
+          "live_blocks": 1577,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035234705,
+          "elapsed_millis": 370000,
+          "stage": "periodic",
+          "live_bytes": 2463490,
+          "live_blocks": 1376,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035239705,
+          "elapsed_millis": 375000,
+          "stage": "periodic",
+          "live_bytes": 2476542,
+          "live_blocks": 1380,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035244705,
+          "elapsed_millis": 380000,
+          "stage": "periodic",
+          "live_bytes": 2476626,
+          "live_blocks": 1381,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035249707,
+          "elapsed_millis": 385003,
+          "stage": "periodic",
+          "live_bytes": 2549247,
+          "live_blocks": 1558,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035254705,
+          "elapsed_millis": 390000,
+          "stage": "periodic",
+          "live_bytes": 2550822,
+          "live_blocks": 1560,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035259705,
+          "elapsed_millis": 395000,
+          "stage": "periodic",
+          "live_bytes": 2550702,
+          "live_blocks": 1559,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035264706,
+          "elapsed_millis": 400001,
+          "stage": "periodic",
+          "live_bytes": 2550702,
+          "live_blocks": 1559,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035269705,
+          "elapsed_millis": 405000,
+          "stage": "periodic",
+          "live_bytes": 2550702,
+          "live_blocks": 1559,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035274705,
+          "elapsed_millis": 410000,
+          "stage": "periodic",
+          "live_bytes": 2550702,
+          "live_blocks": 1559,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035279705,
+          "elapsed_millis": 415001,
+          "stage": "periodic",
+          "live_bytes": 2551350,
+          "live_blocks": 1560,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035284705,
+          "elapsed_millis": 420001,
+          "stage": "periodic",
+          "live_bytes": 2551350,
+          "live_blocks": 1560,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035289706,
+          "elapsed_millis": 425001,
+          "stage": "periodic",
+          "live_bytes": 2551350,
+          "live_blocks": 1560,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035294705,
+          "elapsed_millis": 430000,
+          "stage": "periodic",
+          "live_bytes": 2551350,
+          "live_blocks": 1560,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035299705,
+          "elapsed_millis": 435001,
+          "stage": "periodic",
+          "live_bytes": 2551536,
+          "live_blocks": 1562,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035304705,
+          "elapsed_millis": 440000,
+          "stage": "periodic",
+          "live_bytes": 2553047,
+          "live_blocks": 1575,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035309705,
+          "elapsed_millis": 445001,
+          "stage": "periodic",
+          "live_bytes": 2476542,
+          "live_blocks": 1380,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035314707,
+          "elapsed_millis": 450003,
+          "stage": "periodic",
+          "live_bytes": 2476626,
+          "live_blocks": 1381,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035319705,
+          "elapsed_millis": 455001,
+          "stage": "periodic",
+          "live_bytes": 2476542,
+          "live_blocks": 1380,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035324705,
+          "elapsed_millis": 460001,
+          "stage": "periodic",
+          "live_bytes": 2548962,
+          "live_blocks": 1555,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035329705,
+          "elapsed_millis": 465000,
+          "stage": "periodic",
+          "live_bytes": 2549054,
+          "live_blocks": 1555,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035334705,
+          "elapsed_millis": 470000,
+          "stage": "periodic",
+          "live_bytes": 2549054,
+          "live_blocks": 1555,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035339705,
+          "elapsed_millis": 475001,
+          "stage": "periodic",
+          "live_bytes": 2549106,
+          "live_blocks": 1556,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035344705,
+          "elapsed_millis": 480001,
+          "stage": "periodic",
+          "live_bytes": 2550566,
+          "live_blocks": 1559,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035349705,
+          "elapsed_millis": 485000,
+          "stage": "periodic",
+          "live_bytes": 2550566,
+          "live_blocks": 1559,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035354708,
+          "elapsed_millis": 490003,
+          "stage": "periodic",
+          "live_bytes": 2551214,
+          "live_blocks": 1560,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035359705,
+          "elapsed_millis": 495001,
+          "stage": "periodic",
+          "live_bytes": 2551214,
+          "live_blocks": 1560,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035364704,
+          "elapsed_millis": 500000,
+          "stage": "periodic",
+          "live_bytes": 2551214,
+          "live_blocks": 1560,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035369705,
+          "elapsed_millis": 505001,
+          "stage": "periodic",
+          "live_bytes": 2551214,
+          "live_blocks": 1560,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035374705,
+          "elapsed_millis": 510000,
+          "stage": "periodic",
+          "live_bytes": 2551400,
+          "live_blocks": 1562,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035379705,
+          "elapsed_millis": 515000,
+          "stage": "periodic",
+          "live_bytes": 2552911,
+          "live_blocks": 1575,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035384705,
+          "elapsed_millis": 520000,
+          "stage": "periodic",
+          "live_bytes": 2477910,
+          "live_blocks": 1384,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035389704,
+          "elapsed_millis": 525000,
+          "stage": "periodic",
+          "live_bytes": 2550040,
+          "live_blocks": 1559,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035394704,
+          "elapsed_millis": 530000,
+          "stage": "periodic",
+          "live_bytes": 2550252,
+          "live_blocks": 1560,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035399705,
+          "elapsed_millis": 535000,
+          "stage": "periodic",
+          "live_bytes": 2550132,
+          "live_blocks": 1559,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035404705,
+          "elapsed_millis": 540000,
+          "stage": "periodic",
+          "live_bytes": 2550132,
+          "live_blocks": 1559,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035409705,
+          "elapsed_millis": 545000,
+          "stage": "periodic",
+          "live_bytes": 2550132,
+          "live_blocks": 1559,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035414705,
+          "elapsed_millis": 550000,
+          "stage": "periodic",
+          "live_bytes": 2550132,
+          "live_blocks": 1559,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035419705,
+          "elapsed_millis": 555000,
+          "stage": "periodic",
+          "live_bytes": 2550132,
+          "live_blocks": 1559,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035424705,
+          "elapsed_millis": 560000,
+          "stage": "periodic",
+          "live_bytes": 2550132,
+          "live_blocks": 1559,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035429705,
+          "elapsed_millis": 565000,
+          "stage": "periodic",
+          "live_bytes": 2550132,
+          "live_blocks": 1559,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035434705,
+          "elapsed_millis": 570000,
+          "stage": "periodic",
+          "live_bytes": 2553770,
+          "live_blocks": 1576,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035439706,
+          "elapsed_millis": 575002,
+          "stage": "periodic",
+          "live_bytes": 2553770,
+          "live_blocks": 1576,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035444705,
+          "elapsed_millis": 580000,
+          "stage": "periodic",
+          "live_bytes": 2552720,
+          "live_blocks": 1564,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035449705,
+          "elapsed_millis": 585000,
+          "stage": "periodic",
+          "live_bytes": 2554226,
+          "live_blocks": 1576,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035454705,
+          "elapsed_millis": 590000,
+          "stage": "periodic",
+          "live_bytes": 2554417,
+          "live_blocks": 1579,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035459706,
+          "elapsed_millis": 595001,
+          "stage": "periodic",
+          "live_bytes": 2476739,
+          "live_blocks": 1385,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035464705,
+          "elapsed_millis": 600000,
+          "stage": "periodic",
+          "live_bytes": 2476823,
+          "live_blocks": 1386,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035469705,
+          "elapsed_millis": 605000,
+          "stage": "periodic",
+          "live_bytes": 2476739,
+          "live_blocks": 1385,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035474705,
+          "elapsed_millis": 610000,
+          "stage": "periodic",
+          "live_bytes": 2549159,
+          "live_blocks": 1560,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035479705,
+          "elapsed_millis": 615000,
+          "stage": "periodic",
+          "live_bytes": 2549251,
+          "live_blocks": 1560,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035484705,
+          "elapsed_millis": 620001,
+          "stage": "periodic",
+          "live_bytes": 2549251,
+          "live_blocks": 1560,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035489705,
+          "elapsed_millis": 625001,
+          "stage": "periodic",
+          "live_bytes": 2549251,
+          "live_blocks": 1560,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035494705,
+          "elapsed_millis": 630000,
+          "stage": "periodic",
+          "live_bytes": 2549251,
+          "live_blocks": 1560,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035499704,
+          "elapsed_millis": 635000,
+          "stage": "periodic",
+          "live_bytes": 2549251,
+          "live_blocks": 1560,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035504705,
+          "elapsed_millis": 640001,
+          "stage": "periodic",
+          "live_bytes": 2549899,
+          "live_blocks": 1561,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035509705,
+          "elapsed_millis": 645001,
+          "stage": "periodic",
+          "live_bytes": 2549899,
+          "live_blocks": 1561,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035514705,
+          "elapsed_millis": 650000,
+          "stage": "periodic",
+          "live_bytes": 2549899,
+          "live_blocks": 1561,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035519705,
+          "elapsed_millis": 655000,
+          "stage": "periodic",
+          "live_bytes": 2549899,
+          "live_blocks": 1561,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035524705,
+          "elapsed_millis": 660000,
+          "stage": "periodic",
+          "live_bytes": 2550085,
+          "live_blocks": 1563,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035529706,
+          "elapsed_millis": 665001,
+          "stage": "periodic",
+          "live_bytes": 2551596,
+          "live_blocks": 1576,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035534708,
+          "elapsed_millis": 670004,
+          "stage": "periodic",
+          "live_bytes": 2492212,
+          "live_blocks": 1412,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035539706,
+          "elapsed_millis": 675002,
+          "stage": "periodic",
+          "live_bytes": 2557744,
+          "live_blocks": 1563,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035544705,
+          "elapsed_millis": 680001,
+          "stage": "periodic",
+          "live_bytes": 2557744,
+          "live_blocks": 1563,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035549705,
+          "elapsed_millis": 685000,
+          "stage": "periodic",
+          "live_bytes": 2557624,
+          "live_blocks": 1562,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035554705,
+          "elapsed_millis": 690001,
+          "stage": "periodic",
+          "live_bytes": 2557624,
+          "live_blocks": 1562,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035559704,
+          "elapsed_millis": 695000,
+          "stage": "periodic",
+          "live_bytes": 2557624,
+          "live_blocks": 1562,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035564705,
+          "elapsed_millis": 700001,
+          "stage": "periodic",
+          "live_bytes": 2557624,
+          "live_blocks": 1562,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035569705,
+          "elapsed_millis": 705001,
+          "stage": "periodic",
+          "live_bytes": 2557624,
+          "live_blocks": 1562,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035574705,
+          "elapsed_millis": 710000,
+          "stage": "periodic",
+          "live_bytes": 2557624,
+          "live_blocks": 1562,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035579706,
+          "elapsed_millis": 715001,
+          "stage": "periodic",
+          "live_bytes": 2557624,
+          "live_blocks": 1562,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035584705,
+          "elapsed_millis": 720001,
+          "stage": "periodic",
+          "live_bytes": 2558272,
+          "live_blocks": 1563,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035589705,
+          "elapsed_millis": 725001,
+          "stage": "periodic",
+          "live_bytes": 2558272,
+          "live_blocks": 1563,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035594705,
+          "elapsed_millis": 730000,
+          "stage": "periodic",
+          "live_bytes": 2559778,
+          "live_blocks": 1575,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035599705,
+          "elapsed_millis": 735000,
+          "stage": "periodic",
+          "live_bytes": 2561289,
+          "live_blocks": 1588,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035604704,
+          "elapsed_millis": 740000,
+          "stage": "periodic",
+          "live_bytes": 2484183,
+          "live_blocks": 1386,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035609706,
+          "elapsed_millis": 745001,
+          "stage": "periodic",
+          "live_bytes": 2484267,
+          "live_blocks": 1387,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035614705,
+          "elapsed_millis": 750000,
+          "stage": "periodic",
+          "live_bytes": 2484183,
+          "live_blocks": 1386,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035619708,
+          "elapsed_millis": 755003,
+          "stage": "periodic",
+          "live_bytes": 2556752,
+          "live_blocks": 1564,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035624705,
+          "elapsed_millis": 760001,
+          "stage": "periodic",
+          "live_bytes": 2558327,
+          "live_blocks": 1566,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035629705,
+          "elapsed_millis": 765001,
+          "stage": "periodic",
+          "live_bytes": 2558207,
+          "live_blocks": 1565,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035634704,
+          "elapsed_millis": 770000,
+          "stage": "periodic",
+          "live_bytes": 2558207,
+          "live_blocks": 1565,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035639705,
+          "elapsed_millis": 775001,
+          "stage": "periodic",
+          "live_bytes": 2558207,
+          "live_blocks": 1565,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035644708,
+          "elapsed_millis": 780003,
+          "stage": "periodic",
+          "live_bytes": 2558207,
+          "live_blocks": 1565,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035649707,
+          "elapsed_millis": 785003,
+          "stage": "periodic",
+          "live_bytes": 2558207,
+          "live_blocks": 1565,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035654705,
+          "elapsed_millis": 790001,
+          "stage": "periodic",
+          "live_bytes": 2558207,
+          "live_blocks": 1565,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035659705,
+          "elapsed_millis": 795001,
+          "stage": "periodic",
+          "live_bytes": 2558207,
+          "live_blocks": 1565,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035664705,
+          "elapsed_millis": 800000,
+          "stage": "periodic",
+          "live_bytes": 2558207,
+          "live_blocks": 1565,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035669705,
+          "elapsed_millis": 805000,
+          "stage": "periodic",
+          "live_bytes": 2558207,
+          "live_blocks": 1565,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035674705,
+          "elapsed_millis": 810001,
+          "stage": "periodic",
+          "live_bytes": 2558207,
+          "live_blocks": 1565,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035679705,
+          "elapsed_millis": 815001,
+          "stage": "periodic",
+          "live_bytes": 2558207,
+          "live_blocks": 1565,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035684705,
+          "elapsed_millis": 820000,
+          "stage": "periodic",
+          "live_bytes": 2558207,
+          "live_blocks": 1565,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035689705,
+          "elapsed_millis": 825000,
+          "stage": "periodic",
+          "live_bytes": 2558207,
+          "live_blocks": 1565,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035694705,
+          "elapsed_millis": 830001,
+          "stage": "periodic",
+          "live_bytes": 2558207,
+          "live_blocks": 1565,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035699705,
+          "elapsed_millis": 835001,
+          "stage": "periodic",
+          "live_bytes": 2558207,
+          "live_blocks": 1565,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035704705,
+          "elapsed_millis": 840000,
+          "stage": "periodic",
+          "live_bytes": 2558207,
+          "live_blocks": 1565,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035709705,
+          "elapsed_millis": 845000,
+          "stage": "periodic",
+          "live_bytes": 2558207,
+          "live_blocks": 1565,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035714705,
+          "elapsed_millis": 850000,
+          "stage": "periodic",
+          "live_bytes": 2558207,
+          "live_blocks": 1565,
+          "pid": 18
+        },
+        {
+          "unix_millis": 1789035715574,
+          "elapsed_millis": 850869,
+          "stage": "returned",
+          "live_bytes": 174113,
+          "live_blocks": 651,
+          "pid": 18
+        }
+      ],
+      "clock_drift_ms": 1,
+      "max_gap_ms": 5004,
+      "phases": [
+        {
+          "phase": "churn-01-outage.json",
+          "count": 6,
+          "first_gap_ms": 4157,
+          "last_gap_ms": 853,
+          "first": {
+            "unix_millis": 1789034914705,
+            "elapsed_millis": 50000,
+            "stage": "periodic",
+            "live_bytes": 2529338,
+            "live_blocks": 1542,
+            "pid": 18
+          },
+          "last": {
+            "unix_millis": 1789034939707,
+            "elapsed_millis": 75003,
+            "stage": "periodic",
+            "live_bytes": 2469217,
+            "live_blocks": 1394,
+            "pid": 18
+          },
+          "peak_bytes": 2531124
+        },
+        {
+          "phase": "churn-01-recovery-sample.json",
+          "count": 8,
+          "first_gap_ms": 2789,
+          "last_gap_ms": 2220,
+          "first": {
+            "unix_millis": 1789034944705,
+            "elapsed_millis": 80001,
+            "stage": "periodic",
+            "live_bytes": 2461173,
+            "live_blocks": 1368,
+            "pid": 18
+          },
+          "last": {
+            "unix_millis": 1789034979705,
+            "elapsed_millis": 115000,
+            "stage": "periodic",
+            "live_bytes": 2537317,
+            "live_blocks": 1550,
+            "pid": 18
+          },
+          "peak_bytes": 2538847
+        },
+        {
+          "phase": "churn-02-outage.json",
+          "count": 6,
+          "first_gap_ms": 353,
+          "last_gap_ms": 4659,
+          "first": {
+            "unix_millis": 1789034984705,
+            "elapsed_millis": 120001,
+            "stage": "periodic",
+            "live_bytes": 2537317,
+            "live_blocks": 1550,
+            "pid": 18
+          },
+          "last": {
+            "unix_millis": 1789035009706,
+            "elapsed_millis": 145001,
+            "stage": "periodic",
+            "live_bytes": 2540982,
+            "live_blocks": 1576,
+            "pid": 18
+          },
+          "peak_bytes": 2541639
+        },
+        {
+          "phase": "churn-02-recovery-sample.json",
+          "count": 8,
+          "first_gap_ms": 3991,
+          "last_gap_ms": 1021,
+          "first": {
+            "unix_millis": 1789035019705,
+            "elapsed_millis": 155001,
+            "stage": "periodic",
+            "live_bytes": 2463377,
+            "live_blocks": 1372,
+            "pid": 18
+          },
+          "last": {
+            "unix_millis": 1789035054705,
+            "elapsed_millis": 190000,
+            "stage": "periodic",
+            "live_bytes": 2535991,
+            "live_blocks": 1547,
+            "pid": 18
+          },
+          "peak_bytes": 2535991
+        },
+        {
+          "phase": "churn-03-outage.json",
+          "count": 6,
+          "first_gap_ms": 1554,
+          "last_gap_ms": 3455,
+          "first": {
+            "unix_millis": 1789035059705,
+            "elapsed_millis": 195000,
+            "stage": "periodic",
+            "live_bytes": 2538981,
+            "live_blocks": 1563,
+            "pid": 18
+          },
+          "last": {
+            "unix_millis": 1789035084708,
+            "elapsed_millis": 220003,
+            "stage": "periodic",
+            "live_bytes": 2540289,
+            "live_blocks": 1568,
+            "pid": 18
+          },
+          "peak_bytes": 2540289
+        },
+        {
+          "phase": "churn-03-recovery-sample.json",
+          "count": 8,
+          "first_gap_ms": 189,
+          "last_gap_ms": 4824,
+          "first": {
+            "unix_millis": 1789035089705,
+            "elapsed_millis": 225001,
+            "stage": "periodic",
+            "live_bytes": 2463477,
+            "live_blocks": 1375,
+            "pid": 18
+          },
+          "last": {
+            "unix_millis": 1789035124705,
+            "elapsed_millis": 260001,
+            "stage": "periodic",
+            "live_bytes": 2536931,
+            "live_blocks": 1552,
+            "pid": 18
+          },
+          "peak_bytes": 2536931
+        },
+        {
+          "phase": "churn-04-outage.json",
+          "count": 6,
+          "first_gap_ms": 2755,
+          "last_gap_ms": 2256,
+          "first": {
+            "unix_millis": 1789035134705,
+            "elapsed_millis": 270001,
+            "stage": "periodic",
+            "live_bytes": 2536931,
+            "live_blocks": 1552,
+            "pid": 18
+          },
+          "last": {
+            "unix_millis": 1789035159704,
+            "elapsed_millis": 295000,
+            "stage": "periodic",
+            "live_bytes": 2539276,
+            "live_blocks": 1568,
+            "pid": 18
+          },
+          "peak_bytes": 2539276
+        },
+        {
+          "phase": "churn-04-recovery-sample.json",
+          "count": 8,
+          "first_gap_ms": 1397,
+          "last_gap_ms": 3616,
+          "first": {
+            "unix_millis": 1789035164705,
+            "elapsed_millis": 300001,
+            "stage": "periodic",
+            "live_bytes": 2463574,
+            "live_blocks": 1377,
+            "pid": 18
+          },
+          "last": {
+            "unix_millis": 1789035199705,
+            "elapsed_millis": 335001,
+            "stage": "periodic",
+            "live_bytes": 2536002,
+            "live_blocks": 1551,
+            "pid": 18
+          },
+          "peak_bytes": 2536002
+        },
+        {
+          "phase": "churn-05-outage.json",
+          "count": 6,
+          "first_gap_ms": 3965,
+          "last_gap_ms": 1048,
+          "first": {
+            "unix_millis": 1789035209705,
+            "elapsed_millis": 345000,
+            "stage": "periodic",
+            "live_bytes": 2536002,
+            "live_blocks": 1551,
+            "pid": 18
+          },
+          "last": {
+            "unix_millis": 1789035234705,
+            "elapsed_millis": 370000,
+            "stage": "periodic",
+            "live_bytes": 2463490,
+            "live_blocks": 1376,
+            "pid": 18
+          },
+          "peak_bytes": 2539667
+        },
+        {
+          "phase": "churn-05-recovery-sample.json",
+          "count": 8,
+          "first_gap_ms": 2589,
+          "last_gap_ms": 2420,
+          "first": {
+            "unix_millis": 1789035239705,
+            "elapsed_millis": 375000,
+            "stage": "periodic",
+            "live_bytes": 2476542,
+            "live_blocks": 1380,
+            "pid": 18
+          },
+          "last": {
+            "unix_millis": 1789035274705,
+            "elapsed_millis": 410000,
+            "stage": "periodic",
+            "live_bytes": 2550702,
+            "live_blocks": 1559,
+            "pid": 18
+          },
+          "peak_bytes": 2550822
+        },
+        {
+          "phase": "churn-06-outage.json",
+          "count": 6,
+          "first_gap_ms": 163,
+          "last_gap_ms": 4850,
+          "first": {
+            "unix_millis": 1789035279705,
+            "elapsed_millis": 415001,
+            "stage": "periodic",
+            "live_bytes": 2551350,
+            "live_blocks": 1560,
+            "pid": 18
+          },
+          "last": {
+            "unix_millis": 1789035304705,
+            "elapsed_millis": 440000,
+            "stage": "periodic",
+            "live_bytes": 2553047,
+            "live_blocks": 1575,
+            "pid": 18
+          },
+          "peak_bytes": 2553047
+        },
+        {
+          "phase": "churn-06-recovery-sample.json",
+          "count": 8,
+          "first_gap_ms": 3806,
+          "last_gap_ms": 1209,
+          "first": {
+            "unix_millis": 1789035314707,
+            "elapsed_millis": 450003,
+            "stage": "periodic",
+            "live_bytes": 2476626,
+            "live_blocks": 1381,
+            "pid": 18
+          },
+          "last": {
+            "unix_millis": 1789035349705,
+            "elapsed_millis": 485000,
+            "stage": "periodic",
+            "live_bytes": 2550566,
+            "live_blocks": 1559,
+            "pid": 18
+          },
+          "peak_bytes": 2550566
+        },
+        {
+          "phase": "churn-07-outage.json",
+          "count": 6,
+          "first_gap_ms": 1370,
+          "last_gap_ms": 3646,
+          "first": {
+            "unix_millis": 1789035354708,
+            "elapsed_millis": 490003,
+            "stage": "periodic",
+            "live_bytes": 2551214,
+            "live_blocks": 1560,
+            "pid": 18
+          },
+          "last": {
+            "unix_millis": 1789035379705,
+            "elapsed_millis": 515000,
+            "stage": "periodic",
+            "live_bytes": 2552911,
+            "live_blocks": 1575,
+            "pid": 18
+          },
+          "peak_bytes": 2552911
+        },
+        {
+          "phase": "churn-07-recovery-sample.json",
+          "count": 9,
+          "first_gap_ms": 3,
+          "last_gap_ms": 9,
+          "first": {
+            "unix_millis": 1789035384705,
+            "elapsed_millis": 520000,
+            "stage": "periodic",
+            "live_bytes": 2477910,
+            "live_blocks": 1384,
+            "pid": 18
+          },
+          "last": {
+            "unix_millis": 1789035424705,
+            "elapsed_millis": 560000,
+            "stage": "periodic",
+            "live_bytes": 2550132,
+            "live_blocks": 1559,
+            "pid": 18
+          },
+          "peak_bytes": 2550252
+        },
+        {
+          "phase": "churn-08-outage.json",
+          "count": 6,
+          "first_gap_ms": 2560,
+          "last_gap_ms": 2453,
+          "first": {
+            "unix_millis": 1789035429705,
+            "elapsed_millis": 565000,
+            "stage": "periodic",
+            "live_bytes": 2550132,
+            "live_blocks": 1559,
+            "pid": 18
+          },
+          "last": {
+            "unix_millis": 1789035454705,
+            "elapsed_millis": 590000,
+            "stage": "periodic",
+            "live_bytes": 2554417,
+            "live_blocks": 1579,
+            "pid": 18
+          },
+          "peak_bytes": 2554417
+        },
+        {
+          "phase": "churn-08-recovery-sample.json",
+          "count": 8,
+          "first_gap_ms": 1199,
+          "last_gap_ms": 3812,
+          "first": {
+            "unix_millis": 1789035459706,
+            "elapsed_millis": 595001,
+            "stage": "periodic",
+            "live_bytes": 2476739,
+            "live_blocks": 1385,
+            "pid": 18
+          },
+          "last": {
+            "unix_millis": 1789035494705,
+            "elapsed_millis": 630000,
+            "stage": "periodic",
+            "live_bytes": 2549251,
+            "live_blocks": 1560,
+            "pid": 18
+          },
+          "peak_bytes": 2549251
+        },
+        {
+          "phase": "churn-09-outage.json",
+          "count": 6,
+          "first_gap_ms": 3767,
+          "last_gap_ms": 1246,
+          "first": {
+            "unix_millis": 1789035504705,
+            "elapsed_millis": 640001,
+            "stage": "periodic",
+            "live_bytes": 2549899,
+            "live_blocks": 1561,
+            "pid": 18
+          },
+          "last": {
+            "unix_millis": 1789035529706,
+            "elapsed_millis": 665001,
+            "stage": "periodic",
+            "live_bytes": 2551596,
+            "live_blocks": 1576,
+            "pid": 18
+          },
+          "peak_bytes": 2551596
+        },
+        {
+          "phase": "churn-09-recovery-sample.json",
+          "count": 8,
+          "first_gap_ms": 2407,
+          "last_gap_ms": 2609,
+          "first": {
+            "unix_millis": 1789035534708,
+            "elapsed_millis": 670004,
+            "stage": "periodic",
+            "live_bytes": 2492212,
+            "live_blocks": 1412,
+            "pid": 18
+          },
+          "last": {
+            "unix_millis": 1789035569705,
+            "elapsed_millis": 705001,
+            "stage": "periodic",
+            "live_bytes": 2557624,
+            "live_blocks": 1562,
+            "pid": 18
+          },
+          "peak_bytes": 2557744
+        },
+        {
+          "phase": "churn-10-outage.json",
+          "count": 6,
+          "first_gap_ms": 4974,
+          "last_gap_ms": 40,
+          "first": {
+            "unix_millis": 1789035579706,
+            "elapsed_millis": 715001,
+            "stage": "periodic",
+            "live_bytes": 2557624,
+            "live_blocks": 1562,
+            "pid": 18
+          },
+          "last": {
+            "unix_millis": 1789035604704,
+            "elapsed_millis": 740000,
+            "stage": "periodic",
+            "live_bytes": 2484183,
+            "live_blocks": 1386,
+            "pid": 18
+          },
+          "peak_bytes": 2561289
+        },
+        {
+          "phase": "churn-10-recovery-sample.json",
+          "count": 8,
+          "first_gap_ms": 3606,
+          "last_gap_ms": 1400,
+          "first": {
+            "unix_millis": 1789035609706,
+            "elapsed_millis": 745001,
+            "stage": "periodic",
+            "live_bytes": 2484267,
+            "live_blocks": 1387,
+            "pid": 18
+          },
+          "last": {
+            "unix_millis": 1789035644708,
+            "elapsed_millis": 780003,
+            "stage": "periodic",
+            "live_bytes": 2558207,
+            "live_blocks": 1565,
+            "pid": 18
+          },
+          "peak_bytes": 2558327
+        },
+        {
+          "phase": "churn-settle.json",
+          "count": 12,
+          "first_gap_ms": 2265,
+          "last_gap_ms": 2750,
+          "first": {
+            "unix_millis": 1789035649707,
+            "elapsed_millis": 785003,
+            "stage": "periodic",
+            "live_bytes": 2558207,
+            "live_blocks": 1565,
+            "pid": 18
+          },
+          "last": {
+            "unix_millis": 1789035704705,
+            "elapsed_millis": 840000,
+            "stage": "periodic",
+            "live_bytes": 2558207,
+            "live_blocks": 1565,
+            "pid": 18
+          },
+          "peak_bytes": 2558207
+        }
+      ],
+      "residual_bytes": 40801,
+      "residual_blocks": 90
+    },
+    "b": {
+      "lifecycle": [
+        {
+          "stage": "before_child",
+          "pid": 19,
+          "unix_millis": 1789034863437,
+          "elapsed_millis": 0,
+          "allocations": 617,
+          "deallocations": 194,
+          "reallocations": 22,
+          "bytes_allocated": 74140,
+          "bytes_deallocated": 52521,
+          "bytes_reallocated": 6366,
+          "live_bytes": 21619,
+          "live_blocks": 423
+        },
+        {
+          "stage": "child_returned",
+          "pid": 19,
+          "unix_millis": 1789035715835,
+          "elapsed_millis": 852398,
+          "allocations": 176432,
+          "deallocations": 175919,
+          "reallocations": 65431,
+          "bytes_allocated": 32715872,
+          "bytes_deallocated": 32653452,
+          "bytes_reallocated": 9936691,
+          "live_bytes": 62420,
+          "live_blocks": 513
+        },
+        {
+          "stage": "child_settled",
+          "pid": 19,
+          "unix_millis": 1789035715936,
+          "elapsed_millis": 852499,
+          "allocations": 176432,
+          "deallocations": 175919,
+          "reallocations": 65431,
+          "bytes_allocated": 32715872,
+          "bytes_deallocated": 32653452,
+          "bytes_reallocated": 9936691,
+          "live_bytes": 62420,
+          "live_blocks": 513
+        }
+      ],
+      "samples": [
+        {
+          "unix_millis": 1789034864456,
+          "elapsed_millis": 0,
+          "stage": "started",
+          "live_bytes": 2292120,
+          "live_blocks": 1083,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789034869458,
+          "elapsed_millis": 5001,
+          "stage": "periodic",
+          "live_bytes": 2491774,
+          "live_blocks": 1454,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789034874457,
+          "elapsed_millis": 10001,
+          "stage": "periodic",
+          "live_bytes": 2518558,
+          "live_blocks": 1515,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789034879457,
+          "elapsed_millis": 15001,
+          "stage": "periodic",
+          "live_bytes": 2531998,
+          "live_blocks": 1535,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789034884460,
+          "elapsed_millis": 20004,
+          "stage": "periodic",
+          "live_bytes": 2522594,
+          "live_blocks": 1522,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789034889457,
+          "elapsed_millis": 25001,
+          "stage": "periodic",
+          "live_bytes": 2522594,
+          "live_blocks": 1522,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789034894460,
+          "elapsed_millis": 30003,
+          "stage": "periodic",
+          "live_bytes": 2522594,
+          "live_blocks": 1522,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789034899459,
+          "elapsed_millis": 35003,
+          "stage": "periodic",
+          "live_bytes": 2522594,
+          "live_blocks": 1522,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789034904458,
+          "elapsed_millis": 40001,
+          "stage": "periodic",
+          "live_bytes": 2522594,
+          "live_blocks": 1522,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789034909458,
+          "elapsed_millis": 45001,
+          "stage": "periodic",
+          "live_bytes": 2522594,
+          "live_blocks": 1522,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789034914458,
+          "elapsed_millis": 50001,
+          "stage": "periodic",
+          "live_bytes": 2523242,
+          "live_blocks": 1523,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789034919458,
+          "elapsed_millis": 55001,
+          "stage": "periodic",
+          "live_bytes": 2524837,
+          "live_blocks": 1537,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789034924458,
+          "elapsed_millis": 60002,
+          "stage": "periodic",
+          "live_bytes": 2526348,
+          "live_blocks": 1550,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789034929458,
+          "elapsed_millis": 65002,
+          "stage": "periodic",
+          "live_bytes": 2448819,
+          "live_blocks": 1347,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789034934458,
+          "elapsed_millis": 70002,
+          "stage": "periodic",
+          "live_bytes": 2448819,
+          "live_blocks": 1347,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789034939460,
+          "elapsed_millis": 75003,
+          "stage": "periodic",
+          "live_bytes": 2448819,
+          "live_blocks": 1347,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789034944458,
+          "elapsed_millis": 80002,
+          "stage": "periodic",
+          "live_bytes": 2448903,
+          "live_blocks": 1348,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789034949460,
+          "elapsed_millis": 85004,
+          "stage": "periodic",
+          "live_bytes": 2522661,
+          "live_blocks": 1524,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789034954461,
+          "elapsed_millis": 90004,
+          "stage": "periodic",
+          "live_bytes": 2523456,
+          "live_blocks": 1523,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789034959458,
+          "elapsed_millis": 95001,
+          "stage": "periodic",
+          "live_bytes": 2523456,
+          "live_blocks": 1523,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789034964459,
+          "elapsed_millis": 100002,
+          "stage": "periodic",
+          "live_bytes": 2523456,
+          "live_blocks": 1523,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789034969458,
+          "elapsed_millis": 105001,
+          "stage": "periodic",
+          "live_bytes": 2526446,
+          "live_blocks": 1539,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789034974461,
+          "elapsed_millis": 110004,
+          "stage": "periodic",
+          "live_bytes": 2524968,
+          "live_blocks": 1527,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789034979459,
+          "elapsed_millis": 115002,
+          "stage": "periodic",
+          "live_bytes": 2524968,
+          "live_blocks": 1527,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789034984458,
+          "elapsed_millis": 120001,
+          "stage": "periodic",
+          "live_bytes": 2529096,
+          "live_blocks": 1528,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789034989459,
+          "elapsed_millis": 125002,
+          "stage": "periodic",
+          "live_bytes": 2531440,
+          "live_blocks": 1544,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789034994463,
+          "elapsed_millis": 130006,
+          "stage": "periodic",
+          "live_bytes": 2480777,
+          "live_blocks": 1410,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789034999458,
+          "elapsed_millis": 135001,
+          "stage": "periodic",
+          "live_bytes": 2455115,
+          "live_blocks": 1353,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035004458,
+          "elapsed_millis": 140001,
+          "stage": "periodic",
+          "live_bytes": 2455115,
+          "live_blocks": 1353,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035009459,
+          "elapsed_millis": 145003,
+          "stage": "periodic",
+          "live_bytes": 2455115,
+          "live_blocks": 1353,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035014458,
+          "elapsed_millis": 150001,
+          "stage": "periodic",
+          "live_bytes": 2455115,
+          "live_blocks": 1353,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035019459,
+          "elapsed_millis": 155002,
+          "stage": "periodic",
+          "live_bytes": 2455115,
+          "live_blocks": 1353,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035024460,
+          "elapsed_millis": 160004,
+          "stage": "periodic",
+          "live_bytes": 2455115,
+          "live_blocks": 1353,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035029459,
+          "elapsed_millis": 165003,
+          "stage": "periodic",
+          "live_bytes": 2455199,
+          "live_blocks": 1354,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035034460,
+          "elapsed_millis": 170004,
+          "stage": "periodic",
+          "live_bytes": 2528208,
+          "live_blocks": 1530,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035039459,
+          "elapsed_millis": 175003,
+          "stage": "periodic",
+          "live_bytes": 2527587,
+          "live_blocks": 1528,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035044459,
+          "elapsed_millis": 180003,
+          "stage": "periodic",
+          "live_bytes": 2527587,
+          "live_blocks": 1528,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035049460,
+          "elapsed_millis": 185004,
+          "stage": "periodic",
+          "live_bytes": 2527587,
+          "live_blocks": 1528,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035054461,
+          "elapsed_millis": 190004,
+          "stage": "periodic",
+          "live_bytes": 2527587,
+          "live_blocks": 1528,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035059458,
+          "elapsed_millis": 195002,
+          "stage": "periodic",
+          "live_bytes": 2530577,
+          "live_blocks": 1544,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035064458,
+          "elapsed_millis": 200002,
+          "stage": "periodic",
+          "live_bytes": 2532820,
+          "live_blocks": 1559,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035069457,
+          "elapsed_millis": 205001,
+          "stage": "periodic",
+          "live_bytes": 2534331,
+          "live_blocks": 1572,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035074460,
+          "elapsed_millis": 210003,
+          "stage": "periodic",
+          "live_bytes": 2463827,
+          "live_blocks": 1380,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035079458,
+          "elapsed_millis": 215002,
+          "stage": "periodic",
+          "live_bytes": 2455206,
+          "live_blocks": 1355,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035084458,
+          "elapsed_millis": 220002,
+          "stage": "periodic",
+          "live_bytes": 2455206,
+          "live_blocks": 1355,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035089459,
+          "elapsed_millis": 225002,
+          "stage": "periodic",
+          "live_bytes": 2455206,
+          "live_blocks": 1355,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035094461,
+          "elapsed_millis": 230004,
+          "stage": "periodic",
+          "live_bytes": 2527563,
+          "live_blocks": 1531,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035099459,
+          "elapsed_millis": 235003,
+          "stage": "periodic",
+          "live_bytes": 2527678,
+          "live_blocks": 1530,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035104458,
+          "elapsed_millis": 240001,
+          "stage": "periodic",
+          "live_bytes": 2527678,
+          "live_blocks": 1530,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035109460,
+          "elapsed_millis": 245003,
+          "stage": "periodic",
+          "live_bytes": 2527678,
+          "live_blocks": 1530,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035114461,
+          "elapsed_millis": 250005,
+          "stage": "periodic",
+          "live_bytes": 2527678,
+          "live_blocks": 1530,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035119458,
+          "elapsed_millis": 255001,
+          "stage": "periodic",
+          "live_bytes": 2527678,
+          "live_blocks": 1530,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035124460,
+          "elapsed_millis": 260004,
+          "stage": "periodic",
+          "live_bytes": 2527678,
+          "live_blocks": 1530,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035129460,
+          "elapsed_millis": 265003,
+          "stage": "periodic",
+          "live_bytes": 2527678,
+          "live_blocks": 1530,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035134460,
+          "elapsed_millis": 270004,
+          "stage": "periodic",
+          "live_bytes": 2528511,
+          "live_blocks": 1533,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035139458,
+          "elapsed_millis": 275001,
+          "stage": "periodic",
+          "live_bytes": 2529921,
+          "live_blocks": 1545,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035144458,
+          "elapsed_millis": 280001,
+          "stage": "periodic",
+          "live_bytes": 2531432,
+          "live_blocks": 1558,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035149459,
+          "elapsed_millis": 285003,
+          "stage": "periodic",
+          "live_bytes": 2455206,
+          "live_blocks": 1355,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035154459,
+          "elapsed_millis": 290002,
+          "stage": "periodic",
+          "live_bytes": 2455206,
+          "live_blocks": 1355,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035159459,
+          "elapsed_millis": 295002,
+          "stage": "periodic",
+          "live_bytes": 2455206,
+          "live_blocks": 1355,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035164458,
+          "elapsed_millis": 300001,
+          "stage": "periodic",
+          "live_bytes": 2462734,
+          "live_blocks": 1357,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035169459,
+          "elapsed_millis": 305002,
+          "stage": "periodic",
+          "live_bytes": 2462650,
+          "live_blocks": 1356,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035174460,
+          "elapsed_millis": 310003,
+          "stage": "periodic",
+          "live_bytes": 2462650,
+          "live_blocks": 1356,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035179459,
+          "elapsed_millis": 315002,
+          "stage": "periodic",
+          "live_bytes": 2462650,
+          "live_blocks": 1356,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035184460,
+          "elapsed_millis": 320003,
+          "stage": "periodic",
+          "live_bytes": 2488024,
+          "live_blocks": 1413,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035189458,
+          "elapsed_millis": 325002,
+          "stage": "periodic",
+          "live_bytes": 2536171,
+          "live_blocks": 1533,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035194461,
+          "elapsed_millis": 330004,
+          "stage": "periodic",
+          "live_bytes": 2536171,
+          "live_blocks": 1533,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035199459,
+          "elapsed_millis": 335002,
+          "stage": "periodic",
+          "live_bytes": 2536051,
+          "live_blocks": 1532,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035204458,
+          "elapsed_millis": 340002,
+          "stage": "periodic",
+          "live_bytes": 2536051,
+          "live_blocks": 1532,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035209458,
+          "elapsed_millis": 345002,
+          "stage": "periodic",
+          "live_bytes": 2536051,
+          "live_blocks": 1532,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035214458,
+          "elapsed_millis": 350001,
+          "stage": "periodic",
+          "live_bytes": 2537646,
+          "live_blocks": 1546,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035219459,
+          "elapsed_millis": 355002,
+          "stage": "periodic",
+          "live_bytes": 2539805,
+          "live_blocks": 1560,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035224459,
+          "elapsed_millis": 360002,
+          "stage": "periodic",
+          "live_bytes": 2462650,
+          "live_blocks": 1356,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035229459,
+          "elapsed_millis": 365003,
+          "stage": "periodic",
+          "live_bytes": 2475702,
+          "live_blocks": 1360,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035234459,
+          "elapsed_millis": 370003,
+          "stage": "periodic",
+          "live_bytes": 2475702,
+          "live_blocks": 1360,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035239459,
+          "elapsed_millis": 375002,
+          "stage": "periodic",
+          "live_bytes": 2475702,
+          "live_blocks": 1360,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035244458,
+          "elapsed_millis": 380001,
+          "stage": "periodic",
+          "live_bytes": 2475786,
+          "live_blocks": 1361,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035249458,
+          "elapsed_millis": 385002,
+          "stage": "periodic",
+          "live_bytes": 2475702,
+          "live_blocks": 1360,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035254459,
+          "elapsed_millis": 390003,
+          "stage": "periodic",
+          "live_bytes": 2549851,
+          "live_blocks": 1538,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035259461,
+          "elapsed_millis": 395004,
+          "stage": "periodic",
+          "live_bytes": 2549731,
+          "live_blocks": 1537,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035264458,
+          "elapsed_millis": 400002,
+          "stage": "periodic",
+          "live_bytes": 2549731,
+          "live_blocks": 1537,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035269457,
+          "elapsed_millis": 405001,
+          "stage": "periodic",
+          "live_bytes": 2549731,
+          "live_blocks": 1537,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035274458,
+          "elapsed_millis": 410001,
+          "stage": "periodic",
+          "live_bytes": 2549731,
+          "live_blocks": 1537,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035279459,
+          "elapsed_millis": 415002,
+          "stage": "periodic",
+          "live_bytes": 2549731,
+          "live_blocks": 1537,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035284460,
+          "elapsed_millis": 420003,
+          "stage": "periodic",
+          "live_bytes": 2551987,
+          "live_blocks": 1553,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035289459,
+          "elapsed_millis": 425002,
+          "stage": "periodic",
+          "live_bytes": 2553485,
+          "live_blocks": 1565,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035294458,
+          "elapsed_millis": 430001,
+          "stage": "periodic",
+          "live_bytes": 2475702,
+          "live_blocks": 1360,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035299459,
+          "elapsed_millis": 435002,
+          "stage": "periodic",
+          "live_bytes": 2475702,
+          "live_blocks": 1360,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035304458,
+          "elapsed_millis": 440001,
+          "stage": "periodic",
+          "live_bytes": 2475702,
+          "live_blocks": 1360,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035309459,
+          "elapsed_millis": 445002,
+          "stage": "periodic",
+          "live_bytes": 2475702,
+          "live_blocks": 1360,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035314460,
+          "elapsed_millis": 450004,
+          "stage": "periodic",
+          "live_bytes": 2475702,
+          "live_blocks": 1360,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035319459,
+          "elapsed_millis": 455003,
+          "stage": "periodic",
+          "live_bytes": 2475702,
+          "live_blocks": 1360,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035324460,
+          "elapsed_millis": 460004,
+          "stage": "periodic",
+          "live_bytes": 2498656,
+          "live_blocks": 1413,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035329458,
+          "elapsed_millis": 465001,
+          "stage": "periodic",
+          "live_bytes": 2549223,
+          "live_blocks": 1537,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035334458,
+          "elapsed_millis": 470001,
+          "stage": "periodic",
+          "live_bytes": 2549223,
+          "live_blocks": 1537,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035339461,
+          "elapsed_millis": 475005,
+          "stage": "periodic",
+          "live_bytes": 2549103,
+          "live_blocks": 1536,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035344458,
+          "elapsed_millis": 480002,
+          "stage": "periodic",
+          "live_bytes": 2550615,
+          "live_blocks": 1540,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035349458,
+          "elapsed_millis": 485002,
+          "stage": "periodic",
+          "live_bytes": 2550615,
+          "live_blocks": 1540,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035354458,
+          "elapsed_millis": 490001,
+          "stage": "periodic",
+          "live_bytes": 2550615,
+          "live_blocks": 1540,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035359458,
+          "elapsed_millis": 495001,
+          "stage": "periodic",
+          "live_bytes": 2552858,
+          "live_blocks": 1555,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035364460,
+          "elapsed_millis": 500004,
+          "stage": "periodic",
+          "live_bytes": 2555118,
+          "live_blocks": 1570,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035369458,
+          "elapsed_millis": 505002,
+          "stage": "periodic",
+          "live_bytes": 2475702,
+          "live_blocks": 1360,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035374459,
+          "elapsed_millis": 510002,
+          "stage": "periodic",
+          "live_bytes": 2475702,
+          "live_blocks": 1360,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035379460,
+          "elapsed_millis": 515004,
+          "stage": "periodic",
+          "live_bytes": 2475702,
+          "live_blocks": 1360,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035384460,
+          "elapsed_millis": 520003,
+          "stage": "periodic",
+          "live_bytes": 2475702,
+          "live_blocks": 1360,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035389459,
+          "elapsed_millis": 525002,
+          "stage": "periodic",
+          "live_bytes": 2548082,
+          "live_blocks": 1535,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035394458,
+          "elapsed_millis": 530002,
+          "stage": "periodic",
+          "live_bytes": 2548294,
+          "live_blocks": 1536,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035399458,
+          "elapsed_millis": 535002,
+          "stage": "periodic",
+          "live_bytes": 2548174,
+          "live_blocks": 1535,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035404458,
+          "elapsed_millis": 540001,
+          "stage": "periodic",
+          "live_bytes": 2548174,
+          "live_blocks": 1535,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035409460,
+          "elapsed_millis": 545003,
+          "stage": "periodic",
+          "live_bytes": 2548174,
+          "live_blocks": 1535,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035414460,
+          "elapsed_millis": 550004,
+          "stage": "periodic",
+          "live_bytes": 2548174,
+          "live_blocks": 1535,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035419459,
+          "elapsed_millis": 555002,
+          "stage": "periodic",
+          "live_bytes": 2548174,
+          "live_blocks": 1535,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035424458,
+          "elapsed_millis": 560001,
+          "stage": "periodic",
+          "live_bytes": 2548174,
+          "live_blocks": 1535,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035429458,
+          "elapsed_millis": 565002,
+          "stage": "periodic",
+          "live_bytes": 2548174,
+          "live_blocks": 1535,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035434459,
+          "elapsed_millis": 570003,
+          "stage": "periodic",
+          "live_bytes": 2554156,
+          "live_blocks": 1568,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035439458,
+          "elapsed_millis": 575001,
+          "stage": "periodic",
+          "live_bytes": 2554918,
+          "live_blocks": 1579,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035444460,
+          "elapsed_millis": 580004,
+          "stage": "periodic",
+          "live_bytes": 2475702,
+          "live_blocks": 1360,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035449458,
+          "elapsed_millis": 585002,
+          "stage": "periodic",
+          "live_bytes": 2475702,
+          "live_blocks": 1360,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035454458,
+          "elapsed_millis": 590002,
+          "stage": "periodic",
+          "live_bytes": 2475702,
+          "live_blocks": 1360,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035459460,
+          "elapsed_millis": 595003,
+          "stage": "periodic",
+          "live_bytes": 2475702,
+          "live_blocks": 1360,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035464460,
+          "elapsed_millis": 600003,
+          "stage": "periodic",
+          "live_bytes": 2475702,
+          "live_blocks": 1360,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035469458,
+          "elapsed_millis": 605001,
+          "stage": "periodic",
+          "live_bytes": 2475786,
+          "live_blocks": 1361,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035474460,
+          "elapsed_millis": 610004,
+          "stage": "periodic",
+          "live_bytes": 2499676,
+          "live_blocks": 1412,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035479459,
+          "elapsed_millis": 615002,
+          "stage": "periodic",
+          "live_bytes": 2549223,
+          "live_blocks": 1537,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035484458,
+          "elapsed_millis": 620001,
+          "stage": "periodic",
+          "live_bytes": 2549223,
+          "live_blocks": 1537,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035489459,
+          "elapsed_millis": 625002,
+          "stage": "periodic",
+          "live_bytes": 2549103,
+          "live_blocks": 1536,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035494461,
+          "elapsed_millis": 630005,
+          "stage": "periodic",
+          "live_bytes": 2549103,
+          "live_blocks": 1536,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035499459,
+          "elapsed_millis": 635002,
+          "stage": "periodic",
+          "live_bytes": 2549103,
+          "live_blocks": 1536,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035504461,
+          "elapsed_millis": 640005,
+          "stage": "periodic",
+          "live_bytes": 2549200,
+          "live_blocks": 1538,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035509458,
+          "elapsed_millis": 645002,
+          "stage": "periodic",
+          "live_bytes": 2551346,
+          "live_blocks": 1551,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035514458,
+          "elapsed_millis": 650002,
+          "stage": "periodic",
+          "live_bytes": 2552857,
+          "live_blocks": 1564,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035519459,
+          "elapsed_millis": 655002,
+          "stage": "periodic",
+          "live_bytes": 2500723,
+          "live_blocks": 1415,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035524458,
+          "elapsed_millis": 660002,
+          "stage": "periodic",
+          "live_bytes": 2475702,
+          "live_blocks": 1360,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035529458,
+          "elapsed_millis": 665002,
+          "stage": "periodic",
+          "live_bytes": 2475702,
+          "live_blocks": 1360,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035534458,
+          "elapsed_millis": 670002,
+          "stage": "periodic",
+          "live_bytes": 2475786,
+          "live_blocks": 1361,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035539461,
+          "elapsed_millis": 675004,
+          "stage": "periodic",
+          "live_bytes": 2548915,
+          "live_blocks": 1538,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035544462,
+          "elapsed_millis": 680006,
+          "stage": "periodic",
+          "live_bytes": 2548174,
+          "live_blocks": 1535,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035549460,
+          "elapsed_millis": 685003,
+          "stage": "periodic",
+          "live_bytes": 2548174,
+          "live_blocks": 1535,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035554458,
+          "elapsed_millis": 690001,
+          "stage": "periodic",
+          "live_bytes": 2548174,
+          "live_blocks": 1535,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035559457,
+          "elapsed_millis": 695001,
+          "stage": "periodic",
+          "live_bytes": 2548174,
+          "live_blocks": 1535,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035564458,
+          "elapsed_millis": 700002,
+          "stage": "periodic",
+          "live_bytes": 2548174,
+          "live_blocks": 1535,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035569459,
+          "elapsed_millis": 705002,
+          "stage": "periodic",
+          "live_bytes": 2548174,
+          "live_blocks": 1535,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035574461,
+          "elapsed_millis": 710004,
+          "stage": "periodic",
+          "live_bytes": 2549007,
+          "live_blocks": 1538,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035579459,
+          "elapsed_millis": 715002,
+          "stage": "periodic",
+          "live_bytes": 2549769,
+          "live_blocks": 1549,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035584457,
+          "elapsed_millis": 720001,
+          "stage": "periodic",
+          "live_bytes": 2551928,
+          "live_blocks": 1563,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035589458,
+          "elapsed_millis": 725002,
+          "stage": "periodic",
+          "live_bytes": 2475702,
+          "live_blocks": 1360,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035594458,
+          "elapsed_millis": 730002,
+          "stage": "periodic",
+          "live_bytes": 2475702,
+          "live_blocks": 1360,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035599459,
+          "elapsed_millis": 735003,
+          "stage": "periodic",
+          "live_bytes": 2475702,
+          "live_blocks": 1360,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035604458,
+          "elapsed_millis": 740002,
+          "stage": "periodic",
+          "live_bytes": 2475702,
+          "live_blocks": 1360,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035609458,
+          "elapsed_millis": 745001,
+          "stage": "periodic",
+          "live_bytes": 2475702,
+          "live_blocks": 1360,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035614459,
+          "elapsed_millis": 750003,
+          "stage": "periodic",
+          "live_bytes": 2475702,
+          "live_blocks": 1360,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035619459,
+          "elapsed_millis": 755002,
+          "stage": "periodic",
+          "live_bytes": 2475786,
+          "live_blocks": 1361,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035624458,
+          "elapsed_millis": 760001,
+          "stage": "periodic",
+          "live_bytes": 2549851,
+          "live_blocks": 1538,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035629458,
+          "elapsed_millis": 765002,
+          "stage": "periodic",
+          "live_bytes": 2549731,
+          "live_blocks": 1537,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035634458,
+          "elapsed_millis": 770001,
+          "stage": "periodic",
+          "live_bytes": 2549731,
+          "live_blocks": 1537,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035639458,
+          "elapsed_millis": 775002,
+          "stage": "periodic",
+          "live_bytes": 2549731,
+          "live_blocks": 1537,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035644458,
+          "elapsed_millis": 780001,
+          "stage": "periodic",
+          "live_bytes": 2549731,
+          "live_blocks": 1537,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035649458,
+          "elapsed_millis": 785002,
+          "stage": "periodic",
+          "live_bytes": 2549731,
+          "live_blocks": 1537,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035654460,
+          "elapsed_millis": 790004,
+          "stage": "periodic",
+          "live_bytes": 2549731,
+          "live_blocks": 1537,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035659459,
+          "elapsed_millis": 795002,
+          "stage": "periodic",
+          "live_bytes": 2549731,
+          "live_blocks": 1537,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035664458,
+          "elapsed_millis": 800001,
+          "stage": "periodic",
+          "live_bytes": 2549731,
+          "live_blocks": 1537,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035669460,
+          "elapsed_millis": 805004,
+          "stage": "periodic",
+          "live_bytes": 2549731,
+          "live_blocks": 1537,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035674459,
+          "elapsed_millis": 810002,
+          "stage": "periodic",
+          "live_bytes": 2549731,
+          "live_blocks": 1537,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035679459,
+          "elapsed_millis": 815003,
+          "stage": "periodic",
+          "live_bytes": 2549731,
+          "live_blocks": 1537,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035684460,
+          "elapsed_millis": 820003,
+          "stage": "periodic",
+          "live_bytes": 2549731,
+          "live_blocks": 1537,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035689460,
+          "elapsed_millis": 825003,
+          "stage": "periodic",
+          "live_bytes": 2549731,
+          "live_blocks": 1537,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035694462,
+          "elapsed_millis": 830005,
+          "stage": "periodic",
+          "live_bytes": 2549731,
+          "live_blocks": 1537,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035699460,
+          "elapsed_millis": 835003,
+          "stage": "periodic",
+          "live_bytes": 2549731,
+          "live_blocks": 1537,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035704460,
+          "elapsed_millis": 840004,
+          "stage": "periodic",
+          "live_bytes": 2549731,
+          "live_blocks": 1537,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035709458,
+          "elapsed_millis": 845001,
+          "stage": "periodic",
+          "live_bytes": 2549731,
+          "live_blocks": 1537,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035714458,
+          "elapsed_millis": 850001,
+          "stage": "periodic",
+          "live_bytes": 2549731,
+          "live_blocks": 1537,
+          "pid": 19
+        },
+        {
+          "unix_millis": 1789035715784,
+          "elapsed_millis": 851327,
+          "stage": "returned",
+          "live_bytes": 127196,
+          "live_blocks": 594,
+          "pid": 19
+        }
+      ],
+      "clock_drift_ms": 1,
+      "max_gap_ms": 5004,
+      "phases": [
+        {
+          "phase": "churn-01-outage.json",
+          "count": 6,
+          "first_gap_ms": 3910,
+          "last_gap_ms": 1100,
+          "first": {
+            "unix_millis": 1789034914458,
+            "elapsed_millis": 50001,
+            "stage": "periodic",
+            "live_bytes": 2523242,
+            "live_blocks": 1523,
+            "pid": 19
+          },
+          "last": {
+            "unix_millis": 1789034939460,
+            "elapsed_millis": 75003,
+            "stage": "periodic",
+            "live_bytes": 2448819,
+            "live_blocks": 1347,
+            "pid": 19
+          },
+          "peak_bytes": 2526348
+        },
+        {
+          "phase": "churn-01-recovery-sample.json",
+          "count": 8,
+          "first_gap_ms": 2542,
+          "last_gap_ms": 2466,
+          "first": {
+            "unix_millis": 1789034944458,
+            "elapsed_millis": 80002,
+            "stage": "periodic",
+            "live_bytes": 2448903,
+            "live_blocks": 1348,
+            "pid": 19
+          },
+          "last": {
+            "unix_millis": 1789034979459,
+            "elapsed_millis": 115002,
+            "stage": "periodic",
+            "live_bytes": 2524968,
+            "live_blocks": 1527,
+            "pid": 19
+          },
+          "peak_bytes": 2526446
+        },
+        {
+          "phase": "churn-02-outage.json",
+          "count": 6,
+          "first_gap_ms": 106,
+          "last_gap_ms": 4906,
+          "first": {
+            "unix_millis": 1789034984458,
+            "elapsed_millis": 120001,
+            "stage": "periodic",
+            "live_bytes": 2529096,
+            "live_blocks": 1528,
+            "pid": 19
+          },
+          "last": {
+            "unix_millis": 1789035009459,
+            "elapsed_millis": 145003,
+            "stage": "periodic",
+            "live_bytes": 2455115,
+            "live_blocks": 1353,
+            "pid": 19
+          },
+          "peak_bytes": 2531440
+        },
+        {
+          "phase": "churn-02-recovery-sample.json",
+          "count": 8,
+          "first_gap_ms": 3745,
+          "last_gap_ms": 1265,
+          "first": {
+            "unix_millis": 1789035019459,
+            "elapsed_millis": 155002,
+            "stage": "periodic",
+            "live_bytes": 2455115,
+            "live_blocks": 1353,
+            "pid": 19
+          },
+          "last": {
+            "unix_millis": 1789035054461,
+            "elapsed_millis": 190004,
+            "stage": "periodic",
+            "live_bytes": 2527587,
+            "live_blocks": 1528,
+            "pid": 19
+          },
+          "peak_bytes": 2528208
+        },
+        {
+          "phase": "churn-03-outage.json",
+          "count": 6,
+          "first_gap_ms": 1307,
+          "last_gap_ms": 3705,
+          "first": {
+            "unix_millis": 1789035059458,
+            "elapsed_millis": 195002,
+            "stage": "periodic",
+            "live_bytes": 2530577,
+            "live_blocks": 1544,
+            "pid": 19
+          },
+          "last": {
+            "unix_millis": 1789035084458,
+            "elapsed_millis": 220002,
+            "stage": "periodic",
+            "live_bytes": 2455206,
+            "live_blocks": 1355,
+            "pid": 19
+          },
+          "peak_bytes": 2534331
+        },
+        {
+          "phase": "churn-03-recovery-sample.json",
+          "count": 8,
+          "first_gap_ms": 4945,
+          "last_gap_ms": 69,
+          "first": {
+            "unix_millis": 1789035094461,
+            "elapsed_millis": 230004,
+            "stage": "periodic",
+            "live_bytes": 2527563,
+            "live_blocks": 1531,
+            "pid": 19
+          },
+          "last": {
+            "unix_millis": 1789035129460,
+            "elapsed_millis": 265003,
+            "stage": "periodic",
+            "live_bytes": 2527678,
+            "live_blocks": 1530,
+            "pid": 19
+          },
+          "peak_bytes": 2527678
+        },
+        {
+          "phase": "churn-04-outage.json",
+          "count": 6,
+          "first_gap_ms": 2510,
+          "last_gap_ms": 2501,
+          "first": {
+            "unix_millis": 1789035134460,
+            "elapsed_millis": 270004,
+            "stage": "periodic",
+            "live_bytes": 2528511,
+            "live_blocks": 1533,
+            "pid": 19
+          },
+          "last": {
+            "unix_millis": 1789035159459,
+            "elapsed_millis": 295002,
+            "stage": "periodic",
+            "live_bytes": 2455206,
+            "live_blocks": 1355,
+            "pid": 19
+          },
+          "peak_bytes": 2531432
+        },
+        {
+          "phase": "churn-04-recovery-sample.json",
+          "count": 8,
+          "first_gap_ms": 1150,
+          "last_gap_ms": 3862,
+          "first": {
+            "unix_millis": 1789035164458,
+            "elapsed_millis": 300001,
+            "stage": "periodic",
+            "live_bytes": 2462734,
+            "live_blocks": 1357,
+            "pid": 19
+          },
+          "last": {
+            "unix_millis": 1789035199459,
+            "elapsed_millis": 335002,
+            "stage": "periodic",
+            "live_bytes": 2536051,
+            "live_blocks": 1532,
+            "pid": 19
+          },
+          "peak_bytes": 2536171
+        },
+        {
+          "phase": "churn-05-outage.json",
+          "count": 6,
+          "first_gap_ms": 3718,
+          "last_gap_ms": 1294,
+          "first": {
+            "unix_millis": 1789035209458,
+            "elapsed_millis": 345002,
+            "stage": "periodic",
+            "live_bytes": 2536051,
+            "live_blocks": 1532,
+            "pid": 19
+          },
+          "last": {
+            "unix_millis": 1789035234459,
+            "elapsed_millis": 370003,
+            "stage": "periodic",
+            "live_bytes": 2475702,
+            "live_blocks": 1360,
+            "pid": 19
+          },
+          "peak_bytes": 2539805
+        },
+        {
+          "phase": "churn-05-recovery-sample.json",
+          "count": 8,
+          "first_gap_ms": 2343,
+          "last_gap_ms": 2667,
+          "first": {
+            "unix_millis": 1789035239459,
+            "elapsed_millis": 375002,
+            "stage": "periodic",
+            "live_bytes": 2475702,
+            "live_blocks": 1360,
+            "pid": 19
+          },
+          "last": {
+            "unix_millis": 1789035274458,
+            "elapsed_millis": 410001,
+            "stage": "periodic",
+            "live_bytes": 2549731,
+            "live_blocks": 1537,
+            "pid": 19
+          },
+          "peak_bytes": 2549851
+        },
+        {
+          "phase": "churn-06-outage.json",
+          "count": 6,
+          "first_gap_ms": 4918,
+          "last_gap_ms": 96,
+          "first": {
+            "unix_millis": 1789035284460,
+            "elapsed_millis": 420003,
+            "stage": "periodic",
+            "live_bytes": 2551987,
+            "live_blocks": 1553,
+            "pid": 19
+          },
+          "last": {
+            "unix_millis": 1789035309459,
+            "elapsed_millis": 445002,
+            "stage": "periodic",
+            "live_bytes": 2475702,
+            "live_blocks": 1360,
+            "pid": 19
+          },
+          "peak_bytes": 2553485
+        },
+        {
+          "phase": "churn-06-recovery-sample.json",
+          "count": 8,
+          "first_gap_ms": 3559,
+          "last_gap_ms": 1456,
+          "first": {
+            "unix_millis": 1789035314460,
+            "elapsed_millis": 450004,
+            "stage": "periodic",
+            "live_bytes": 2475702,
+            "live_blocks": 1360,
+            "pid": 19
+          },
+          "last": {
+            "unix_millis": 1789035349458,
+            "elapsed_millis": 485002,
+            "stage": "periodic",
+            "live_bytes": 2550615,
+            "live_blocks": 1540,
+            "pid": 19
+          },
+          "peak_bytes": 2550615
+        },
+        {
+          "phase": "churn-07-outage.json",
+          "count": 6,
+          "first_gap_ms": 1120,
+          "last_gap_ms": 3891,
+          "first": {
+            "unix_millis": 1789035354458,
+            "elapsed_millis": 490001,
+            "stage": "periodic",
+            "live_bytes": 2550615,
+            "live_blocks": 1540,
+            "pid": 19
+          },
+          "last": {
+            "unix_millis": 1789035379460,
+            "elapsed_millis": 515004,
+            "stage": "periodic",
+            "live_bytes": 2475702,
+            "live_blocks": 1360,
+            "pid": 19
+          },
+          "peak_bytes": 2555118
+        },
+        {
+          "phase": "churn-07-recovery-sample.json",
+          "count": 8,
+          "first_gap_ms": 4757,
+          "last_gap_ms": 256,
+          "first": {
+            "unix_millis": 1789035389459,
+            "elapsed_millis": 525002,
+            "stage": "periodic",
+            "live_bytes": 2548082,
+            "live_blocks": 1535,
+            "pid": 19
+          },
+          "last": {
+            "unix_millis": 1789035424458,
+            "elapsed_millis": 560001,
+            "stage": "periodic",
+            "live_bytes": 2548174,
+            "live_blocks": 1535,
+            "pid": 19
+          },
+          "peak_bytes": 2548294
+        },
+        {
+          "phase": "churn-08-outage.json",
+          "count": 6,
+          "first_gap_ms": 2313,
+          "last_gap_ms": 2700,
+          "first": {
+            "unix_millis": 1789035429458,
+            "elapsed_millis": 565002,
+            "stage": "periodic",
+            "live_bytes": 2548174,
+            "live_blocks": 1535,
+            "pid": 19
+          },
+          "last": {
+            "unix_millis": 1789035454458,
+            "elapsed_millis": 590002,
+            "stage": "periodic",
+            "live_bytes": 2475702,
+            "live_blocks": 1360,
+            "pid": 19
+          },
+          "peak_bytes": 2554918
+        },
+        {
+          "phase": "churn-08-recovery-sample.json",
+          "count": 8,
+          "first_gap_ms": 953,
+          "last_gap_ms": 4056,
+          "first": {
+            "unix_millis": 1789035459460,
+            "elapsed_millis": 595003,
+            "stage": "periodic",
+            "live_bytes": 2475702,
+            "live_blocks": 1360,
+            "pid": 19
+          },
+          "last": {
+            "unix_millis": 1789035494461,
+            "elapsed_millis": 630005,
+            "stage": "periodic",
+            "live_bytes": 2549103,
+            "live_blocks": 1536,
+            "pid": 19
+          },
+          "peak_bytes": 2549223
+        },
+        {
+          "phase": "churn-09-outage.json",
+          "count": 6,
+          "first_gap_ms": 3523,
+          "last_gap_ms": 1494,
+          "first": {
+            "unix_millis": 1789035504461,
+            "elapsed_millis": 640005,
+            "stage": "periodic",
+            "live_bytes": 2549200,
+            "live_blocks": 1538,
+            "pid": 19
+          },
+          "last": {
+            "unix_millis": 1789035529458,
+            "elapsed_millis": 665002,
+            "stage": "periodic",
+            "live_bytes": 2475702,
+            "live_blocks": 1360,
+            "pid": 19
+          },
+          "peak_bytes": 2552857
+        },
+        {
+          "phase": "churn-09-recovery-sample.json",
+          "count": 8,
+          "first_gap_ms": 2157,
+          "last_gap_ms": 2855,
+          "first": {
+            "unix_millis": 1789035534458,
+            "elapsed_millis": 670002,
+            "stage": "periodic",
+            "live_bytes": 2475786,
+            "live_blocks": 1361,
+            "pid": 19
+          },
+          "last": {
+            "unix_millis": 1789035569459,
+            "elapsed_millis": 705002,
+            "stage": "periodic",
+            "live_bytes": 2548174,
+            "live_blocks": 1535,
+            "pid": 19
+          },
+          "peak_bytes": 2548915
+        },
+        {
+          "phase": "churn-10-outage.json",
+          "count": 6,
+          "first_gap_ms": 4727,
+          "last_gap_ms": 286,
+          "first": {
+            "unix_millis": 1789035579459,
+            "elapsed_millis": 715002,
+            "stage": "periodic",
+            "live_bytes": 2549769,
+            "live_blocks": 1549,
+            "pid": 19
+          },
+          "last": {
+            "unix_millis": 1789035604458,
+            "elapsed_millis": 740002,
+            "stage": "periodic",
+            "live_bytes": 2475702,
+            "live_blocks": 1360,
+            "pid": 19
+          },
+          "peak_bytes": 2551928
+        },
+        {
+          "phase": "churn-10-recovery-sample.json",
+          "count": 8,
+          "first_gap_ms": 3358,
+          "last_gap_ms": 1650,
+          "first": {
+            "unix_millis": 1789035609458,
+            "elapsed_millis": 745001,
+            "stage": "periodic",
+            "live_bytes": 2475702,
+            "live_blocks": 1360,
+            "pid": 19
+          },
+          "last": {
+            "unix_millis": 1789035644458,
+            "elapsed_millis": 780001,
+            "stage": "periodic",
+            "live_bytes": 2549731,
+            "live_blocks": 1537,
+            "pid": 19
+          },
+          "peak_bytes": 2549851
+        },
+        {
+          "phase": "churn-settle.json",
+          "count": 12,
+          "first_gap_ms": 2016,
+          "last_gap_ms": 2995,
+          "first": {
+            "unix_millis": 1789035649458,
+            "elapsed_millis": 785002,
+            "stage": "periodic",
+            "live_bytes": 2549731,
+            "live_blocks": 1537,
+            "pid": 19
+          },
+          "last": {
+            "unix_millis": 1789035704460,
+            "elapsed_millis": 840004,
+            "stage": "periodic",
+            "live_bytes": 2549731,
+            "live_blocks": 1537,
+            "pid": 19
+          },
+          "peak_bytes": 2549731
+        }
+      ],
+      "residual_bytes": 40801,
+      "residual_blocks": 90
+    }
+  },
+  "source_revision": "575ef4ac",
+  "test_seconds": 852.82,
+  "summary": {
+    "collector_after": {
+      "capture_seconds": 0.002926658,
+      "cpu_ticks": 3564,
+      "elapsed_seconds": 837.397624445,
+      "namespace_tcp_states": {},
+      "pid": 1,
+      "process_tcp_states": {},
+      "rss_kib": 30876,
+      "socket_fds": 2,
+      "socket_inodes": 2,
+      "start_ticks": 90779276,
+      "threads": 2,
+      "total_fds": 6,
+      "vanished_fds": 0
+    },
+    "complete": true,
+    "completed_cycles": 10,
+    "elapsed_seconds": 837.394696795,
+    "final_pings": [
+      {
+        "output": "status: exit status: 0\nstdout:\nPING 100.64.179.80 (100.64.179.80) from 100.64.233.146 hse2ea: 56(84) bytes of data.\n64 bytes from 100.64.179.80: icmp_seq=1 ttl=64 time=1.47 ms\n64 bytes from 100.64.179.80: icmp_seq=2 ttl=64 time=2.17 ms\n64 bytes from 100.64.179.80: icmp_seq=3 ttl=64 time=2.05 ms\n64 bytes from 100.64.179.80: icmp_seq=4 ttl=64 time=2.42 ms\n64 bytes from 100.64.179.80: icmp_seq=5 ttl=64 time=2.32 ms\n\n--- 100.64.179.80 ping statistics ---\n5 packets transmitted, 5 received, 0% packet loss, time 4007ms\nrtt min/avg/max/mdev = 1.467/2.083/2.417/0.333 ms\n\nstderr:\n",
+        "role": "a",
+        "success": true
+      },
+      {
+        "output": "status: exit status: 0\nstdout:\nPING 10.41.0.9 (10.41.0.9) from 100.64.179.80 hse2eb: 56(84) bytes of data.\n64 bytes from 10.41.0.9: icmp_seq=1 ttl=64 time=2.96 ms\n64 bytes from 10.41.0.9: icmp_seq=2 ttl=64 time=2.95 ms\n64 bytes from 10.41.0.9: icmp_seq=3 ttl=64 time=2.99 ms\n64 bytes from 10.41.0.9: icmp_seq=4 ttl=64 time=2.61 ms\n64 bytes from 10.41.0.9: icmp_seq=5 ttl=64 time=1.76 ms\n\n--- 10.41.0.9 ping statistics ---\n5 packets transmitted, 5 received, 0% packet loss, time 4006ms\nrtt min/avg/max/mdev = 1.763/2.654/2.986/0.466 ms\n\nstderr:\n",
+        "role": "b",
+        "success": true
+      }
+    ],
+    "process_after": [
+      {
+        "capture_seconds": 0.003124494,
+        "cpu_ticks": 271,
+        "elapsed_seconds": 837.392075276,
+        "pid": 18,
+        "process_tcp_states": {
+          "01": 1,
+          "0A": 1
+        },
+        "role": "a",
+        "rss_kib": 36484,
+        "socket_fds": 14,
+        "start_ticks": 90779302,
+        "tcp_states": {
+          "01": 1,
+          "0A": 1
+        },
+        "threads": 6,
+        "total_fds": 24,
+        "vanished_fds": 0
+      },
+      {
+        "capture_seconds": 0.0025168,
+        "cpu_ticks": 263,
+        "elapsed_seconds": 837.394622093,
+        "pid": 19,
+        "process_tcp_states": {
+          "01": 1,
+          "0A": 1
+        },
+        "role": "b",
+        "rss_kib": 35740,
+        "socket_fds": 12,
+        "start_ticks": 90779302,
+        "tcp_states": {
+          "01": 1,
+          "0A": 1
+        },
+        "threads": 6,
+        "total_fds": 22,
+        "vanished_fds": 0
+      }
+    ],
+    "process_before": [
+      {
+        "capture_seconds": 0.00493291,
+        "cpu_ticks": 14,
+        "elapsed_seconds": 0.004942508,
+        "pid": 18,
+        "process_tcp_states": {
+          "01": 1,
+          "0A": 1
+        },
+        "role": "a",
+        "rss_kib": 36172,
+        "socket_fds": 14,
+        "start_ticks": 90779302,
+        "tcp_states": {
+          "01": 1,
+          "0A": 1
+        },
+        "threads": 6,
+        "total_fds": 24,
+        "vanished_fds": 0
+      },
+      {
+        "capture_seconds": 0.003947477,
+        "cpu_ticks": 12,
+        "elapsed_seconds": 0.008931314,
+        "pid": 19,
+        "process_tcp_states": {
+          "01": 1,
+          "0A": 1
+        },
+        "role": "b",
+        "rss_kib": 35404,
+        "socket_fds": 12,
+        "start_ticks": 90779302,
+        "tcp_states": {
+          "01": 1,
+          "0A": 1
+        },
+        "threads": 6,
+        "total_fds": 22,
+        "vanished_fds": 0
+      }
+    ],
+    "proof_eligible": true,
+    "reports": [
+      "churn-01-outage.json",
+      "churn-01-recovery.json",
+      "churn-01-recovery-sample.json",
+      "churn-02-outage.json",
+      "churn-02-recovery.json",
+      "churn-02-recovery-sample.json",
+      "churn-03-outage.json",
+      "churn-03-recovery.json",
+      "churn-03-recovery-sample.json",
+      "churn-04-outage.json",
+      "churn-04-recovery.json",
+      "churn-04-recovery-sample.json",
+      "churn-05-outage.json",
+      "churn-05-recovery.json",
+      "churn-05-recovery-sample.json",
+      "churn-06-outage.json",
+      "churn-06-recovery.json",
+      "churn-06-recovery-sample.json",
+      "churn-07-outage.json",
+      "churn-07-recovery.json",
+      "churn-07-recovery-sample.json",
+      "churn-08-outage.json",
+      "churn-08-recovery.json",
+      "churn-08-recovery-sample.json",
+      "churn-09-outage.json",
+      "churn-09-recovery.json",
+      "churn-09-recovery-sample.json",
+      "churn-10-outage.json",
+      "churn-10-recovery.json",
+      "churn-10-recovery-sample.json",
+      "churn-settle.json"
+    ],
+    "requested_cycles": 10,
+    "same_processes": true,
+    "schema_version": 1
+  },
+  "recoveries": [
+    {
+      "name": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-01-recovery.json",
+      "recovered_seconds": 5.273744622,
+      "final_pings": [
+        {
+          "output": "status: exit status: 0\nstdout:\nPING 100.64.179.80 (100.64.179.80) from 100.64.233.146 hse2ea: 56(84) bytes of data.\n64 bytes from 100.64.179.80: icmp_seq=1 ttl=64 time=5.93 ms\n64 bytes from 100.64.179.80: icmp_seq=2 ttl=64 time=6.17 ms\n64 bytes from 100.64.179.80: icmp_seq=3 ttl=64 time=5.27 ms\n64 bytes from 100.64.179.80: icmp_seq=4 ttl=64 time=2.66 ms\n64 bytes from 100.64.179.80: icmp_seq=5 ttl=64 time=2.33 ms\n\n--- 100.64.179.80 ping statistics ---\n5 packets transmitted, 5 received, 0% packet loss, time 4007ms\nrtt min/avg/max/mdev = 2.334/4.472/6.167/1.641 ms\n\nstderr:\n",
+          "role": "a",
+          "success": true
+        },
+        {
+          "output": "status: exit status: 0\nstdout:\nPING 10.41.0.9 (10.41.0.9) from 100.64.179.80 hse2eb: 56(84) bytes of data.\n64 bytes from 10.41.0.9: icmp_seq=1 ttl=64 time=1.79 ms\n64 bytes from 10.41.0.9: icmp_seq=2 ttl=64 time=3.25 ms\n64 bytes from 10.41.0.9: icmp_seq=3 ttl=64 time=2.91 ms\n64 bytes from 10.41.0.9: icmp_seq=4 ttl=64 time=2.84 ms\n64 bytes from 10.41.0.9: icmp_seq=5 ttl=64 time=2.19 ms\n\n--- 10.41.0.9 ping statistics ---\n5 packets transmitted, 5 received, 0% packet loss, time 4008ms\nrtt min/avg/max/mdev = 1.790/2.595/3.246/0.528 ms\n\nstderr:\n",
+          "role": "b",
+          "success": true
+        }
+      ],
+      "process_after": [
+        {
+          "capture_seconds": 0.004023065,
+          "cpu_ticks": 40,
+          "elapsed_seconds": 13.327501215,
+          "pid": 18,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36260,
+          "socket_fds": 14,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 24,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.003490028,
+          "cpu_ticks": 35,
+          "elapsed_seconds": 13.331027833,
+          "pid": 19,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35472,
+          "socket_fds": 12,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 22,
+          "vanished_fds": 0
+        }
+      ]
+    },
+    {
+      "name": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-02-recovery.json",
+      "recovered_seconds": 18.322853971,
+      "final_pings": [
+        {
+          "output": "status: exit status: 0\nstdout:\nPING 100.64.179.80 (100.64.179.80) from 100.64.233.146 hse2ea: 56(84) bytes of data.\n64 bytes from 100.64.179.80: icmp_seq=1 ttl=64 time=6.19 ms\n64 bytes from 100.64.179.80: icmp_seq=2 ttl=64 time=2.68 ms\n64 bytes from 100.64.179.80: icmp_seq=3 ttl=64 time=1.84 ms\n64 bytes from 100.64.179.80: icmp_seq=4 ttl=64 time=1.97 ms\n64 bytes from 100.64.179.80: icmp_seq=5 ttl=64 time=2.26 ms\n\n--- 100.64.179.80 ping statistics ---\n5 packets transmitted, 5 received, 0% packet loss, time 4005ms\nrtt min/avg/max/mdev = 1.838/2.990/6.193/1.627 ms\n\nstderr:\n",
+          "role": "a",
+          "success": true
+        },
+        {
+          "output": "status: exit status: 0\nstdout:\nPING 10.41.0.9 (10.41.0.9) from 100.64.179.80 hse2eb: 56(84) bytes of data.\n64 bytes from 10.41.0.9: icmp_seq=1 ttl=64 time=2.08 ms\n64 bytes from 10.41.0.9: icmp_seq=2 ttl=64 time=2.20 ms\n64 bytes from 10.41.0.9: icmp_seq=3 ttl=64 time=2.10 ms\n64 bytes from 10.41.0.9: icmp_seq=4 ttl=64 time=2.74 ms\n64 bytes from 10.41.0.9: icmp_seq=5 ttl=64 time=2.71 ms\n\n--- 10.41.0.9 ping statistics ---\n5 packets transmitted, 5 received, 0% packet loss, time 4006ms\nrtt min/avg/max/mdev = 2.079/2.363/2.739/0.297 ms\n\nstderr:\n",
+          "role": "b",
+          "success": true
+        }
+      ],
+      "process_after": [
+        {
+          "capture_seconds": 0.00405019,
+          "cpu_ticks": 65,
+          "elapsed_seconds": 26.384270845,
+          "pid": 18,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36276,
+          "socket_fds": 14,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 24,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.003948135,
+          "cpu_ticks": 60,
+          "elapsed_seconds": 26.388252434,
+          "pid": 19,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35548,
+          "socket_fds": 12,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 22,
+          "vanished_fds": 0
+        }
+      ]
+    },
+    {
+      "name": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-03-recovery.json",
+      "recovered_seconds": 0.503066696,
+      "final_pings": [
+        {
+          "output": "status: exit status: 0\nstdout:\nPING 100.64.179.80 (100.64.179.80) from 100.64.233.146 hse2ea: 56(84) bytes of data.\n64 bytes from 100.64.179.80: icmp_seq=1 ttl=64 time=5.58 ms\n64 bytes from 100.64.179.80: icmp_seq=2 ttl=64 time=6.97 ms\n64 bytes from 100.64.179.80: icmp_seq=3 ttl=64 time=7.26 ms\n64 bytes from 100.64.179.80: icmp_seq=4 ttl=64 time=7.77 ms\n64 bytes from 100.64.179.80: icmp_seq=5 ttl=64 time=7.18 ms\n\n--- 100.64.179.80 ping statistics ---\n5 packets transmitted, 5 received, 0% packet loss, time 4008ms\nrtt min/avg/max/mdev = 5.577/6.952/7.768/0.735 ms\n\nstderr:\n",
+          "role": "a",
+          "success": true
+        },
+        {
+          "output": "status: exit status: 0\nstdout:\nPING 10.41.0.9 (10.41.0.9) from 100.64.179.80 hse2eb: 56(84) bytes of data.\n64 bytes from 10.41.0.9: icmp_seq=1 ttl=64 time=2.98 ms\n64 bytes from 10.41.0.9: icmp_seq=2 ttl=64 time=3.05 ms\n64 bytes from 10.41.0.9: icmp_seq=3 ttl=64 time=2.37 ms\n64 bytes from 10.41.0.9: icmp_seq=4 ttl=64 time=2.73 ms\n64 bytes from 10.41.0.9: icmp_seq=5 ttl=64 time=2.35 ms\n\n--- 10.41.0.9 ping statistics ---\n5 packets transmitted, 5 received, 0% packet loss, time 4004ms\nrtt min/avg/max/mdev = 2.354/2.698/3.047/0.292 ms\n\nstderr:\n",
+          "role": "b",
+          "success": true
+        }
+      ],
+      "process_after": [
+        {
+          "capture_seconds": 0.004023364,
+          "cpu_ticks": 88,
+          "elapsed_seconds": 8.555199288,
+          "pid": 18,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36332,
+          "socket_fds": 14,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 24,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.003854142,
+          "cpu_ticks": 81,
+          "elapsed_seconds": 8.559083798,
+          "pid": 19,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35584,
+          "socket_fds": 12,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 22,
+          "vanished_fds": 0
+        }
+      ]
+    },
+    {
+      "name": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-04-recovery.json",
+      "recovered_seconds": 21.293945021,
+      "final_pings": [
+        {
+          "output": "status: exit status: 0\nstdout:\nPING 100.64.179.80 (100.64.179.80) from 100.64.233.146 hse2ea: 56(84) bytes of data.\n64 bytes from 100.64.179.80: icmp_seq=1 ttl=64 time=3.98 ms\n64 bytes from 100.64.179.80: icmp_seq=2 ttl=64 time=2.14 ms\n64 bytes from 100.64.179.80: icmp_seq=3 ttl=64 time=2.21 ms\n64 bytes from 100.64.179.80: icmp_seq=4 ttl=64 time=2.55 ms\n64 bytes from 100.64.179.80: icmp_seq=5 ttl=64 time=2.82 ms\n\n--- 100.64.179.80 ping statistics ---\n5 packets transmitted, 5 received, 0% packet loss, time 4007ms\nrtt min/avg/max/mdev = 2.143/2.740/3.982/0.666 ms\n\nstderr:\n",
+          "role": "a",
+          "success": true
+        },
+        {
+          "output": "status: exit status: 0\nstdout:\nPING 10.41.0.9 (10.41.0.9) from 100.64.179.80 hse2eb: 56(84) bytes of data.\n64 bytes from 10.41.0.9: icmp_seq=1 ttl=64 time=3.18 ms\n64 bytes from 10.41.0.9: icmp_seq=2 ttl=64 time=2.25 ms\n64 bytes from 10.41.0.9: icmp_seq=3 ttl=64 time=1.37 ms\n64 bytes from 10.41.0.9: icmp_seq=4 ttl=64 time=2.51 ms\n64 bytes from 10.41.0.9: icmp_seq=5 ttl=64 time=2.38 ms\n\n--- 10.41.0.9 ping statistics ---\n5 packets transmitted, 5 received, 0% packet loss, time 4005ms\nrtt min/avg/max/mdev = 1.372/2.338/3.178/0.578 ms\n\nstderr:\n",
+          "role": "b",
+          "success": true
+        }
+      ],
+      "process_after": [
+        {
+          "capture_seconds": 0.00261077,
+          "cpu_ticks": 113,
+          "elapsed_seconds": 29.353193176,
+          "pid": 18,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36348,
+          "socket_fds": 14,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 24,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.002530306,
+          "cpu_ticks": 106,
+          "elapsed_seconds": 29.355746396,
+          "pid": 19,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35608,
+          "socket_fds": 12,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 22,
+          "vanished_fds": 0
+        }
+      ]
+    },
+    {
+      "name": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-05-recovery.json",
+      "recovered_seconds": 12.442773758,
+      "final_pings": [
+        {
+          "output": "status: exit status: 0\nstdout:\nPING 100.64.179.80 (100.64.179.80) from 100.64.233.146 hse2ea: 56(84) bytes of data.\n64 bytes from 100.64.179.80: icmp_seq=1 ttl=64 time=4.90 ms\n64 bytes from 100.64.179.80: icmp_seq=2 ttl=64 time=2.78 ms\n64 bytes from 100.64.179.80: icmp_seq=3 ttl=64 time=3.25 ms\n64 bytes from 100.64.179.80: icmp_seq=4 ttl=64 time=2.51 ms\n64 bytes from 100.64.179.80: icmp_seq=5 ttl=64 time=2.30 ms\n\n--- 100.64.179.80 ping statistics ---\n5 packets transmitted, 5 received, 0% packet loss, time 4006ms\nrtt min/avg/max/mdev = 2.296/3.145/4.899/0.932 ms\n\nstderr:\n",
+          "role": "a",
+          "success": true
+        },
+        {
+          "output": "status: exit status: 0\nstdout:\nPING 10.41.0.9 (10.41.0.9) from 100.64.179.80 hse2eb: 56(84) bytes of data.\n64 bytes from 10.41.0.9: icmp_seq=1 ttl=64 time=3.05 ms\n64 bytes from 10.41.0.9: icmp_seq=2 ttl=64 time=3.29 ms\n64 bytes from 10.41.0.9: icmp_seq=3 ttl=64 time=2.69 ms\n64 bytes from 10.41.0.9: icmp_seq=4 ttl=64 time=2.40 ms\n64 bytes from 10.41.0.9: icmp_seq=5 ttl=64 time=2.57 ms\n\n--- 10.41.0.9 ping statistics ---\n5 packets transmitted, 5 received, 0% packet loss, time 4008ms\nrtt min/avg/max/mdev = 2.404/2.801/3.291/0.324 ms\n\nstderr:\n",
+          "role": "b",
+          "success": true
+        }
+      ],
+      "process_after": [
+        {
+          "capture_seconds": 0.004027683,
+          "cpu_ticks": 135,
+          "elapsed_seconds": 20.48723891,
+          "pid": 18,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36392,
+          "socket_fds": 14,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 24,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.003863031,
+          "cpu_ticks": 126,
+          "elapsed_seconds": 20.491134403,
+          "pid": 19,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35632,
+          "socket_fds": 12,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 22,
+          "vanished_fds": 0
+        }
+      ]
+    },
+    {
+      "name": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-06-recovery.json",
+      "recovered_seconds": 14.719028758,
+      "final_pings": [
+        {
+          "output": "status: exit status: 0\nstdout:\nPING 100.64.179.80 (100.64.179.80) from 100.64.233.146 hse2ea: 56(84) bytes of data.\n64 bytes from 100.64.179.80: icmp_seq=1 ttl=64 time=1.76 ms\n64 bytes from 100.64.179.80: icmp_seq=2 ttl=64 time=2.58 ms\n64 bytes from 100.64.179.80: icmp_seq=3 ttl=64 time=2.53 ms\n64 bytes from 100.64.179.80: icmp_seq=4 ttl=64 time=2.37 ms\n64 bytes from 100.64.179.80: icmp_seq=5 ttl=64 time=1.56 ms\n\n--- 100.64.179.80 ping statistics ---\n5 packets transmitted, 5 received, 0% packet loss, time 4007ms\nrtt min/avg/max/mdev = 1.561/2.161/2.584/0.420 ms\n\nstderr:\n",
+          "role": "a",
+          "success": true
+        },
+        {
+          "output": "status: exit status: 0\nstdout:\nPING 10.41.0.9 (10.41.0.9) from 100.64.179.80 hse2eb: 56(84) bytes of data.\n64 bytes from 10.41.0.9: icmp_seq=1 ttl=64 time=1.17 ms\n64 bytes from 10.41.0.9: icmp_seq=2 ttl=64 time=2.15 ms\n64 bytes from 10.41.0.9: icmp_seq=3 ttl=64 time=2.44 ms\n64 bytes from 10.41.0.9: icmp_seq=4 ttl=64 time=3.16 ms\n64 bytes from 10.41.0.9: icmp_seq=5 ttl=64 time=2.75 ms\n\n--- 10.41.0.9 ping statistics ---\n5 packets transmitted, 5 received, 0% packet loss, time 4007ms\nrtt min/avg/max/mdev = 1.165/2.332/3.157/0.672 ms\n\nstderr:\n",
+          "role": "b",
+          "success": true
+        }
+      ],
+      "process_after": [
+        {
+          "capture_seconds": 0.004030095,
+          "cpu_ticks": 156,
+          "elapsed_seconds": 22.775747744,
+          "pid": 18,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36400,
+          "socket_fds": 14,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 24,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.003524463,
+          "cpu_ticks": 148,
+          "elapsed_seconds": 22.779302865,
+          "pid": 19,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35656,
+          "socket_fds": 12,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 22,
+          "vanished_fds": 0
+        }
+      ]
+    },
+    {
+      "name": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-07-recovery.json",
+      "recovered_seconds": 0.503166061,
+      "final_pings": [
+        {
+          "output": "status: exit status: 0\nstdout:\nPING 100.64.179.80 (100.64.179.80) from 100.64.233.146 hse2ea: 56(84) bytes of data.\n64 bytes from 100.64.179.80: icmp_seq=1 ttl=64 time=7.11 ms\n64 bytes from 100.64.179.80: icmp_seq=2 ttl=64 time=7.51 ms\n64 bytes from 100.64.179.80: icmp_seq=3 ttl=64 time=3.18 ms\n64 bytes from 100.64.179.80: icmp_seq=4 ttl=64 time=7.14 ms\n64 bytes from 100.64.179.80: icmp_seq=5 ttl=64 time=7.19 ms\n\n--- 100.64.179.80 ping statistics ---\n5 packets transmitted, 5 received, 0% packet loss, time 4006ms\nrtt min/avg/max/mdev = 3.175/6.424/7.506/1.630 ms\n\nstderr:\n",
+          "role": "a",
+          "success": true
+        },
+        {
+          "output": "status: exit status: 0\nstdout:\nPING 10.41.0.9 (10.41.0.9) from 100.64.179.80 hse2eb: 56(84) bytes of data.\n64 bytes from 10.41.0.9: icmp_seq=1 ttl=64 time=5.64 ms\n64 bytes from 10.41.0.9: icmp_seq=2 ttl=64 time=2.91 ms\n64 bytes from 10.41.0.9: icmp_seq=3 ttl=64 time=2.42 ms\n64 bytes from 10.41.0.9: icmp_seq=4 ttl=64 time=2.69 ms\n64 bytes from 10.41.0.9: icmp_seq=5 ttl=64 time=2.75 ms\n\n--- 10.41.0.9 ping statistics ---\n5 packets transmitted, 5 received, 0% packet loss, time 4008ms\nrtt min/avg/max/mdev = 2.420/3.282/5.644/1.191 ms\n\nstderr:\n",
+          "role": "b",
+          "success": true
+        }
+      ],
+      "process_after": [
+        {
+          "capture_seconds": 0.004013371,
+          "cpu_ticks": 179,
+          "elapsed_seconds": 8.56625282,
+          "pid": 18,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36428,
+          "socket_fds": 14,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 24,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.003828259,
+          "cpu_ticks": 170,
+          "elapsed_seconds": 8.570111396,
+          "pid": 19,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35676,
+          "socket_fds": 12,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 22,
+          "vanished_fds": 0
+        }
+      ]
+    },
+    {
+      "name": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-08-recovery.json",
+      "recovered_seconds": 16.084031504,
+      "final_pings": [
+        {
+          "output": "status: exit status: 0\nstdout:\nPING 100.64.179.80 (100.64.179.80) from 100.64.233.146 hse2ea: 56(84) bytes of data.\n64 bytes from 100.64.179.80: icmp_seq=1 ttl=64 time=7.28 ms\n64 bytes from 100.64.179.80: icmp_seq=2 ttl=64 time=2.62 ms\n64 bytes from 100.64.179.80: icmp_seq=3 ttl=64 time=1.74 ms\n64 bytes from 100.64.179.80: icmp_seq=4 ttl=64 time=2.78 ms\n64 bytes from 100.64.179.80: icmp_seq=5 ttl=64 time=2.84 ms\n\n--- 100.64.179.80 ping statistics ---\n5 packets transmitted, 5 received, 0% packet loss, time 4005ms\nrtt min/avg/max/mdev = 1.735/3.451/7.284/1.957 ms\n\nstderr:\n",
+          "role": "a",
+          "success": true
+        },
+        {
+          "output": "status: exit status: 0\nstdout:\nPING 10.41.0.9 (10.41.0.9) from 100.64.179.80 hse2eb: 56(84) bytes of data.\n64 bytes from 10.41.0.9: icmp_seq=1 ttl=64 time=1.78 ms\n64 bytes from 10.41.0.9: icmp_seq=2 ttl=64 time=2.53 ms\n64 bytes from 10.41.0.9: icmp_seq=3 ttl=64 time=2.67 ms\n64 bytes from 10.41.0.9: icmp_seq=4 ttl=64 time=2.67 ms\n64 bytes from 10.41.0.9: icmp_seq=5 ttl=64 time=2.60 ms\n\n--- 10.41.0.9 ping statistics ---\n5 packets transmitted, 5 received, 0% packet loss, time 4009ms\nrtt min/avg/max/mdev = 1.782/2.450/2.670/0.337 ms\n\nstderr:\n",
+          "role": "b",
+          "success": true
+        }
+      ],
+      "process_after": [
+        {
+          "capture_seconds": 0.004032063,
+          "cpu_ticks": 205,
+          "elapsed_seconds": 24.131140661,
+          "pid": 18,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36436,
+          "socket_fds": 14,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 24,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.003797277,
+          "cpu_ticks": 197,
+          "elapsed_seconds": 24.134969037,
+          "pid": 19,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35700,
+          "socket_fds": 12,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 22,
+          "vanished_fds": 0
+        }
+      ]
+    },
+    {
+      "name": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-09-recovery.json",
+      "recovered_seconds": 3.166553544,
+      "final_pings": [
+        {
+          "output": "status: exit status: 0\nstdout:\nPING 100.64.179.80 (100.64.179.80) from 100.64.233.146 hse2ea: 56(84) bytes of data.\n64 bytes from 100.64.179.80: icmp_seq=1 ttl=64 time=6.86 ms\n64 bytes from 100.64.179.80: icmp_seq=2 ttl=64 time=6.39 ms\n64 bytes from 100.64.179.80: icmp_seq=3 ttl=64 time=5.58 ms\n64 bytes from 100.64.179.80: icmp_seq=4 ttl=64 time=5.84 ms\n64 bytes from 100.64.179.80: icmp_seq=5 ttl=64 time=5.20 ms\n\n--- 100.64.179.80 ping statistics ---\n5 packets transmitted, 5 received, 0% packet loss, time 4008ms\nrtt min/avg/max/mdev = 5.196/5.972/6.863/0.591 ms\n\nstderr:\n",
+          "role": "a",
+          "success": true
+        },
+        {
+          "output": "status: exit status: 0\nstdout:\nPING 10.41.0.9 (10.41.0.9) from 100.64.179.80 hse2eb: 56(84) bytes of data.\n64 bytes from 10.41.0.9: icmp_seq=1 ttl=64 time=2.39 ms\n64 bytes from 10.41.0.9: icmp_seq=2 ttl=64 time=2.35 ms\n64 bytes from 10.41.0.9: icmp_seq=3 ttl=64 time=2.43 ms\n64 bytes from 10.41.0.9: icmp_seq=4 ttl=64 time=2.85 ms\n64 bytes from 10.41.0.9: icmp_seq=5 ttl=64 time=2.44 ms\n\n--- 10.41.0.9 ping statistics ---\n5 packets transmitted, 5 received, 0% packet loss, time 4008ms\nrtt min/avg/max/mdev = 2.346/2.489/2.849/0.182 ms\n\nstderr:\n",
+          "role": "b",
+          "success": true
+        }
+      ],
+      "process_after": [
+        {
+          "capture_seconds": 0.00402571,
+          "cpu_ticks": 226,
+          "elapsed_seconds": 11.220605467,
+          "pid": 18,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36468,
+          "socket_fds": 14,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 24,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.003593338,
+          "cpu_ticks": 220,
+          "elapsed_seconds": 11.224228722,
+          "pid": 19,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35716,
+          "socket_fds": 12,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 22,
+          "vanished_fds": 0
+        }
+      ]
+    },
+    {
+      "name": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-10-recovery.json",
+      "recovered_seconds": 14.562993085,
+      "final_pings": [
+        {
+          "output": "status: exit status: 0\nstdout:\nPING 100.64.179.80 (100.64.179.80) from 100.64.233.146 hse2ea: 56(84) bytes of data.\n64 bytes from 100.64.179.80: icmp_seq=1 ttl=64 time=2.39 ms\n64 bytes from 100.64.179.80: icmp_seq=2 ttl=64 time=2.15 ms\n64 bytes from 100.64.179.80: icmp_seq=3 ttl=64 time=3.25 ms\n64 bytes from 100.64.179.80: icmp_seq=4 ttl=64 time=2.71 ms\n64 bytes from 100.64.179.80: icmp_seq=5 ttl=64 time=1.83 ms\n\n--- 100.64.179.80 ping statistics ---\n5 packets transmitted, 5 received, 0% packet loss, time 4005ms\nrtt min/avg/max/mdev = 1.833/2.465/3.249/0.485 ms\n\nstderr:\n",
+          "role": "a",
+          "success": true
+        },
+        {
+          "output": "status: exit status: 0\nstdout:\nPING 10.41.0.9 (10.41.0.9) from 100.64.179.80 hse2eb: 56(84) bytes of data.\n64 bytes from 10.41.0.9: icmp_seq=1 ttl=64 time=1.24 ms\n64 bytes from 10.41.0.9: icmp_seq=2 ttl=64 time=2.35 ms\n64 bytes from 10.41.0.9: icmp_seq=3 ttl=64 time=2.96 ms\n64 bytes from 10.41.0.9: icmp_seq=4 ttl=64 time=2.39 ms\n64 bytes from 10.41.0.9: icmp_seq=5 ttl=64 time=2.74 ms\n\n--- 10.41.0.9 ping statistics ---\n5 packets transmitted, 5 received, 0% packet loss, time 4006ms\nrtt min/avg/max/mdev = 1.239/2.336/2.957/0.593 ms\n\nstderr:\n",
+          "role": "b",
+          "success": true
+        }
+      ],
+      "process_after": [
+        {
+          "capture_seconds": 0.004602993,
+          "cpu_ticks": 251,
+          "elapsed_seconds": 22.622555952,
+          "pid": 18,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "a",
+          "rss_kib": 36484,
+          "socket_fds": 14,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 24,
+          "vanished_fds": 0
+        },
+        {
+          "capture_seconds": 0.004574369,
+          "cpu_ticks": 243,
+          "elapsed_seconds": 22.627163044,
+          "pid": 19,
+          "process_tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "role": "b",
+          "rss_kib": 35740,
+          "socket_fds": 12,
+          "start_ticks": 90779302,
+          "tcp_states": {
+            "01": 1,
+            "0A": 1
+          },
+          "threads": 6,
+          "total_fds": 22,
+          "vanished_fds": 0
+        }
+      ]
+    }
+  ],
+  "artifacts": [
+    {
+      "sha256": "67c5f83a73cd0e0d477b2ef99e64111c2791b25318bb02e87e3f064b8d8d6028",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-01-outage.json"
+    },
+    {
+      "sha256": "0b40e07762d90008ae2415a73c206d4afa8834029ba010c81fc0835f58b85d7b",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-01-recovery-sample.json"
+    },
+    {
+      "sha256": "3d192b960b926e53196a481f7caadc7d36fc230a676bb089f708add0cc89b2f6",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-01-recovery.json"
+    },
+    {
+      "sha256": "9170bcf03ceb2d601f326e9d4dc4d91e1d91e22c22f8e40ea41b9fbdb9331ece",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-02-outage.json"
+    },
+    {
+      "sha256": "8517d067288782ae67c6b0b779de46074a849131879e157838d81881ef776af8",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-02-recovery-sample.json"
+    },
+    {
+      "sha256": "2c5322afea09e50231bdf2c87aa2a0f21d4c6b5f2cd4a2b1659b0c2854f61572",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-02-recovery.json"
+    },
+    {
+      "sha256": "33cb4b8613c87a966c376f053cfebfca9d47d7dd943dc57bcd4bab795b42a275",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-03-outage.json"
+    },
+    {
+      "sha256": "a6b99ea0aa04223e94464fa36c0dbad22941a7c3ffb3a91bfae497a3147b0774",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-03-recovery-sample.json"
+    },
+    {
+      "sha256": "72717848003124ff2e3e32190960adafbb44470649ac4ba47ea5a4706cbe20b5",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-03-recovery.json"
+    },
+    {
+      "sha256": "cb398b16a747154bf45db34e7f436837921a5118b940c309acc104263976108d",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-04-outage.json"
+    },
+    {
+      "sha256": "d535255ec0e98abf4fb1be61fb52f4b172b108354ed0d1b6bc3aa167f1154a69",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-04-recovery-sample.json"
+    },
+    {
+      "sha256": "ab43956abeb5521383d964c160f34dfe07c51cd144b8864aeee54e3fbfc0b0e9",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-04-recovery.json"
+    },
+    {
+      "sha256": "88fe68a8620f19eaeeeada1bf4f41e4a1152007c806cb9e7f1effc7df88d1362",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-05-outage.json"
+    },
+    {
+      "sha256": "361aff5e424417ad0916712e1abc6c0188f2a1efa632ae7654ffc61936000fe2",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-05-recovery-sample.json"
+    },
+    {
+      "sha256": "7bb2728d9818ef078edce1fdb1678d7f2de7974b6e2a0aab6519a380d986158a",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-05-recovery.json"
+    },
+    {
+      "sha256": "8ddafec2484e6e0dc8f2ae767d106f0725017f2d8308a68c3498b2ba4f89fb76",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-06-outage.json"
+    },
+    {
+      "sha256": "9eb1b4d957279188903b8e1aa2e4868511beaaad8134dd0d22eba166c3b7f25c",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-06-recovery-sample.json"
+    },
+    {
+      "sha256": "49ef459d3a527e522d0d8cecf6b5eda0af0b6f9a32d21c3c4a856582339918f3",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-06-recovery.json"
+    },
+    {
+      "sha256": "cb30b5c5d3e19811c46f7ddc139306df0861cb091742b57db62ad1dde9e61b64",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-07-outage.json"
+    },
+    {
+      "sha256": "b693ad3d3c0a086771efa87976447c4f6395d8ce959d3bd02aefbb2266a80aee",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-07-recovery-sample.json"
+    },
+    {
+      "sha256": "0fd1cbf2fca1e811be1b8b942d32d3537f34241dc43d1b2b86d9c9f23df80607",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-07-recovery.json"
+    },
+    {
+      "sha256": "d5e58dc1554e52950e0ec4e05a4aead59ac91a8ca616fcd489fa0e3c7be1df6f",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-08-outage.json"
+    },
+    {
+      "sha256": "d199f8fde26042f687876f057deb9d2c5fc2ba0917013da6e8ae665265dc6f5b",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-08-recovery-sample.json"
+    },
+    {
+      "sha256": "b7471587a9c387c3c26303e6d1a7042d713c709ddd5140cd2b6929390d990d24",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-08-recovery.json"
+    },
+    {
+      "sha256": "df773b651488443f2e9a2c7a4e522fdc359248c1a173155527d36529caf98261",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-09-outage.json"
+    },
+    {
+      "sha256": "2e44362b3bc463ed6671ff680bfbcc0b8f33201d3f89e8a91aeab9fecfa8d4e4",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-09-recovery-sample.json"
+    },
+    {
+      "sha256": "744c2617a526d7bcf65afc83511065650490f318ecc39ad60f475c2810c29a81",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-09-recovery.json"
+    },
+    {
+      "sha256": "f98db20756c3ee6eb183c0110e2d2491474a492a13ec750137db73cb1c24b9f8",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-10-outage.json"
+    },
+    {
+      "sha256": "9a53798decbb1ebf9bdef4974079f3fd42021c1fefb70f99365d998a4a01f1a5",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-10-recovery-sample.json"
+    },
+    {
+      "sha256": "b03acc42237fcfa90493a470586042558eedf444556ec0e826a162568b1d7020",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-10-recovery.json"
+    },
+    {
+      "sha256": "a45e4842b702ed65eb9a303ed96c73720c62d71dbcde358e7443e19d6ba9dc2d",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/churn-settle.json"
+    },
+    {
+      "sha256": "d5b4191d70dc63f8c6037d0719bc23f7099a990176ffe7befd1bc6d6ef532132",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/lifecycle-churn.json"
+    },
+    {
+      "sha256": "1db47f65cf4e1f3edac74b49510a9b473114048691549d37de835cddfab5e741",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/node-a.log"
+    },
+    {
+      "sha256": "b8fb3165315708c98f9b4a5e9a37d136b41e87c7f647b3f61e01929bd6b57ddf",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.7306b1a288be1591/node-b.log"
+    }
+  ],
+  "artifact_bytes": {
+    "json": 6544833,
+    "node_logs": 1706606
+  },
+  "outer_log": {
+    "sha256": "ea6cec5f9727627b9c6bf3702283599ebccbaa9234aa1bd6d468cacb35c522d7",
+    "path": "/tmp/p2p-vpn-graceful-churn-1.log"
+  }
+}
