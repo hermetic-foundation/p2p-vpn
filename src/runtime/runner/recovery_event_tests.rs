@@ -3,7 +3,210 @@
 use super::tests::{config_with_peer, membership_sync_test_node};
 use super::*;
 
+#[tokio::test]
+async fn failed_packet_connection_cannot_veto_fresh_opposite_role_connection() {
+    let peer = NodeIdentity::generate_ed25519()
+        .unwrap()
+        .peer_id
+        .parse()
+        .unwrap();
+    let mut fixture = EventFixture::new(peer);
+    let overlay = PeerId::from_libp2p(peer);
+    let old = ConnectionId::new_unchecked(30);
+    let fresh = ConnectionId::new_unchecked(43);
+    let local = *fixture.node.swarm.local_peer_id();
+    let outbound = ConnectedPoint::Dialer {
+        address: "/ip4/127.0.0.1/tcp/42001".parse().unwrap(),
+        role_override: libp2p::core::Endpoint::Dialer,
+        port_use: libp2p::core::transport::PortUse::New,
+    };
+    let inbound = ConnectedPoint::Listener {
+        local_addr: "/ip4/127.0.0.1/tcp/42002".parse().unwrap(),
+        send_back_addr: "/ip4/127.0.0.1/tcp/42003".parse().unwrap(),
+    };
+    let (preferred, opposite) = if local.to_bytes() < peer.to_bytes() {
+        (outbound, inbound)
+    } else {
+        (inbound, outbound)
+    };
+    fixture.epochs.record_established(old);
+    fixture.active_connections.insert((peer, old), preferred);
+    fixture.paths.record_established_with_details(
+        overlay,
+        PathKind::DirectTcpStream,
+        None,
+        Some(1280),
+        PathOrigin::Identify,
+        PathConnectionRole::Unknown,
+        false,
+        Some(old),
+        None,
+    );
+    let path = fixture.paths.best_for(overlay).unwrap();
+    let id = fixture
+        .node
+        .swarm
+        .behaviour_mut()
+        .pinned_packet_stream
+        .send_request_on_connection(peer, old, Frame::packet(1, 1, vec![0x45; 20]).unwrap());
+    fixture.packet_in_flight.record_path_probe(
+        overlay,
+        PacketInFlightId::PinnedPacketStream(id),
+        path,
+    );
+    fixture
+        .dispatch(SwarmEvent::Behaviour(BehaviourEvent::PinnedPacketStream(
+            pinned_packet_stream::Event::OutboundFailure {
+                peer,
+                connection_id: old,
+                request_id: id,
+                error: pinned_packet_stream::Failure::StreamUpgrade("Timeout".to_owned()),
+            },
+        )))
+        .await;
+    assert!(fixture.paths.best_for(overlay).is_none());
+    assert_eq!(fixture.packet_in_flight.stats().packets, 0);
+    fixture.epochs.record_established(fresh);
+    fixture.active_connections.insert((peer, fresh), opposite);
+    let redundant =
+        redundant_direct_connection_ids(local, peer, &fixture.active_connections, &fixture.epochs);
+    assert!(
+        !redundant.contains(&fresh),
+        "failed preferred connection vetoed fresh replacement"
+    );
+    assert!(
+        !fixture.epochs.is_usable(old),
+        "failed connection must be retired until its close event"
+    );
+    assert!(fixture.epochs.is_usable(fresh));
+}
+
 struct UnusedPacketIo;
+
+#[tokio::test]
+async fn packet_failure_retirement_is_owned_current_and_preserves_replacements() {
+    for scenario in [
+        "io",
+        "capacity",
+        "unowned",
+        "stale_epoch",
+        "untracked",
+        "wrong_peer",
+        "wrong_path",
+        "non_transport",
+        "already_retiring",
+    ] {
+        let peer = NodeIdentity::generate_ed25519()
+            .unwrap()
+            .peer_id
+            .parse()
+            .unwrap();
+        let mut fixture = EventFixture::new(peer);
+        let overlay = PeerId::from_libp2p(peer);
+        let old = ConnectionId::new_unchecked(7);
+        let replacement = ConnectionId::new_unchecked(8);
+        let endpoint = ConnectedPoint::Dialer {
+            address: if scenario == "wrong_path" {
+                "/ip4/127.0.0.1/udp/42001/quic-v1"
+            } else {
+                "/ip4/127.0.0.1/tcp/42001"
+            }
+            .parse()
+            .unwrap(),
+            role_override: libp2p::core::Endpoint::Dialer,
+            port_use: libp2p::core::transport::PortUse::New,
+        };
+        fixture.epochs.record_established(old);
+        if scenario != "untracked" {
+            fixture.active_connections.insert((peer, old), endpoint);
+        }
+        if scenario == "stale_epoch" {
+            fixture.epochs.advance();
+        }
+        if scenario == "already_retiring" {
+            fixture.epochs.mark_retiring(old);
+        }
+        fixture.epochs.record_started(replacement);
+        fixture.epochs.record_established(replacement);
+        fixture.active_connections.insert(
+            (peer, replacement),
+            ConnectedPoint::Dialer {
+                address: "/ip4/127.0.0.1/tcp/42002".parse().unwrap(),
+                role_override: libp2p::core::Endpoint::Dialer,
+                port_use: libp2p::core::transport::PortUse::New,
+            },
+        );
+        for id in [old, replacement] {
+            fixture.paths.record_established_with_details(
+                overlay,
+                PathKind::DirectTcpStream,
+                None,
+                Some(1280),
+                PathOrigin::Identify,
+                PathConnectionRole::Dialer,
+                false,
+                Some(id),
+                None,
+            );
+        }
+        let path = fixture.paths.best_for(overlay).unwrap();
+        let id = fixture
+            .node
+            .swarm
+            .behaviour_mut()
+            .pinned_packet_stream
+            .send_request_on_connection(peer, old, Frame::packet(1, 1, vec![0x45; 20]).unwrap());
+        if scenario != "unowned" {
+            fixture.packet_in_flight.record_path_probe(
+                overlay,
+                PacketInFlightId::PinnedPacketStream(id),
+                path,
+            );
+        }
+        let error = match scenario {
+            "capacity" => pinned_packet_stream::Failure::capacity_exhausted(),
+            "non_transport" => pinned_packet_stream::Failure::MissingInboundRequest(id),
+            _ => pinned_packet_stream::Failure::Io("connection reset".to_owned()),
+        };
+        let event_peer = if scenario == "wrong_peer" {
+            NodeIdentity::generate_ed25519()
+                .unwrap()
+                .peer_id
+                .parse()
+                .unwrap()
+        } else {
+            peer
+        };
+        for _ in 0..2 {
+            fixture
+                .dispatch(SwarmEvent::Behaviour(BehaviourEvent::PinnedPacketStream(
+                    pinned_packet_stream::Event::OutboundFailure {
+                        peer: event_peer,
+                        connection_id: old,
+                        request_id: id,
+                        error: error.clone(),
+                    },
+                )))
+                .await;
+            assert_eq!(
+                fixture.epochs.retiring.contains(&old),
+                matches!(scenario, "io" | "already_retiring"),
+                "{scenario}"
+            );
+            assert!(fixture.epochs.is_usable(replacement), "{scenario}");
+            assert_eq!(
+                fixture
+                    .paths
+                    .best_for(overlay)
+                    .unwrap()
+                    .latest_connection_id,
+                Some(replacement),
+                "{scenario}"
+            );
+            assert_eq!(fixture.packet_in_flight.stats().packets, 0, "{scenario}");
+        }
+    }
+}
 
 impl crate::runtime::tun::PacketRead for UnusedPacketIo {
     fn read_packet(&mut self, _: &mut [u8]) -> io::Result<usize> {
@@ -36,6 +239,7 @@ struct EventFixture {
     retired_listeners: HashSet<ListenerId>,
     pairing: CodePairingSessions,
     pairing_tokens: PairingReplayTokens,
+    packet_in_flight: PacketInFlight,
 }
 
 impl EventFixture {
@@ -61,6 +265,7 @@ impl EventFixture {
             retired_listeners: HashSet::new(),
             pairing: CodePairingSessions::new(),
             pairing_tokens: PairingReplayTokens::default(),
+            packet_in_flight: PacketInFlight::new(1),
         }
     }
 
@@ -98,7 +303,7 @@ impl EventFixture {
                 retiring_configured_relay_reservation_listeners: &mut self.retired_listeners,
                 relay_server_enabled: false,
                 discovered_peer_addresses: &mut self.discovered,
-                packet_in_flight: &mut PacketInFlight::new(1),
+                packet_in_flight: &mut self.packet_in_flight,
                 inbound_packet_rate_limiters: &mut PeerRateLimiters::new(1),
                 pairing_request_rate_limiters: &mut PeerRateLimiters::new(1),
                 membership_page_rate_limiters: &mut PeerRateLimiters::new(1),

@@ -13067,7 +13067,40 @@ fn handle_pinned_packet_stream_event(
                     connection_id,
                     &error,
                 );
-                if let Some(peer) = context.forwarder.transport_peer_for_overlay(request.peer) {
+                if let Some(transport_peer) =
+                    context.forwarder.transport_peer_for_overlay(request.peer)
+                {
+                    // Failed packet connections must not win deduplication over fresh recovery paths.
+                    if peer == transport_peer
+                        && context.connection_epochs.is_usable(connection_id)
+                        && context
+                            .active_connections
+                            .get(&(peer, connection_id))
+                            .is_some_and(|endpoint| {
+                                path_kind_for_endpoint(endpoint) == request.path
+                                    && relay_peer_for_endpoint(endpoint) == request.relay_peer
+                            })
+                        && matches!(
+                            error,
+                            pinned_packet_stream::Failure::StreamUpgrade(_)
+                                | pinned_packet_stream::Failure::Io(_)
+                        )
+                    {
+                        context.connection_epochs.mark_retiring(connection_id);
+                        let close_requested = swarm.close_connection(connection_id);
+                        log_runtime_event(
+                            LogLevel::Warn,
+                            "pinned_stream_connection_retired",
+                            &[
+                                ("peer", &peer.to_string()),
+                                ("connection_id", &connection_id.to_string()),
+                                ("path", request.path.wire_name()),
+                                ("reason", pinned_stream_failure_name(&error)),
+                                ("close_requested", &close_requested.to_string()),
+                            ],
+                        );
+                    }
+                    let peer = transport_peer;
                     if demoted {
                         dial_ready_relays_for_configured_peer(swarm, context, peer);
                     }

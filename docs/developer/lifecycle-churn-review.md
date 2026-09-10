@@ -2,8 +2,9 @@
 
 ## Status
 
-S5 fixture validated. Both sustained ten-cycle captures remain pending.
-Production runtime remains `11416a8d`; changes are test support only.
+S5 fixture validated. The first full capture failed on cycle three; both successful
+ten-cycle captures remain pending. See [connection retirement investigation](churn-connection-retirement.md).
+Fixture validation below used production runtime `11416a8d`.
 
 ## Frozen Capture Manifest
 
