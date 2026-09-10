@@ -452,6 +452,8 @@
                 shellcheck ${./scripts/android-e2e.sh}
                 shellcheck ${./scripts/android-resource-isolation.sh}
                 shellcheck ${./tests/android-resource-isolation.sh}
+                shellcheck ${./scripts/android-process-sample.sh}
+                shellcheck ${./tests/android-process-sample.sh}
                 shellcheck ${./scripts/android-e2e-nix.sh}
 
                 source <(sed -n '/^summarize_android_connectivity() {$/,/^}$/p' ${./scripts/android-e2e.sh})

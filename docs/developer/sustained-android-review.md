@@ -124,7 +124,7 @@ launch the historical scenario unchanged for this goal's no-public-WAN boundary.
 | Networking | Only loopback; IPv4/IPv6 routes use loopback only |
 | USB | Private empty mount hides `/dev/bus/usb`; host bus directory listing unchanged |
 | ADB | Dedicated loopback TCP server endpoint; inherited serial removed; automatic mDNS connect disabled |
-| KVM | Device remains present/readable/writable; emulator initialization not tested yet |
+| KVM | Device remains present/readable/writable; subsequent isolated boot passes below |
 | Process exit | Child exit 23 propagates; invalid invocation rejected |
 | Descendants | Tagged live descendant disappears after namespace init exits |
 | Timeout | External timeout returns 124 and leaves no tagged isolated command |
@@ -150,7 +150,7 @@ so their build/test suites were not repeated for this shell-only addition.
 ## Next Work
 
 1. Preserve refreshed artifact hashes and verify them again before emulator admission.
-2. Add the cheap OS/resource collector and collector-on/off controls inside the boot-tested wrapper.
+2. Validate the process collector on the emulator; integrate runtime sampling and collector-on/off controls.
 3. Freeze S7's 30-second warmup, 300-second idle/load windows, five independent transitions, actual offered load and watchdogs.
 4. Require healthy sibling traffic and identity continuity while the other network is disabled or unavailable.
 5. Run paired captures; audit cadence, recovery, teardown and storage cleanup before accepting results.
@@ -208,3 +208,43 @@ namespace, failure-propagation and descendant-cleanup checks continue to pass.
 ShellCheck and shfmt pass. Validation log:
 `/tmp/p2p-vpn-android-resource-isolation-adb-tests.log`. This shell-only correction
 does not require repeating unchanged Rust/Android builds or device lifecycle tests.
+
+## Process Collector
+
+`scripts/android-process-sample.sh` emits one JSON object per observation. Run it
+through the debug app's `run-as` identity inside the isolated emulator. Local
+shell tests pass; emulator permissions and overhead are not verified yet.
+
+| Field | Meaning / Limit |
+| --- | --- |
+| PID and start ticks | Checked before and after observation; changes abort capture |
+| Started/finished uptime | Kernel uptime seconds; includes observation duration |
+| User/system ticks | Process CPU ticks; record device `CLK_TCK` before conversion |
+| OS threads | Kernel process thread count, not Java `activeCount` |
+| RSS | Kernel RSS in KiB; not allocation attribution or PSS |
+| Descriptors | Non-atomic count of visible descriptor links; inaccessible directory is null |
+| Leader context switches | Main-thread voluntary/involuntary counters, not all-thread wakeups |
+
+### Invocation Contract
+
+```sh
+# Only inside the isolated wrapper, with an explicitly selected owned emulator.
+adb -s "$serial" exec-out run-as org.hermeticfoundation.p2pvpn.debug \
+  sh -s -- "$app_pid" 300 < scripts/android-process-sample.sh
+```
+
+- Accepts 1 to 900 samples; rejects invalid or zero PID and noncanonical numeric arguments.
+- Sleeps one second between observations; actual cadence includes collection overhead.
+- Missing optional fields become null; unreadable/malformed process identity aborts.
+- Pair output with an external watchdog, byte cap, app identity and device clock metadata.
+- `P2P_VPN_SAMPLE_PROC_ROOT` exists for synthetic parser tests; do not override during capture.
+
+### Validation and Remaining Gates
+
+`timeout 10 bash tests/android-process-sample.sh` passes live-process and synthetic
+checks, including names containing spaces/parentheses, missing optional fields,
+malformed stat records and argument bounds. ShellCheck and shfmt pass.
+
+Both scripts are included in the Nix Android structure lint check. No production
+code changed; unchanged Rust and Android builds were not repeated. This collector
+alone does not satisfy S7 or measure scheduled work, PSS, queues or network isolation.
