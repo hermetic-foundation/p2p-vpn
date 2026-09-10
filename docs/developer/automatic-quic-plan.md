@@ -296,6 +296,37 @@ This strengthens physical fallback/re-promotion evidence and clarifies the probe
 It does not explain the prior post-recovery loss, certify long-duration stability or test
 physical network movement. No timeout or routing policy change was made to obtain this pass.
 
+### Settled Packet Timing Follow-Up
+
+Analyzed the retained capture over epoch seconds `1789067667` through `1789067727`.
+Sort by packet timestamp: the multi-interface capture's record order is not globally chronological.
+All 60 full-MTU requests have replies in this interval.
+
+| Candidate timing, milliseconds | Median | 95th percentile | Maximum |
+| --- | --- | --- | --- |
+| TUN request to next outgoing UDP datagram of at least 1,345 bytes | 1.268 | 1.909 | 600.817 |
+| Last incoming UDP datagram of at least 1,345 bytes to TUN reply | 1.548 | 2.054 | 2.410 |
+| Matched ICMP request/reply RTT at TUN | 134.745 | 285.561 | 683.671 |
+
+These are temporal candidates, not decrypted payload attribution. Large probes can have
+similar sizes; the underlay capture excludes stream transports. Percentiles use nearest rank.
+The median uses the mean of the two central observations.
+
+- Sequence seven entered `pv1` at `14:14:33.280917460` CDT. The next captured outgoing
+  QUIC datagram was at `.881734929`, followed by its candidate return at `.963183421`.
+- Its TUN reply arrived at `.964588486`. The other 59 request-to-outgoing candidates
+  were below 3 ms; every return-to-TUN candidate was below 3 ms.
+- Precise system journal time places `control_capabilities_accepted` at `.880948`,
+  less than 1 ms before that outgoing datagram. The preceding logged event was at `.174373`.
+
+`handle_control_response_event` validates membership and hostname records synchronously
+inside the runtime event loop. This is a profiling target, not proof that validation
+occupied the entire gap; the log does not record handler entry or time spent per stage.
+
+Next: measure control-handler duration and packet dispatch independently of QUIC queueing.
+Both physical artifacts were debug builds, so account for optimization before attributing
+timing to release behavior. Do not weaken authorization or probe deadlines based on this correlation.
+
 ## Failed Datagram Fallback Review
 
 - Inspection found that a failed QUIC send could try UDP, then immediately drop on UDP failure
