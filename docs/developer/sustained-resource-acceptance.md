@@ -11,7 +11,7 @@ not replace the original acceptance criteria with a smaller workload.
 | Criterion | Evidence To Reconcile | Current Audit Result |
 | --- | --- | --- |
 | 1. Source, manifests, budgets, exclusions | [Measurement plan](sustained-resource-review.md), per-workload manifests, source history | Final runtime matches graceful-capture revision; earlier Linux/Android reuse still needs reconciliation |
-| 2. Sustained resource coverage | S1-S7 captures, process/runtime series, collector controls | Paired graceful reconnect artifacts revalidated; remaining workload series need final audit |
+| 2. Sustained resource coverage | S1-S7 captures, process/runtime series, collector controls | Linux and Android capture integrity reconciled; final-code moderate-load/idle comparison remains unverified |
 | 3. Retention and teardown | Ledger/queue controls, pressure/churn, allocation-owner traces | Reconnect teardown evidence verified; residual scope and pressure ownership conclusions still need reconciliation |
 | 4. Android scheduling and background work | [Thread controls](android-thread-controls.md), load/profile/isolation reports | Five captures' raw artifacts and historical harness versions verified; shared shutdown reuse limit explicit below |
 | 5. Reproduction and minimal corrections | Capability retirement, connection retirement, Linux TUN cancellation | Production-fix inventory and guarded regression sources inspected; workload reconciliation remains |
@@ -186,6 +186,56 @@ queues and overlapping RSS/PSS ranges do not prove allocation release.
   successful later captures do not retroactively turn failed attempts into passes.
 - Physical battery/thermal behavior, release performance and WAN movement are
   outside these emulator observations and remain separate acceptance work.
+
+## Linux Workload Reconciliation
+
+### Revalidated Captures
+
+| Workload | Raw Hash Entries Rechecked | Scope |
+| --- | ---: | --- |
+| S1 idle | 2 | Two 300-second reports; original runtime `00b1b58a` |
+| Observer off/on/on/off | 4 | Four 300-second reports; original runtime `00b1b58a` |
+| S2 unavailable | 4 | Two outage/recovery pairs; original runtime `00b1b58a` |
+| S3 paced load | 6 | Two load/drain/outcome triplets; runtime `11416a8d` |
+| Graceful S4 pressure | 108 | Packet/byte five-round captures; final production runtime `575ef4ac` |
+| Graceful S5 reconnect | 70, verified earlier | Two ten-cycle captures; final production runtime `575ef4ac` |
+
+All listed hashes match retained raw files. S3's original outcome files each
+show fixed transport, unchanged processes, valid delivery and 15,000/15,000
+packets with zero invalid or duplicate replies. Both S4 series complete five rounds.
+
+### Assertion Scope
+
+The inspected `tests/support/sustained_traffic.rs` requires at least 98% of
+scheduled sends and 98% replies to actual sends, no invalid/duplicate replies,
+stable process identities, fixed UDP paths and final strict pings both ways.
+The actual captures exceeded the delivery threshold with every reply received.
+
+- Load and drain reports are retained before delivery assertions. Generator
+  cleanup has its own five-second exit check; failed work is not replayed.
+- Five-second runtime snapshots must retain healthy UDP paths and unchanged
+  stream-fallback counts. They cannot exclude between-sample transients.
+- S1 uses 20 threads per daemon; later S3 uses six with two Tokio workers.
+  Do not call S1-to-S3 CPU differences a matched idle/load experiment.
+- S3's own load/drain phases are comparable within each run: load CPU is about
+  6.5-6.8% per node, returning below 0.2% after traffic.
+- S2 separates static overlay peers from five unreachable bootstrap candidates.
+  Infrastructure errors are not all overlay-redial attempts or successful WAN discovery.
+
+### Final-Code Limit
+
+S1-S3 predate Linux readiness-based TUN I/O. Their measurements remain valid for
+the named revisions, but are not final-code CPU baselines. S4/S5 cover final-code
+pressure, recovery, settling and teardown, not the same moderate paced workload.
+
+The new implementation adds three Linux descriptors and no recurring idle timer.
+That source inspection explains descriptor cost; it does not prove unchanged
+CPU or throughput. Final-code comparable idle/moderate-load evidence remains
+unverified and must not be substituted with older results or a pressure-only pass.
+
+The complete storage total must be established before a new capture. Reuse the
+cached final-runtime executable and original workload gates if follow-up is
+needed; do not rebuild or repeat the completed ten-cycle campaign by default.
 
 ## Attribution Boundary
 
