@@ -2,22 +2,22 @@
 
 ## Status
 
-Audit started against `21420c0b`. The goal remains active.
-This document separates verified evidence from pending reconciliation; it does
-not replace the original acceptance criteria with a smaller workload.
+Bounded acceptance established through `5715d2a5`, subject to publication of this
+closeout. Audit began at `21420c0b`; the sections below retain the evidence checked
+and its limits. No production source changed during the final evidence audit.
 
 ## Requirement Map
 
 | Criterion | Evidence To Reconcile | Current Audit Result |
 | --- | --- | --- |
-| 1. Source, manifests, budgets, exclusions | [Measurement plan](sustained-resource-review.md), per-workload manifests, source history | Final runtime matches graceful-capture revision; earlier Linux/Android reuse still needs reconciliation |
+| 1. Source, manifests, budgets, exclusions | [Measurement plan](sustained-resource-review.md), per-workload manifests, source history | Satisfied: runtime/diagnostic revisions reconciled, historical reuse limits retained, final-code S3 added |
 | 2. Sustained resource coverage | S1-S7 captures, process/runtime series, collector controls | Linux/Android evidence reconciled; paired final-code S3 now passes with the documented instrumentation limits |
-| 3. Retention and teardown | Ledger/queue controls, pressure/churn, allocation-owner traces | Ledger/queue invariants verified; one/five/five/one pressure inventories match across eight daemons; large pressure-owner attribution pending |
+| 3. Retention and teardown | Ledger/queue controls, pressure/churn, allocation-owner traces | Satisfied within measured workloads: teardown, repeatability and causal owner evidence; pressure's large residual is global timer capacity |
 | 4. Android scheduling and background work | [Thread controls](android-thread-controls.md), load/profile/isolation reports | Five captures' raw artifacts and historical harness versions verified; shared shutdown reuse limit explicit below |
-| 5. Reproduction and minimal corrections | Capability retirement, connection retirement, Linux TUN cancellation | Production-fix inventory and guarded regression sources inspected; workload reconciliation remains |
-| 6. Verification and invariant preservation | Workspace, Clippy, source parity, Android-native logs, regression sources | Final runtime terminal logs verified; source-parity inventories match; instrumentation gates still need reconciliation |
-| 7. Results and documentation | Structured results, historical failures, review index | Index contains superseded open items; reconcile after evidence audit |
-| 8. Publication and final acceptance | Jujutsu main, clean tree, this audit | Startup findings published; final acceptance not established |
+| 5. Reproduction and minimal corrections | Capability retirement, connection retirement, Linux TUN cancellation | Satisfied: three production corrections verified against reproductions, ownership guards and final-source workloads |
+| 6. Verification and invariant preservation | Workspace, Clippy, source parity, Android-native logs, regression sources | Satisfied for affected scope: terminal logs/source correspondence verified; package/device exclusions explicit |
+| 7. Results and documentation | Structured results, historical failures, review index | Satisfied: commands, hashes, results, causal findings and limits published; current index reconciled |
+| 8. Publication and final acceptance | Jujutsu main, clean tree, this audit | Evidence commits through `5715d2a5` published; final clean/publication check required after this closeout commit |
 
 ## Verified This Pass
 
@@ -266,31 +266,31 @@ The source-gated ledger and queue diagnostics remain unchanged in production.
 - Pressure has a distinct 59,707-byte / 84-block residual. Do not merge it with
   the direct/churn baseline or infer ownership from matching aggregate totals.
 
-The goal requires investigating growth, bounding resource behavior and verifying
-release. It does not explicitly require naming every allocator byte. Whether
-remaining uncertainty prevents those conclusions is still an audit question,
-not permission to declare unexplained growth harmless.
+The scoped investigation now distinguishes queue/ledger release, session/channel
+reuse, process-global timer capacity and deferred epoch reclamation. Repeated
+full-runtime teardown and size inventories supplement those owner controls.
+This establishes the measured behavior without claiming every byte is named.
 
 ### Required Follow-Up Boundary
 
 The [follow-up manifest](resource-followup-manifest.md) pins cached binaries,
 commands, comparison controls and budgets before the remaining captures.
 
-1. Verify the full temporary-storage total before captures. A read-only elevated
-   total has been requested; do not delete evidence or alter directory permissions.
+1. Complete storage verification and authorized cache cleanup are recorded below.
 2. Final-code moderate-load/drain comparison is complete: existing S3 workload,
    cached executable, original gates and two fresh repetitions pass.
-3. Investigate the distinct pressure residual with a bounded matched control or
-   owner inventory. Freeze its comparison and quotas before execution.
-4. Reconcile remaining diagnostic validation and update the review index only
-   after the evidence establishes the corresponding requirement.
+3. Pressure comparison and owner tracing are complete: eight matching daemon
+   inventories, followed by direct identification of retained global timer vectors.
+4. Diagnostic validation is reconciled below; the current review index links to
+   this final map rather than treating historical open items as current blockers.
 
 No new ten-cycle reconnect run is required by this audit. The unassigned 734
 direct bytes and 2088-byte reconnect bucket remain disclosed limitations; they
 are not automatically extra work merely because their stack names are unknown.
 The [pressure comparison](resource-followup-manifest.md#pressure-comparison-results)
 now establishes identical residual size rows across eight one/five-round daemons.
-The two large pressure-specific blocks still need allocating-owner correspondence.
+The [startup owner trace](resource-followup-manifest.md#owner-results) identifies
+both large pressure-specific blocks and their survival after runtime teardown.
 
 ## Storage Verification And Cleanup
 
@@ -307,10 +307,46 @@ The complete post-cleanup total is 9,598,300 KiB. Both historical release
 executables retain their original hashes; current test binaries, raw captures
 and user files are preserved. The storage blocker is resolved without a rebuild.
 
-## Next Audit Actions
+Final elevated total after all follow-ups: 9,620,096 KiB, below 10 GiB. No matching
+namespace fixture, pressure debugger or startup-driver process remains.
 
-1. Reconcile S1-S7 source revisions, original gates and raw measurement series.
-2. Verify correction logs and affected negative/positive regression coverage.
-3. Resolve required evidence gaps; distinguish optional attribution from missing
-   proof of bounded behavior. Preserve platform and physical-energy exclusions.
-4. Update superseded index entries, publish final findings and verify clean main.
+## Diagnostic Validation Reconciliation
+
+The final size-inventory change is test-only. No production, Android, crate,
+vendor, lockfile, flake or Nix-source-filter differences follow `6fa5026b` through
+`5715d2a5`; later executable diagnostics and documentation retain their own checks.
+
+| Retained Log Under `/tmp/p2p-vpn-` | Inspected Terminal Result |
+| --- | --- |
+| `size-default-workspace.log` | 1,512 pass, zero failures, 40 opt-in exclusions |
+| `size-library.log` | Feature-enabled library: 1,152 pass, 15 opt-in exclusions |
+| `size-unit.log` | 63 fixture tests pass, 28 opt-in exclusions |
+| `size-calibration.log`, `size-byte-calibration.log` | Both calibration tests pass |
+| `size-vendor-unit.log` | Allocator unit test passes |
+| `size-clippy.log` | Required-group dev check finishes successfully |
+
+The standalone epoch diagnostic's safe APIs, bounded loops, formatting and
+required static checks are recorded in its [control report](epoch-retention-review.md).
+Documentation-only follow-ups do not justify repeating full workspace builds.
+
+## Final Decision And Limits
+
+All S1-S7 workload categories have bounded evidence, with source/collector
+differences stated. The last final-code comparison and pressure-owner gaps are
+closed. No reproduced in-scope production defect remains unresolved.
+
+- Small unassigned allocations and the earlier 2088-byte reconnect bucket remain
+  explicit attribution limits, not a claim of zero leakage under arbitrary load.
+- Debug CPU includes instrumentation. Android profiles identify worker cost but
+  do not establish a release optimization or physical battery/thermal behavior.
+- Android source is unchanged; final shared-Rust compilation is verified. Final
+  APK/platform recertification remains separate, as required by the goal.
+- Full hermetic package builds, public NAT/WAN behavior and physical-device
+  acceptance were not rerun. Cached Nix source parity is not package certification.
+- The randomized address-collision test failure is retained as fixture
+  nondeterminism, not evidence that conflicting routes should be accepted.
+- The storage-cap breach was detected by full accounting and corrected through
+  authorized disposable-cache cleanup; historical partial totals are not recertified.
+
+Publication and a clean worktree are the final operational gates. No additional
+benchmark, physical host or product decision is required for this bounded goal.

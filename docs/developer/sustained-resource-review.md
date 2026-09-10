@@ -2,33 +2,33 @@
 
 ## Status
 
-Active bounded review opened at `00b1b58a` on 2026-09-09.
-This contains the measurement plan and partial results, not a completion claim.
-No physical device or deployed host is authorized for this work.
+Bounded review complete through the [acceptance audit](sustained-resource-acceptance.md).
+Opened at `00b1b58a` on 2026-09-09; final evidence includes paired current-runtime
+load captures and pressure-owner attribution at `5715d2a5`.
 
-The [acceptance audit](sustained-resource-acceptance.md) tracks current evidence
-reconciliation. Historical "remaining gap" entries below describe their capture
-stage; later reports may supersede them, but final acceptance is not yet proven.
+Historical "remaining gap" entries below describe their capture stage. The
+acceptance audit is the current status map and records all reuse/platform limits.
+No physical-device or deployed-host campaign was performed for this review.
 
 ## Checklist
 
 - [x] Locate prior measurements and identify reuse limits.
 - [x] Define capture windows, budgets and decision rules.
-- [ ] Audit collectors and freeze workload manifests before capture.
+- [x] Audit collectors and freeze workload manifests before capture.
 - [x] Measure connected idle and periodic-collector overhead in the isolated debug fixture.
 - [x] Measure unavailable peers and retain retry/backoff timelines in the isolated debug fixture.
 - [x] Measure matched sustained traffic (S3): two direct-UDP captures, 30000/30000 total requests/replies.
-- [x] Measure repeated packet/byte pressure and recovery (S4); allocation attribution remains open.
-- [ ] Attribute retained allocations, including signed-ledger refreshes.
-- [x] Complete the twelve-capture signed-ledger allocation matrix; packet/runtime attribution remains open.
-- [x] Attribute packet-queue payload/container ownership across 40 cycles; transport/runtime allocations remain open.
-- [x] Measure paired runtime teardown baselines; first-use allocation owners and connected transport attribution remain open.
+- [x] Measure repeated packet/byte pressure and recovery (S4), including graceful release and pressure residual comparison.
+- [x] Investigate retained allocations and growth; preserve the final audit's unassigned-byte limits.
+- [x] Complete the twelve-capture signed-ledger allocation matrix.
+- [x] Attribute packet-queue payload/container ownership across 40 cycles.
+- [x] Measure runtime teardown, first-use globals and connected allocation owners.
 - [x] Attribute the isolated AutoNAT 224-byte teardown differential to global timer capacity through matched prewarm controls.
 - [x] Measure paired ten-cycle lifecycle churn; all recoveries pass without rescue.
-- [x] Measure repeated bounded Android multi-network resource isolation; allocation attribution remains open.
-- [ ] Measure Android background CPU/wakeup proxies on a cached emulator.
-- [ ] Reproduce and correct defects; validate before/after behavior.
-- [ ] Publish results, cleanup evidence and a requirement-by-requirement audit.
+- [x] Measure repeated bounded Android multi-network resource isolation.
+- [x] Measure Android background CPU/scheduling proxies on a cached emulator.
+- [x] Reproduce and correct defects; validate before/after behavior.
+- [x] Publish results, cleanup evidence and a requirement-by-requirement audit.
 
 ## Existing Evidence
 
