@@ -1,0 +1,584 @@
+{
+  "schema_version": 1,
+  "baseline": "11c8ba0d",
+  "binary_sha256": "ce9dd5655f18717a1f84f6bdfb848d879d5845f2fe426795182945856e85d486",
+  "fixture_command": "env -u P2P_VPN_TUN_E2E_IDLE_SECONDS -u P2P_VPN_TUN_E2E_ORCHESTRATOR_TIMEOUT_SECONDS -u P2P_VPN_TUN_E2E_WAIT_SCALE P2P_VPN_REVIEW_CHURN_SMOKE=1 P2P_VPN_REVIEW_GRACEFUL_SHUTDOWN=1 P2P_VPN_TUN_E2E_KEEP_TEMP=1 TOKIO_WORKER_THREADS=2 RUST_MIN_STACK=8388608 timeout --signal=TERM --kill-after=2s 250 prlimit --fsize=8388608:8388608 -- /tmp/p2p-vpn-review-target/debug/deps/tun_namespace-92e26a895f071361 tun_namespace_measures_lifecycle_churn_resources --ignored --exact --nocapture --test-threads=1",
+  "attach_command": "timeout --signal=TERM --kill-after=2s 240 prlimit --fsize=1048576:1048576 -- nsenter --target 2020617 --user --net --mount --pid --preserve-credentials -- /nix/store/bg2bp1zmii5spb2hkgv5xn6mzva7nx9r-gdb-17.2/bin/gdb -q -nx -batch -x /tmp/p2p-vpn-reconnect-inventory.gdb",
+  "observer_script": "set pagination off\nset confirm off\nset debuginfod enabled off\nset auto-load off\nset print frame-arguments none\nset print address off\nattach 18\nset language c\npython\nimport gdb, struct, json, time\nsamples = 0\nexit_code = None\ndef inventory():\n    global samples\n    samples += 1\n    if samples > 128:\n        raise gdb.GdbError(\"snapshot quota exceeded\")\n    base = int(gdb.parse_and_eval(\"(unsigned long long)&'stats_alloc::INSTRUMENTED_SYSTEM'\"))\n    values = struct.unpack(\"<65546q\", bytes(gdb.selected_inferior().read_memory(base, 0x80050)))\n    rows = [(i, count) for i, count in enumerate(values[:65537]) if count]\n    oversized_blocks, oversized_bytes, failures = values[65537:65540]\n    allocs, frees, resizes, allocated_bytes, freed_bytes, resized_bytes = values[65540:]\n    blocks = sum(count for _, count in rows) + oversized_blocks\n    size = sum(i * count for i, count in rows) + oversized_bytes\n    coherent = blocks == allocs - frees and size == allocated_bytes - freed_bytes and failures == 0\n    if len(rows) > 512:\n        raise gdb.GdbError(\"row quota exceeded\")\n    print(\"FROZEN_INVENTORY\", json.dumps({\"index\": samples, \"unix_millis\": int(time.time() * 1000), \"rows\": rows, \"bytes\": size, \"blocks\": blocks, \"oversized_blocks\": oversized_blocks, \"oversized_bytes\": oversized_bytes, \"failures\": failures, \"coherent\": coherent}))\ndef ended(event):\n    global exit_code\n    exit_code = getattr(event, \"exit_code\", None)\n    print(\"FROZEN_END\", json.dumps({\"exit_code\": exit_code, \"samples\": samples}))\ngdb.events.exited.connect(ended)\nfor symbol in (\"tun_namespace::allocation_sample::emit\", \"tun_namespace::allocation_sample::emit_sizes\"):\n    bp = gdb.Breakpoint(symbol, internal=True)\n    bp.commands = \"silent\\npython inventory()\\ncontinue\\n\"\nprint(\"FROZEN_READY\", json.dumps({\"pid\": gdb.selected_inferior().pid, \"unix_millis\": int(time.time()*1000)}))\n\nend\ncontinue\npython assert exit_code == 0 and samples >= 24, \"incomplete inventory calibration\"\nquit\n\n",
+  "identity": {
+    "host_pid": 2020617,
+    "namespace_pid": 18,
+    "role": "a",
+    "start_ticks": 91432804,
+    "dir": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.56e7c309383dc41f"
+  },
+  "fixture_exit": 0,
+  "debugger_exit": 0,
+  "test_seconds": 189.02,
+  "smoke_proof_eligible": false,
+  "recovered_seconds": 22.434638643,
+  "strict_replies": 20,
+  "same_processes": true,
+  "threads_before_after": {
+    "a": [
+      6,
+      6
+    ],
+    "b": [
+      6,
+      6
+    ]
+  },
+  "fds_before_after": {
+    "a": [
+      24,
+      24
+    ],
+    "b": [
+      22,
+      22
+    ]
+  },
+  "samples": [
+    {
+      "index": 1,
+      "unix_millis": 1789041424726,
+      "bytes": 2529494,
+      "blocks": 1538,
+      "oversized_blocks": 2,
+      "oversized_bytes": 385024,
+      "failures": 0,
+      "coherent": true
+    },
+    {
+      "index": 2,
+      "unix_millis": 1789041429724,
+      "bytes": 2529494,
+      "blocks": 1538,
+      "oversized_blocks": 2,
+      "oversized_bytes": 385024,
+      "failures": 0,
+      "coherent": true
+    },
+    {
+      "index": 3,
+      "unix_millis": 1789041434726,
+      "bytes": 2529494,
+      "blocks": 1538,
+      "oversized_blocks": 2,
+      "oversized_bytes": 385024,
+      "failures": 0,
+      "coherent": true
+    },
+    {
+      "index": 4,
+      "unix_millis": 1789041439726,
+      "bytes": 2529494,
+      "blocks": 1538,
+      "oversized_blocks": 2,
+      "oversized_bytes": 385024,
+      "failures": 0,
+      "coherent": true
+    },
+    {
+      "index": 5,
+      "unix_millis": 1789041444725,
+      "bytes": 2529494,
+      "blocks": 1538,
+      "oversized_blocks": 2,
+      "oversized_bytes": 385024,
+      "failures": 0,
+      "coherent": true
+    },
+    {
+      "index": 6,
+      "unix_millis": 1789041449725,
+      "bytes": 2530142,
+      "blocks": 1539,
+      "oversized_blocks": 2,
+      "oversized_bytes": 385024,
+      "failures": 0,
+      "coherent": true
+    },
+    {
+      "index": 7,
+      "unix_millis": 1789041454725,
+      "bytes": 2530142,
+      "blocks": 1539,
+      "oversized_blocks": 2,
+      "oversized_bytes": 385024,
+      "failures": 0,
+      "coherent": true
+    },
+    {
+      "index": 8,
+      "unix_millis": 1789041459725,
+      "bytes": 2530142,
+      "blocks": 1539,
+      "oversized_blocks": 2,
+      "oversized_bytes": 385024,
+      "failures": 0,
+      "coherent": true
+    },
+    {
+      "index": 9,
+      "unix_millis": 1789041464725,
+      "bytes": 2531737,
+      "blocks": 1553,
+      "oversized_blocks": 2,
+      "oversized_bytes": 385024,
+      "failures": 0,
+      "coherent": true
+    },
+    {
+      "index": 10,
+      "unix_millis": 1789041469726,
+      "bytes": 2531928,
+      "blocks": 1556,
+      "oversized_blocks": 2,
+      "oversized_bytes": 385024,
+      "failures": 0,
+      "coherent": true
+    },
+    {
+      "index": 11,
+      "unix_millis": 1789041474726,
+      "bytes": 2459673,
+      "blocks": 1364,
+      "oversized_blocks": 2,
+      "oversized_bytes": 385024,
+      "failures": 0,
+      "coherent": true
+    },
+    {
+      "index": 12,
+      "unix_millis": 1789041479725,
+      "bytes": 2459725,
+      "blocks": 1365,
+      "oversized_blocks": 2,
+      "oversized_bytes": 385024,
+      "failures": 0,
+      "coherent": true
+    },
+    {
+      "index": 13,
+      "unix_millis": 1789041484726,
+      "bytes": 2459809,
+      "blocks": 1366,
+      "oversized_blocks": 2,
+      "oversized_bytes": 385024,
+      "failures": 0,
+      "coherent": true
+    },
+    {
+      "index": 14,
+      "unix_millis": 1789041489725,
+      "bytes": 2459809,
+      "blocks": 1366,
+      "oversized_blocks": 2,
+      "oversized_bytes": 385024,
+      "failures": 0,
+      "coherent": true
+    },
+    {
+      "index": 15,
+      "unix_millis": 1789041494725,
+      "bytes": 2459809,
+      "blocks": 1366,
+      "oversized_blocks": 2,
+      "oversized_bytes": 385024,
+      "failures": 0,
+      "coherent": true
+    },
+    {
+      "index": 16,
+      "unix_millis": 1789041499724,
+      "bytes": 2534369,
+      "blocks": 1545,
+      "oversized_blocks": 2,
+      "oversized_bytes": 385024,
+      "failures": 0,
+      "coherent": true
+    },
+    {
+      "index": 17,
+      "unix_millis": 1789041504724,
+      "bytes": 2537471,
+      "blocks": 1567,
+      "oversized_blocks": 2,
+      "oversized_bytes": 385024,
+      "failures": 0,
+      "coherent": true
+    },
+    {
+      "index": 18,
+      "unix_millis": 1789041509724,
+      "bytes": 2535973,
+      "blocks": 1549,
+      "oversized_blocks": 2,
+      "oversized_bytes": 385024,
+      "failures": 0,
+      "coherent": true
+    },
+    {
+      "index": 19,
+      "unix_millis": 1789041514726,
+      "bytes": 2535973,
+      "blocks": 1549,
+      "oversized_blocks": 2,
+      "oversized_bytes": 385024,
+      "failures": 0,
+      "coherent": true
+    },
+    {
+      "index": 20,
+      "unix_millis": 1789041519725,
+      "bytes": 2535973,
+      "blocks": 1549,
+      "oversized_blocks": 2,
+      "oversized_bytes": 385024,
+      "failures": 0,
+      "coherent": true
+    },
+    {
+      "index": 21,
+      "unix_millis": 1789041524726,
+      "bytes": 2535973,
+      "blocks": 1549,
+      "oversized_blocks": 2,
+      "oversized_bytes": 385024,
+      "failures": 0,
+      "coherent": true
+    },
+    {
+      "index": 22,
+      "unix_millis": 1789041529726,
+      "bytes": 2535973,
+      "blocks": 1549,
+      "oversized_blocks": 2,
+      "oversized_bytes": 385024,
+      "failures": 0,
+      "coherent": true
+    },
+    {
+      "index": 23,
+      "unix_millis": 1789041534726,
+      "bytes": 2535973,
+      "blocks": 1549,
+      "oversized_blocks": 2,
+      "oversized_bytes": 385024,
+      "failures": 0,
+      "coherent": true
+    },
+    {
+      "index": 24,
+      "unix_millis": 1789041539726,
+      "bytes": 2535973,
+      "blocks": 1549,
+      "oversized_blocks": 2,
+      "oversized_bytes": 385024,
+      "failures": 0,
+      "coherent": true
+    },
+    {
+      "index": 25,
+      "unix_millis": 1789041544726,
+      "bytes": 2535973,
+      "blocks": 1549,
+      "oversized_blocks": 2,
+      "oversized_bytes": 385024,
+      "failures": 0,
+      "coherent": true
+    },
+    {
+      "index": 26,
+      "unix_millis": 1789041549727,
+      "bytes": 2535973,
+      "blocks": 1549,
+      "oversized_blocks": 2,
+      "oversized_bytes": 385024,
+      "failures": 0,
+      "coherent": true
+    },
+    {
+      "index": 27,
+      "unix_millis": 1789041554726,
+      "bytes": 2535973,
+      "blocks": 1549,
+      "oversized_blocks": 2,
+      "oversized_bytes": 385024,
+      "failures": 0,
+      "coherent": true
+    },
+    {
+      "index": 28,
+      "unix_millis": 1789041559726,
+      "bytes": 2535973,
+      "blocks": 1549,
+      "oversized_blocks": 2,
+      "oversized_bytes": 385024,
+      "failures": 0,
+      "coherent": true
+    },
+    {
+      "index": 29,
+      "unix_millis": 1789041564726,
+      "bytes": 2535973,
+      "blocks": 1549,
+      "oversized_blocks": 2,
+      "oversized_bytes": 385024,
+      "failures": 0,
+      "coherent": true
+    },
+    {
+      "index": 30,
+      "unix_millis": 1789041569727,
+      "bytes": 2535973,
+      "blocks": 1549,
+      "oversized_blocks": 2,
+      "oversized_bytes": 385024,
+      "failures": 0,
+      "coherent": true
+    },
+    {
+      "index": 31,
+      "unix_millis": 1789041574724,
+      "bytes": 2535973,
+      "blocks": 1549,
+      "oversized_blocks": 2,
+      "oversized_bytes": 385024,
+      "failures": 0,
+      "coherent": true
+    },
+    {
+      "index": 32,
+      "unix_millis": 1789041579725,
+      "bytes": 2535973,
+      "blocks": 1549,
+      "oversized_blocks": 2,
+      "oversized_bytes": 385024,
+      "failures": 0,
+      "coherent": true
+    },
+    {
+      "index": 33,
+      "unix_millis": 1789041584726,
+      "bytes": 2535973,
+      "blocks": 1549,
+      "oversized_blocks": 2,
+      "oversized_bytes": 385024,
+      "failures": 0,
+      "coherent": true
+    },
+    {
+      "index": 34,
+      "unix_millis": 1789041586808,
+      "bytes": 138829,
+      "blocks": 612,
+      "oversized_blocks": 0,
+      "oversized_bytes": 0,
+      "failures": 0,
+      "coherent": true
+    },
+    {
+      "index": 35,
+      "unix_millis": 1789041586862,
+      "bytes": 62420,
+      "blocks": 513,
+      "oversized_blocks": 0,
+      "oversized_bytes": 0,
+      "failures": 0,
+      "coherent": true
+    },
+    {
+      "index": 36,
+      "unix_millis": 1789041586967,
+      "bytes": 62420,
+      "blocks": 513,
+      "oversized_blocks": 0,
+      "oversized_bytes": 0,
+      "failures": 0,
+      "coherent": true
+    }
+  ],
+  "phases": [
+    {
+      "file": "churn-01-outage.json",
+      "capture_started_unix_millis": 1789041445725,
+      "capture_finished_unix_millis": 1789041475737,
+      "samples": 6,
+      "coherent": 6,
+      "first_index": 6,
+      "last_index": 11
+    },
+    {
+      "file": "churn-01-recovery-sample.json",
+      "capture_started_unix_millis": 1789041477173,
+      "capture_finished_unix_millis": 1789041517183,
+      "samples": 8,
+      "coherent": 8,
+      "first_index": 12,
+      "last_index": 19
+    },
+    {
+      "file": "churn-settle.json",
+      "capture_started_unix_millis": 1789041518604,
+      "capture_finished_unix_millis": 1789041578615,
+      "samples": 12,
+      "coherent": 12,
+      "first_index": 20,
+      "last_index": 31
+    }
+  ],
+  "baseline_index": 1,
+  "settled_index": 31,
+  "size_delta": [
+    {
+      "size": 8,
+      "blocks": 3,
+      "bytes": 24
+    },
+    {
+      "size": 32,
+      "blocks": -1,
+      "bytes": -32
+    },
+    {
+      "size": 40,
+      "blocks": 2,
+      "bytes": 80
+    },
+    {
+      "size": 49,
+      "blocks": -1,
+      "bytes": -49
+    },
+    {
+      "size": 52,
+      "blocks": 4,
+      "bytes": 208
+    },
+    {
+      "size": 84,
+      "blocks": -1,
+      "bytes": -84
+    },
+    {
+      "size": 212,
+      "blocks": 1,
+      "bytes": 212
+    },
+    {
+      "size": 372,
+      "blocks": 1,
+      "bytes": 372
+    },
+    {
+      "size": 532,
+      "blocks": 1,
+      "bytes": 532
+    },
+    {
+      "size": 768,
+      "blocks": -1,
+      "bytes": -768
+    },
+    {
+      "size": 800,
+      "blocks": 1,
+      "bytes": 800
+    },
+    {
+      "size": 1108,
+      "blocks": 1,
+      "bytes": 1108
+    },
+    {
+      "size": 2088,
+      "blocks": 1,
+      "bytes": 2088
+    },
+    {
+      "size": 2140,
+      "blocks": -1,
+      "bytes": -2140
+    },
+    {
+      "size": 4128,
+      "blocks": 1,
+      "bytes": 4128
+    }
+  ],
+  "native_post_child_rows_match": true,
+  "post_child_delta": {
+    "bytes": 40801,
+    "blocks": 90
+  },
+  "artifacts": [
+    {
+      "sha256": "b51acf66b8848c7308295670a22721bd97e9c7d7bf7c38143fbd5f88ea500aec",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.56e7c309383dc41f/lifecycle-churn.json"
+    },
+    {
+      "sha256": "8110c4387a920fa59e2a322a7c90768b6e62cf1ae69eab2bbac4ab162c7f38f4",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.56e7c309383dc41f/node-a.log"
+    },
+    {
+      "sha256": "b24d6d33736ecd5604a4b17bc9c6481039fac362bb7df044ef1c10a2bfd21db6",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.56e7c309383dc41f/ready-b"
+    },
+    {
+      "sha256": "1d24a08e0e029b98d8409949f6eab9d9df67384353ebed79471320dbdd6f568b",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.56e7c309383dc41f/repro-metadata.txt"
+    },
+    {
+      "sha256": "ce66c43421f8f3ffaa56ae3149efa383a87c8cd536a0eeab491f5f18b7542d1c",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.56e7c309383dc41f/churn-01-recovery.json"
+    },
+    {
+      "sha256": "cced28c6dc3f99c2396a5eaad732bf6b28142335892b1cd0e6af6cdb53f5ccfa",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.56e7c309383dc41f/start-a"
+    },
+    {
+      "sha256": "b24d6d33736ecd5604a4b17bc9c6481039fac362bb7df044ef1c10a2bfd21db6",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.56e7c309383dc41f/ready-a"
+    },
+    {
+      "sha256": "cced28c6dc3f99c2396a5eaad732bf6b28142335892b1cd0e6af6cdb53f5ccfa",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.56e7c309383dc41f/start-b"
+    },
+    {
+      "sha256": "f58626e32056d48ab750291faf7007db4082b0fb10f8ab74f00817fe04941da1",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.56e7c309383dc41f/churn-01-outage.json"
+    },
+    {
+      "sha256": "1a00c1b75f332a687cea9dc9a222efb7827d6449206bbdc4be1892a5c976c73e",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.56e7c309383dc41f/churn-settle.json"
+    },
+    {
+      "sha256": "f1c0735e27de7ea80c79432bcab1fe4e53b27d79a2d18e6b7b157ba47f197d46",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.56e7c309383dc41f/node-b.log"
+    },
+    {
+      "sha256": "40b60767d5a99d755f516bdf1f2379a3e7f4786c66b90a442e33cdf06d148ca8",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.56e7c309383dc41f/churn-01-recovery-sample.json"
+    },
+    {
+      "sha256": "b819fc2b81ea20d65e57dfbc8a2375405af89d4896bec90d7db68afd5a3e35e2",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.56e7c309383dc41f/repro-commands.sh"
+    },
+    {
+      "path": "/tmp/p2p-vpn-reconnect-inventory-1.log",
+      "sha256": "44c6a7487cc58e97501f45067f594cb76db29981ff3506668ada9709eedcb490"
+    },
+    {
+      "path": "/tmp/p2p-vpn-reconnect-inventory-gdb-1.log",
+      "sha256": "8a9be3055263f5303fd54df9e06107abc88ca5755d175d04c04020fafab867bb"
+    }
+  ],
+  "limitations": [
+    "Single-cycle diagnostic is not the paired ten-cycle workload.",
+    "Allocation-size deltas do not establish stack ownership or monotonically unbounded growth.",
+    "No CPU/throughput conclusion from debugger-instrumented runtime."
+  ]
+}
