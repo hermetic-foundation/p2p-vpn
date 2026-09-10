@@ -6662,7 +6662,16 @@ fn query_configured_peer_recovery_discovery_for_peer(
             ],
         );
     }
-    let record_query =
+    let public_dht = swarm
+        .behaviour()
+        .kad
+        .protocol_names()
+        .iter()
+        .any(|protocol| protocol.as_ref() == PUBLIC_IPFS_KADEMLIA_PROTOCOL);
+    // Public IPFS servers do not store our application-specific value records.
+    let query = if public_dht {
+        swarm.behaviour_mut().kad.try_get_closest_peers(peer)
+    } else {
         swarm
             .behaviour_mut()
             .kad
@@ -6670,16 +6679,28 @@ fn query_configured_peer_recovery_discovery_for_peer(
                 network_name,
                 membership_tag,
                 peer,
-            ));
-    let Ok(record_query) = record_query else {
+            ))
+    };
+    let Ok(query) = query else {
         return false;
     };
-    recovery_state.record_recovery_discovery_queries(peer, [record_query], now);
+    recovery_state.record_recovery_discovery_queries(peer, [query], now);
     metrics.record_kademlia_provider_lookup();
     log_runtime_event(
         LogLevel::Info,
         "peer_recovery_discovery_query",
-        &[("peer", &peer.to_string()), ("reason", reason)],
+        &[
+            ("peer", &peer.to_string()),
+            ("reason", reason),
+            (
+                "kind",
+                if public_dht {
+                    "find_peer"
+                } else {
+                    "get_record"
+                },
+            ),
+        ],
     );
     true
 }
@@ -31183,15 +31204,20 @@ mod tests {
 
     #[tokio::test]
     async fn targeted_recovery_discovery_records_query_attempt() {
-        exercise_targeted_recovery_admission(false).await;
+        exercise_targeted_recovery_admission(false, true).await;
+    }
+
+    #[tokio::test]
+    async fn targeted_recovery_discovery_preserves_private_record_lookup() {
+        exercise_targeted_recovery_admission(false, false).await;
     }
 
     #[tokio::test]
     async fn targeted_recovery_discovery_retries_after_query_capacity_is_released() {
-        exercise_targeted_recovery_admission(true).await;
+        exercise_targeted_recovery_admission(true, true).await;
     }
 
-    async fn exercise_targeted_recovery_admission(saturate: bool) {
+    async fn exercise_targeted_recovery_admission(saturate: bool, public_dht: bool) {
         let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
         let remote = peer_id();
         let mut node = build_node(&HostConfig {
@@ -31209,7 +31235,14 @@ mod tests {
             relay_server: false,
             relay_resources: crate::config::RelayResourceConfig::default(),
             resources: crate::config::ResourceConfig::default(),
-            discovery: DiscoveryConfig::default(),
+            discovery: DiscoveryConfig {
+                kademlia_protocol: if public_dht {
+                    PUBLIC_IPFS_KADEMLIA_PROTOCOL.to_owned()
+                } else {
+                    "/p2p-vpn/kad/1".to_owned()
+                },
+                ..DiscoveryConfig::default()
+            },
         })
         .expect("node");
         let metrics = RuntimeMetrics::default();
@@ -31269,6 +31302,20 @@ mod tests {
             .last_query;
         let query_ids = recovery_state.recovery_queries.query_ids();
         assert_eq!(query_ids.len(), 1);
+        let query = node
+            .swarm
+            .behaviour()
+            .kad
+            .query(&query_ids[0])
+            .expect("query");
+        if public_dht {
+            assert!(
+                matches!(query.info(), kad::QueryInfo::GetClosestPeers { key, .. } if key == &remote.to_bytes())
+            );
+        } else {
+            assert!(matches!(query.info(), kad::QueryInfo::GetRecord { key, .. }
+                if key == &crate::runtime::p2p::kademlia_peer_addresses_key("lab", None, remote)));
+        }
         assert!(
             !recovery_state
                 .should_query_recovery_discovery_at(remote, query_started_at + REDIAL_INTERVAL)

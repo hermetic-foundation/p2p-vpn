@@ -55,6 +55,23 @@ Acceptance remains incomplete. Local evidence does not certify physical Android 
 
 ## Acceptance Audit
 
+### Public-DHT Recovery Correction
+
+- Recovery previously queried only `/p2p-vpn/...` values even on the default public IPFS DHT.
+  [Upstream validators](https://github.com/libp2p/go-libp2p-kad-dht/blob/master/dht_options.go) default to `pk` and `ipns`, not our namespace.
+- Use peer-ID `FIND_NODE` lookup on the public protocol; preserve signed-record lookup on private protocols.
+  Retain query admission, serialization, cooldowns, address filtering and peer authentication.
+- Verify actual query type/key for both protocols and saturated-query retry behavior.
+  Then run core tests and required lint groups before matched-build physical verification.
+- This does not establish that every public server returns relay addresses for unreachable clients.
+  Custom public value publication and provider/address dissemination still need review.
+- Focused regressions: three passed; full core suite: 1,170 passed, eight ignored, zero failures (47.62s).
+  Evidence: `/tmp/p2p-vpn-public-peer-recovery-{tests,core}.log`; no applicable formal models were found.
+- Formatting and required Clippy groups passed; existing warnings remain.
+  Evidence: `/tmp/p2p-vpn-public-peer-recovery-clippy.log`.
+- No Android deployment or physical recovery pass is claimed for this correction yet.
+  The earlier matched-build cellular failure remains the latest physical acceptance result.
+
 | Requirement | Verified evidence | Remaining work |
 | --- | --- | --- |
 | Defaults and overrides | Shared config and Android profile regressions; 26 NixOS contracts; Pixel profile upgrade | Native NixOS activation |
