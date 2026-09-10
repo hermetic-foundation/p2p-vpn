@@ -1,0 +1,873 @@
+{
+  "schema_version": 1,
+  "baseline": "d68d5ab4",
+  "binary_sha256": "ce9dd5655f18717a1f84f6bdfb848d879d5845f2fe426795182945856e85d486",
+  "fixture_command": "env -u P2P_VPN_TUN_E2E_IDLE_SECONDS -u P2P_VPN_TUN_E2E_ORCHESTRATOR_TIMEOUT_SECONDS -u P2P_VPN_TUN_E2E_WAIT_SCALE P2P_VPN_REVIEW_CHURN_SMOKE=1 P2P_VPN_REVIEW_GRACEFUL_SHUTDOWN=1 P2P_VPN_TUN_E2E_KEEP_TEMP=1 TOKIO_WORKER_THREADS=2 RUST_MIN_STACK=8388608 timeout --signal=TERM --kill-after=2s 250 prlimit --fsize=8388608:8388608 -- /tmp/p2p-vpn-review-target/debug/deps/tun_namespace-92e26a895f071361 tun_namespace_measures_lifecycle_churn_resources --ignored --exact --nocapture --test-threads=1",
+  "attach_command": "timeout --signal=TERM --kill-after=2s 240 prlimit --fsize=1048576:1048576 -- nsenter --target 2026581 --user --net --mount --pid --preserve-credentials -- /nix/store/bg2bp1zmii5spb2hkgv5xn6mzva7nx9r-gdb-17.2/bin/gdb -q -nx -batch -x /tmp/p2p-vpn-reconnect-owner.gdb",
+  "observer_script": "set pagination off\nset confirm off\nset debuginfod enabled off\nset auto-load off\nset print frame-arguments none\nset print address off\nattach 18\nset language c\npython\nimport gdb, json, time\nlive = {}\nsites = []\nallocated = 0\nfreed = 0\nsnapshots = 0\nfailures = []\nexit_code = None\nselected = {212, 372, 532, 800, 1108, 2088, 4128}\nsizes = set(selected)\ndef fail(message):\n    failures.append(message)\n    raise gdb.GdbError(message)\ndef filters():\n    free_bp.condition = \" || \".join(\"$rsi == %d\" % s for s in sorted(sizes))\n    resize_bp.condition = \"(\" + free_bp.condition + \") || \" + \" || \".join(\"$rcx == %d\" % s for s in sorted(selected))\npending = {}\nreturn_calls = 0\ndef Returned(owner, old=None):\n    global return_calls\n    return_calls += 1\n    if return_calls > 16384 or len(pending) >= 128:\n        fail(\"return tracking quota exceeded\")\n    ident = return_calls\n    sp = int(gdb.parse_and_eval(\"$rsp\"))\n    address = int(gdb.parse_and_eval(\"*(unsigned long long*)$rsp\"))\n    bp = gdb.Breakpoint(\"*%d\" % address, internal=True)\n    bp.thread = gdb.selected_thread().global_num\n    bp.condition = \"$rsp == %d\" % (sp + 8)\n    pending[ident] = (bp, owner, old)\n    bp.commands = \"silent\\npython returned(%d)\\ncontinue\\n\" % ident\ndef returned(ident):\n    bp, owner, old = pending.pop(ident)\n    bp.delete()\n    address = int(gdb.parse_and_eval(\"$rax\"))\n    if not address:\n        fail(\"allocation or resize failed; old owner retained\")\n    if old is not None:\n        live.pop(old, None)\n    if address in live:\n        fail(\"duplicate live allocation address\")\n    live[address] = owner\ndef stack_site():\n    frames = []\n    frame = gdb.newest_frame()\n    for _ in range(24):\n        if frame is None:\n            break\n        frames.append((frame.name() or \"?\")[:240])\n        frame = frame.older()\n    if frames not in sites:\n        if len(sites) >= 64:\n            fail(\"site quota exceeded\")\n        sites.append(frames)\n        print(\"SITE\", json.dumps({\"id\": len(sites), \"frames\": frames}))\n    return sites.index(frames) + 1\ndef new_owner(size):\n    global allocated\n    allocated += 1\n    if allocated > 4096:\n        fail(\"allocation quota exceeded\")\n    return (allocated, size, stack_site())\ndef allocate():\n    size = int(gdb.parse_and_eval(\"$rdi\"))\n    if size not in selected:\n        fail(\"allocation filter mismatch\")\n    Returned(new_owner(size))\ndef deallocate():\n    global freed\n    address = int(gdb.parse_and_eval(\"$rdi\"))\n    if address in live:\n        freed += 1\n        live.pop(address)\ndef resize():\n    address = int(gdb.parse_and_eval(\"$rdi\"))\n    size = int(gdb.parse_and_eval(\"$rcx\"))\n    if address in live:\n        ident, _, site = live[address]\n        if size not in sizes:\n            sizes.add(size)\n            filters()\n        Returned((ident, size, site), address)\n    elif size in selected:\n        Returned(new_owner(size))\ndef checkpoint():\n    global snapshots\n    snapshots += 1\n    print(\"CHECKPOINT\", json.dumps({\"index\": snapshots, \"unix_millis\": int(time.time()*1000), \"live\": sorted(live.values())}))\nfor symbol in (\"__rust_alloc\", \"__rust_alloc_zeroed\"):\n    bp = gdb.Breakpoint(\"*'__rustc::\" + symbol + \"'\", internal=True)\n    bp.condition = \" || \".join(\"$rdi == %d\" % s for s in sorted(selected))\n    bp.commands = \"silent\\npython allocate()\\ncontinue\\n\"\nfree_bp = gdb.Breakpoint(\"*'__rustc::__rust_dealloc'\", internal=True)\nfree_bp.commands = \"silent\\npython deallocate()\\ncontinue\\n\"\nresize_bp = gdb.Breakpoint(\"*'__rustc::__rust_realloc'\", internal=True)\nresize_bp.commands = \"silent\\npython resize()\\ncontinue\\n\"\nfilters()\nfor symbol in (\"tun_namespace::allocation_sample::emit\", \"tun_namespace::allocation_sample::emit_sizes\"):\n    bp = gdb.Breakpoint(symbol, internal=True)\n    bp.commands = \"silent\\npython checkpoint()\\ncontinue\\n\"\nprint(\"TRACE_READY\", json.dumps({\"pid\": gdb.selected_inferior().pid, \"unix_millis\": int(time.time()*1000)}))\ndef ended(event):\n    global exit_code\n    exit_code = getattr(event, \"exit_code\", None)\n    print(\"TRACE_SUMMARY\", json.dumps({\"allocated\": allocated, \"freed\": freed, \"live\": sorted(live.values()), \"snapshots\": snapshots, \"sites\": len(sites), \"failures\": failures, \"exit_code\": exit_code, \"pending_returns\": len(pending), \"return_calls\": return_calls}))\ngdb.events.exited.connect(ended)\n\nend\ncontinue\npython assert exit_code == 0 and snapshots >= 24 and not failures and not pending, \"incomplete trace\"\nquit\n",
+  "identity": {
+    "host_pid": 2026581,
+    "namespace_pid": 18,
+    "start_ticks": 91474429,
+    "role": "a",
+    "dir": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.359f6cb70152674d"
+  },
+  "fixture_exit": 0,
+  "debugger_exit": 0,
+  "test_seconds": 190.91,
+  "recovered_seconds": 3.25730912,
+  "proof_eligible": false,
+  "checkpoints": [
+    {
+      "index": 1,
+      "unix_millis": 1789041835982,
+      "live": []
+    },
+    {
+      "index": 2,
+      "unix_millis": 1789041840981,
+      "live": []
+    },
+    {
+      "index": 3,
+      "unix_millis": 1789041846066,
+      "live": []
+    },
+    {
+      "index": 4,
+      "unix_millis": 1789041850993,
+      "live": []
+    },
+    {
+      "index": 5,
+      "unix_millis": 1789041855982,
+      "live": []
+    },
+    {
+      "index": 6,
+      "unix_millis": 1789041860998,
+      "live": []
+    },
+    {
+      "index": 7,
+      "unix_millis": 1789041865981,
+      "live": []
+    },
+    {
+      "index": 8,
+      "unix_millis": 1789041870982,
+      "live": []
+    },
+    {
+      "index": 9,
+      "unix_millis": 1789041876049,
+      "live": []
+    },
+    {
+      "index": 10,
+      "unix_millis": 1789041880981,
+      "live": []
+    },
+    {
+      "index": 11,
+      "unix_millis": 1789041886057,
+      "live": []
+    },
+    {
+      "index": 12,
+      "unix_millis": 1789041890989,
+      "live": [
+        [
+          4,
+          4128,
+          4
+        ]
+      ]
+    },
+    {
+      "index": 13,
+      "unix_millis": 1789041895981,
+      "live": [
+        [
+          4,
+          4128,
+          4
+        ]
+      ]
+    },
+    {
+      "index": 14,
+      "unix_millis": 1789041900982,
+      "live": [
+        [
+          4,
+          4128,
+          4
+        ],
+        [
+          26,
+          1108,
+          12
+        ]
+      ]
+    },
+    {
+      "index": 15,
+      "unix_millis": 1789041906062,
+      "live": [
+        [
+          4,
+          4128,
+          4
+        ],
+        [
+          26,
+          1108,
+          12
+        ],
+        [
+          27,
+          212,
+          13
+        ],
+        [
+          28,
+          800,
+          14
+        ]
+      ]
+    },
+    {
+      "index": 16,
+      "unix_millis": 1789041910990,
+      "live": [
+        [
+          4,
+          4128,
+          4
+        ],
+        [
+          26,
+          1108,
+          12
+        ],
+        [
+          27,
+          212,
+          13
+        ],
+        [
+          28,
+          800,
+          14
+        ]
+      ]
+    },
+    {
+      "index": 17,
+      "unix_millis": 1789041916061,
+      "live": [
+        [
+          4,
+          4128,
+          4
+        ],
+        [
+          26,
+          1108,
+          12
+        ],
+        [
+          27,
+          212,
+          13
+        ],
+        [
+          28,
+          800,
+          14
+        ]
+      ]
+    },
+    {
+      "index": 18,
+      "unix_millis": 1789041920997,
+      "live": [
+        [
+          4,
+          4128,
+          4
+        ],
+        [
+          26,
+          1108,
+          12
+        ],
+        [
+          27,
+          212,
+          13
+        ],
+        [
+          28,
+          800,
+          14
+        ]
+      ]
+    },
+    {
+      "index": 19,
+      "unix_millis": 1789041926059,
+      "live": [
+        [
+          4,
+          4128,
+          4
+        ],
+        [
+          26,
+          1108,
+          12
+        ],
+        [
+          27,
+          212,
+          13
+        ],
+        [
+          28,
+          800,
+          14
+        ]
+      ]
+    },
+    {
+      "index": 20,
+      "unix_millis": 1789041930993,
+      "live": [
+        [
+          4,
+          4128,
+          4
+        ],
+        [
+          26,
+          1108,
+          12
+        ],
+        [
+          27,
+          212,
+          13
+        ],
+        [
+          28,
+          800,
+          14
+        ]
+      ]
+    },
+    {
+      "index": 21,
+      "unix_millis": 1789041936168,
+      "live": [
+        [
+          4,
+          4128,
+          4
+        ],
+        [
+          26,
+          1108,
+          12
+        ],
+        [
+          27,
+          212,
+          13
+        ],
+        [
+          28,
+          800,
+          14
+        ]
+      ]
+    },
+    {
+      "index": 22,
+      "unix_millis": 1789041940981,
+      "live": [
+        [
+          4,
+          4128,
+          4
+        ],
+        [
+          26,
+          1108,
+          12
+        ],
+        [
+          27,
+          212,
+          13
+        ],
+        [
+          28,
+          800,
+          14
+        ]
+      ]
+    },
+    {
+      "index": 23,
+      "unix_millis": 1789041945981,
+      "live": [
+        [
+          4,
+          4128,
+          4
+        ],
+        [
+          26,
+          1108,
+          12
+        ],
+        [
+          27,
+          212,
+          13
+        ],
+        [
+          28,
+          800,
+          14
+        ]
+      ]
+    },
+    {
+      "index": 24,
+      "unix_millis": 1789041950987,
+      "live": [
+        [
+          4,
+          4128,
+          4
+        ],
+        [
+          26,
+          1108,
+          12
+        ],
+        [
+          27,
+          212,
+          13
+        ],
+        [
+          28,
+          800,
+          14
+        ]
+      ]
+    },
+    {
+      "index": 25,
+      "unix_millis": 1789041956072,
+      "live": [
+        [
+          4,
+          4128,
+          4
+        ],
+        [
+          26,
+          1108,
+          12
+        ],
+        [
+          27,
+          212,
+          13
+        ],
+        [
+          28,
+          800,
+          14
+        ]
+      ]
+    },
+    {
+      "index": 26,
+      "unix_millis": 1789041960982,
+      "live": [
+        [
+          4,
+          4128,
+          4
+        ],
+        [
+          26,
+          1108,
+          12
+        ],
+        [
+          27,
+          212,
+          13
+        ],
+        [
+          28,
+          800,
+          14
+        ]
+      ]
+    },
+    {
+      "index": 27,
+      "unix_millis": 1789041965981,
+      "live": [
+        [
+          4,
+          4128,
+          4
+        ],
+        [
+          26,
+          1108,
+          12
+        ],
+        [
+          27,
+          212,
+          13
+        ],
+        [
+          28,
+          800,
+          14
+        ]
+      ]
+    },
+    {
+      "index": 28,
+      "unix_millis": 1789041970990,
+      "live": [
+        [
+          4,
+          4128,
+          4
+        ],
+        [
+          26,
+          1108,
+          12
+        ],
+        [
+          27,
+          212,
+          13
+        ],
+        [
+          28,
+          800,
+          14
+        ]
+      ]
+    },
+    {
+      "index": 29,
+      "unix_millis": 1789041976060,
+      "live": [
+        [
+          4,
+          4128,
+          4
+        ],
+        [
+          26,
+          1108,
+          12
+        ],
+        [
+          27,
+          212,
+          13
+        ],
+        [
+          28,
+          800,
+          14
+        ]
+      ]
+    },
+    {
+      "index": 30,
+      "unix_millis": 1789041980994,
+      "live": [
+        [
+          4,
+          4128,
+          4
+        ],
+        [
+          26,
+          1108,
+          12
+        ],
+        [
+          27,
+          212,
+          13
+        ],
+        [
+          28,
+          800,
+          14
+        ]
+      ]
+    },
+    {
+      "index": 31,
+      "unix_millis": 1789041985981,
+      "live": [
+        [
+          4,
+          4128,
+          4
+        ],
+        [
+          26,
+          1108,
+          12
+        ],
+        [
+          27,
+          212,
+          13
+        ],
+        [
+          28,
+          800,
+          14
+        ]
+      ]
+    },
+    {
+      "index": 32,
+      "unix_millis": 1789041990990,
+      "live": [
+        [
+          4,
+          4128,
+          4
+        ],
+        [
+          26,
+          1108,
+          12
+        ],
+        [
+          27,
+          212,
+          13
+        ],
+        [
+          28,
+          800,
+          14
+        ]
+      ]
+    },
+    {
+      "index": 33,
+      "unix_millis": 1789041996059,
+      "live": [
+        [
+          4,
+          4128,
+          4
+        ],
+        [
+          26,
+          1108,
+          12
+        ],
+        [
+          27,
+          212,
+          13
+        ],
+        [
+          28,
+          800,
+          14
+        ]
+      ]
+    },
+    {
+      "index": 34,
+      "unix_millis": 1789042000981,
+      "live": [
+        [
+          4,
+          4128,
+          4
+        ],
+        [
+          26,
+          1108,
+          12
+        ],
+        [
+          27,
+          212,
+          13
+        ],
+        [
+          28,
+          800,
+          14
+        ]
+      ]
+    },
+    {
+      "index": 35,
+      "unix_millis": 1789042004847,
+      "live": []
+    },
+    {
+      "index": 36,
+      "unix_millis": 1789042004936,
+      "live": []
+    },
+    {
+      "index": 37,
+      "unix_millis": 1789042005038,
+      "live": []
+    }
+  ],
+  "retained_sites": [
+    {
+      "id": 4,
+      "frames": [
+        "__rustc::__rust_alloc",
+        "alloc::alloc::alloc",
+        "<tokio::sync::mpsc::block::Block<p2p_vpn::runtime::control_socket::RuntimeControlRequest>>::new",
+        "<tokio::sync::mpsc::block::Block<p2p_vpn::runtime::control_socket::RuntimeControlRequest>>::grow",
+        "<tokio::sync::mpsc::list::Tx<p2p_vpn::runtime::control_socket::RuntimeControlRequest>>::find_block::{closure#0}",
+        "<core::option::Option<core::ptr::non_null::NonNull<tokio::sync::mpsc::block::Block<p2p_vpn::runtime::control_socket::RuntimeControlRequest>>>>::unwrap_or_else::<<tokio::sync::mpsc::list::Tx<p2p_vpn::runtime::control_socket::RuntimeControlRe",
+        "<tokio::sync::mpsc::list::Tx<p2p_vpn::runtime::control_socket::RuntimeControlRequest>>::find_block",
+        "<tokio::sync::mpsc::list::Tx<p2p_vpn::runtime::control_socket::RuntimeControlRequest>>::push",
+        "<tokio::sync::mpsc::chan::Chan<p2p_vpn::runtime::control_socket::RuntimeControlRequest, tokio::sync::mpsc::bounded::Semaphore>>::send",
+        "<tokio::sync::mpsc::chan::Tx<p2p_vpn::runtime::control_socket::RuntimeControlRequest, tokio::sync::mpsc::bounded::Semaphore>>::send",
+        "<tokio::sync::mpsc::bounded::Permit<p2p_vpn::runtime::control_socket::RuntimeControlRequest>>::send",
+        "<tokio::sync::mpsc::bounded::Sender<p2p_vpn::runtime::control_socket::RuntimeControlRequest>>::send::{closure#0}",
+        "p2p_vpn::runtime::control_socket::handle_legacy_connection::{closure#0}",
+        "p2p_vpn::runtime::control_socket::handle_connection::{closure#0}",
+        "p2p_vpn::runtime::control_socket::serve::{closure#0}::{closure#0}",
+        "<tokio::runtime::task::core::Core<p2p_vpn::runtime::control_socket::serve::{closure#0}::{closure#0}, alloc::sync::Arc<tokio::runtime::scheduler::multi_thread::handle::Handle>>>::poll::{closure#0}",
+        "<tokio::runtime::task::core::Core<p2p_vpn::runtime::control_socket::serve::{closure#0}::{closure#0}, alloc::sync::Arc<tokio::runtime::scheduler::multi_thread::handle::Handle>>>::poll",
+        "tokio::runtime::task::harness::poll_future::<p2p_vpn::runtime::control_socket::serve::{closure#0}::{closure#0}, alloc::sync::Arc<tokio::runtime::scheduler::multi_thread::handle::Handle>>::{closure#0}",
+        "<core::panic::unwind_safe::AssertUnwindSafe<tokio::runtime::task::harness::poll_future<p2p_vpn::runtime::control_socket::serve::{closure#0}::{closure#0}, alloc::sync::Arc<tokio::runtime::scheduler::multi_thread::handle::Handle>>::{closure#0",
+        "std::panicking::catch_unwind::do_call::<core::panic::unwind_safe::AssertUnwindSafe<tokio::runtime::task::harness::poll_future<p2p_vpn::runtime::control_socket::serve::{closure#0}::{closure#0}, alloc::sync::Arc<tokio::runtime::scheduler::mul",
+        "__rust_try",
+        "std::panic::catch_unwind::<core::panic::unwind_safe::AssertUnwindSafe<tokio::runtime::task::harness::poll_future<p2p_vpn::runtime::control_socket::serve::{closure#0}::{closure#0}, alloc::sync::Arc<tokio::runtime::scheduler::multi_thread::ha",
+        "tokio::runtime::task::harness::poll_future::<p2p_vpn::runtime::control_socket::serve::{closure#0}::{closure#0}, alloc::sync::Arc<tokio::runtime::scheduler::multi_thread::handle::Handle>>",
+        "<tokio::runtime::task::harness::Harness<p2p_vpn::runtime::control_socket::serve::{closure#0}::{closure#0}, alloc::sync::Arc<tokio::runtime::scheduler::multi_thread::handle::Handle>>>::poll_inner"
+      ]
+    },
+    {
+      "id": 12,
+      "frames": [
+        "__rustc::__rust_alloc",
+        "<alloc::alloc::Global>::alloc_impl_runtime",
+        "<alloc::alloc::Global as core::alloc::Allocator>::allocate",
+        "<hashbrown::raw::RawTableInner>::new_uninitialized::<alloc::alloc::Global>",
+        "<hashbrown::raw::RawTableInner>::fallible_with_capacity::<alloc::alloc::Global>",
+        "<hashbrown::raw::RawTable<(p2p_vpn::PeerId, p2p_vpn::runtime::packet_plane::RetiringPacketPlaneSession)>>::reserve_rehash::<hashbrown::map::make_hasher<p2p_vpn::PeerId, p2p_vpn::runtime::packet_plane::RetiringPacketPlaneSession, std::hash::",
+        "<hashbrown::raw::RawTable<(p2p_vpn::PeerId, p2p_vpn::runtime::packet_plane::RetiringPacketPlaneSession)>>::reserve::<hashbrown::map::make_hasher<p2p_vpn::PeerId, p2p_vpn::runtime::packet_plane::RetiringPacketPlaneSession, std::hash::random:",
+        "<hashbrown::raw::RawTable<(p2p_vpn::PeerId, p2p_vpn::runtime::packet_plane::RetiringPacketPlaneSession)>>::find_or_find_insert_index::<hashbrown::map::equivalent_key<p2p_vpn::PeerId, p2p_vpn::PeerId, p2p_vpn::runtime::packet_plane::Retiring",
+        "<hashbrown::map::HashMap<p2p_vpn::PeerId, p2p_vpn::runtime::packet_plane::RetiringPacketPlaneSession, std::hash::random::RandomState>>::insert",
+        "<std::collections::hash::map::HashMap<p2p_vpn::PeerId, p2p_vpn::runtime::packet_plane::RetiringPacketPlaneSession>>::insert",
+        "<p2p_vpn::runtime::packet_plane::PacketPlaneRuntime>::install_session",
+        "<p2p_vpn::runtime::packet_plane::PacketPlaneRuntime>::establish_session_overlapping",
+        "p2p_vpn::runtime::runner::complete_packet_plane_hello",
+        "p2p_vpn::runtime::runner::handle_control_response_event",
+        "p2p_vpn::runtime::runner::handle_control_event::{closure#0}",
+        "p2p_vpn::runtime::runner::handle_swarm_event::{closure#0}",
+        "p2p_vpn::runtime::runner::run_node_until_with_membership_state::<core::future::pending::Pending<p2p_vpn::runtime::runner::ShutdownReason>>::{closure#0}",
+        "<core::pin::Pin<alloc::boxed::Box<p2p_vpn::runtime::runner::run_node_until_with_membership_state<core::future::pending::Pending<p2p_vpn::runtime::runner::ShutdownReason>>::{closure#0}>> as core::future::future::Future>::poll",
+        "p2p_vpn::runtime::runner::run_node_until_with_platform::<core::future::pending::Pending<p2p_vpn::runtime::runner::ShutdownReason>, p2p_vpn::runtime::runner::LinuxTunRoutes>::{closure#0}",
+        "<core::pin::Pin<alloc::boxed::Box<p2p_vpn::runtime::runner::run_node_until_with_platform<core::future::pending::Pending<p2p_vpn::runtime::runner::ShutdownReason>, p2p_vpn::runtime::runner::LinuxTunRoutes>::{closure#0}>> as core::future::fut",
+        "p2p_vpn::runtime::runner::run_node_until::<core::future::pending::Pending<p2p_vpn::runtime::runner::ShutdownReason>>::{closure#0}",
+        "<core::pin::Pin<alloc::boxed::Box<p2p_vpn::runtime::runner::run_node_until<core::future::pending::Pending<p2p_vpn::runtime::runner::ShutdownReason>>::{closure#0}>> as core::future::future::Future>::poll",
+        "<core::pin::Pin<&mut core::pin::Pin<alloc::boxed::Box<p2p_vpn::runtime::runner::run_node_until<core::future::pending::Pending<p2p_vpn::runtime::runner::ShutdownReason>>::{closure#0}>>> as core::future::future::Future>::poll",
+        "<&mut core::pin::Pin<&mut core::pin::Pin<alloc::boxed::Box<p2p_vpn::runtime::runner::run_node_until<core::future::pending::Pending<p2p_vpn::runtime::runner::ShutdownReason>>::{closure#0}>>> as core::future::future::Future>::poll"
+      ]
+    },
+    {
+      "id": 13,
+      "frames": [
+        "__rustc::__rust_alloc",
+        "<alloc::alloc::Global>::alloc_impl_runtime",
+        "<alloc::alloc::Global as core::alloc::Allocator>::allocate",
+        "<hashbrown::raw::RawTableInner>::new_uninitialized::<alloc::alloc::Global>",
+        "<hashbrown::raw::RawTableInner>::fallible_with_capacity::<alloc::alloc::Global>",
+        "<hashbrown::raw::RawTable<(u32, p2p_vpn::runtime::packet_plane::PacketPlaneReplayWindow)>>::reserve_rehash::<hashbrown::map::make_hasher<u32, p2p_vpn::runtime::packet_plane::PacketPlaneReplayWindow, std::hash::random::RandomState>::{closure",
+        "<hashbrown::raw::RawTable<(u32, p2p_vpn::runtime::packet_plane::PacketPlaneReplayWindow)>>::reserve::<hashbrown::map::make_hasher<u32, p2p_vpn::runtime::packet_plane::PacketPlaneReplayWindow, std::hash::random::RandomState>::{closure#0}>",
+        "<hashbrown::map::HashMap<u32, p2p_vpn::runtime::packet_plane::PacketPlaneReplayWindow, std::hash::random::RandomState>>::rustc_entry",
+        "<std::collections::hash::map::HashMap<u32, p2p_vpn::runtime::packet_plane::PacketPlaneReplayWindow>>::entry",
+        "<p2p_vpn::runtime::packet_plane::PacketPlaneSession>::accept_datagram_at",
+        "<p2p_vpn::runtime::packet_plane::PacketPlaneSession>::accept_datagram",
+        "<p2p_vpn::runtime::packet_plane::PacketPlaneRuntime>::open_session_datagram",
+        "<p2p_vpn::runtime::packet_plane::PacketPlaneRuntime>::recv_frame_from_session_on::{closure#0}",
+        "<p2p_vpn::runtime::packet_plane::PacketPlaneRuntime>::recv_frame_from_session::{closure#0}",
+        "p2p_vpn::runtime::runner::run_node_until_with_membership_state::<core::future::pending::Pending<p2p_vpn::runtime::runner::ShutdownReason>>::{closure#0}::{closure#8}",
+        "<core::future::poll_fn::PollFn<p2p_vpn::runtime::runner::run_node_until_with_membership_state<core::future::pending::Pending<p2p_vpn::runtime::runner::ShutdownReason>>::{closure#0}::{closure#8}> as core::future::future::Future>::poll",
+        "p2p_vpn::runtime::runner::run_node_until_with_membership_state::<core::future::pending::Pending<p2p_vpn::runtime::runner::ShutdownReason>>::{closure#0}",
+        "<core::pin::Pin<alloc::boxed::Box<p2p_vpn::runtime::runner::run_node_until_with_membership_state<core::future::pending::Pending<p2p_vpn::runtime::runner::ShutdownReason>>::{closure#0}>> as core::future::future::Future>::poll",
+        "p2p_vpn::runtime::runner::run_node_until_with_platform::<core::future::pending::Pending<p2p_vpn::runtime::runner::ShutdownReason>, p2p_vpn::runtime::runner::LinuxTunRoutes>::{closure#0}",
+        "<core::pin::Pin<alloc::boxed::Box<p2p_vpn::runtime::runner::run_node_until_with_platform<core::future::pending::Pending<p2p_vpn::runtime::runner::ShutdownReason>, p2p_vpn::runtime::runner::LinuxTunRoutes>::{closure#0}>> as core::future::fut",
+        "p2p_vpn::runtime::runner::run_node_until::<core::future::pending::Pending<p2p_vpn::runtime::runner::ShutdownReason>>::{closure#0}",
+        "<core::pin::Pin<alloc::boxed::Box<p2p_vpn::runtime::runner::run_node_until<core::future::pending::Pending<p2p_vpn::runtime::runner::ShutdownReason>>::{closure#0}>> as core::future::future::Future>::poll",
+        "<core::pin::Pin<&mut core::pin::Pin<alloc::boxed::Box<p2p_vpn::runtime::runner::run_node_until<core::future::pending::Pending<p2p_vpn::runtime::runner::ShutdownReason>>::{closure#0}>>> as core::future::future::Future>::poll",
+        "<&mut core::pin::Pin<&mut core::pin::Pin<alloc::boxed::Box<p2p_vpn::runtime::runner::run_node_until<core::future::pending::Pending<p2p_vpn::runtime::runner::ShutdownReason>>::{closure#0}>>> as core::future::future::Future>::poll"
+      ]
+    },
+    {
+      "id": 14,
+      "frames": [
+        "__rustc::__rust_alloc",
+        "alloc::alloc::alloc",
+        "<tokio::sync::mpsc::block::Block<alloc::vec::Vec<u8>>>::new",
+        "<tokio::sync::mpsc::block::Block<alloc::vec::Vec<u8>>>::grow",
+        "<tokio::sync::mpsc::list::Tx<alloc::vec::Vec<u8>>>::find_block::{closure#0}",
+        "<core::option::Option<core::ptr::non_null::NonNull<tokio::sync::mpsc::block::Block<alloc::vec::Vec<u8>>>>>::unwrap_or_else::<<tokio::sync::mpsc::list::Tx<alloc::vec::Vec<u8>>>::find_block::{closure#0}>",
+        "<tokio::sync::mpsc::list::Tx<alloc::vec::Vec<u8>>>::find_block",
+        "<tokio::sync::mpsc::list::Tx<alloc::vec::Vec<u8>>>::push",
+        "<tokio::sync::mpsc::chan::Chan<alloc::vec::Vec<u8>, tokio::sync::mpsc::bounded::Semaphore>>::send",
+        "<tokio::sync::mpsc::chan::Tx<alloc::vec::Vec<u8>, tokio::sync::mpsc::bounded::Semaphore>>::send",
+        "<tokio::sync::mpsc::bounded::Permit<alloc::vec::Vec<u8>>>::send",
+        "<tokio::sync::mpsc::bounded::Sender<alloc::vec::Vec<u8>>>::send::{closure#0}",
+        "<tokio::runtime::park::CachedParkThread>::block_on::<<tokio::sync::mpsc::bounded::Sender<alloc::vec::Vec<u8>>>::send::{closure#0}>::{closure#0}",
+        "<tokio::runtime::park::CachedParkThread>::block_on::<<tokio::sync::mpsc::bounded::Sender<alloc::vec::Vec<u8>>>::send::{closure#0}>",
+        "<tokio::runtime::context::blocking::BlockingRegionGuard>::block_on::<<tokio::sync::mpsc::bounded::Sender<alloc::vec::Vec<u8>>>::send::{closure#0}>",
+        "tokio::future::block_on::block_on::<<tokio::sync::mpsc::bounded::Sender<alloc::vec::Vec<u8>>>::send::{closure#0}>",
+        "<tokio::sync::mpsc::bounded::Sender<alloc::vec::Vec<u8>>>::blocking_send",
+        "p2p_vpn::runtime::runner::spawn_tun_reader::{closure#0}",
+        "std::sys::backtrace::__rust_begin_short_backtrace::<p2p_vpn::runtime::runner::spawn_tun_reader::{closure#0}, ()>",
+        "std::thread::lifecycle::spawn_unchecked::<p2p_vpn::runtime::runner::spawn_tun_reader::{closure#0}, ()>::{closure#1}::{closure#0}",
+        "<core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked<p2p_vpn::runtime::runner::spawn_tun_reader::{closure#0}, ()>::{closure#1}::{closure#0}> as core::ops::function::FnOnce<()>>::call_once",
+        "std::panicking::catch_unwind::do_call::<core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked<p2p_vpn::runtime::runner::spawn_tun_reader::{closure#0}, ()>::{closure#1}::{closure#0}>, ()>",
+        "__rust_try",
+        "std::thread::lifecycle::spawn_unchecked::<p2p_vpn::runtime::runner::spawn_tun_reader::{closure#0}, ()>::{closure#1}"
+      ]
+    }
+  ],
+  "summary": [
+    {
+      "allocated": 28,
+      "freed": 28,
+      "live": [],
+      "snapshots": 37,
+      "sites": 14,
+      "failures": [],
+      "exit_code": 0,
+      "pending_returns": 0,
+      "return_calls": 32
+    }
+  ],
+  "settled_selected_bytes": 6248,
+  "settled_selected_blocks": 4,
+  "packet_plane_tests": 42,
+  "artifacts": [
+    {
+      "sha256": "088ef1843e7dde900e1c9cbf0b182f88d4a6000b11b7e178e0426f7b665269a5",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.359f6cb70152674d/lifecycle-churn.json"
+    },
+    {
+      "sha256": "0a7b51123f5dc98226b4dd6efa30a68bc1f74ecf310527be0f5500c7af05257b",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.359f6cb70152674d/node-a.log"
+    },
+    {
+      "sha256": "b24d6d33736ecd5604a4b17bc9c6481039fac362bb7df044ef1c10a2bfd21db6",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.359f6cb70152674d/ready-b"
+    },
+    {
+      "sha256": "25794e37de6415ef01ea06482821899f9a8f2c5687cb732d118b99889a53ccd8",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.359f6cb70152674d/repro-metadata.txt"
+    },
+    {
+      "sha256": "183b5dd97e2ec746d1ae81e05a60ea9cc3dc59608fda17144ca7d7005fbc954f",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.359f6cb70152674d/churn-01-recovery.json"
+    },
+    {
+      "sha256": "cced28c6dc3f99c2396a5eaad732bf6b28142335892b1cd0e6af6cdb53f5ccfa",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.359f6cb70152674d/start-a"
+    },
+    {
+      "sha256": "b24d6d33736ecd5604a4b17bc9c6481039fac362bb7df044ef1c10a2bfd21db6",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.359f6cb70152674d/ready-a"
+    },
+    {
+      "sha256": "cced28c6dc3f99c2396a5eaad732bf6b28142335892b1cd0e6af6cdb53f5ccfa",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.359f6cb70152674d/start-b"
+    },
+    {
+      "sha256": "869f1fb8523d9e9bbc3ab0a674e009170b791246da7e9bc866bf241b6da6041e",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.359f6cb70152674d/churn-01-outage.json"
+    },
+    {
+      "sha256": "a609f50b75d97c29a18bf0f08b734ff20c1777b6596ed5c323b42298bff3d8ec",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.359f6cb70152674d/churn-settle.json"
+    },
+    {
+      "sha256": "a3111c89736a73116bbaf8b1b615fb99bc5e19e2188f1816708e845cf536b9e0",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.359f6cb70152674d/node-b.log"
+    },
+    {
+      "sha256": "1dc3130a50bc46d1d9f7f83951d6c1d2f5c4a9f6c9a891f46aeabaa7ed06c590",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.359f6cb70152674d/churn-01-recovery-sample.json"
+    },
+    {
+      "sha256": "bc93f9ebc2c01add55377f001666f19aa041f96e68e1f9874ac3166dce50e37c",
+      "path": "/tmp/p2p-vpn-tun_namespace_measures_lifecycle_churn_resources-1.359f6cb70152674d/repro-commands.sh"
+    },
+    {
+      "path": "/tmp/p2p-vpn-reconnect-owner-1.log",
+      "sha256": "90eb5b3530878a97b8b942fd48b3e72578922d97339ad2f5467827678af3be92"
+    },
+    {
+      "path": "/tmp/p2p-vpn-reconnect-owner-gdb-1.log",
+      "sha256": "9b4a42ba3f3c48e6aab1f81a8e1af6b029ec72fa32f2f6a896b29f27e7b3152e"
+    },
+    {
+      "path": "/tmp/p2p-vpn-reconnect-owner-packet-tests.log",
+      "sha256": "c52893e1f1414d675667818a11ac55874013bd6276af12ff6e248ed1df5a8412"
+    }
+  ],
+  "source_evidence": [
+    {
+      "path": "src/runtime/packet_plane.rs",
+      "sha256": "8c8e998e11101cc154c7cc891b660e02a9f6ea7dc201d0ff05135c05f32ea788"
+    },
+    {
+      "path": "src/runtime/control_socket.rs",
+      "sha256": "6644be3fa8d25604f40caec44a8f735200784c8908804ed0392e85553f3fd62d"
+    },
+    {
+      "path": "src/runtime/runner.rs",
+      "sha256": "ea9bbcb424451b8daa757c9585c62c4a443f21a987d4e2cac719807e945ccad7"
+    },
+    {
+      "path": "/home/midischwarz12/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.53.1/src/sync/mpsc/list.rs",
+      "sha256": "3b587ddaf224eb6876ce6312bf856f5f22a487138b5e1464b8d57930fec4fde0"
+    }
+  ],
+  "limitations": [
+    "Allocations existing before attachment are not tracked.",
+    "Selected surviving objects total 6248 bytes; not a net whole-heap delta and not a retroactive explanation of every prior snapshot.",
+    "One-cycle diagnostic, not sustained-workload proof."
+  ]
+}
