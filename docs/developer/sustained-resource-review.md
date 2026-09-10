@@ -6,6 +6,10 @@ Active bounded review opened at `00b1b58a` on 2026-09-09.
 This contains the measurement plan and partial results, not a completion claim.
 No physical device or deployed host is authorized for this work.
 
+The [acceptance audit](sustained-resource-acceptance.md) tracks current evidence
+reconciliation. Historical "remaining gap" entries below describe their capture
+stage; later reports may supersede them, but final acceptance is not yet proven.
+
 ## Checklist
 
 - [x] Locate prior measurements and identify reuse limits.
