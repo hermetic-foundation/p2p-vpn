@@ -13,7 +13,7 @@ No physical device or deployed host is authorized for this work.
 - [ ] Audit collectors and freeze workload manifests before capture.
 - [x] Measure connected idle and periodic-collector overhead in the isolated debug fixture.
 - [x] Measure unavailable peers and retain retry/backoff timelines in the isolated debug fixture.
-- [ ] Measure matched sustained traffic (S3).
+- [x] Measure matched sustained traffic (S3): two direct-UDP captures, 30000/30000 total requests/replies.
 - [x] Measure repeated packet/byte pressure and recovery (S4); allocation attribution remains open.
 - [ ] Attribute retained allocations, including signed-ledger refreshes.
 - [x] Complete the twelve-capture signed-ledger allocation matrix; packet/runtime attribution remains open.
@@ -32,7 +32,7 @@ No physical device or deployed host is authorized for this work.
 | [Queue pressure](sustained-pressure-results.md) | Corrected S4: 20 TCP pressure/recovery rounds; probe rejection/owner regression passes | RSS allocation attribution and broader workload coverage |
 | [Ledger allocations](allocation-review.md) | Twelve captures, 120 teardowns; zero retained requested Rust bytes/blocks | Whole-runtime/native allocation attribution |
 | [Queue allocations](queue-allocation-review.md) | Four captures, 40 cycles; exact payload release, stable container storage, full owner release | Transport buffers and full-process pressure retention |
-| [Sustained traffic fixture](sustained-traffic-review.md) | First full capture: 15000/15000, stable descriptors, CPU settles after load | Second full capture and broader allocation attribution remain open |
+| [Sustained traffic fixture](sustained-traffic-review.md) | Two full captures: 30000/30000, stable descriptors, CPU settles below 0.2% per node after load | Broader allocation attribution, churn and multi-network workloads remain open |
 | [Capability retirement](capability-retirement-review.md) | Retry gap reproduced; guarded correction and dispatch regressions pass | Live follow-ups pass but did not exercise the retry branch |
 | [Kademlia acceptance](kademlia-workstream-acceptance.md) | Enforcement and scoped recovery fixes | RM-2 sampling, RM-3 unequal work, RM-4 backend confounding, RM-5 allocation attribution |
 | [Android lifecycle](android-lifecycle-audit.md) | Ownership regressions and multi-network restoration | Sustained CPU/memory and physical battery behavior |

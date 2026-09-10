@@ -2,7 +2,7 @@
 
 ## Status
 
-One of two full S3 captures passed; the repeated measurement remains open.
+Both full S3 captures passed; this closes the bounded direct-UDP workload only.
 This workload reuses the S1/S2 direct-UDP namespace topology and
 collectors; it does not alter the older Kademlia resource workload definitions.
 
@@ -184,5 +184,35 @@ including the ten initial fixture packets. Do not treat this as lost traffic.
 
 [Counter summaries, outcome and hashes](sustained-traffic-samples.json) preserve
 the observations. Full logs remain under the printed artifact directory and
-`/tmp/p2p-vpn-sustained-traffic-full-1.log`. The second full capture remains open;
-this single moderate-load debug run does not prove sustained behavior generally.
+`/tmp/p2p-vpn-sustained-traffic-full-1.log`. The repeated capture below completes
+the planned pair; neither run proves sustained behavior generally.
+
+## Repeated Capture
+
+The second run used the identical executable and workload, without builds or
+manual recovery. It passed in 416.33 seconds, with 15000/15000 requests over
+300.002 seconds, zero skipped/invalid/duplicate packets, and 2.644 ms maximum
+pacing lateness. Transport, process identity and final strict pings passed.
+
+| Phase / Node | CPU, % One Core | RSS First / Last, KiB | Total / Socket FDs | Threads |
+| --- | ---: | --- | --- | ---: |
+| Load A | 6.8101 | 35852 / 35916 | 21 / 14 | 6 |
+| Load B | 6.5434 | 35780 / 35808 | 19 / 12 | 6 |
+| Drain A | 0.1667 | 35916 / 35916 | 21 / 14 | 6 |
+| Drain B | 0.1667 | 35808 / 35808 | 19 / 12 | 6 |
+
+- Each node again has 300 load and 61 drain OS samples, with gaps below 1.009 seconds.
+- Runtime series are complete: 60 load and 12 drain snapshots per node; no query errors.
+- Sampled queues, drops, expiry, pending connection attempts and retiring connections stayed zero.
+- Redial attempts stayed zero; outgoing connection errors did not increase in either phase.
+- Artifact suffix: `1.c6e80b73f0d9ffe2`, 4132 KiB; full log `/tmp/p2p-vpn-sustained-traffic-full-2.log`.
+- Both run summaries and all six primary report hashes are preserved in the linked JSON.
+
+Together, these runs delivered 30000 requests and replies, with CPU settling
+below 0.2% of one core per node after load. Descriptors and threads remained
+constant; modest load-phase RSS increases did not continue during drain.
+
+This is current-runtime, moderate-rate debug evidence, not a before/after
+performance improvement, release throughput ceiling or allocation proof.
+Lifecycle churn, multi-network isolation, Android background work and retained
+transport/runtime allocation attribution remain open.
