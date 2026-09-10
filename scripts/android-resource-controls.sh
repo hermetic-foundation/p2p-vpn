@@ -335,6 +335,29 @@ resource_control_window() (
   fi
 )
 
+resource_profile_load() (
+  local binary="$1" guest="" profiler="" status=0 size
+  [[ -f "$binary" ]] || exit 2
+  guest="$(adb_run shell mktemp -d /data/local/tmp/p2p-vpn-profile.XXXXXX | tr -d '\r')"
+  [[ "$guest" =~ ^/data/local/tmp/p2p-vpn-profile\.[a-zA-Z0-9]+$ ]] || exit 1
+  trap 'if [[ -n "$profiler" ]]; then kill "$profiler" 2>/dev/null || true; wait "$profiler" 2>/dev/null || true; fi; adb_run shell rm -rf "$guest" >/dev/null 2>&1 || true' EXIT
+  adb_run push "$binary" "$guest/simpleperf" >"$output_dir/profile-push.txt" || exit 1
+  adb_run shell chmod 500 "$guest/simpleperf" || exit 1
+  timeout --signal=TERM --kill-after=2s 75 "${adb[@]}" shell "$guest/simpleperf" record \
+    -p "$resource_app_pid" -e cpu-clock:u -f 99 --duration 60 --no-inherit \
+    -m 64 --user-buffer-size 1M --size-limit 8M --no-dump-symbols \
+    --no-dump-kernel-symbols --exit-with-parent -o "$guest/perf.data" \
+    >"$output_dir/profile-record.txt" 2>&1 &
+  profiler=$!
+  resource_control_window on "$output_dir/load-smoke" 60 load || status=1
+  wait "$profiler" || status=1
+  profiler=""
+  adb_run pull "$guest/perf.data" "$output_dir/profile.data" >"$output_dir/profile-pull.txt" 2>&1 || status=1
+  [[ "$status" == 0 ]] || exit 1
+  size="$(stat -c %s "$output_dir/profile.data")" || exit 1
+  [[ "$size" -gt 0 && "$size" -lt 8388608 ]] || exit 1
+)
+
 run_android_sustained_load() {
   local detail="${1:-process}" phase duration traffic
   [[ "$detail" == process || "$detail" == threads ]] || return 2
@@ -352,8 +375,10 @@ run_android_resource_controls() {
   local resource_collector="${P2P_VPN_ANDROID_PROCESS_COLLECTOR:-$(dirname "$0")/android-process-sample.sh}"
   local resource_app_pid resource_emulator_pid index=0 mode detail
   local load_detail="${P2P_VPN_ANDROID_RESOURCE_LOAD_DETAIL:-process}"
+  local profile_binary="${P2P_VPN_ANDROID_SIMPLEPERF_BINARY:-}"
   [[ "$load_detail" == process || "$load_detail" == threads ]] || return 2
   [[ "$load_detail" == process || "${scenario:-}" == multi-network-resource-load ]] || return 2
+  [[ -z "$profile_binary" || ("${scenario:-}" == multi-network-resource-load-smoke && -f "$profile_binary") ]] || return 2
   adb_run root >"$output_dir/resource-root.txt" || return 1
   adb_run wait-for-device || return 1
   [[ "$(adb_run shell id -u | tr -d '\r')" == 0 ]] || return 1
@@ -388,7 +413,11 @@ run_android_resource_controls() {
   fi
   if [[ "${scenario:-}" == multi-network-resource-load-smoke ]]; then
     record_step load_smoke started "Four paced streams; 60-second compatibility window"
-    resource_control_window on "$output_dir/load-smoke" 60 load || return 1
+    if [[ -n "$profile_binary" ]]; then
+      resource_profile_load "$profile_binary" || return 1
+    else
+      resource_control_window on "$output_dir/load-smoke" 60 load || return 1
+    fi
     record_step load_smoke passed "Paced traffic and resource collection verified; not S7 acceptance"
     return 0
   fi
