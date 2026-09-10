@@ -2,10 +2,64 @@
 
 ## Status
 
-Configuration implementation in progress. Baseline: `e483775d`.
-This plan does not certify QUIC-first minimal configuration or physical recovery.
+Core implementation published as `8690bce2`; NixOS wiring published as `43345ef1`.
+The goal remains active. Local evidence does not certify physical Android or public-network recovery.
 
-## Implementation Progress
+## Acceptance Audit
+
+| Requirement | Verified evidence | Remaining work |
+| --- | --- | --- |
+| Defaults and overrides | Shared config and Android profile regressions; 26 NixOS contracts; Pixel profile upgrade | Native NixOS activation |
+| QUIC payload preference | Minimal TUN fixture; physical Pixel/Linux payloads and Linux backend-specific counters | Physical sustained stability and Android backend-specific accounting |
+| Compatibility | Explicit UDP-only current peer; override round trips; isolated relay payloads | Archived-release compatibility is not established; review direct stream-only coverage |
+| Autonomous recovery | Four initiator orderings; startup and established QUIC blocking | Physical movement and sustained settling evidence |
+| MTU and isolation | 1,280-byte IPv4 fallback/recovery traffic; Android supervisor tests | Smaller-underlay MTU boundaries and physical multi-network behavior |
+| Verification | 1,526 workspace tests; required root Clippy groups; ARM64 build; fresh JVM tests | Full Nix package/source-parity audit and remaining targeted scenarios |
+| Deployment | Verified debug APK installed on Pixel preserving profile | Physical stability, fallback and recovery checks |
+| Delivery | Core and NixOS commits pushed to main | Final evidence review and requirement-by-requirement closeout |
+
+- UDP compatibility uses a current runtime with QUIC disabled, not an archived release.
+- Namespace underlays are isolated fixtures, not substitutes for physical or public-NAT evidence.
+- The separate Android always-on process-restart finding is not claimed fixed here.
+- Remaining evidence gaps do not authorize deployment, underlay changes or personal-flake edits.
+
+## Physical Pixel Check: September 10
+
+The authorized in-place APK upgrade preserved the existing identity, hostname and network.
+Wi-Fi remained selected with zero reported underlay changes. USB was management only.
+
+| Artifact | SHA-256 |
+| --- | --- |
+| Installed debug APK | `02ead2d9990d90a0d2c4ef914cdaac9923afdcfb50ce438d426f27d2fc6cdb4e` |
+| ARM64 native library | `3d48757b7b4bdd2d4f68f9cf8b9f952479bbd3d75e6c875cd85d87c926258cd5` |
+
+The laptop temporarily ran the new binary through a runtime-only systemd override.
+Its existing config omitted `packet_plane`; no endpoints, profiles or firewall rules changed.
+The Nix-managed binary was restored after testing; the updated APK remains installed.
+
+| Check | Result |
+| --- | --- |
+| Updated phone against original Linux binary | Five small pings each direction, all delivered |
+| Initial Linux service restart | One of five replies; retained as restart interruption evidence |
+| Automatic QUIC discovery | One session; Linux selected `direct_quic_datagram` without endpoint configuration |
+| Phone to updated Linux, small packets | Ten of ten replies; Linux owned-QUIC payload counter reached ten |
+| Linux to phone, 1,280-byte IPv4 packets, DF set | Ten of ten replies |
+| Phone to Linux, 1,280-byte IPv4 packets | Four of ten replies; stability acceptance failed |
+| Counters after both full-size runs | Linux owned-QUIC 22, owned-UDP 8; selected path had changed to UDP |
+
+- At 12:41:20 device/laptop journal time, both datagram paths were demoted for probe timeout.
+- At 12:41:40 QUIC was demoted again; probe acknowledgements also arrived at those timestamps.
+- Android still reported one QUIC session and no underlay transition after the failure.
+- Android's legacy payload counter combines UDP and QUIC; it cannot certify the return backend alone.
+
+This establishes physical QUIC payload capability, not stable QUIC preference or an MTU root cause.
+Next: correlate probe deadlines, receive scheduling and backend selection around the observed loss.
+Do not classify these failures as successful fallback or public-network recovery.
+
+## Historical Implementation Progress
+
+The chronological notes below preserve earlier results and failures. Their pending-work statements
+describe those stages; the acceptance audit above records the current status.
 
 - Shared defaults now request an ephemeral QUIC listener alongside UDP.
 - Deserialization distinguishes omitted QUIC settings from an explicit empty list.
