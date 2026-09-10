@@ -10,12 +10,12 @@ The goal remains active. Local evidence does not certify physical Android or pub
 | Requirement | Verified evidence | Remaining work |
 | --- | --- | --- |
 | Defaults and overrides | Shared config and Android profile regressions; 26 NixOS contracts; Pixel profile upgrade | Native NixOS activation |
-| QUIC payload preference | Minimal TUN fixture; physical Pixel/Linux payloads and Linux backend-specific counters | Physical sustained stability and Android backend-specific accounting |
+| QUIC payload preference | Minimal TUN fixture; physical Pixel/Linux traffic; OnePlus bidirectional backend counters | Longer physical stability and unresolved Pixel loss |
 | Compatibility | Explicit UDP-only and stream-only current peers; override round trips; isolated relay payloads | Archived-release compatibility is not established |
 | Autonomous recovery | Four initiator orderings; startup and established QUIC blocking | Physical movement and sustained settling evidence |
 | MTU and isolation | 1,280-byte IPv4 fallback/recovery traffic; Android supervisor tests | Smaller-underlay MTU boundaries and physical multi-network behavior |
 | Verification | 1,526 workspace tests; required root Clippy groups; ARM64 build; fresh JVM tests; cached source parity | Full Nix package realization and remaining targeted scenarios |
-| Deployment | Verified debug APK installed on Pixel preserving profile | Physical stability, fallback and recovery checks |
+| Deployment | Verified debug APK upgrades on Pixel and OnePlus preserving profiles | Physical stability, fallback and recovery checks |
 | Delivery | Core and NixOS commits pushed to main | Final evidence review and requirement-by-requirement closeout |
 
 - UDP compatibility uses a current runtime with QUIC disabled, not an archived release.
@@ -95,6 +95,65 @@ APK alignment passed; native library hash is unchanged from the physical run.
 
 New APK SHA-256: `2be7a7d92012e45ff1f51a5220c6df8d730ab22acffac1c5ef7a52a5ece1aee8`.
 This diagnostics APK has not been deployed. Rust/Nix checks were not rerun for this Java-only change.
+
+## Physical OnePlus Check: September 10
+
+The user authorized replacing the Pixel test device with the already-paired OnePlus,
+upgrading its APK and temporarily restarting the laptop with the test binary.
+No pairing, endpoints, firewall rules, personal-flake settings or underlays changed.
+
+| Item | Observed value |
+| --- | --- |
+| Device | OnePlus 9 Pro, Android 16, USB serial `1ebfe979` |
+| Preserved profile | `personal-devices`, `oneplus-9-pro`, `100.64.241.163` |
+| Preserved peer ID | `12D3KooWBEiDFMNfaHXC7kQQAwjgsLZYv8xjVEQY77QuasfC8pPs` |
+| Installed APK SHA-256 | `cf0921ff4e015d86d6a94c24c5d339974642017adfe25d01e84db44d98ce7cac` |
+| Test Linux binary SHA-256 | `aad10df4f669ab7254ab97b390b72f1dad5094bd3dd3bb4c158c50de47bd11f0` |
+| Source revision | `6aaee223` |
+| Test environment | Validated Wi-Fi; phone awake and USB-powered; management over USB |
+
+The existing network was reconnected after APK installation. The laptop's existing
+minimal config still omitted `packet_plane`. It discovered and selected the phone's
+owned QUIC datagram endpoint without manual endpoint configuration.
+
+| Traffic check | Replies | Mean RTT |
+| --- | --- | --- |
+| Laptop to phone, small | 10/10 | 35.718 ms |
+| Phone to laptop, small | 10/10 | 19.864 ms |
+| Laptop to phone, 1,280-byte IPv4, DF | 20/20 | 94.958 ms |
+| Phone to laptop, 1,280-byte IPv4, DF | 30/30 | 88.906 ms |
+| Laptop to phone, one-minute 1,280-byte repeat, DF | 60/60 | 147.419 ms |
+
+- Before the repeat, Linux counted 69 owned-QUIC payloads and one QUIC-stream fallback;
+  Android counted 70 owned-QUIC payloads. Both owned-UDP counters were zero.
+- After the repeat, Linux counted 129 owned-QUIC payloads with fallback unchanged;
+  Android counted 130. Both owned-UDP counters remained zero.
+- Linux retained `direct_quic_datagram` with unchanged establishment time and zero probe failures.
+  Android reported generation one, unchanged profile and zero underlay changes/recoveries.
+- The first attempted ping overlapped the service restart and failed to bind the absent `pv1`.
+  It was not included in the completed traffic runs above.
+
+### Capture And Limits
+
+- A 110-second, 96-byte-snaplen capture was restricted to the phone's owned datagram endpoints.
+  It recorded 606 packets and zero reported capture drops; no builds ran during traffic tests.
+- QUIC endpoints `192.168.0.229:48978` and `192.168.0.180:56065` exchanged 518 packets.
+  UDP fallback endpoints exchanged 88 control packets while owned-UDP payload counters stayed zero.
+- Each QUIC direction had 90 outer UDP packets longer than 1,280 bytes.
+  This is transport-size evidence, not decrypted attribution of individual overlay packets.
+- Local evidence: `/tmp/p2p-vpn-oneplus-quic-20260910.pcapng`,
+  `/tmp/p2p-vpn-oneplus-{before,after,final}.state` and matching Android status snapshots.
+- The capture ended during the repeat, not after it. The full repeat's ping output is retained
+  in `/tmp/p2p-vpn-oneplus-sustained-ping.log`; its maximum RTT was 468.871 ms.
+
+The runtime-only Linux override and copied binary were removed, and the original Nix-store
+service was restored; five post-restoration pings all succeeded.
+The updated APK remains installed with the existing profile.
+Temporary project storage measured 9,780,196 KiB, below the 10 GiB limit.
+
+This bounded OnePlus Wi-Fi pass does not resolve the earlier Pixel failure or certify
+sleep, cellular, physical fallback, movement or long-duration stability. No timing or
+transport fixes were inferred from a passing run; those acceptance gaps remain open.
 
 ## Stream-Only Compatibility Check
 
