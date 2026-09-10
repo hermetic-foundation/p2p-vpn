@@ -42,7 +42,8 @@ ip -j -4 route show table all | jq -e 'all(.[]; .dev == "lo")' >/dev/null
 ip -j -6 route show table all | jq -e 'all(.[]; .dev == "lo")' >/dev/null
 
 # A fresh network namespace cannot reach the host's TCP ADB server.
-export ADB_SERVER_SOCKET=tcp:127.0.0.1:5037
+# ADB treats numeric 127.0.0.1 as remote and refuses automatic server startup.
+export ADB_SERVER_SOCKET=tcp:localhost:5037
 export ADB_MDNS_AUTO_CONNECT=0
 unset ANDROID_SERIAL
 exec "$@"

@@ -3,8 +3,8 @@
 ## Status
 
 Cached capability preflight passes. The APK and Linux fixture have now been
-refreshed, and the packaged JNI matches the selected native build. No emulator
-or physical device was started; sustained capture has not begun.
+refreshed, and the packaged JNI matches the selected native build. Isolated cached
+emulator boot now passes. No physical device was used; sustained capture has not begun.
 
 ## Capability Evidence
 
@@ -150,10 +150,61 @@ so their build/test suites were not repeated for this shell-only addition.
 ## Next Work
 
 1. Preserve refreshed artifact hashes and verify them again before emulator admission.
-2. Verify cached emulator boot inside the tested wrapper, then add the cheap OS/resource collector and collector-on/off controls.
+2. Add the cheap OS/resource collector and collector-on/off controls inside the boot-tested wrapper.
 3. Freeze S7's 30-second warmup, 300-second idle/load windows, five independent transitions, actual offered load and watchdogs.
 4. Require healthy sibling traffic and identity continuity while the other network is disabled or unavailable.
 5. Run paired captures; audit cadence, recovery, teardown and storage cleanup before accepting results.
 
 No Android resource or multi-network sustained acceptance is claimed yet. Linux
 allocation attribution remains open in parallel with this workstream.
+
+## Isolated Boot Results
+
+The first attempt failed before readiness: ADB treats the numeric socket
+`tcp:127.0.0.1:5037` as remote and will not auto-start a server. Changing only
+the socket to `tcp:localhost:5037` allows auto-start inside the same isolated network.
+
+| Attempt | Result | Evidence SHA-256 |
+| --- | --- | --- |
+| Numeric socket | Launcher exited before readiness | `19c40b0e37094d93a95a921f4414d72d92067a2c660be8008af766e414d78beb` |
+| Localhost socket | Boot smoke passes in 33 seconds | `561bb2c5e857856072d13261ea753bcc8f93992cc65aaf31ad647239991346a0` |
+
+[Portable evidence](sustained-android-boot-samples.json) preserves both attempts.
+Raw directories are `/tmp/p2p-vpn-sustained-android-isolated-boot` and the same
+path suffixed `-2`. Successful emulator log SHA-256:
+`502a0ffaf85709fbf9aa6f019482d301554ef386458da4e034a6a501e2a83a68`.
+
+### Frozen Boot Controls
+
+- API 35 x86_64 cached emulator; no downloads or concurrent builds.
+- Isolated network/process/mount namespaces with USB hidden and private ADB.
+- 200-second inner timeout plus 15-second kill grace; 240-second outer timeout plus 20-second grace.
+- Original 1,258,291,200-byte runtime growth cap, unchanged between attempts.
+- Dedicated `TMPDIR=/tmp/p2p-vpn-sustained-android-boot-state`; existing harness cleanup retained.
+- Before first attempt: 9,118,764 KiB across `/tmp/p2p-vpn-*`, below 10 GiB.
+
+The boot scenario verifies the device contract, installed package, activity and
+structured debug status. All six harness cleanup checks pass; no matching emulator
+process remains. The dedicated temporary root retains only 68 KiB of small tool state.
+
+### Scope Limits
+
+- The immutable launcher installs its bundled historical smoke APK; boot-smoke does not reinstall the refreshed APK.
+- No profile is stored, no VPN runtime is connected, and public-routing peer count is zero.
+- Android reports unvalidated emulated Wi-Fi; its `internet` capability is not proof of external reachability.
+- A modem `::1` resolution warning remains; no cellular-emulation claim is made.
+- The one CPU/PSS diagnostic is only smoke evidence, not a sustained resource sample or physical battery estimate.
+
+The first log also reported missing AVD registration. A separate isolated AVD
+creation succeeded, and the boot retry required no AVD change; do not attribute
+that secondary message to a new application or AVD defect.
+
+### Regression Validation
+
+With `P2P_VPN_ADB` pointing to cached ADB, `tests/android-resource-isolation.sh`
+also verifies real private-server auto-start and an empty device list. The regular
+namespace, failure-propagation and descendant-cleanup checks continue to pass.
+
+ShellCheck and shfmt pass. Validation log:
+`/tmp/p2p-vpn-android-resource-isolation-adb-tests.log`. This shell-only correction
+does not require repeating unchanged Rust/Android builds or device lifecycle tests.

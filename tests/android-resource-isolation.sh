@@ -26,7 +26,7 @@ bash "$wrapper" -- bash -c '
   set -euo pipefail
   [[ $$ == 1 ]]
   [[ -z ${ANDROID_SERIAL+x} ]]
-  [[ $ADB_SERVER_SOCKET == tcp:127.0.0.1:5037 ]]
+  [[ $ADB_SERVER_SOCKET == tcp:localhost:5037 ]]
   [[ $ADB_MDNS_AUTO_CONNECT == 0 ]]
   [[ -z $(find /dev/bus/usb -mindepth 1 -print -quit) ]]
   ip -j link show | jq -e "length == 1 and .[0].ifname == \"lo\"" >/dev/null
@@ -51,3 +51,13 @@ if pgrep -f " $marker$" >/dev/null; then
   exit 1
 fi
 printf 'Isolation checks passed: guards, network, USB, KVM, exit status and descendant cleanup.\n'
+if [[ -n "${P2P_VPN_ADB:-}" ]]; then
+  # shellcheck disable=SC2016
+  bash "$wrapper" -- bash -c '
+    set -euo pipefail
+    "$1" start-server
+    devices=$("$1" devices)
+    [[ $(printf "%s\n" "$devices" | sed "/^List of devices attached/d; /^[[:space:]]*$/d") == "" ]]
+  ' sh "$P2P_VPN_ADB"
+  printf 'Private ADB auto-start and empty device-list checks passed.\n'
+fi

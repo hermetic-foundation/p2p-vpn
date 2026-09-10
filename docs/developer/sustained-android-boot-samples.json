@@ -1,0 +1,411 @@
+{
+  "schema_version": 1,
+  "scope": "isolated_cached_emulator_boot_not_sustained_resources",
+  "failed": {
+    "path": "/tmp/p2p-vpn-sustained-android-isolated-boot/evidence.json",
+    "result": {
+      "schema_version": 1,
+      "kind": "p2p-vpn-android-e2e",
+      "scenario": "boot-smoke",
+      "status": "failed",
+      "detail": "Emulator launcher exited before readiness",
+      "started_utc": "2026-09-10T03:50:56Z",
+      "finished_utc": "2026-09-10T03:50:58Z",
+      "preflight": [
+        {
+          "name": "host_linux",
+          "required": true,
+          "available": true,
+          "detail": "Linux host"
+        },
+        {
+          "name": "host_architecture",
+          "required": true,
+          "available": true,
+          "detail": "x86_64 host"
+        },
+        {
+          "name": "disk_space",
+          "required": true,
+          "available": true,
+          "detail": "tmp has 678534025216 bytes; evidence has 678534025216; 17179869184 required"
+        },
+        {
+          "name": "emulator_command",
+          "required": true,
+          "available": true,
+          "detail": "Nix emulator launcher is executable"
+        },
+        {
+          "name": "adb",
+          "required": true,
+          "available": true,
+          "detail": "ADB is executable"
+        },
+        {
+          "name": "timeout",
+          "required": true,
+          "available": true,
+          "detail": "Bounded subprocess runner is executable"
+        },
+        {
+          "name": "android_apk",
+          "required": false,
+          "available": false,
+          "detail": "boot-smoke does not reinstall the APK"
+        },
+        {
+          "name": "fixture_command",
+          "required": false,
+          "available": false,
+          "detail": "Selected scenario does not use the Linux fixture"
+        },
+        {
+          "name": "p2p_vpn_command",
+          "required": false,
+          "available": false,
+          "detail": "Selected scenario does not use the pairing CLI"
+        },
+        {
+          "name": "kvm",
+          "required": true,
+          "available": true,
+          "detail": "/dev/kvm is readable and writable"
+        },
+        {
+          "name": "tun",
+          "required": false,
+          "available": true,
+          "detail": "/dev/net/tun is present for later packet scenarios"
+        }
+      ],
+      "device": {
+        "serial": ""
+      },
+      "steps": [
+        {
+          "name": "preflight",
+          "status": "passed",
+          "detail": "Required Android E2E capabilities are available",
+          "recorded_unix_millis": 1789012256778
+        },
+        {
+          "name": "emulator_start",
+          "status": "started",
+          "detail": "Waiting for a clean API 35 emulator",
+          "recorded_unix_millis": 1789012256787
+        },
+        {
+          "name": "emulator_start",
+          "status": "failed",
+          "detail": "Emulator launcher exited before readiness",
+          "recorded_unix_millis": 1789012257797
+        }
+      ],
+      "cleanup": {
+        "emulator_stopped": true,
+        "fixture_stopped": true,
+        "private_state_removed": true,
+        "logs_redacted": true,
+        "diagnostic_report_redacted": true,
+        "always_on_cleared": true
+      },
+      "artifacts": {
+        "android_log": "android.log",
+        "emulator_log": "emulator.log",
+        "fixture_log": "fixture.log",
+        "fixture_secondary_log": "fixture-secondary.log"
+      }
+    }
+  },
+  "passed": {
+    "path": "/tmp/p2p-vpn-sustained-android-isolated-boot-2/evidence.json",
+    "result": {
+      "schema_version": 1,
+      "kind": "p2p-vpn-android-e2e",
+      "scenario": "boot-smoke",
+      "status": "passed",
+      "detail": "Clean emulator boot and application smoke test passed",
+      "started_utc": "2026-09-10T03:52:54Z",
+      "finished_utc": "2026-09-10T03:53:27Z",
+      "preflight": [
+        {
+          "name": "host_linux",
+          "required": true,
+          "available": true,
+          "detail": "Linux host"
+        },
+        {
+          "name": "host_architecture",
+          "required": true,
+          "available": true,
+          "detail": "x86_64 host"
+        },
+        {
+          "name": "disk_space",
+          "required": true,
+          "available": true,
+          "detail": "tmp has 678536724480 bytes; evidence has 678536724480; 17179869184 required"
+        },
+        {
+          "name": "emulator_command",
+          "required": true,
+          "available": true,
+          "detail": "Nix emulator launcher is executable"
+        },
+        {
+          "name": "adb",
+          "required": true,
+          "available": true,
+          "detail": "ADB is executable"
+        },
+        {
+          "name": "timeout",
+          "required": true,
+          "available": true,
+          "detail": "Bounded subprocess runner is executable"
+        },
+        {
+          "name": "android_apk",
+          "required": false,
+          "available": false,
+          "detail": "boot-smoke does not reinstall the APK"
+        },
+        {
+          "name": "fixture_command",
+          "required": false,
+          "available": false,
+          "detail": "Selected scenario does not use the Linux fixture"
+        },
+        {
+          "name": "p2p_vpn_command",
+          "required": false,
+          "available": false,
+          "detail": "Selected scenario does not use the pairing CLI"
+        },
+        {
+          "name": "kvm",
+          "required": true,
+          "available": true,
+          "detail": "/dev/kvm is readable and writable"
+        },
+        {
+          "name": "tun",
+          "required": false,
+          "available": true,
+          "detail": "/dev/net/tun is present for later packet scenarios"
+        }
+      ],
+      "device": {
+        "api_level": "35",
+        "abi": "x86_64",
+        "package_installed": true,
+        "debug_automation": true,
+        "diagnostics": {
+          "os_underlay": {
+            "status": "parsed",
+            "networks": [
+              {
+                "kind": "wifi",
+                "validated": false,
+                "internet": true,
+                "not_vpn": true
+              }
+            ]
+          },
+          "final_runtime": {
+            "connected": false,
+            "busy": false,
+            "runtime_generation": 0,
+            "underlay": {
+              "kind": "wifi",
+              "validated": false,
+              "available_networks": 1,
+              "selection_changes": 0,
+              "selected_losses": 0,
+              "recoveries": 0,
+              "runtime_recovery_requests": 0,
+              "runtime_recovery_failures": 0
+            },
+            "paths": {
+              "connected_peers": 0,
+              "direct_udp_datagram": 0,
+              "direct_quic_datagram": 0,
+              "direct_quic_stream": 0,
+              "direct_tcp_stream": 0,
+              "relay": 0,
+              "public_routing_peers": 0,
+              "packet_plane_quic_sessions": 0,
+              "outbound_quic_datagram_packets": 0,
+              "outbound_direct_tcp_stream_packets": 0,
+              "promotions_to_direct": 0
+            }
+          },
+          "export": {
+            "schema_version": 1,
+            "kind": "p2p-vpn-android-diagnostics",
+            "generated_at": "2026-09-10T03:53:23.968451Z",
+            "app": {
+              "version": "0.1.0",
+              "android_api": 35
+            },
+            "lifecycle": {
+              "service_uptime_millis": 1572,
+              "profile_stored": false,
+              "profile_readable": false,
+              "connection_requested": false,
+              "connected": false,
+              "always_on": false,
+              "lockdown": false,
+              "busy": false,
+              "runtime_generation": 0
+            },
+            "underlay": {
+              "kind": "wifi",
+              "validated": false,
+              "available_networks": 1,
+              "selection_changes": 0,
+              "selected_losses": 0,
+              "recoveries": 0,
+              "runtime_recovery_requests": 0,
+              "runtime_recovery_failures": 0
+            },
+            "paths": {
+              "connected_peers": 0,
+              "peers_without_supported_path": 0,
+              "direct_udp_datagram": 0,
+              "direct_quic_datagram": 0,
+              "direct_quic_stream": 0,
+              "direct_tcp_stream": 0,
+              "relay": 0,
+              "public_routing_peers": 0,
+              "packet_plane_quic_sessions": 0,
+              "promotions_to_direct": 0
+            },
+            "queue": {
+              "queued_packets": 0,
+              "queued_bytes": 0,
+              "oldest_packet_age_millis": 0,
+              "blocked_no_supported_path_events": 0,
+              "blocked_packet_window_events": 0
+            },
+            "drops": {
+              "queue_packets": 0,
+              "queue_bytes": 0,
+              "expired_packets": 0,
+              "expired_bytes": 0,
+              "outbound_packets": 0,
+              "inbound_packets": 0,
+              "packet_plane_datagrams": 0,
+              "path_fallbacks_to_relay": 0,
+              "packet_plane_path_demotions": 0,
+              "stream_path_demotions": 0
+            },
+            "resources": {
+              "process_cpu_millis": 1214,
+              "total_pss_kib": 34879,
+              "private_dirty_kib": 23304,
+              "java_heap_used_bytes": 3342272,
+              "java_heap_max_bytes": 201326592,
+              "active_threads": 10
+            },
+            "pairing": {
+              "operation_active": false,
+              "candidate_pending": false
+            },
+            "events": {
+              "discarded": 0,
+              "items": [
+                {
+                  "sequence": 1,
+                  "since_service_start_millis": 0,
+                  "name": "service_created"
+                },
+                {
+                  "sequence": 2,
+                  "since_service_start_millis": 5,
+                  "name": "profile_absent"
+                },
+                {
+                  "sequence": 3,
+                  "since_service_start_millis": 462,
+                  "name": "underlay_baseline_selected"
+                },
+                {
+                  "sequence": 4,
+                  "since_service_start_millis": 1572,
+                  "name": "diagnostic_report_generated"
+                }
+              ]
+            },
+            "privacy": {
+              "identity_material": "excluded",
+              "peers": "excluded",
+              "pairing_secrets": "excluded",
+              "underlay_addresses": "excluded"
+            }
+          }
+        },
+        "serial": "emulator-5554"
+      },
+      "steps": [
+        {
+          "name": "preflight",
+          "status": "passed",
+          "detail": "Required Android E2E capabilities are available",
+          "recorded_unix_millis": 1789012374606
+        },
+        {
+          "name": "emulator_start",
+          "status": "started",
+          "detail": "Waiting for a clean API 35 emulator",
+          "recorded_unix_millis": 1789012374614
+        },
+        {
+          "name": "emulator_start",
+          "status": "passed",
+          "detail": "Emulator reported an ADB serial",
+          "recorded_unix_millis": 1789012402729
+        },
+        {
+          "name": "device_contract",
+          "status": "passed",
+          "detail": "API 35 x86_64 device contract verified",
+          "recorded_unix_millis": 1789012402990
+        },
+        {
+          "name": "package",
+          "status": "passed",
+          "detail": "Debug package is installed",
+          "recorded_unix_millis": 1789012402995
+        },
+        {
+          "name": "activity",
+          "status": "passed",
+          "detail": "Main activity is running",
+          "recorded_unix_millis": 1789012403001
+        },
+        {
+          "name": "debug_automation",
+          "status": "passed",
+          "detail": "ADB-authorized structured status is available",
+          "recorded_unix_millis": 1789012403006
+        }
+      ],
+      "cleanup": {
+        "emulator_stopped": true,
+        "fixture_stopped": true,
+        "private_state_removed": true,
+        "logs_redacted": true,
+        "diagnostic_report_redacted": true,
+        "always_on_cleared": true
+      },
+      "artifacts": {
+        "android_log": "android.log",
+        "emulator_log": "emulator.log",
+        "fixture_log": "fixture.log",
+        "fixture_secondary_log": "fixture-secondary.log"
+      }
+    }
+  }
+}
