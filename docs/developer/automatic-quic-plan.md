@@ -72,6 +72,25 @@ Acceptance remains incomplete. Local evidence does not certify physical Android 
 - No Android deployment or physical recovery pass is claimed for this correction yet.
   The earlier matched-build cellular failure remains the latest physical acceptance result.
 
+### Prepared Peer-Lookup Artifacts
+
+- Source `eb0fb4ca`: offline ARM64 compilation passed in 40.42s; Linux binary build passed in 42.23s.
+  Logs: `/tmp/p2p-vpn-public-peer-recovery-{android,linux}.log`.
+- APK assembly passed in seven seconds; 16 KiB alignment passed.
+  JVM tests were up-to-date, not freshly executed: `/tmp/p2p-vpn-public-peer-recovery-apk.log`.
+- Nix-evaluated ARM64 source `/nix/store/6w4kggnd3ha46ck61r0bawl8z13nvm3q-source`
+  matches working-tree `src` and `crates`; this is source parity, not full package realization.
+- Root-inclusive temporary storage: 9,796,000 KiB, below 10 GiB.
+  No new deployment occurred; a fresh matched-build cellular test awaits approval.
+
+| Artifact | SHA-256 |
+| --- | --- |
+| Debug APK | `d1fdc641323e07e33f3c864e3fe57296add1b76850bfe4f84d72296a453ec265` |
+| ARM64 native library | `2f000837d82bc159bec1d26d18aed51c25fe0e3c00cb27385436b9a6c9be7ddd` |
+| Linux binary | `f9fa3e4e6794685b65420bd064d36cae5d7b7eceec90c23cca8c9868861f34c3` |
+
+### Requirement Status
+
 | Requirement | Verified evidence | Remaining work |
 | --- | --- | --- |
 | Defaults and overrides | Shared config and Android profile regressions; 26 NixOS contracts; Pixel profile upgrade | Native NixOS activation |
