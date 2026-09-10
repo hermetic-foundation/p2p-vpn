@@ -2,9 +2,9 @@
 
 ## Status
 
-Cached capability preflight passes. No emulator or physical device was started.
-Artifact reconciliation found that the available APK and fixture cannot yet serve
-as current-source resource evidence. Sustained capture has not begun.
+Cached capability preflight passes. The APK and Linux fixture have now been
+refreshed, and the packaged JNI matches the selected native build. No emulator
+or physical device was started; sustained capture has not begun.
 
 ## Capability Evidence
 
@@ -20,7 +20,7 @@ Linux fixture, CLI and KVM access passed availability checks.
 Preflight checks presence and capabilities, not source freshness, private egress,
 sampling completeness or performance. Its `passed` status closes none of those gates.
 
-## Artifact Reconciliation
+## Pre-Refresh Artifacts
 
 | Artifact | SHA-256 | Interpretation |
 | --- | --- | --- |
@@ -40,6 +40,44 @@ readelf 2.46 executable; those differ too. Neither ELF supplied a GNU build ID.
 
 This detects nonidentical executable content; it does not identify every source
 revision represented by the APK. Keep historical lifecycle evidence separate.
+
+## Refreshed Artifacts
+
+At source `460a3b9e`, the fixture rebuilt offline in 5.42 seconds. Gradle packaging
+and checks completed offline in eight seconds using cached Gradle 9.5.1,
+OpenJDK 17.0.20+8 and the SDK containing `android-37.0`.
+
+| Artifact | SHA-256 |
+| --- | --- |
+| Refreshed debug APK | `e4881658d6a8fc734df0428caf50f4878ea5774e494b234ca0fcf1ee19f39911` |
+| Instrumentation APK | `319170af6e2cadeeabfe7d813d75c0be5a9f6067d2c94b75489509b97682c0cd` |
+| Packaged x86_64 JNI | `9430fcd79dba9ccd5d3290d031de750bc72cf8bd6f1a4d765da5eacb377e013c` |
+| Refreshed Linux fixture | `4b1bcd69a410f9a830e813d9457aa0a55a8a507d762c208aad42a1092ab8f8fa` |
+| JNI `.text` dump | `51cac321fa540baff3c5069021efa67c68dc2f332193a3d12ab822d8e2923ddb` |
+
+The packaged JNI is byte-identical to Gradle's stripped JNI output. Its `.text`
+dump matches the cached native build validated for `7b59625f`; subsequent changes
+are test/documentation-only. No fresh native cross-compilation was needed here.
+
+| Check | Result |
+| --- | --- |
+| Android unit task | Gradle accepted existing results as up-to-date; not a new test execution |
+| Android lint | Pass |
+| App assembly | Pass; native merge/strip/package tasks executed |
+| Instrumentation assembly | Up-to-date; no device instrumentation executed |
+| Linux fixture | Offline locked build passes; two Cargo jobs |
+| Storage before builds | 9,072,752 KiB under `/tmp/p2p-vpn-*`, below 10 GiB |
+| Storage after packaging and extraction | 9,118,752 KiB; recheck before emulator provisioning |
+| Device use | None |
+
+Logs: `/tmp/p2p-vpn-sustained-android-fixture-build.log` and
+`/tmp/p2p-vpn-sustained-android-packaging.log`. Their SHA-256 values are
+`a8b77a8b36564cdb8be71ebb8457d9357a283f74a7bf671d66d30247c15af022` and
+`6f2cd04fbaf247aaed161b5584562d1dce535c0e186877970ebde2510b7d0c99` respectively.
+
+The existing JNI init script selects the cached native staging symlink. Packaging
+uses `--offline --no-daemon --max-workers=2 -Dorg.gradle.parallel=false` with
+`:app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest`.
 
 ## Collector Audit
 
@@ -70,7 +108,7 @@ launch the historical scenario unchanged for this goal's no-public-WAN boundary.
 
 ## Next Work
 
-1. Refresh cached JNI packaging and the Linux fixture; verify the APK's packaged native code against the selected build.
+1. Preserve refreshed artifact hashes and verify them again before emulator admission.
 2. Add the cheap OS/resource collector and measured collector-on/off controls.
 3. Freeze S7's 30-second warmup, 300-second idle/load windows, five independent transitions, actual offered load and watchdogs.
 4. Require healthy sibling traffic and identity continuity while the other network is disabled or unavailable.

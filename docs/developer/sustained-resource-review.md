@@ -44,7 +44,7 @@ No physical device or deployed host is authorized for this work.
 | [Churn retirement investigation](churn-connection-retirement.md) | Cycle-three failure reproduced; fix, dispatch regressions, smoke and paired full captures pass | Whole-runtime resource attribution and other workloads remain open |
 | [Kademlia acceptance](kademlia-workstream-acceptance.md) | Enforcement and scoped recovery fixes | RM-2 sampling, RM-3 unequal work, RM-4 backend confounding, RM-5 allocation attribution |
 | [Android lifecycle](android-lifecycle-audit.md) | Ownership regressions and multi-network restoration | Sustained CPU/memory and physical battery behavior |
-| [Android resource preflight](sustained-android-review.md) | Cached capabilities available; artifact and collector reuse limits audited without device execution | Refresh native packaging/fixture, enforce private egress, add sustained collector and run S7 |
+| [Android resource preflight](sustained-android-review.md) | Cached capabilities pass; APK/fixture refreshed and packaged native code verified without device execution | Enforce private egress, add sustained collector and run S7 |
 
 Retain historical failures, censoring and sampling gaps. Missing observations
 are not zero activity. Reopen completed ownership/enforcement work only with
