@@ -1,0 +1,6368 @@
+{
+  "schema_version": 1,
+  "complete": true,
+  "binary_sha256": "ce9dd5655f18717a1f84f6bdfb848d879d5845f2fe426795182945856e85d486",
+  "all_residual_rows_equal": true,
+  "runs": [
+    {
+      "dir": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.74c16fad42b6494e",
+      "rounds": 1,
+      "seconds": 41.05,
+      "series": {
+        "complete": true,
+        "completed_rounds": 1,
+        "requested_rounds": 1
+      },
+      "roles": [
+        {
+          "role": "a",
+          "inventory": [
+            {
+              "stage": "before_child",
+              "pid": 18,
+              "rows": [
+                [
+                  1,
+                  7
+                ],
+                [
+                  2,
+                  24
+                ],
+                [
+                  3,
+                  69
+                ],
+                [
+                  4,
+                  61
+                ],
+                [
+                  5,
+                  41
+                ],
+                [
+                  6,
+                  53
+                ],
+                [
+                  7,
+                  101
+                ],
+                [
+                  8,
+                  15
+                ],
+                [
+                  9,
+                  2
+                ],
+                [
+                  10,
+                  3
+                ],
+                [
+                  11,
+                  1
+                ],
+                [
+                  12,
+                  1
+                ],
+                [
+                  13,
+                  1
+                ],
+                [
+                  14,
+                  1
+                ],
+                [
+                  16,
+                  3
+                ],
+                [
+                  17,
+                  6
+                ],
+                [
+                  18,
+                  1
+                ],
+                [
+                  19,
+                  1
+                ],
+                [
+                  21,
+                  1
+                ],
+                [
+                  22,
+                  1
+                ],
+                [
+                  24,
+                  1
+                ],
+                [
+                  47,
+                  3
+                ],
+                [
+                  48,
+                  5
+                ],
+                [
+                  52,
+                  1
+                ],
+                [
+                  62,
+                  1
+                ],
+                [
+                  63,
+                  1
+                ],
+                [
+                  68,
+                  1
+                ],
+                [
+                  92,
+                  1
+                ],
+                [
+                  93,
+                  1
+                ],
+                [
+                  96,
+                  2
+                ],
+                [
+                  120,
+                  1
+                ],
+                [
+                  136,
+                  1
+                ],
+                [
+                  148,
+                  1
+                ],
+                [
+                  184,
+                  1
+                ],
+                [
+                  312,
+                  1
+                ],
+                [
+                  512,
+                  1
+                ],
+                [
+                  544,
+                  2
+                ],
+                [
+                  608,
+                  1
+                ],
+                [
+                  640,
+                  1
+                ],
+                [
+                  1024,
+                  1
+                ],
+                [
+                  1072,
+                  1
+                ],
+                [
+                  12560,
+                  1
+                ]
+              ],
+              "oversized_blocks": 0,
+              "oversized_bytes": 0,
+              "total_blocks": 423,
+              "total_bytes": 21615,
+              "failures": 0,
+              "coherent": true,
+              "truncated": false
+            },
+            {
+              "stage": "child_returned",
+              "pid": 18,
+              "rows": [
+                [
+                  1,
+                  7
+                ],
+                [
+                  2,
+                  24
+                ],
+                [
+                  3,
+                  69
+                ],
+                [
+                  4,
+                  61
+                ],
+                [
+                  5,
+                  41
+                ],
+                [
+                  6,
+                  53
+                ],
+                [
+                  7,
+                  101
+                ],
+                [
+                  8,
+                  15
+                ],
+                [
+                  9,
+                  2
+                ],
+                [
+                  10,
+                  3
+                ],
+                [
+                  11,
+                  1
+                ],
+                [
+                  12,
+                  1
+                ],
+                [
+                  13,
+                  2
+                ],
+                [
+                  14,
+                  2
+                ],
+                [
+                  16,
+                  3
+                ],
+                [
+                  17,
+                  6
+                ],
+                [
+                  18,
+                  1
+                ],
+                [
+                  19,
+                  1
+                ],
+                [
+                  21,
+                  1
+                ],
+                [
+                  22,
+                  1
+                ],
+                [
+                  24,
+                  3
+                ],
+                [
+                  32,
+                  2
+                ],
+                [
+                  40,
+                  1
+                ],
+                [
+                  47,
+                  3
+                ],
+                [
+                  48,
+                  7
+                ],
+                [
+                  52,
+                  1
+                ],
+                [
+                  62,
+                  1
+                ],
+                [
+                  63,
+                  1
+                ],
+                [
+                  68,
+                  1
+                ],
+                [
+                  92,
+                  1
+                ],
+                [
+                  93,
+                  1
+                ],
+                [
+                  96,
+                  2
+                ],
+                [
+                  112,
+                  1
+                ],
+                [
+                  120,
+                  1
+                ],
+                [
+                  136,
+                  1
+                ],
+                [
+                  148,
+                  1
+                ],
+                [
+                  184,
+                  1
+                ],
+                [
+                  312,
+                  1
+                ],
+                [
+                  336,
+                  65
+                ],
+                [
+                  352,
+                  1
+                ],
+                [
+                  368,
+                  1
+                ],
+                [
+                  512,
+                  1
+                ],
+                [
+                  544,
+                  2
+                ],
+                [
+                  608,
+                  1
+                ],
+                [
+                  640,
+                  2
+                ],
+                [
+                  1024,
+                  2
+                ],
+                [
+                  1072,
+                  1
+                ],
+                [
+                  2048,
+                  1
+                ],
+                [
+                  2072,
+                  1
+                ],
+                [
+                  2304,
+                  1
+                ],
+                [
+                  8192,
+                  1
+                ],
+                [
+                  12560,
+                  1
+                ],
+                [
+                  20480,
+                  1
+                ]
+              ],
+              "oversized_blocks": 0,
+              "oversized_bytes": 0,
+              "total_blocks": 507,
+              "total_bytes": 81322,
+              "failures": 0,
+              "coherent": true,
+              "truncated": false
+            },
+            {
+              "stage": "child_settled",
+              "pid": 18,
+              "rows": [
+                [
+                  1,
+                  7
+                ],
+                [
+                  2,
+                  24
+                ],
+                [
+                  3,
+                  69
+                ],
+                [
+                  4,
+                  61
+                ],
+                [
+                  5,
+                  41
+                ],
+                [
+                  6,
+                  53
+                ],
+                [
+                  7,
+                  101
+                ],
+                [
+                  8,
+                  15
+                ],
+                [
+                  9,
+                  2
+                ],
+                [
+                  10,
+                  3
+                ],
+                [
+                  11,
+                  1
+                ],
+                [
+                  12,
+                  1
+                ],
+                [
+                  13,
+                  2
+                ],
+                [
+                  14,
+                  2
+                ],
+                [
+                  16,
+                  3
+                ],
+                [
+                  17,
+                  6
+                ],
+                [
+                  18,
+                  1
+                ],
+                [
+                  19,
+                  1
+                ],
+                [
+                  21,
+                  1
+                ],
+                [
+                  22,
+                  1
+                ],
+                [
+                  24,
+                  3
+                ],
+                [
+                  32,
+                  2
+                ],
+                [
+                  40,
+                  1
+                ],
+                [
+                  47,
+                  3
+                ],
+                [
+                  48,
+                  7
+                ],
+                [
+                  52,
+                  1
+                ],
+                [
+                  62,
+                  1
+                ],
+                [
+                  63,
+                  1
+                ],
+                [
+                  68,
+                  1
+                ],
+                [
+                  92,
+                  1
+                ],
+                [
+                  93,
+                  1
+                ],
+                [
+                  96,
+                  2
+                ],
+                [
+                  112,
+                  1
+                ],
+                [
+                  120,
+                  1
+                ],
+                [
+                  136,
+                  1
+                ],
+                [
+                  148,
+                  1
+                ],
+                [
+                  184,
+                  1
+                ],
+                [
+                  312,
+                  1
+                ],
+                [
+                  336,
+                  65
+                ],
+                [
+                  352,
+                  1
+                ],
+                [
+                  368,
+                  1
+                ],
+                [
+                  512,
+                  1
+                ],
+                [
+                  544,
+                  2
+                ],
+                [
+                  608,
+                  1
+                ],
+                [
+                  640,
+                  2
+                ],
+                [
+                  1024,
+                  2
+                ],
+                [
+                  1072,
+                  1
+                ],
+                [
+                  2048,
+                  1
+                ],
+                [
+                  2072,
+                  1
+                ],
+                [
+                  2304,
+                  1
+                ],
+                [
+                  8192,
+                  1
+                ],
+                [
+                  12560,
+                  1
+                ],
+                [
+                  20480,
+                  1
+                ]
+              ],
+              "oversized_blocks": 0,
+              "oversized_bytes": 0,
+              "total_blocks": 507,
+              "total_bytes": 81322,
+              "failures": 0,
+              "coherent": true,
+              "truncated": false
+            }
+          ],
+          "residual": [
+            [
+              13,
+              1
+            ],
+            [
+              14,
+              1
+            ],
+            [
+              24,
+              2
+            ],
+            [
+              32,
+              2
+            ],
+            [
+              40,
+              1
+            ],
+            [
+              48,
+              2
+            ],
+            [
+              112,
+              1
+            ],
+            [
+              336,
+              65
+            ],
+            [
+              352,
+              1
+            ],
+            [
+              368,
+              1
+            ],
+            [
+              640,
+              1
+            ],
+            [
+              1024,
+              1
+            ],
+            [
+              2048,
+              1
+            ],
+            [
+              2072,
+              1
+            ],
+            [
+              2304,
+              1
+            ],
+            [
+              8192,
+              1
+            ],
+            [
+              20480,
+              1
+            ]
+          ],
+          "bytes": 59707,
+          "blocks": 84
+        },
+        {
+          "role": "b",
+          "inventory": [
+            {
+              "stage": "before_child",
+              "pid": 19,
+              "rows": [
+                [
+                  1,
+                  7
+                ],
+                [
+                  2,
+                  24
+                ],
+                [
+                  3,
+                  69
+                ],
+                [
+                  4,
+                  61
+                ],
+                [
+                  5,
+                  41
+                ],
+                [
+                  6,
+                  53
+                ],
+                [
+                  7,
+                  101
+                ],
+                [
+                  8,
+                  15
+                ],
+                [
+                  9,
+                  2
+                ],
+                [
+                  10,
+                  3
+                ],
+                [
+                  11,
+                  1
+                ],
+                [
+                  12,
+                  1
+                ],
+                [
+                  13,
+                  1
+                ],
+                [
+                  14,
+                  1
+                ],
+                [
+                  16,
+                  3
+                ],
+                [
+                  17,
+                  6
+                ],
+                [
+                  18,
+                  1
+                ],
+                [
+                  19,
+                  1
+                ],
+                [
+                  21,
+                  1
+                ],
+                [
+                  22,
+                  1
+                ],
+                [
+                  24,
+                  1
+                ],
+                [
+                  47,
+                  3
+                ],
+                [
+                  48,
+                  5
+                ],
+                [
+                  52,
+                  1
+                ],
+                [
+                  62,
+                  1
+                ],
+                [
+                  63,
+                  1
+                ],
+                [
+                  68,
+                  1
+                ],
+                [
+                  92,
+                  1
+                ],
+                [
+                  93,
+                  1
+                ],
+                [
+                  96,
+                  2
+                ],
+                [
+                  120,
+                  1
+                ],
+                [
+                  136,
+                  1
+                ],
+                [
+                  148,
+                  1
+                ],
+                [
+                  184,
+                  1
+                ],
+                [
+                  312,
+                  1
+                ],
+                [
+                  512,
+                  1
+                ],
+                [
+                  544,
+                  2
+                ],
+                [
+                  608,
+                  1
+                ],
+                [
+                  640,
+                  1
+                ],
+                [
+                  1024,
+                  1
+                ],
+                [
+                  1072,
+                  1
+                ],
+                [
+                  12560,
+                  1
+                ]
+              ],
+              "oversized_blocks": 0,
+              "oversized_bytes": 0,
+              "total_blocks": 423,
+              "total_bytes": 21615,
+              "failures": 0,
+              "coherent": true,
+              "truncated": false
+            },
+            {
+              "stage": "child_returned",
+              "pid": 19,
+              "rows": [
+                [
+                  1,
+                  7
+                ],
+                [
+                  2,
+                  24
+                ],
+                [
+                  3,
+                  69
+                ],
+                [
+                  4,
+                  61
+                ],
+                [
+                  5,
+                  41
+                ],
+                [
+                  6,
+                  53
+                ],
+                [
+                  7,
+                  101
+                ],
+                [
+                  8,
+                  15
+                ],
+                [
+                  9,
+                  2
+                ],
+                [
+                  10,
+                  3
+                ],
+                [
+                  11,
+                  1
+                ],
+                [
+                  12,
+                  1
+                ],
+                [
+                  13,
+                  2
+                ],
+                [
+                  14,
+                  2
+                ],
+                [
+                  16,
+                  3
+                ],
+                [
+                  17,
+                  6
+                ],
+                [
+                  18,
+                  1
+                ],
+                [
+                  19,
+                  1
+                ],
+                [
+                  21,
+                  1
+                ],
+                [
+                  22,
+                  1
+                ],
+                [
+                  24,
+                  3
+                ],
+                [
+                  32,
+                  2
+                ],
+                [
+                  40,
+                  1
+                ],
+                [
+                  47,
+                  3
+                ],
+                [
+                  48,
+                  7
+                ],
+                [
+                  52,
+                  1
+                ],
+                [
+                  62,
+                  1
+                ],
+                [
+                  63,
+                  1
+                ],
+                [
+                  68,
+                  1
+                ],
+                [
+                  92,
+                  1
+                ],
+                [
+                  93,
+                  1
+                ],
+                [
+                  96,
+                  2
+                ],
+                [
+                  112,
+                  1
+                ],
+                [
+                  120,
+                  1
+                ],
+                [
+                  136,
+                  1
+                ],
+                [
+                  148,
+                  1
+                ],
+                [
+                  184,
+                  1
+                ],
+                [
+                  312,
+                  1
+                ],
+                [
+                  336,
+                  65
+                ],
+                [
+                  352,
+                  1
+                ],
+                [
+                  368,
+                  1
+                ],
+                [
+                  512,
+                  1
+                ],
+                [
+                  544,
+                  2
+                ],
+                [
+                  608,
+                  1
+                ],
+                [
+                  640,
+                  2
+                ],
+                [
+                  1024,
+                  2
+                ],
+                [
+                  1072,
+                  1
+                ],
+                [
+                  2048,
+                  1
+                ],
+                [
+                  2072,
+                  1
+                ],
+                [
+                  2304,
+                  1
+                ],
+                [
+                  8192,
+                  1
+                ],
+                [
+                  12560,
+                  1
+                ],
+                [
+                  20480,
+                  1
+                ]
+              ],
+              "oversized_blocks": 0,
+              "oversized_bytes": 0,
+              "total_blocks": 507,
+              "total_bytes": 81322,
+              "failures": 0,
+              "coherent": true,
+              "truncated": false
+            },
+            {
+              "stage": "child_settled",
+              "pid": 19,
+              "rows": [
+                [
+                  1,
+                  7
+                ],
+                [
+                  2,
+                  24
+                ],
+                [
+                  3,
+                  69
+                ],
+                [
+                  4,
+                  61
+                ],
+                [
+                  5,
+                  41
+                ],
+                [
+                  6,
+                  53
+                ],
+                [
+                  7,
+                  101
+                ],
+                [
+                  8,
+                  15
+                ],
+                [
+                  9,
+                  2
+                ],
+                [
+                  10,
+                  3
+                ],
+                [
+                  11,
+                  1
+                ],
+                [
+                  12,
+                  1
+                ],
+                [
+                  13,
+                  2
+                ],
+                [
+                  14,
+                  2
+                ],
+                [
+                  16,
+                  3
+                ],
+                [
+                  17,
+                  6
+                ],
+                [
+                  18,
+                  1
+                ],
+                [
+                  19,
+                  1
+                ],
+                [
+                  21,
+                  1
+                ],
+                [
+                  22,
+                  1
+                ],
+                [
+                  24,
+                  3
+                ],
+                [
+                  32,
+                  2
+                ],
+                [
+                  40,
+                  1
+                ],
+                [
+                  47,
+                  3
+                ],
+                [
+                  48,
+                  7
+                ],
+                [
+                  52,
+                  1
+                ],
+                [
+                  62,
+                  1
+                ],
+                [
+                  63,
+                  1
+                ],
+                [
+                  68,
+                  1
+                ],
+                [
+                  92,
+                  1
+                ],
+                [
+                  93,
+                  1
+                ],
+                [
+                  96,
+                  2
+                ],
+                [
+                  112,
+                  1
+                ],
+                [
+                  120,
+                  1
+                ],
+                [
+                  136,
+                  1
+                ],
+                [
+                  148,
+                  1
+                ],
+                [
+                  184,
+                  1
+                ],
+                [
+                  312,
+                  1
+                ],
+                [
+                  336,
+                  65
+                ],
+                [
+                  352,
+                  1
+                ],
+                [
+                  368,
+                  1
+                ],
+                [
+                  512,
+                  1
+                ],
+                [
+                  544,
+                  2
+                ],
+                [
+                  608,
+                  1
+                ],
+                [
+                  640,
+                  2
+                ],
+                [
+                  1024,
+                  2
+                ],
+                [
+                  1072,
+                  1
+                ],
+                [
+                  2048,
+                  1
+                ],
+                [
+                  2072,
+                  1
+                ],
+                [
+                  2304,
+                  1
+                ],
+                [
+                  8192,
+                  1
+                ],
+                [
+                  12560,
+                  1
+                ],
+                [
+                  20480,
+                  1
+                ]
+              ],
+              "oversized_blocks": 0,
+              "oversized_bytes": 0,
+              "total_blocks": 507,
+              "total_bytes": 81322,
+              "failures": 0,
+              "coherent": true,
+              "truncated": false
+            }
+          ],
+          "residual": [
+            [
+              13,
+              1
+            ],
+            [
+              14,
+              1
+            ],
+            [
+              24,
+              2
+            ],
+            [
+              32,
+              2
+            ],
+            [
+              40,
+              1
+            ],
+            [
+              48,
+              2
+            ],
+            [
+              112,
+              1
+            ],
+            [
+              336,
+              65
+            ],
+            [
+              352,
+              1
+            ],
+            [
+              368,
+              1
+            ],
+            [
+              640,
+              1
+            ],
+            [
+              1024,
+              1
+            ],
+            [
+              2048,
+              1
+            ],
+            [
+              2072,
+              1
+            ],
+            [
+              2304,
+              1
+            ],
+            [
+              8192,
+              1
+            ],
+            [
+              20480,
+              1
+            ]
+          ],
+          "bytes": 59707,
+          "blocks": 84
+        }
+      ],
+      "artifacts": [
+        {
+          "sha256": "c56ce509225b1d0f3e5dd805d00a630c820341c1637bc00e886e42a87567f9f0",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.74c16fad42b6494e/queue-pressure.json"
+        },
+        {
+          "sha256": "41e6a8ebccb377f429d3520686ab6faf6c3130cdb2b1059f672c171ad4c310df",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.74c16fad42b6494e/recovery-ping-a.stdout"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.74c16fad42b6494e/recovery-ping-b.stderr"
+        },
+        {
+          "sha256": "782130a3ed8e5501c379f5900a684ecac9ffccb785f96fad1df219aa74de860f",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.74c16fad42b6494e/pressure-ping.log"
+        },
+        {
+          "sha256": "5e004d3eae7bf39adc01f18cd26387eb79d86ea81d5e4a9a8996447d84558d57",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.74c16fad42b6494e/recovery-ping-b.stdout"
+        },
+        {
+          "sha256": "b8749fb37d04694b0353bc3014a58736534c98211d58e46c647b0f17b499f17a",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.74c16fad42b6494e/node-a.log"
+        },
+        {
+          "sha256": "b24d6d33736ecd5604a4b17bc9c6481039fac362bb7df044ef1c10a2bfd21db6",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.74c16fad42b6494e/ready-b"
+        },
+        {
+          "sha256": "e88c80f6f7769a6028e99e5a88760d8f267ac095626f02a3d86c07860f8e5c11",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.74c16fad42b6494e/repro-metadata.txt"
+        },
+        {
+          "sha256": "272740f2240ae0ce888bd8423bcf1d6251465c382377d48eaa2ed5553c4bae9b",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.74c16fad42b6494e/queue-pressure-partial.json"
+        },
+        {
+          "sha256": "cced28c6dc3f99c2396a5eaad732bf6b28142335892b1cd0e6af6cdb53f5ccfa",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.74c16fad42b6494e/start-a"
+        },
+        {
+          "sha256": "b24d6d33736ecd5604a4b17bc9c6481039fac362bb7df044ef1c10a2bfd21db6",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.74c16fad42b6494e/ready-a"
+        },
+        {
+          "sha256": "56ef96e15d26b140b28a3a191cd8fdc69244ab71040bdc7853e6bc5488c6bc90",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.74c16fad42b6494e/queue-pressure-drain.json"
+        },
+        {
+          "sha256": "cced28c6dc3f99c2396a5eaad732bf6b28142335892b1cd0e6af6cdb53f5ccfa",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.74c16fad42b6494e/start-b"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.74c16fad42b6494e/recovery-ping-a.stderr"
+        },
+        {
+          "sha256": "f5d7db2b6038dde84976c3ef98e20a14156c880a9d09b540034a4edcc5609541",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.74c16fad42b6494e/recovery-ping-a.json"
+        },
+        {
+          "sha256": "085730d77eae47d14ae55d27baeec0ab4416401c9b32c9abb660201703c33fa1",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.74c16fad42b6494e/node-b.log"
+        },
+        {
+          "sha256": "9e055b5531a5934b2b9bae2345c3f8fed6417a39891acc0a1b210885038bb2c4",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.74c16fad42b6494e/recovery-ping-b.json"
+        },
+        {
+          "sha256": "6cf8efbb6bfdcb8a0b332b1041698bc1c3c33b50edea20b853e24578441d17f7",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.74c16fad42b6494e/repro-commands.sh"
+        },
+        {
+          "sha256": "6fdfbf0351d25e715890882cce401c9f13832d498d3e6817ba70165dd2ad6d3d",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.74c16fad42b6494e/queue-pressure-series.json"
+        },
+        {
+          "sha256": "21e4e735e35de434cd659dc72ca6d826c8c454490b66a9fb596be666e9bad381",
+          "path": "/tmp/p2p-vpn-pressure-inventory-1.log"
+        }
+      ]
+    },
+    {
+      "dir": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79",
+      "rounds": 5,
+      "seconds": 161.92,
+      "series": {
+        "complete": true,
+        "completed_rounds": 5,
+        "requested_rounds": 5
+      },
+      "roles": [
+        {
+          "role": "a",
+          "inventory": [
+            {
+              "stage": "before_child",
+              "pid": 18,
+              "rows": [
+                [
+                  1,
+                  7
+                ],
+                [
+                  2,
+                  24
+                ],
+                [
+                  3,
+                  69
+                ],
+                [
+                  4,
+                  61
+                ],
+                [
+                  5,
+                  41
+                ],
+                [
+                  6,
+                  53
+                ],
+                [
+                  7,
+                  101
+                ],
+                [
+                  8,
+                  15
+                ],
+                [
+                  9,
+                  2
+                ],
+                [
+                  10,
+                  3
+                ],
+                [
+                  11,
+                  1
+                ],
+                [
+                  12,
+                  1
+                ],
+                [
+                  13,
+                  1
+                ],
+                [
+                  14,
+                  1
+                ],
+                [
+                  16,
+                  3
+                ],
+                [
+                  17,
+                  6
+                ],
+                [
+                  18,
+                  1
+                ],
+                [
+                  19,
+                  1
+                ],
+                [
+                  21,
+                  1
+                ],
+                [
+                  22,
+                  1
+                ],
+                [
+                  24,
+                  1
+                ],
+                [
+                  47,
+                  3
+                ],
+                [
+                  48,
+                  5
+                ],
+                [
+                  52,
+                  1
+                ],
+                [
+                  62,
+                  1
+                ],
+                [
+                  63,
+                  1
+                ],
+                [
+                  68,
+                  1
+                ],
+                [
+                  92,
+                  1
+                ],
+                [
+                  93,
+                  1
+                ],
+                [
+                  96,
+                  2
+                ],
+                [
+                  120,
+                  1
+                ],
+                [
+                  136,
+                  1
+                ],
+                [
+                  148,
+                  1
+                ],
+                [
+                  184,
+                  1
+                ],
+                [
+                  312,
+                  1
+                ],
+                [
+                  512,
+                  1
+                ],
+                [
+                  544,
+                  2
+                ],
+                [
+                  608,
+                  1
+                ],
+                [
+                  640,
+                  1
+                ],
+                [
+                  1024,
+                  1
+                ],
+                [
+                  1072,
+                  1
+                ],
+                [
+                  12560,
+                  1
+                ]
+              ],
+              "oversized_blocks": 0,
+              "oversized_bytes": 0,
+              "total_blocks": 423,
+              "total_bytes": 21615,
+              "failures": 0,
+              "coherent": true,
+              "truncated": false
+            },
+            {
+              "stage": "child_returned",
+              "pid": 18,
+              "rows": [
+                [
+                  1,
+                  7
+                ],
+                [
+                  2,
+                  24
+                ],
+                [
+                  3,
+                  69
+                ],
+                [
+                  4,
+                  61
+                ],
+                [
+                  5,
+                  41
+                ],
+                [
+                  6,
+                  53
+                ],
+                [
+                  7,
+                  101
+                ],
+                [
+                  8,
+                  15
+                ],
+                [
+                  9,
+                  2
+                ],
+                [
+                  10,
+                  3
+                ],
+                [
+                  11,
+                  1
+                ],
+                [
+                  12,
+                  1
+                ],
+                [
+                  13,
+                  2
+                ],
+                [
+                  14,
+                  2
+                ],
+                [
+                  16,
+                  3
+                ],
+                [
+                  17,
+                  6
+                ],
+                [
+                  18,
+                  1
+                ],
+                [
+                  19,
+                  1
+                ],
+                [
+                  21,
+                  1
+                ],
+                [
+                  22,
+                  1
+                ],
+                [
+                  24,
+                  3
+                ],
+                [
+                  32,
+                  2
+                ],
+                [
+                  40,
+                  1
+                ],
+                [
+                  47,
+                  3
+                ],
+                [
+                  48,
+                  7
+                ],
+                [
+                  52,
+                  1
+                ],
+                [
+                  62,
+                  1
+                ],
+                [
+                  63,
+                  1
+                ],
+                [
+                  68,
+                  1
+                ],
+                [
+                  92,
+                  1
+                ],
+                [
+                  93,
+                  1
+                ],
+                [
+                  96,
+                  2
+                ],
+                [
+                  112,
+                  1
+                ],
+                [
+                  120,
+                  1
+                ],
+                [
+                  136,
+                  1
+                ],
+                [
+                  148,
+                  1
+                ],
+                [
+                  184,
+                  1
+                ],
+                [
+                  312,
+                  1
+                ],
+                [
+                  336,
+                  65
+                ],
+                [
+                  352,
+                  1
+                ],
+                [
+                  368,
+                  1
+                ],
+                [
+                  512,
+                  1
+                ],
+                [
+                  544,
+                  2
+                ],
+                [
+                  608,
+                  1
+                ],
+                [
+                  640,
+                  2
+                ],
+                [
+                  1024,
+                  2
+                ],
+                [
+                  1072,
+                  1
+                ],
+                [
+                  2048,
+                  1
+                ],
+                [
+                  2072,
+                  1
+                ],
+                [
+                  2304,
+                  1
+                ],
+                [
+                  8192,
+                  1
+                ],
+                [
+                  12560,
+                  1
+                ],
+                [
+                  20480,
+                  1
+                ]
+              ],
+              "oversized_blocks": 0,
+              "oversized_bytes": 0,
+              "total_blocks": 507,
+              "total_bytes": 81322,
+              "failures": 0,
+              "coherent": true,
+              "truncated": false
+            },
+            {
+              "stage": "child_settled",
+              "pid": 18,
+              "rows": [
+                [
+                  1,
+                  7
+                ],
+                [
+                  2,
+                  24
+                ],
+                [
+                  3,
+                  69
+                ],
+                [
+                  4,
+                  61
+                ],
+                [
+                  5,
+                  41
+                ],
+                [
+                  6,
+                  53
+                ],
+                [
+                  7,
+                  101
+                ],
+                [
+                  8,
+                  15
+                ],
+                [
+                  9,
+                  2
+                ],
+                [
+                  10,
+                  3
+                ],
+                [
+                  11,
+                  1
+                ],
+                [
+                  12,
+                  1
+                ],
+                [
+                  13,
+                  2
+                ],
+                [
+                  14,
+                  2
+                ],
+                [
+                  16,
+                  3
+                ],
+                [
+                  17,
+                  6
+                ],
+                [
+                  18,
+                  1
+                ],
+                [
+                  19,
+                  1
+                ],
+                [
+                  21,
+                  1
+                ],
+                [
+                  22,
+                  1
+                ],
+                [
+                  24,
+                  3
+                ],
+                [
+                  32,
+                  2
+                ],
+                [
+                  40,
+                  1
+                ],
+                [
+                  47,
+                  3
+                ],
+                [
+                  48,
+                  7
+                ],
+                [
+                  52,
+                  1
+                ],
+                [
+                  62,
+                  1
+                ],
+                [
+                  63,
+                  1
+                ],
+                [
+                  68,
+                  1
+                ],
+                [
+                  92,
+                  1
+                ],
+                [
+                  93,
+                  1
+                ],
+                [
+                  96,
+                  2
+                ],
+                [
+                  112,
+                  1
+                ],
+                [
+                  120,
+                  1
+                ],
+                [
+                  136,
+                  1
+                ],
+                [
+                  148,
+                  1
+                ],
+                [
+                  184,
+                  1
+                ],
+                [
+                  312,
+                  1
+                ],
+                [
+                  336,
+                  65
+                ],
+                [
+                  352,
+                  1
+                ],
+                [
+                  368,
+                  1
+                ],
+                [
+                  512,
+                  1
+                ],
+                [
+                  544,
+                  2
+                ],
+                [
+                  608,
+                  1
+                ],
+                [
+                  640,
+                  2
+                ],
+                [
+                  1024,
+                  2
+                ],
+                [
+                  1072,
+                  1
+                ],
+                [
+                  2048,
+                  1
+                ],
+                [
+                  2072,
+                  1
+                ],
+                [
+                  2304,
+                  1
+                ],
+                [
+                  8192,
+                  1
+                ],
+                [
+                  12560,
+                  1
+                ],
+                [
+                  20480,
+                  1
+                ]
+              ],
+              "oversized_blocks": 0,
+              "oversized_bytes": 0,
+              "total_blocks": 507,
+              "total_bytes": 81322,
+              "failures": 0,
+              "coherent": true,
+              "truncated": false
+            }
+          ],
+          "residual": [
+            [
+              13,
+              1
+            ],
+            [
+              14,
+              1
+            ],
+            [
+              24,
+              2
+            ],
+            [
+              32,
+              2
+            ],
+            [
+              40,
+              1
+            ],
+            [
+              48,
+              2
+            ],
+            [
+              112,
+              1
+            ],
+            [
+              336,
+              65
+            ],
+            [
+              352,
+              1
+            ],
+            [
+              368,
+              1
+            ],
+            [
+              640,
+              1
+            ],
+            [
+              1024,
+              1
+            ],
+            [
+              2048,
+              1
+            ],
+            [
+              2072,
+              1
+            ],
+            [
+              2304,
+              1
+            ],
+            [
+              8192,
+              1
+            ],
+            [
+              20480,
+              1
+            ]
+          ],
+          "bytes": 59707,
+          "blocks": 84
+        },
+        {
+          "role": "b",
+          "inventory": [
+            {
+              "stage": "before_child",
+              "pid": 19,
+              "rows": [
+                [
+                  1,
+                  7
+                ],
+                [
+                  2,
+                  24
+                ],
+                [
+                  3,
+                  69
+                ],
+                [
+                  4,
+                  61
+                ],
+                [
+                  5,
+                  41
+                ],
+                [
+                  6,
+                  53
+                ],
+                [
+                  7,
+                  101
+                ],
+                [
+                  8,
+                  15
+                ],
+                [
+                  9,
+                  2
+                ],
+                [
+                  10,
+                  3
+                ],
+                [
+                  11,
+                  1
+                ],
+                [
+                  12,
+                  1
+                ],
+                [
+                  13,
+                  1
+                ],
+                [
+                  14,
+                  1
+                ],
+                [
+                  16,
+                  3
+                ],
+                [
+                  17,
+                  6
+                ],
+                [
+                  18,
+                  1
+                ],
+                [
+                  19,
+                  1
+                ],
+                [
+                  21,
+                  1
+                ],
+                [
+                  22,
+                  1
+                ],
+                [
+                  24,
+                  1
+                ],
+                [
+                  47,
+                  3
+                ],
+                [
+                  48,
+                  5
+                ],
+                [
+                  52,
+                  1
+                ],
+                [
+                  62,
+                  1
+                ],
+                [
+                  63,
+                  1
+                ],
+                [
+                  68,
+                  1
+                ],
+                [
+                  92,
+                  1
+                ],
+                [
+                  93,
+                  1
+                ],
+                [
+                  96,
+                  2
+                ],
+                [
+                  120,
+                  1
+                ],
+                [
+                  136,
+                  1
+                ],
+                [
+                  148,
+                  1
+                ],
+                [
+                  184,
+                  1
+                ],
+                [
+                  312,
+                  1
+                ],
+                [
+                  512,
+                  1
+                ],
+                [
+                  544,
+                  2
+                ],
+                [
+                  608,
+                  1
+                ],
+                [
+                  640,
+                  1
+                ],
+                [
+                  1024,
+                  1
+                ],
+                [
+                  1072,
+                  1
+                ],
+                [
+                  12560,
+                  1
+                ]
+              ],
+              "oversized_blocks": 0,
+              "oversized_bytes": 0,
+              "total_blocks": 423,
+              "total_bytes": 21615,
+              "failures": 0,
+              "coherent": true,
+              "truncated": false
+            },
+            {
+              "stage": "child_returned",
+              "pid": 19,
+              "rows": [
+                [
+                  1,
+                  7
+                ],
+                [
+                  2,
+                  24
+                ],
+                [
+                  3,
+                  69
+                ],
+                [
+                  4,
+                  61
+                ],
+                [
+                  5,
+                  41
+                ],
+                [
+                  6,
+                  53
+                ],
+                [
+                  7,
+                  101
+                ],
+                [
+                  8,
+                  15
+                ],
+                [
+                  9,
+                  2
+                ],
+                [
+                  10,
+                  3
+                ],
+                [
+                  11,
+                  1
+                ],
+                [
+                  12,
+                  1
+                ],
+                [
+                  13,
+                  2
+                ],
+                [
+                  14,
+                  2
+                ],
+                [
+                  16,
+                  3
+                ],
+                [
+                  17,
+                  6
+                ],
+                [
+                  18,
+                  1
+                ],
+                [
+                  19,
+                  1
+                ],
+                [
+                  21,
+                  1
+                ],
+                [
+                  22,
+                  1
+                ],
+                [
+                  24,
+                  3
+                ],
+                [
+                  32,
+                  2
+                ],
+                [
+                  40,
+                  1
+                ],
+                [
+                  47,
+                  3
+                ],
+                [
+                  48,
+                  7
+                ],
+                [
+                  52,
+                  1
+                ],
+                [
+                  62,
+                  1
+                ],
+                [
+                  63,
+                  1
+                ],
+                [
+                  68,
+                  1
+                ],
+                [
+                  92,
+                  1
+                ],
+                [
+                  93,
+                  1
+                ],
+                [
+                  96,
+                  2
+                ],
+                [
+                  112,
+                  1
+                ],
+                [
+                  120,
+                  1
+                ],
+                [
+                  136,
+                  1
+                ],
+                [
+                  148,
+                  1
+                ],
+                [
+                  184,
+                  1
+                ],
+                [
+                  312,
+                  1
+                ],
+                [
+                  336,
+                  65
+                ],
+                [
+                  352,
+                  1
+                ],
+                [
+                  368,
+                  1
+                ],
+                [
+                  512,
+                  1
+                ],
+                [
+                  544,
+                  2
+                ],
+                [
+                  608,
+                  1
+                ],
+                [
+                  640,
+                  2
+                ],
+                [
+                  1024,
+                  2
+                ],
+                [
+                  1072,
+                  1
+                ],
+                [
+                  2048,
+                  1
+                ],
+                [
+                  2072,
+                  1
+                ],
+                [
+                  2304,
+                  1
+                ],
+                [
+                  8192,
+                  1
+                ],
+                [
+                  12560,
+                  1
+                ],
+                [
+                  20480,
+                  1
+                ]
+              ],
+              "oversized_blocks": 0,
+              "oversized_bytes": 0,
+              "total_blocks": 507,
+              "total_bytes": 81322,
+              "failures": 0,
+              "coherent": true,
+              "truncated": false
+            },
+            {
+              "stage": "child_settled",
+              "pid": 19,
+              "rows": [
+                [
+                  1,
+                  7
+                ],
+                [
+                  2,
+                  24
+                ],
+                [
+                  3,
+                  69
+                ],
+                [
+                  4,
+                  61
+                ],
+                [
+                  5,
+                  41
+                ],
+                [
+                  6,
+                  53
+                ],
+                [
+                  7,
+                  101
+                ],
+                [
+                  8,
+                  15
+                ],
+                [
+                  9,
+                  2
+                ],
+                [
+                  10,
+                  3
+                ],
+                [
+                  11,
+                  1
+                ],
+                [
+                  12,
+                  1
+                ],
+                [
+                  13,
+                  2
+                ],
+                [
+                  14,
+                  2
+                ],
+                [
+                  16,
+                  3
+                ],
+                [
+                  17,
+                  6
+                ],
+                [
+                  18,
+                  1
+                ],
+                [
+                  19,
+                  1
+                ],
+                [
+                  21,
+                  1
+                ],
+                [
+                  22,
+                  1
+                ],
+                [
+                  24,
+                  3
+                ],
+                [
+                  32,
+                  2
+                ],
+                [
+                  40,
+                  1
+                ],
+                [
+                  47,
+                  3
+                ],
+                [
+                  48,
+                  7
+                ],
+                [
+                  52,
+                  1
+                ],
+                [
+                  62,
+                  1
+                ],
+                [
+                  63,
+                  1
+                ],
+                [
+                  68,
+                  1
+                ],
+                [
+                  92,
+                  1
+                ],
+                [
+                  93,
+                  1
+                ],
+                [
+                  96,
+                  2
+                ],
+                [
+                  112,
+                  1
+                ],
+                [
+                  120,
+                  1
+                ],
+                [
+                  136,
+                  1
+                ],
+                [
+                  148,
+                  1
+                ],
+                [
+                  184,
+                  1
+                ],
+                [
+                  312,
+                  1
+                ],
+                [
+                  336,
+                  65
+                ],
+                [
+                  352,
+                  1
+                ],
+                [
+                  368,
+                  1
+                ],
+                [
+                  512,
+                  1
+                ],
+                [
+                  544,
+                  2
+                ],
+                [
+                  608,
+                  1
+                ],
+                [
+                  640,
+                  2
+                ],
+                [
+                  1024,
+                  2
+                ],
+                [
+                  1072,
+                  1
+                ],
+                [
+                  2048,
+                  1
+                ],
+                [
+                  2072,
+                  1
+                ],
+                [
+                  2304,
+                  1
+                ],
+                [
+                  8192,
+                  1
+                ],
+                [
+                  12560,
+                  1
+                ],
+                [
+                  20480,
+                  1
+                ]
+              ],
+              "oversized_blocks": 0,
+              "oversized_bytes": 0,
+              "total_blocks": 507,
+              "total_bytes": 81322,
+              "failures": 0,
+              "coherent": true,
+              "truncated": false
+            }
+          ],
+          "residual": [
+            [
+              13,
+              1
+            ],
+            [
+              14,
+              1
+            ],
+            [
+              24,
+              2
+            ],
+            [
+              32,
+              2
+            ],
+            [
+              40,
+              1
+            ],
+            [
+              48,
+              2
+            ],
+            [
+              112,
+              1
+            ],
+            [
+              336,
+              65
+            ],
+            [
+              352,
+              1
+            ],
+            [
+              368,
+              1
+            ],
+            [
+              640,
+              1
+            ],
+            [
+              1024,
+              1
+            ],
+            [
+              2048,
+              1
+            ],
+            [
+              2072,
+              1
+            ],
+            [
+              2304,
+              1
+            ],
+            [
+              8192,
+              1
+            ],
+            [
+              20480,
+              1
+            ]
+          ],
+          "bytes": 59707,
+          "blocks": 84
+        }
+      ],
+      "artifacts": [
+        {
+          "sha256": "8048f04bb205b7b0c9d52f569e5c1f74ec0c47b71f3c00a2e2c558bb452258eb",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/node-a.log"
+        },
+        {
+          "sha256": "b24d6d33736ecd5604a4b17bc9c6481039fac362bb7df044ef1c10a2bfd21db6",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/ready-b"
+        },
+        {
+          "sha256": "94632703d45f1cd78271fcf52f246b39d61e37dc1ece1a5dda8bf7ed43610da4",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-5/queue-pressure.json"
+        },
+        {
+          "sha256": "566a07d4b29270face375fbcdf6702ddc6079fa41290977ccb568d67a3e52fa9",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-5/recovery-ping-a.stdout"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-5/recovery-ping-b.stderr"
+        },
+        {
+          "sha256": "82320f2471abf1f58c4f76b815214f9fc0e6db568c24259054986e94683629b5",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-5/pressure-ping.log"
+        },
+        {
+          "sha256": "fc7dbff5483a18a524c44f03e90557b15e514809d2611daf23e30205fc333f81",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-5/recovery-ping-b.stdout"
+        },
+        {
+          "sha256": "489c9d737d04b87dcda3ab8d64eb843ef055cdd76b7705761accdf6a76ad1dc7",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-5/queue-pressure-partial.json"
+        },
+        {
+          "sha256": "0d57889655893262ec36e16e0c515a07bd52816ae9e509df0f426768fcf92a0e",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-5/queue-pressure-drain.json"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-5/recovery-ping-a.stderr"
+        },
+        {
+          "sha256": "86a30f0bdbd511f59b6085a45587c3a7c23c2ec236cb5e126444da9c1228ddab",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-5/recovery-ping-a.json"
+        },
+        {
+          "sha256": "303807ee6151a82da83a5f99c3c03478cff2019d2f552d35157cef5dab901545",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-5/recovery-ping-b.json"
+        },
+        {
+          "sha256": "2526672d18578b87dc957fe44023056df470db138e8ee68158c69e0b9e6d27bb",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/repro-metadata.txt"
+        },
+        {
+          "sha256": "cced28c6dc3f99c2396a5eaad732bf6b28142335892b1cd0e6af6cdb53f5ccfa",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/start-a"
+        },
+        {
+          "sha256": "b24d6d33736ecd5604a4b17bc9c6481039fac362bb7df044ef1c10a2bfd21db6",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/ready-a"
+        },
+        {
+          "sha256": "2b10335f5ed3599711a44ab0386164bac1d08b132b5ee983ff7d213f68a919cd",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-3/queue-pressure.json"
+        },
+        {
+          "sha256": "8369e012080307803a1741c4821b2db6065b0ad0b482b44a5fe3fbd3de2207b7",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-3/recovery-ping-a.stdout"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-3/recovery-ping-b.stderr"
+        },
+        {
+          "sha256": "dc8cb1e71c49a1c09cb47bdcc2f3af47c8aa703dea6101ef1424e5963a179c80",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-3/pressure-ping.log"
+        },
+        {
+          "sha256": "5705be5f148df4818f54f62dfa07d94e38fa1646e65c248ef378874fe2759ad5",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-3/recovery-ping-b.stdout"
+        },
+        {
+          "sha256": "c9b3642a1e440dd2affa9140bd4d5ce5f27fb1d5441e6bf36c298298c253aeb2",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-3/queue-pressure-partial.json"
+        },
+        {
+          "sha256": "43e3246a719b54829ad27404f4356aa175e67b545bbf2c034eebe46e3684a259",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-3/queue-pressure-drain.json"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-3/recovery-ping-a.stderr"
+        },
+        {
+          "sha256": "5c41aac596af641c5e4c2c26f52d308378ce042a3c953bf98f6f88942fa835b9",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-3/recovery-ping-a.json"
+        },
+        {
+          "sha256": "1b42cef7add847d0c3429743e42f2b9d64ca16cc145a0ffc7ea7bb0391feb531",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-3/recovery-ping-b.json"
+        },
+        {
+          "sha256": "cced28c6dc3f99c2396a5eaad732bf6b28142335892b1cd0e6af6cdb53f5ccfa",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/start-b"
+        },
+        {
+          "sha256": "332442cfd15bce9af1c9d1fc1667e57e7a588d38f4beb3116b2d532a378f781d",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-2/queue-pressure.json"
+        },
+        {
+          "sha256": "037adb69d845d844981d0e281a815955cdafd3950b96a74aa652056a1e5f8548",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-2/recovery-ping-a.stdout"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-2/recovery-ping-b.stderr"
+        },
+        {
+          "sha256": "8cdf68885e10571a7b726bac80f01abcb511532e8e543c6e528b4f4d94d248ee",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-2/pressure-ping.log"
+        },
+        {
+          "sha256": "c2ef2b7688e505836c95a346dbbc97127b77eb312305ec0cf467e8bc358e8e65",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-2/recovery-ping-b.stdout"
+        },
+        {
+          "sha256": "e924c6f62e9814be0e539ff7518af19544daff6fc849f25a9e2696de2b4ddf74",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-2/queue-pressure-partial.json"
+        },
+        {
+          "sha256": "b3bf288891f04c171a6c868ee06c99932b7543ef3cb725dbdef52cb2e6dc0072",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-2/queue-pressure-drain.json"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-2/recovery-ping-a.stderr"
+        },
+        {
+          "sha256": "91f08b97f411e651717ac5367d117803f9805aeb604f9b112df75c8319c9962a",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-2/recovery-ping-a.json"
+        },
+        {
+          "sha256": "8839e166c7ef61fce747df87e29e43b8cf8a296ac7e47c4e7d9782fbf9770a8c",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-2/recovery-ping-b.json"
+        },
+        {
+          "sha256": "7719da6866fe3b25a7d5fb6b621ff01657d4fe0c9afeccdc665dec8b8e94b051",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/node-b.log"
+        },
+        {
+          "sha256": "15595aef78e574fe736ee29ad3ac106409fa022bd8ba03fa9e1745afff702485",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-1/queue-pressure.json"
+        },
+        {
+          "sha256": "30f7dd63cf984b1951e3e65befd884b77ebdbe0fc956a5ece33f3b670db7556a",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-1/recovery-ping-a.stdout"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-1/recovery-ping-b.stderr"
+        },
+        {
+          "sha256": "1337dace02f12e9791f08dc269ee3322a22f72f3a7d4fd98ec9429e9693f8aac",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-1/pressure-ping.log"
+        },
+        {
+          "sha256": "e5882c25e30a1086edacc4a55dd4f653589a3af3beacdf752ef04c2190e11c7b",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-1/recovery-ping-b.stdout"
+        },
+        {
+          "sha256": "0dd58568c0df9bc684418d113a5b4366e2cd87bb76081e8ce62078bd366a2b85",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-1/queue-pressure-partial.json"
+        },
+        {
+          "sha256": "cd6ce78dc6b2af1c0a80686414f6ab8bd5423a082afd82ad95bcd0325ba05e1e",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-1/queue-pressure-drain.json"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-1/recovery-ping-a.stderr"
+        },
+        {
+          "sha256": "2f8af26ada2335e7780b47684624a3ee7f525071664d24c7f92c31662de6f662",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-1/recovery-ping-a.json"
+        },
+        {
+          "sha256": "cb48fcea9cb861333d46da313f6352923df5620e325d498079397dbd5af088e5",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-1/recovery-ping-b.json"
+        },
+        {
+          "sha256": "d1fe013ca533989cb673eca7bd47c546ca8b6ddc498cff9a8f10b5754d2c3afe",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/repro-commands.sh"
+        },
+        {
+          "sha256": "e0e6175a0489eca06ed8207b8898169f23c2592a353ebcfe7b3525ac843fed34",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-4/queue-pressure.json"
+        },
+        {
+          "sha256": "ca59525c61acf622de6e70bea4dc7e15ce6fc23466a5432ada1a319b45f75d0a",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-4/recovery-ping-a.stdout"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-4/recovery-ping-b.stderr"
+        },
+        {
+          "sha256": "0591dbd03c219e370eb61fc9da2baff4c29a88786be45af4e8f4ada497bcd89f",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-4/pressure-ping.log"
+        },
+        {
+          "sha256": "a2c0621e261da571538751f6b462fcc83ffdcf4e6962c693b4ed1abbe4b7234b",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-4/recovery-ping-b.stdout"
+        },
+        {
+          "sha256": "12e88a4a685756355ad628df5fb85066fd3749e453892979fc51a499ec475e91",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-4/queue-pressure-partial.json"
+        },
+        {
+          "sha256": "c4c2ac10a1b2615e85560e452e8a517ad2863808edd4f60eb28bb1f4a88ef946",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-4/queue-pressure-drain.json"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-4/recovery-ping-a.stderr"
+        },
+        {
+          "sha256": "2cd35613658e3ae78aae4b3f5a8a8beacd93a6d7a230dbd23ed11a6580a5667a",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-4/recovery-ping-a.json"
+        },
+        {
+          "sha256": "e537c7d0637c3cfd5ba90da4553329708072312bd7a298bfd77c6419d665d204",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/round-4/recovery-ping-b.json"
+        },
+        {
+          "sha256": "1284c0b82c329b9d7d342fd9c3f1b80f0362b52ac0af6ec39568b99d9f7c199b",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0e92b883d8ff3e79/queue-pressure-series.json"
+        },
+        {
+          "sha256": "1f068dfbb843978f11ac550df1ea9bf29ccb10665b34156fa24a9621c21efa98",
+          "path": "/tmp/p2p-vpn-pressure-inventory-2.log"
+        }
+      ]
+    },
+    {
+      "dir": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437",
+      "rounds": 5,
+      "seconds": 160.36,
+      "series": {
+        "complete": true,
+        "completed_rounds": 5,
+        "requested_rounds": 5
+      },
+      "roles": [
+        {
+          "role": "a",
+          "inventory": [
+            {
+              "stage": "before_child",
+              "pid": 18,
+              "rows": [
+                [
+                  1,
+                  7
+                ],
+                [
+                  2,
+                  24
+                ],
+                [
+                  3,
+                  69
+                ],
+                [
+                  4,
+                  61
+                ],
+                [
+                  5,
+                  41
+                ],
+                [
+                  6,
+                  53
+                ],
+                [
+                  7,
+                  101
+                ],
+                [
+                  8,
+                  15
+                ],
+                [
+                  9,
+                  2
+                ],
+                [
+                  10,
+                  3
+                ],
+                [
+                  11,
+                  1
+                ],
+                [
+                  12,
+                  1
+                ],
+                [
+                  13,
+                  1
+                ],
+                [
+                  14,
+                  1
+                ],
+                [
+                  16,
+                  3
+                ],
+                [
+                  17,
+                  6
+                ],
+                [
+                  18,
+                  1
+                ],
+                [
+                  19,
+                  1
+                ],
+                [
+                  21,
+                  1
+                ],
+                [
+                  22,
+                  1
+                ],
+                [
+                  24,
+                  1
+                ],
+                [
+                  47,
+                  3
+                ],
+                [
+                  48,
+                  5
+                ],
+                [
+                  52,
+                  1
+                ],
+                [
+                  62,
+                  1
+                ],
+                [
+                  63,
+                  1
+                ],
+                [
+                  68,
+                  1
+                ],
+                [
+                  92,
+                  1
+                ],
+                [
+                  93,
+                  1
+                ],
+                [
+                  96,
+                  2
+                ],
+                [
+                  120,
+                  1
+                ],
+                [
+                  136,
+                  1
+                ],
+                [
+                  148,
+                  1
+                ],
+                [
+                  184,
+                  1
+                ],
+                [
+                  312,
+                  1
+                ],
+                [
+                  512,
+                  1
+                ],
+                [
+                  544,
+                  2
+                ],
+                [
+                  608,
+                  1
+                ],
+                [
+                  640,
+                  1
+                ],
+                [
+                  1024,
+                  1
+                ],
+                [
+                  1072,
+                  1
+                ],
+                [
+                  12560,
+                  1
+                ]
+              ],
+              "oversized_blocks": 0,
+              "oversized_bytes": 0,
+              "total_blocks": 423,
+              "total_bytes": 21615,
+              "failures": 0,
+              "coherent": true,
+              "truncated": false
+            },
+            {
+              "stage": "child_returned",
+              "pid": 18,
+              "rows": [
+                [
+                  1,
+                  7
+                ],
+                [
+                  2,
+                  24
+                ],
+                [
+                  3,
+                  69
+                ],
+                [
+                  4,
+                  61
+                ],
+                [
+                  5,
+                  41
+                ],
+                [
+                  6,
+                  53
+                ],
+                [
+                  7,
+                  101
+                ],
+                [
+                  8,
+                  15
+                ],
+                [
+                  9,
+                  2
+                ],
+                [
+                  10,
+                  3
+                ],
+                [
+                  11,
+                  1
+                ],
+                [
+                  12,
+                  1
+                ],
+                [
+                  13,
+                  2
+                ],
+                [
+                  14,
+                  2
+                ],
+                [
+                  16,
+                  3
+                ],
+                [
+                  17,
+                  6
+                ],
+                [
+                  18,
+                  1
+                ],
+                [
+                  19,
+                  1
+                ],
+                [
+                  21,
+                  1
+                ],
+                [
+                  22,
+                  1
+                ],
+                [
+                  24,
+                  3
+                ],
+                [
+                  32,
+                  2
+                ],
+                [
+                  40,
+                  1
+                ],
+                [
+                  47,
+                  3
+                ],
+                [
+                  48,
+                  7
+                ],
+                [
+                  52,
+                  1
+                ],
+                [
+                  62,
+                  1
+                ],
+                [
+                  63,
+                  1
+                ],
+                [
+                  68,
+                  1
+                ],
+                [
+                  92,
+                  1
+                ],
+                [
+                  93,
+                  1
+                ],
+                [
+                  96,
+                  2
+                ],
+                [
+                  112,
+                  1
+                ],
+                [
+                  120,
+                  1
+                ],
+                [
+                  136,
+                  1
+                ],
+                [
+                  148,
+                  1
+                ],
+                [
+                  184,
+                  1
+                ],
+                [
+                  312,
+                  1
+                ],
+                [
+                  336,
+                  65
+                ],
+                [
+                  352,
+                  1
+                ],
+                [
+                  368,
+                  1
+                ],
+                [
+                  512,
+                  1
+                ],
+                [
+                  544,
+                  2
+                ],
+                [
+                  608,
+                  1
+                ],
+                [
+                  640,
+                  2
+                ],
+                [
+                  1024,
+                  2
+                ],
+                [
+                  1072,
+                  1
+                ],
+                [
+                  2048,
+                  1
+                ],
+                [
+                  2072,
+                  1
+                ],
+                [
+                  2304,
+                  1
+                ],
+                [
+                  8192,
+                  1
+                ],
+                [
+                  12560,
+                  1
+                ],
+                [
+                  20480,
+                  1
+                ]
+              ],
+              "oversized_blocks": 0,
+              "oversized_bytes": 0,
+              "total_blocks": 507,
+              "total_bytes": 81322,
+              "failures": 0,
+              "coherent": true,
+              "truncated": false
+            },
+            {
+              "stage": "child_settled",
+              "pid": 18,
+              "rows": [
+                [
+                  1,
+                  7
+                ],
+                [
+                  2,
+                  24
+                ],
+                [
+                  3,
+                  69
+                ],
+                [
+                  4,
+                  61
+                ],
+                [
+                  5,
+                  41
+                ],
+                [
+                  6,
+                  53
+                ],
+                [
+                  7,
+                  101
+                ],
+                [
+                  8,
+                  15
+                ],
+                [
+                  9,
+                  2
+                ],
+                [
+                  10,
+                  3
+                ],
+                [
+                  11,
+                  1
+                ],
+                [
+                  12,
+                  1
+                ],
+                [
+                  13,
+                  2
+                ],
+                [
+                  14,
+                  2
+                ],
+                [
+                  16,
+                  3
+                ],
+                [
+                  17,
+                  6
+                ],
+                [
+                  18,
+                  1
+                ],
+                [
+                  19,
+                  1
+                ],
+                [
+                  21,
+                  1
+                ],
+                [
+                  22,
+                  1
+                ],
+                [
+                  24,
+                  3
+                ],
+                [
+                  32,
+                  2
+                ],
+                [
+                  40,
+                  1
+                ],
+                [
+                  47,
+                  3
+                ],
+                [
+                  48,
+                  7
+                ],
+                [
+                  52,
+                  1
+                ],
+                [
+                  62,
+                  1
+                ],
+                [
+                  63,
+                  1
+                ],
+                [
+                  68,
+                  1
+                ],
+                [
+                  92,
+                  1
+                ],
+                [
+                  93,
+                  1
+                ],
+                [
+                  96,
+                  2
+                ],
+                [
+                  112,
+                  1
+                ],
+                [
+                  120,
+                  1
+                ],
+                [
+                  136,
+                  1
+                ],
+                [
+                  148,
+                  1
+                ],
+                [
+                  184,
+                  1
+                ],
+                [
+                  312,
+                  1
+                ],
+                [
+                  336,
+                  65
+                ],
+                [
+                  352,
+                  1
+                ],
+                [
+                  368,
+                  1
+                ],
+                [
+                  512,
+                  1
+                ],
+                [
+                  544,
+                  2
+                ],
+                [
+                  608,
+                  1
+                ],
+                [
+                  640,
+                  2
+                ],
+                [
+                  1024,
+                  2
+                ],
+                [
+                  1072,
+                  1
+                ],
+                [
+                  2048,
+                  1
+                ],
+                [
+                  2072,
+                  1
+                ],
+                [
+                  2304,
+                  1
+                ],
+                [
+                  8192,
+                  1
+                ],
+                [
+                  12560,
+                  1
+                ],
+                [
+                  20480,
+                  1
+                ]
+              ],
+              "oversized_blocks": 0,
+              "oversized_bytes": 0,
+              "total_blocks": 507,
+              "total_bytes": 81322,
+              "failures": 0,
+              "coherent": true,
+              "truncated": false
+            }
+          ],
+          "residual": [
+            [
+              13,
+              1
+            ],
+            [
+              14,
+              1
+            ],
+            [
+              24,
+              2
+            ],
+            [
+              32,
+              2
+            ],
+            [
+              40,
+              1
+            ],
+            [
+              48,
+              2
+            ],
+            [
+              112,
+              1
+            ],
+            [
+              336,
+              65
+            ],
+            [
+              352,
+              1
+            ],
+            [
+              368,
+              1
+            ],
+            [
+              640,
+              1
+            ],
+            [
+              1024,
+              1
+            ],
+            [
+              2048,
+              1
+            ],
+            [
+              2072,
+              1
+            ],
+            [
+              2304,
+              1
+            ],
+            [
+              8192,
+              1
+            ],
+            [
+              20480,
+              1
+            ]
+          ],
+          "bytes": 59707,
+          "blocks": 84
+        },
+        {
+          "role": "b",
+          "inventory": [
+            {
+              "stage": "before_child",
+              "pid": 19,
+              "rows": [
+                [
+                  1,
+                  7
+                ],
+                [
+                  2,
+                  24
+                ],
+                [
+                  3,
+                  69
+                ],
+                [
+                  4,
+                  61
+                ],
+                [
+                  5,
+                  41
+                ],
+                [
+                  6,
+                  53
+                ],
+                [
+                  7,
+                  101
+                ],
+                [
+                  8,
+                  15
+                ],
+                [
+                  9,
+                  2
+                ],
+                [
+                  10,
+                  3
+                ],
+                [
+                  11,
+                  1
+                ],
+                [
+                  12,
+                  1
+                ],
+                [
+                  13,
+                  1
+                ],
+                [
+                  14,
+                  1
+                ],
+                [
+                  16,
+                  3
+                ],
+                [
+                  17,
+                  6
+                ],
+                [
+                  18,
+                  1
+                ],
+                [
+                  19,
+                  1
+                ],
+                [
+                  21,
+                  1
+                ],
+                [
+                  22,
+                  1
+                ],
+                [
+                  24,
+                  1
+                ],
+                [
+                  47,
+                  3
+                ],
+                [
+                  48,
+                  5
+                ],
+                [
+                  52,
+                  1
+                ],
+                [
+                  62,
+                  1
+                ],
+                [
+                  63,
+                  1
+                ],
+                [
+                  68,
+                  1
+                ],
+                [
+                  92,
+                  1
+                ],
+                [
+                  93,
+                  1
+                ],
+                [
+                  96,
+                  2
+                ],
+                [
+                  120,
+                  1
+                ],
+                [
+                  136,
+                  1
+                ],
+                [
+                  148,
+                  1
+                ],
+                [
+                  184,
+                  1
+                ],
+                [
+                  312,
+                  1
+                ],
+                [
+                  512,
+                  1
+                ],
+                [
+                  544,
+                  2
+                ],
+                [
+                  608,
+                  1
+                ],
+                [
+                  640,
+                  1
+                ],
+                [
+                  1024,
+                  1
+                ],
+                [
+                  1072,
+                  1
+                ],
+                [
+                  12560,
+                  1
+                ]
+              ],
+              "oversized_blocks": 0,
+              "oversized_bytes": 0,
+              "total_blocks": 423,
+              "total_bytes": 21615,
+              "failures": 0,
+              "coherent": true,
+              "truncated": false
+            },
+            {
+              "stage": "child_returned",
+              "pid": 19,
+              "rows": [
+                [
+                  1,
+                  7
+                ],
+                [
+                  2,
+                  24
+                ],
+                [
+                  3,
+                  69
+                ],
+                [
+                  4,
+                  61
+                ],
+                [
+                  5,
+                  41
+                ],
+                [
+                  6,
+                  53
+                ],
+                [
+                  7,
+                  101
+                ],
+                [
+                  8,
+                  15
+                ],
+                [
+                  9,
+                  2
+                ],
+                [
+                  10,
+                  3
+                ],
+                [
+                  11,
+                  1
+                ],
+                [
+                  12,
+                  1
+                ],
+                [
+                  13,
+                  2
+                ],
+                [
+                  14,
+                  2
+                ],
+                [
+                  16,
+                  3
+                ],
+                [
+                  17,
+                  6
+                ],
+                [
+                  18,
+                  1
+                ],
+                [
+                  19,
+                  1
+                ],
+                [
+                  21,
+                  1
+                ],
+                [
+                  22,
+                  1
+                ],
+                [
+                  24,
+                  3
+                ],
+                [
+                  32,
+                  2
+                ],
+                [
+                  40,
+                  1
+                ],
+                [
+                  47,
+                  3
+                ],
+                [
+                  48,
+                  7
+                ],
+                [
+                  52,
+                  1
+                ],
+                [
+                  62,
+                  1
+                ],
+                [
+                  63,
+                  1
+                ],
+                [
+                  68,
+                  1
+                ],
+                [
+                  92,
+                  1
+                ],
+                [
+                  93,
+                  1
+                ],
+                [
+                  96,
+                  2
+                ],
+                [
+                  112,
+                  1
+                ],
+                [
+                  120,
+                  1
+                ],
+                [
+                  136,
+                  1
+                ],
+                [
+                  148,
+                  1
+                ],
+                [
+                  184,
+                  1
+                ],
+                [
+                  312,
+                  1
+                ],
+                [
+                  336,
+                  65
+                ],
+                [
+                  352,
+                  1
+                ],
+                [
+                  368,
+                  1
+                ],
+                [
+                  512,
+                  1
+                ],
+                [
+                  544,
+                  2
+                ],
+                [
+                  608,
+                  1
+                ],
+                [
+                  640,
+                  2
+                ],
+                [
+                  1024,
+                  2
+                ],
+                [
+                  1072,
+                  1
+                ],
+                [
+                  2048,
+                  1
+                ],
+                [
+                  2072,
+                  1
+                ],
+                [
+                  2304,
+                  1
+                ],
+                [
+                  8192,
+                  1
+                ],
+                [
+                  12560,
+                  1
+                ],
+                [
+                  20480,
+                  1
+                ]
+              ],
+              "oversized_blocks": 0,
+              "oversized_bytes": 0,
+              "total_blocks": 507,
+              "total_bytes": 81322,
+              "failures": 0,
+              "coherent": true,
+              "truncated": false
+            },
+            {
+              "stage": "child_settled",
+              "pid": 19,
+              "rows": [
+                [
+                  1,
+                  7
+                ],
+                [
+                  2,
+                  24
+                ],
+                [
+                  3,
+                  69
+                ],
+                [
+                  4,
+                  61
+                ],
+                [
+                  5,
+                  41
+                ],
+                [
+                  6,
+                  53
+                ],
+                [
+                  7,
+                  101
+                ],
+                [
+                  8,
+                  15
+                ],
+                [
+                  9,
+                  2
+                ],
+                [
+                  10,
+                  3
+                ],
+                [
+                  11,
+                  1
+                ],
+                [
+                  12,
+                  1
+                ],
+                [
+                  13,
+                  2
+                ],
+                [
+                  14,
+                  2
+                ],
+                [
+                  16,
+                  3
+                ],
+                [
+                  17,
+                  6
+                ],
+                [
+                  18,
+                  1
+                ],
+                [
+                  19,
+                  1
+                ],
+                [
+                  21,
+                  1
+                ],
+                [
+                  22,
+                  1
+                ],
+                [
+                  24,
+                  3
+                ],
+                [
+                  32,
+                  2
+                ],
+                [
+                  40,
+                  1
+                ],
+                [
+                  47,
+                  3
+                ],
+                [
+                  48,
+                  7
+                ],
+                [
+                  52,
+                  1
+                ],
+                [
+                  62,
+                  1
+                ],
+                [
+                  63,
+                  1
+                ],
+                [
+                  68,
+                  1
+                ],
+                [
+                  92,
+                  1
+                ],
+                [
+                  93,
+                  1
+                ],
+                [
+                  96,
+                  2
+                ],
+                [
+                  112,
+                  1
+                ],
+                [
+                  120,
+                  1
+                ],
+                [
+                  136,
+                  1
+                ],
+                [
+                  148,
+                  1
+                ],
+                [
+                  184,
+                  1
+                ],
+                [
+                  312,
+                  1
+                ],
+                [
+                  336,
+                  65
+                ],
+                [
+                  352,
+                  1
+                ],
+                [
+                  368,
+                  1
+                ],
+                [
+                  512,
+                  1
+                ],
+                [
+                  544,
+                  2
+                ],
+                [
+                  608,
+                  1
+                ],
+                [
+                  640,
+                  2
+                ],
+                [
+                  1024,
+                  2
+                ],
+                [
+                  1072,
+                  1
+                ],
+                [
+                  2048,
+                  1
+                ],
+                [
+                  2072,
+                  1
+                ],
+                [
+                  2304,
+                  1
+                ],
+                [
+                  8192,
+                  1
+                ],
+                [
+                  12560,
+                  1
+                ],
+                [
+                  20480,
+                  1
+                ]
+              ],
+              "oversized_blocks": 0,
+              "oversized_bytes": 0,
+              "total_blocks": 507,
+              "total_bytes": 81322,
+              "failures": 0,
+              "coherent": true,
+              "truncated": false
+            }
+          ],
+          "residual": [
+            [
+              13,
+              1
+            ],
+            [
+              14,
+              1
+            ],
+            [
+              24,
+              2
+            ],
+            [
+              32,
+              2
+            ],
+            [
+              40,
+              1
+            ],
+            [
+              48,
+              2
+            ],
+            [
+              112,
+              1
+            ],
+            [
+              336,
+              65
+            ],
+            [
+              352,
+              1
+            ],
+            [
+              368,
+              1
+            ],
+            [
+              640,
+              1
+            ],
+            [
+              1024,
+              1
+            ],
+            [
+              2048,
+              1
+            ],
+            [
+              2072,
+              1
+            ],
+            [
+              2304,
+              1
+            ],
+            [
+              8192,
+              1
+            ],
+            [
+              20480,
+              1
+            ]
+          ],
+          "bytes": 59707,
+          "blocks": 84
+        }
+      ],
+      "artifacts": [
+        {
+          "sha256": "a0e4d88d0c725072106ec6c41416dfbfd38dc7a5ed1a57ce75a93bd60841ccae",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/node-a.log"
+        },
+        {
+          "sha256": "b24d6d33736ecd5604a4b17bc9c6481039fac362bb7df044ef1c10a2bfd21db6",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/ready-b"
+        },
+        {
+          "sha256": "ea83b63e25adcd91e14939b229b85c6f21a1e475369612d35c2978e4f988cf59",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-5/queue-pressure.json"
+        },
+        {
+          "sha256": "cbfecf6714dc42967ab4d2d7d17c4fb0827747a7e6fac279bbf415f049cb7e8f",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-5/recovery-ping-a.stdout"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-5/recovery-ping-b.stderr"
+        },
+        {
+          "sha256": "27a39c78f95358fe2d4c7a3159b403ff1194fb02348521593d4133563d135880",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-5/pressure-ping.log"
+        },
+        {
+          "sha256": "e74aa837ec20fee8a30e588b137ac0f08ee255c576beeb2bc89777c66727c549",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-5/recovery-ping-b.stdout"
+        },
+        {
+          "sha256": "2883a7e2ddbaf3c34e59052f7660aa7d67d5890325c16a4d6d4c8c284d7eab41",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-5/queue-pressure-partial.json"
+        },
+        {
+          "sha256": "245eace478da43403ebf3b9859ebdd6ccce1b181d7b1f1e778bbccdbf7b7ea40",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-5/queue-pressure-drain.json"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-5/recovery-ping-a.stderr"
+        },
+        {
+          "sha256": "8e32823af0dbc185b64edad74bce149116f077370c34c4703fc7a50afab956c1",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-5/recovery-ping-a.json"
+        },
+        {
+          "sha256": "c57ee0dd13af624dad490f1230ad269d6cebbaa088215b035e8ecd2866f5084e",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-5/recovery-ping-b.json"
+        },
+        {
+          "sha256": "a1a4ead5b5846486bff0971b7185a5936dd5e77ef7c8c2e6285714b9baa537bb",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/repro-metadata.txt"
+        },
+        {
+          "sha256": "cced28c6dc3f99c2396a5eaad732bf6b28142335892b1cd0e6af6cdb53f5ccfa",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/start-a"
+        },
+        {
+          "sha256": "b24d6d33736ecd5604a4b17bc9c6481039fac362bb7df044ef1c10a2bfd21db6",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/ready-a"
+        },
+        {
+          "sha256": "e953399125d79fb887700cdf440cddc1dfbf0ffdcd1b75fe4e88fb28a6f221e6",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-3/queue-pressure.json"
+        },
+        {
+          "sha256": "af9a9758735a3358af125c65f00ebd4299a21808c5e03499e109990ab25a6a77",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-3/recovery-ping-a.stdout"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-3/recovery-ping-b.stderr"
+        },
+        {
+          "sha256": "552fe1df752db0f7622fbee7815bd0ae67df6374027474800d1a0fbee597ecc4",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-3/pressure-ping.log"
+        },
+        {
+          "sha256": "1125b0a825b8436efd66009468aa543c90b8a33d9a8022c3f80a3aae3da95aa9",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-3/recovery-ping-b.stdout"
+        },
+        {
+          "sha256": "9ef89d63407631062f343ab15ac456c6a90c9b3576995e2e11d4aca463f08f20",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-3/queue-pressure-partial.json"
+        },
+        {
+          "sha256": "19580a98720059efd71ec5527ba52c31bdd20a65aa5b29501f7610a7395b8bd7",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-3/queue-pressure-drain.json"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-3/recovery-ping-a.stderr"
+        },
+        {
+          "sha256": "274299d0f78652f90d818c806a173a764b297790c2b7f9f89edadcc993ec26a0",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-3/recovery-ping-a.json"
+        },
+        {
+          "sha256": "1e4f6927bab4b2305a857e5ab3cf60ef1fdf9d6b5acd260511287516b6204943",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-3/recovery-ping-b.json"
+        },
+        {
+          "sha256": "cced28c6dc3f99c2396a5eaad732bf6b28142335892b1cd0e6af6cdb53f5ccfa",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/start-b"
+        },
+        {
+          "sha256": "881f2d5d6947adb8c6a74a4c0f8ccdc1d33533c0b51ded716cde531a1d152eaf",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-2/queue-pressure.json"
+        },
+        {
+          "sha256": "a948d049db91e7cfeb35919d6722743ae53f204ab9e0f6163623bca30e3af1b0",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-2/recovery-ping-a.stdout"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-2/recovery-ping-b.stderr"
+        },
+        {
+          "sha256": "01b16d3636e59b4f3b35ab7e0ca2c1059ba7da961305d47858471ac9bb001a0f",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-2/pressure-ping.log"
+        },
+        {
+          "sha256": "472112aceb611b97ea16025958cf1b9011eb17bb3187f002ddf705206c3aec68",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-2/recovery-ping-b.stdout"
+        },
+        {
+          "sha256": "6e46640bcd2f1243c9269a77bb9cf190caec3a3e85d980b9f2fd0af0cbe1bc0f",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-2/queue-pressure-partial.json"
+        },
+        {
+          "sha256": "d2826f7cb30d6177e42f4de48eabc4b916e72274fd1828ad6ca4984dee84b96d",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-2/queue-pressure-drain.json"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-2/recovery-ping-a.stderr"
+        },
+        {
+          "sha256": "000f62eca0730c259f578f6b2ef3917cdf5edcc5ade9d2dc9b1845622c5e8bd5",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-2/recovery-ping-a.json"
+        },
+        {
+          "sha256": "1115f28067182c73000170cf189f5b8c5759334e4c2d1f70142a5bbd54478856",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-2/recovery-ping-b.json"
+        },
+        {
+          "sha256": "fa37deda5e7bf4066a755bef3c537fe05ef36cfcd69d0eb1446e39ef2a9850b0",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/node-b.log"
+        },
+        {
+          "sha256": "d41202ae91484655b5ec4da194808406cc7bbf8dad13073c039a70e64106fd94",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-1/queue-pressure.json"
+        },
+        {
+          "sha256": "55efbb52be7123ea6410602791ab36538ef6c074e0fac1af2eed13f224fd6bf2",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-1/recovery-ping-a.stdout"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-1/recovery-ping-b.stderr"
+        },
+        {
+          "sha256": "6aa9db78be52cc7ed60eb4362a0cd054c44737e0abad17adc0b6d361d433c394",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-1/pressure-ping.log"
+        },
+        {
+          "sha256": "8b2127f06dbdceb4228010d8081cfd43ccfc2f7ff3c279c1013a4a5c0d34f55d",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-1/recovery-ping-b.stdout"
+        },
+        {
+          "sha256": "aa0fe6bc82aced056e012b0894fa6c078ec1db498766bb05a4181bdae8ba156c",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-1/queue-pressure-partial.json"
+        },
+        {
+          "sha256": "756d7b1ec6c43fa8a5942174abd3d67c75926a838300672c99dc59b638b1b313",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-1/queue-pressure-drain.json"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-1/recovery-ping-a.stderr"
+        },
+        {
+          "sha256": "51e8996a16176f9b2503362ce8fb3f0aafcc9e458e83d2d5badbe60e360c8094",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-1/recovery-ping-a.json"
+        },
+        {
+          "sha256": "a8b5a80fb1a11e7a983f65abc211f076cd2125b96066b90f1a28e7d446127aa6",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-1/recovery-ping-b.json"
+        },
+        {
+          "sha256": "c9d1145d615cfea7e4f21f5747fa81ad812329e67789d772750aa79db30917c3",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/repro-commands.sh"
+        },
+        {
+          "sha256": "4e1d9d205e30160f800855345193eba9ef572d9d4b4f1daaa5a0aed45d35015d",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-4/queue-pressure.json"
+        },
+        {
+          "sha256": "8be37e62ebcb7e0d28f3bea3e1b671da5aa239aa586c8828ab30cd252d47b780",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-4/recovery-ping-a.stdout"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-4/recovery-ping-b.stderr"
+        },
+        {
+          "sha256": "534f98e191fa74a7a706dee4c14b67b97d805f8cf0286ee031ba695ed3835c07",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-4/pressure-ping.log"
+        },
+        {
+          "sha256": "f0b11aa7cd06b43032d17d3262424b637549fa673836d0c39a42c924287adf86",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-4/recovery-ping-b.stdout"
+        },
+        {
+          "sha256": "359dbcd803bdc15ae87f79da09de9db5fb632df0e912534d0ade6209429c20e4",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-4/queue-pressure-partial.json"
+        },
+        {
+          "sha256": "1b421c9d91e98920875c9272855351564073f2fc416b6cdf383e86a9471c98d7",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-4/queue-pressure-drain.json"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-4/recovery-ping-a.stderr"
+        },
+        {
+          "sha256": "3a58912c9d05c3a9e8ad2b649239797ebdfe36acb43575c3683467795182d69a",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-4/recovery-ping-a.json"
+        },
+        {
+          "sha256": "557b1e44df79f33f1a29ecfcb045ac306cacc8e9dc131f41bc1bb4cd123266fd",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/round-4/recovery-ping-b.json"
+        },
+        {
+          "sha256": "a7dddfb0f469291e4c8a3a6618de1d620e8483748f0cf89fb590c88ef3663912",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.ab7a7fb2b35aa437/queue-pressure-series.json"
+        },
+        {
+          "sha256": "ec0c4cb1349c28622608fea6684c289141612c3ef25c80873aeaf9d682459065",
+          "path": "/tmp/p2p-vpn-pressure-inventory-3.log"
+        }
+      ]
+    },
+    {
+      "dir": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.edbc122bb527f640",
+      "rounds": 1,
+      "seconds": 40.07,
+      "series": {
+        "complete": true,
+        "completed_rounds": 1,
+        "requested_rounds": 1
+      },
+      "roles": [
+        {
+          "role": "a",
+          "inventory": [
+            {
+              "stage": "before_child",
+              "pid": 18,
+              "rows": [
+                [
+                  1,
+                  7
+                ],
+                [
+                  2,
+                  24
+                ],
+                [
+                  3,
+                  69
+                ],
+                [
+                  4,
+                  61
+                ],
+                [
+                  5,
+                  41
+                ],
+                [
+                  6,
+                  53
+                ],
+                [
+                  7,
+                  101
+                ],
+                [
+                  8,
+                  15
+                ],
+                [
+                  9,
+                  2
+                ],
+                [
+                  10,
+                  3
+                ],
+                [
+                  11,
+                  1
+                ],
+                [
+                  12,
+                  1
+                ],
+                [
+                  13,
+                  1
+                ],
+                [
+                  14,
+                  1
+                ],
+                [
+                  16,
+                  3
+                ],
+                [
+                  17,
+                  6
+                ],
+                [
+                  18,
+                  1
+                ],
+                [
+                  19,
+                  1
+                ],
+                [
+                  21,
+                  1
+                ],
+                [
+                  22,
+                  1
+                ],
+                [
+                  24,
+                  1
+                ],
+                [
+                  47,
+                  3
+                ],
+                [
+                  48,
+                  5
+                ],
+                [
+                  52,
+                  1
+                ],
+                [
+                  62,
+                  1
+                ],
+                [
+                  63,
+                  1
+                ],
+                [
+                  68,
+                  1
+                ],
+                [
+                  92,
+                  1
+                ],
+                [
+                  93,
+                  1
+                ],
+                [
+                  96,
+                  2
+                ],
+                [
+                  120,
+                  1
+                ],
+                [
+                  136,
+                  1
+                ],
+                [
+                  148,
+                  1
+                ],
+                [
+                  184,
+                  1
+                ],
+                [
+                  312,
+                  1
+                ],
+                [
+                  512,
+                  1
+                ],
+                [
+                  544,
+                  2
+                ],
+                [
+                  608,
+                  1
+                ],
+                [
+                  640,
+                  1
+                ],
+                [
+                  1024,
+                  1
+                ],
+                [
+                  1072,
+                  1
+                ],
+                [
+                  12560,
+                  1
+                ]
+              ],
+              "oversized_blocks": 0,
+              "oversized_bytes": 0,
+              "total_blocks": 423,
+              "total_bytes": 21615,
+              "failures": 0,
+              "coherent": true,
+              "truncated": false
+            },
+            {
+              "stage": "child_returned",
+              "pid": 18,
+              "rows": [
+                [
+                  1,
+                  7
+                ],
+                [
+                  2,
+                  24
+                ],
+                [
+                  3,
+                  69
+                ],
+                [
+                  4,
+                  61
+                ],
+                [
+                  5,
+                  41
+                ],
+                [
+                  6,
+                  53
+                ],
+                [
+                  7,
+                  101
+                ],
+                [
+                  8,
+                  15
+                ],
+                [
+                  9,
+                  2
+                ],
+                [
+                  10,
+                  3
+                ],
+                [
+                  11,
+                  1
+                ],
+                [
+                  12,
+                  1
+                ],
+                [
+                  13,
+                  2
+                ],
+                [
+                  14,
+                  2
+                ],
+                [
+                  16,
+                  3
+                ],
+                [
+                  17,
+                  6
+                ],
+                [
+                  18,
+                  1
+                ],
+                [
+                  19,
+                  1
+                ],
+                [
+                  21,
+                  1
+                ],
+                [
+                  22,
+                  1
+                ],
+                [
+                  24,
+                  3
+                ],
+                [
+                  32,
+                  2
+                ],
+                [
+                  40,
+                  1
+                ],
+                [
+                  47,
+                  3
+                ],
+                [
+                  48,
+                  7
+                ],
+                [
+                  52,
+                  1
+                ],
+                [
+                  62,
+                  1
+                ],
+                [
+                  63,
+                  1
+                ],
+                [
+                  68,
+                  1
+                ],
+                [
+                  92,
+                  1
+                ],
+                [
+                  93,
+                  1
+                ],
+                [
+                  96,
+                  2
+                ],
+                [
+                  112,
+                  1
+                ],
+                [
+                  120,
+                  1
+                ],
+                [
+                  136,
+                  1
+                ],
+                [
+                  148,
+                  1
+                ],
+                [
+                  184,
+                  1
+                ],
+                [
+                  312,
+                  1
+                ],
+                [
+                  336,
+                  65
+                ],
+                [
+                  352,
+                  1
+                ],
+                [
+                  368,
+                  1
+                ],
+                [
+                  512,
+                  1
+                ],
+                [
+                  544,
+                  2
+                ],
+                [
+                  608,
+                  1
+                ],
+                [
+                  640,
+                  2
+                ],
+                [
+                  1024,
+                  2
+                ],
+                [
+                  1072,
+                  1
+                ],
+                [
+                  2048,
+                  1
+                ],
+                [
+                  2072,
+                  1
+                ],
+                [
+                  2304,
+                  1
+                ],
+                [
+                  8192,
+                  1
+                ],
+                [
+                  12560,
+                  1
+                ],
+                [
+                  20480,
+                  1
+                ]
+              ],
+              "oversized_blocks": 0,
+              "oversized_bytes": 0,
+              "total_blocks": 507,
+              "total_bytes": 81322,
+              "failures": 0,
+              "coherent": true,
+              "truncated": false
+            },
+            {
+              "stage": "child_settled",
+              "pid": 18,
+              "rows": [
+                [
+                  1,
+                  7
+                ],
+                [
+                  2,
+                  24
+                ],
+                [
+                  3,
+                  69
+                ],
+                [
+                  4,
+                  61
+                ],
+                [
+                  5,
+                  41
+                ],
+                [
+                  6,
+                  53
+                ],
+                [
+                  7,
+                  101
+                ],
+                [
+                  8,
+                  15
+                ],
+                [
+                  9,
+                  2
+                ],
+                [
+                  10,
+                  3
+                ],
+                [
+                  11,
+                  1
+                ],
+                [
+                  12,
+                  1
+                ],
+                [
+                  13,
+                  2
+                ],
+                [
+                  14,
+                  2
+                ],
+                [
+                  16,
+                  3
+                ],
+                [
+                  17,
+                  6
+                ],
+                [
+                  18,
+                  1
+                ],
+                [
+                  19,
+                  1
+                ],
+                [
+                  21,
+                  1
+                ],
+                [
+                  22,
+                  1
+                ],
+                [
+                  24,
+                  3
+                ],
+                [
+                  32,
+                  2
+                ],
+                [
+                  40,
+                  1
+                ],
+                [
+                  47,
+                  3
+                ],
+                [
+                  48,
+                  7
+                ],
+                [
+                  52,
+                  1
+                ],
+                [
+                  62,
+                  1
+                ],
+                [
+                  63,
+                  1
+                ],
+                [
+                  68,
+                  1
+                ],
+                [
+                  92,
+                  1
+                ],
+                [
+                  93,
+                  1
+                ],
+                [
+                  96,
+                  2
+                ],
+                [
+                  112,
+                  1
+                ],
+                [
+                  120,
+                  1
+                ],
+                [
+                  136,
+                  1
+                ],
+                [
+                  148,
+                  1
+                ],
+                [
+                  184,
+                  1
+                ],
+                [
+                  312,
+                  1
+                ],
+                [
+                  336,
+                  65
+                ],
+                [
+                  352,
+                  1
+                ],
+                [
+                  368,
+                  1
+                ],
+                [
+                  512,
+                  1
+                ],
+                [
+                  544,
+                  2
+                ],
+                [
+                  608,
+                  1
+                ],
+                [
+                  640,
+                  2
+                ],
+                [
+                  1024,
+                  2
+                ],
+                [
+                  1072,
+                  1
+                ],
+                [
+                  2048,
+                  1
+                ],
+                [
+                  2072,
+                  1
+                ],
+                [
+                  2304,
+                  1
+                ],
+                [
+                  8192,
+                  1
+                ],
+                [
+                  12560,
+                  1
+                ],
+                [
+                  20480,
+                  1
+                ]
+              ],
+              "oversized_blocks": 0,
+              "oversized_bytes": 0,
+              "total_blocks": 507,
+              "total_bytes": 81322,
+              "failures": 0,
+              "coherent": true,
+              "truncated": false
+            }
+          ],
+          "residual": [
+            [
+              13,
+              1
+            ],
+            [
+              14,
+              1
+            ],
+            [
+              24,
+              2
+            ],
+            [
+              32,
+              2
+            ],
+            [
+              40,
+              1
+            ],
+            [
+              48,
+              2
+            ],
+            [
+              112,
+              1
+            ],
+            [
+              336,
+              65
+            ],
+            [
+              352,
+              1
+            ],
+            [
+              368,
+              1
+            ],
+            [
+              640,
+              1
+            ],
+            [
+              1024,
+              1
+            ],
+            [
+              2048,
+              1
+            ],
+            [
+              2072,
+              1
+            ],
+            [
+              2304,
+              1
+            ],
+            [
+              8192,
+              1
+            ],
+            [
+              20480,
+              1
+            ]
+          ],
+          "bytes": 59707,
+          "blocks": 84
+        },
+        {
+          "role": "b",
+          "inventory": [
+            {
+              "stage": "before_child",
+              "pid": 19,
+              "rows": [
+                [
+                  1,
+                  7
+                ],
+                [
+                  2,
+                  24
+                ],
+                [
+                  3,
+                  69
+                ],
+                [
+                  4,
+                  61
+                ],
+                [
+                  5,
+                  41
+                ],
+                [
+                  6,
+                  53
+                ],
+                [
+                  7,
+                  101
+                ],
+                [
+                  8,
+                  15
+                ],
+                [
+                  9,
+                  2
+                ],
+                [
+                  10,
+                  3
+                ],
+                [
+                  11,
+                  1
+                ],
+                [
+                  12,
+                  1
+                ],
+                [
+                  13,
+                  1
+                ],
+                [
+                  14,
+                  1
+                ],
+                [
+                  16,
+                  3
+                ],
+                [
+                  17,
+                  6
+                ],
+                [
+                  18,
+                  1
+                ],
+                [
+                  19,
+                  1
+                ],
+                [
+                  21,
+                  1
+                ],
+                [
+                  22,
+                  1
+                ],
+                [
+                  24,
+                  1
+                ],
+                [
+                  47,
+                  3
+                ],
+                [
+                  48,
+                  5
+                ],
+                [
+                  52,
+                  1
+                ],
+                [
+                  62,
+                  1
+                ],
+                [
+                  63,
+                  1
+                ],
+                [
+                  68,
+                  1
+                ],
+                [
+                  92,
+                  1
+                ],
+                [
+                  93,
+                  1
+                ],
+                [
+                  96,
+                  2
+                ],
+                [
+                  120,
+                  1
+                ],
+                [
+                  136,
+                  1
+                ],
+                [
+                  148,
+                  1
+                ],
+                [
+                  184,
+                  1
+                ],
+                [
+                  312,
+                  1
+                ],
+                [
+                  512,
+                  1
+                ],
+                [
+                  544,
+                  2
+                ],
+                [
+                  608,
+                  1
+                ],
+                [
+                  640,
+                  1
+                ],
+                [
+                  1024,
+                  1
+                ],
+                [
+                  1072,
+                  1
+                ],
+                [
+                  12560,
+                  1
+                ]
+              ],
+              "oversized_blocks": 0,
+              "oversized_bytes": 0,
+              "total_blocks": 423,
+              "total_bytes": 21615,
+              "failures": 0,
+              "coherent": true,
+              "truncated": false
+            },
+            {
+              "stage": "child_returned",
+              "pid": 19,
+              "rows": [
+                [
+                  1,
+                  7
+                ],
+                [
+                  2,
+                  24
+                ],
+                [
+                  3,
+                  69
+                ],
+                [
+                  4,
+                  61
+                ],
+                [
+                  5,
+                  41
+                ],
+                [
+                  6,
+                  53
+                ],
+                [
+                  7,
+                  101
+                ],
+                [
+                  8,
+                  15
+                ],
+                [
+                  9,
+                  2
+                ],
+                [
+                  10,
+                  3
+                ],
+                [
+                  11,
+                  1
+                ],
+                [
+                  12,
+                  1
+                ],
+                [
+                  13,
+                  2
+                ],
+                [
+                  14,
+                  2
+                ],
+                [
+                  16,
+                  3
+                ],
+                [
+                  17,
+                  6
+                ],
+                [
+                  18,
+                  1
+                ],
+                [
+                  19,
+                  1
+                ],
+                [
+                  21,
+                  1
+                ],
+                [
+                  22,
+                  1
+                ],
+                [
+                  24,
+                  3
+                ],
+                [
+                  32,
+                  2
+                ],
+                [
+                  40,
+                  1
+                ],
+                [
+                  47,
+                  3
+                ],
+                [
+                  48,
+                  7
+                ],
+                [
+                  52,
+                  1
+                ],
+                [
+                  62,
+                  1
+                ],
+                [
+                  63,
+                  1
+                ],
+                [
+                  68,
+                  1
+                ],
+                [
+                  92,
+                  1
+                ],
+                [
+                  93,
+                  1
+                ],
+                [
+                  96,
+                  2
+                ],
+                [
+                  112,
+                  1
+                ],
+                [
+                  120,
+                  1
+                ],
+                [
+                  136,
+                  1
+                ],
+                [
+                  148,
+                  1
+                ],
+                [
+                  184,
+                  1
+                ],
+                [
+                  312,
+                  1
+                ],
+                [
+                  336,
+                  65
+                ],
+                [
+                  352,
+                  1
+                ],
+                [
+                  368,
+                  1
+                ],
+                [
+                  512,
+                  1
+                ],
+                [
+                  544,
+                  2
+                ],
+                [
+                  608,
+                  1
+                ],
+                [
+                  640,
+                  2
+                ],
+                [
+                  1024,
+                  2
+                ],
+                [
+                  1072,
+                  1
+                ],
+                [
+                  2048,
+                  1
+                ],
+                [
+                  2072,
+                  1
+                ],
+                [
+                  2304,
+                  1
+                ],
+                [
+                  8192,
+                  1
+                ],
+                [
+                  12560,
+                  1
+                ],
+                [
+                  20480,
+                  1
+                ]
+              ],
+              "oversized_blocks": 0,
+              "oversized_bytes": 0,
+              "total_blocks": 507,
+              "total_bytes": 81322,
+              "failures": 0,
+              "coherent": true,
+              "truncated": false
+            },
+            {
+              "stage": "child_settled",
+              "pid": 19,
+              "rows": [
+                [
+                  1,
+                  7
+                ],
+                [
+                  2,
+                  24
+                ],
+                [
+                  3,
+                  69
+                ],
+                [
+                  4,
+                  61
+                ],
+                [
+                  5,
+                  41
+                ],
+                [
+                  6,
+                  53
+                ],
+                [
+                  7,
+                  101
+                ],
+                [
+                  8,
+                  15
+                ],
+                [
+                  9,
+                  2
+                ],
+                [
+                  10,
+                  3
+                ],
+                [
+                  11,
+                  1
+                ],
+                [
+                  12,
+                  1
+                ],
+                [
+                  13,
+                  2
+                ],
+                [
+                  14,
+                  2
+                ],
+                [
+                  16,
+                  3
+                ],
+                [
+                  17,
+                  6
+                ],
+                [
+                  18,
+                  1
+                ],
+                [
+                  19,
+                  1
+                ],
+                [
+                  21,
+                  1
+                ],
+                [
+                  22,
+                  1
+                ],
+                [
+                  24,
+                  3
+                ],
+                [
+                  32,
+                  2
+                ],
+                [
+                  40,
+                  1
+                ],
+                [
+                  47,
+                  3
+                ],
+                [
+                  48,
+                  7
+                ],
+                [
+                  52,
+                  1
+                ],
+                [
+                  62,
+                  1
+                ],
+                [
+                  63,
+                  1
+                ],
+                [
+                  68,
+                  1
+                ],
+                [
+                  92,
+                  1
+                ],
+                [
+                  93,
+                  1
+                ],
+                [
+                  96,
+                  2
+                ],
+                [
+                  112,
+                  1
+                ],
+                [
+                  120,
+                  1
+                ],
+                [
+                  136,
+                  1
+                ],
+                [
+                  148,
+                  1
+                ],
+                [
+                  184,
+                  1
+                ],
+                [
+                  312,
+                  1
+                ],
+                [
+                  336,
+                  65
+                ],
+                [
+                  352,
+                  1
+                ],
+                [
+                  368,
+                  1
+                ],
+                [
+                  512,
+                  1
+                ],
+                [
+                  544,
+                  2
+                ],
+                [
+                  608,
+                  1
+                ],
+                [
+                  640,
+                  2
+                ],
+                [
+                  1024,
+                  2
+                ],
+                [
+                  1072,
+                  1
+                ],
+                [
+                  2048,
+                  1
+                ],
+                [
+                  2072,
+                  1
+                ],
+                [
+                  2304,
+                  1
+                ],
+                [
+                  8192,
+                  1
+                ],
+                [
+                  12560,
+                  1
+                ],
+                [
+                  20480,
+                  1
+                ]
+              ],
+              "oversized_blocks": 0,
+              "oversized_bytes": 0,
+              "total_blocks": 507,
+              "total_bytes": 81322,
+              "failures": 0,
+              "coherent": true,
+              "truncated": false
+            }
+          ],
+          "residual": [
+            [
+              13,
+              1
+            ],
+            [
+              14,
+              1
+            ],
+            [
+              24,
+              2
+            ],
+            [
+              32,
+              2
+            ],
+            [
+              40,
+              1
+            ],
+            [
+              48,
+              2
+            ],
+            [
+              112,
+              1
+            ],
+            [
+              336,
+              65
+            ],
+            [
+              352,
+              1
+            ],
+            [
+              368,
+              1
+            ],
+            [
+              640,
+              1
+            ],
+            [
+              1024,
+              1
+            ],
+            [
+              2048,
+              1
+            ],
+            [
+              2072,
+              1
+            ],
+            [
+              2304,
+              1
+            ],
+            [
+              8192,
+              1
+            ],
+            [
+              20480,
+              1
+            ]
+          ],
+          "bytes": 59707,
+          "blocks": 84
+        }
+      ],
+      "artifacts": [
+        {
+          "sha256": "674021a181e3debf63ffd9886533212cb29b146f947094bb0d520643dad4c050",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.edbc122bb527f640/queue-pressure.json"
+        },
+        {
+          "sha256": "1c05fd9455248f60eb5e9f2f4f42a1c22a17128ad93c5d6edbfcab0fa3d87394",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.edbc122bb527f640/recovery-ping-a.stdout"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.edbc122bb527f640/recovery-ping-b.stderr"
+        },
+        {
+          "sha256": "ce133cf61811b74ccc941fbee15ff03726f1a572ecbf7b0aba9f91571537e957",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.edbc122bb527f640/pressure-ping.log"
+        },
+        {
+          "sha256": "26847e9543577d4685d0052436f5a645a0a89f0ce1ca12f3431ee2defb3c99d2",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.edbc122bb527f640/recovery-ping-b.stdout"
+        },
+        {
+          "sha256": "68b862437972573e5f5ed12b57efb1a58505ba955fbcf437d65c6be085341b74",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.edbc122bb527f640/node-a.log"
+        },
+        {
+          "sha256": "b24d6d33736ecd5604a4b17bc9c6481039fac362bb7df044ef1c10a2bfd21db6",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.edbc122bb527f640/ready-b"
+        },
+        {
+          "sha256": "66e978a2d689127cd8c5f3cbd140da57208258a44485545152e2fb1ac0da120e",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.edbc122bb527f640/repro-metadata.txt"
+        },
+        {
+          "sha256": "f11f443e5aec16598f4db3dfaa5466609928fcfb7f07640ad181ff11b360c4c6",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.edbc122bb527f640/queue-pressure-partial.json"
+        },
+        {
+          "sha256": "cced28c6dc3f99c2396a5eaad732bf6b28142335892b1cd0e6af6cdb53f5ccfa",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.edbc122bb527f640/start-a"
+        },
+        {
+          "sha256": "b24d6d33736ecd5604a4b17bc9c6481039fac362bb7df044ef1c10a2bfd21db6",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.edbc122bb527f640/ready-a"
+        },
+        {
+          "sha256": "617e3623792f3d79e65a97b4de9bd33b686265cb5ae18ca22d60b98dae53e994",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.edbc122bb527f640/queue-pressure-drain.json"
+        },
+        {
+          "sha256": "cced28c6dc3f99c2396a5eaad732bf6b28142335892b1cd0e6af6cdb53f5ccfa",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.edbc122bb527f640/start-b"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.edbc122bb527f640/recovery-ping-a.stderr"
+        },
+        {
+          "sha256": "6ed6495dce76663cf5e944f182a81b468718369fa5faceaf24ab3295ba722870",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.edbc122bb527f640/recovery-ping-a.json"
+        },
+        {
+          "sha256": "30c571456f1f43b2706db274b2d206b3cde6502606e298cf53f36fbb3bf8cf88",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.edbc122bb527f640/node-b.log"
+        },
+        {
+          "sha256": "419d1cb4f120933d97bf21bd1162ff1dd707502787e2c23f629ef57aed2deffb",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.edbc122bb527f640/recovery-ping-b.json"
+        },
+        {
+          "sha256": "74f9ecccfed31eb247b90bd75f931f44f63b675f6f70a7e43ede9d894eadf7c3",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.edbc122bb527f640/repro-commands.sh"
+        },
+        {
+          "sha256": "e3d3d76d30d05366f97bc838bbc3c9770641f379e70d5476cd8e3dab7cda0ae3",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.edbc122bb527f640/queue-pressure-series.json"
+        },
+        {
+          "sha256": "db9b212474518f7e2656add99f6cc64c9d7910af8ef2ee4e8b105688541bb20e",
+          "path": "/tmp/p2p-vpn-pressure-inventory-4.log"
+        }
+      ]
+    }
+  ]
+}

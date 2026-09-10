@@ -12,7 +12,7 @@ not replace the original acceptance criteria with a smaller workload.
 | --- | --- | --- |
 | 1. Source, manifests, budgets, exclusions | [Measurement plan](sustained-resource-review.md), per-workload manifests, source history | Final runtime matches graceful-capture revision; earlier Linux/Android reuse still needs reconciliation |
 | 2. Sustained resource coverage | S1-S7 captures, process/runtime series, collector controls | Linux/Android evidence reconciled; paired final-code S3 now passes with the documented instrumentation limits |
-| 3. Retention and teardown | Ledger/queue controls, pressure/churn, allocation-owner traces | Ledger/queue invariants and epoch-control integrity revalidated; pressure-dependent residual remains unresolved |
+| 3. Retention and teardown | Ledger/queue controls, pressure/churn, allocation-owner traces | Ledger/queue invariants verified; one/five/five/one pressure inventories match across eight daemons; large pressure-owner attribution pending |
 | 4. Android scheduling and background work | [Thread controls](android-thread-controls.md), load/profile/isolation reports | Five captures' raw artifacts and historical harness versions verified; shared shutdown reuse limit explicit below |
 | 5. Reproduction and minimal corrections | Capability retirement, connection retirement, Linux TUN cancellation | Production-fix inventory and guarded regression sources inspected; workload reconciliation remains |
 | 6. Verification and invariant preservation | Workspace, Clippy, source parity, Android-native logs, regression sources | Final runtime terminal logs verified; source-parity inventories match; instrumentation gates still need reconciliation |
@@ -288,7 +288,9 @@ commands, comparison controls and budgets before the remaining captures.
 No new ten-cycle reconnect run is required by this audit. The unassigned 734
 direct bytes and 2088-byte reconnect bucket remain disclosed limitations; they
 are not automatically extra work merely because their stack names are unknown.
-Pressure's different residual still lacks sufficient comparison to close it.
+The [pressure comparison](resource-followup-manifest.md#pressure-comparison-results)
+now establishes identical residual size rows across eight one/five-round daemons.
+The two large pressure-specific blocks still need allocating-owner correspondence.
 
 ## Storage Verification And Cleanup
 

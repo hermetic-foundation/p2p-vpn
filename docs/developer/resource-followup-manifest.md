@@ -139,3 +139,29 @@ env -u P2P_VPN_TUN_E2E_PRESSURE_INITIATOR \
 The existing byte-profile capture remains independent evidence. This comparison
 isolates packet-profile round count; it does not newly certify byte-profile
 allocation ownership or claim zero retained process-global memory.
+
+## Pressure Comparison Results
+
+All four frozen captures pass. [Structured results](pressure-inventory-results.json)
+retain all 24 lifecycle inventories, per-node residual rows, completed-round
+summaries and 160 hashes covering nested raw artifacts and outer logs.
+
+| Sequence | Rounds | Seconds | Residual Per Daemon |
+| --- | ---: | ---: | --- |
+| 1 | 1 | 41.05 | 59,707 bytes / 84 blocks |
+| 2 | 5 | 161.92 | 59,707 bytes / 84 blocks |
+| 3 | 5 | 160.36 | 59,707 bytes / 84 blocks |
+| 4 | 1 | 40.07 | 59,707 bytes / 84 blocks |
+
+- All inventories are coherent, with zero failures, truncation or oversized buckets.
+- Both post-child checkpoints match on each daemon. Residual size rows match
+  across all eight daemons, not merely aggregate byte totals.
+- Original recovery and graceful shutdown gates pass; no matching fixture
+  process remains. No build, debugger, changed deadline or manual rescue occurred.
+- The packet-profile residual does not increase from one to five pressure rounds
+  in these repetitions. This is not an arbitrary-workload or native-heap bound.
+
+The 8192- and 20480-byte residual blocks are candidates for retained timer
+capacity, based on the existing heap/index storage layout. Size coincidence is
+not ownership evidence. A targeted allocation trace is still needed before
+assigning those blocks; do not repeat the round-count campaign to answer that.
