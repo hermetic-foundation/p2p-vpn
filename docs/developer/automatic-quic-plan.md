@@ -66,6 +66,32 @@ Failed traffic and fallback use remain evidence, not grounds to extend a failed 
 
 ## Physical Pixel Check: September 10
 
+### Latest Authorized Upgrade And Wi-Fi Window
+
+- The returning Pixel was upgraded in place to APK SHA-256
+  `f489206e9d91aeed066082436cd43720130c8d8f3ed2bfaf5293b5609bab5b86`.
+- Identity, hostname and overlay addresses were preserved. Linux temporarily used binary SHA-256
+  `4228b88abfe4f149a947f4246fe4973ffd9a8471e8df64ff90441007633eacae` with its unchanged minimal config.
+- Updated-pair baseline: 30/30 full-MTU replies each direction. Linux owned-QUIC counter grew
+  0 to 59; Android grew 0 to 56, with owned-UDP counters unchanged across asynchronous snapshots.
+- Baseline evidence: `/tmp/p2p-vpn-pixel-baseline.J3cTTx/`.
+  The original Linux service was restored before the separate movement-monitor deployment.
+- Movement-monitor evidence: `/tmp/p2p-vpn-pixel-movement.csEklf/`, 80 sampling windows.
+  Every phone snapshot reported Wi-Fi with zero selection changes; cellular was never tested.
+- Full-MTU totals including startup: Linux 389/403 replies; phone 394/403 replies.
+  Loss windows: Linux 1, 2, 64; phone 1, 32, 63. Post-startup loss remains unclassified.
+- Between snapshots 4 and 80, Linux owned-QUIC/UDP counters grew 13/0 to 747/26;
+  Android grew 67/21 to 804/45. This demonstrates mixed traffic, predominantly owned QUIC.
+- The monitor stopped at its fixed deadline and restored the original service with no drop-ins.
+  No automatic retry or extension was started; phone pairing and runtime generation remained intact.
+- An initial monitor launch failed before deployment because systemd's PATH lacked `mktemp`.
+  The host-only script's PATH was corrected before the recorded run; no production code changed.
+
+This window is Wi-Fi evidence only, not physical network recovery or a loss-free stability pass.
+It retained status snapshots and ping logs, not outer-packet captures sufficient to classify loss.
+
+### Earlier Pixel Deployment
+
 The authorized in-place APK upgrade preserved the existing identity, hostname and network.
 Wi-Fi remained selected with zero reported underlay changes. USB was management only.
 
