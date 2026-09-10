@@ -176,6 +176,24 @@ transport fixes were inferred from a passing run; those acceptance gaps remain o
 
 No existing Lean/TLA+ model was found; this asynchronous fallback change has executable coverage only.
 
+### Android Build Follow-Up
+
+- Source revision `26d716b6`: cached offline ARM64 native build passed in 39.12 seconds,
+  with four existing platform-specific dead-code warnings. Two Cargo jobs; no downloads.
+- Debug APK assembly passed in seven seconds; JVM tests were up-to-date, not freshly executed.
+  `zipalign -c -P 16 4` passed. Neither phone nor Linux service was redeployed.
+- Nix-evaluated ARM64 source `/nix/store/zq7kfqd9r650nrq04ycmrsja9dsxxz0s-source`
+  matched working-tree `src` and `crates` recursively. This is not a full Nix realization.
+
+| Prepared artifact | SHA-256 |
+| --- | --- |
+| Debug APK | `1d71d2cad8c4c1cfaaa532589461368a69c72574c00fbdfe929df470d963e6f7` |
+| ARM64 native library | `092639d66a412036f86b7027353931fe4e5fda1280b421a9110c6ea3442e46f7` |
+
+Physical fault injection remains pending authorization: upgrade the OnePlus, temporarily
+run the laptop test binary, block only their owned QUIC packet traffic, then remove the
+block and observe autonomous recovery. Restore the Nix-managed service afterward.
+
 ## Stream-Only Compatibility Check
 
 - Extend the isolated minimal-config mDNS fixture with one explicitly stream-only peer.
