@@ -725,6 +725,8 @@ measure_concurrent_multi_network_traffic() {
   local batch_started batch_completed process received failed_summary
   local attempt attempt_detail=""
   local max_attempts=3
+  # Readiness may retry, but a resource measurement must retain its first batch.
+  [[ "${scenario:-}" != multi-network-resource-* ]] || max_attempts=1
   local failed_processes=0
   local -a failed_legs=()
   local -a processes=()

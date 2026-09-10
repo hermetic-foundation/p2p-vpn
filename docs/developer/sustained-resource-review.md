@@ -96,6 +96,22 @@ Freeze packet size/rate, transition schedules and transport settings in each
 fixture manifest before its first capture. Select supported controls from source
 and configured limits, not observed results. Record actual delivered work.
 
+### Android Traffic Batch Integrity
+
+- Resource scenarios use one concurrent measurement batch after bounded readiness checks.
+- A failed measured batch fails the scenario; it cannot be replaced by a successful retry.
+- Non-resource lifecycle scenarios retain their existing three-attempt behavior.
+- Paced sustained ping workloads already use one batch and remain unchanged.
+- Regression coverage: `tests/android-resource-traffic.sh`, using eight mocked legs without networking.
+
+The saved sustained-load attempt 1, thread-controls attempt 2 and corrected
+notification-admission attempt 1 report first-attempt initial traffic success.
+Their recorded results are unchanged by this stricter rule.
+
+The five-cycle Android isolation workload remains to be implemented and captured.
+It must keep readiness convergence separate from measured traffic and verify
+disabled-route rejection, surviving-network traffic and post-enable recovery.
+
 S6's allocator instrumentation, calibration, modes and capture order are
 specified in [Allocation Review](allocation-review.md). All twelve captures
 passed with zero requested-byte/block retention after each of 120 teardowns.
