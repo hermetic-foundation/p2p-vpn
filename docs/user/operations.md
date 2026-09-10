@@ -210,7 +210,11 @@ Useful packet-path counters:
 
 | Counter | Meaning |
 | --- | --- |
-| `outbound_quic_datagram_packets` | Packets sent over QUIC datagram packet plane. |
+| `outbound_quic_datagram_packets` | Legacy aggregate of UDP and QUIC packet-plane payload sends; not QUIC-specific. |
+| `outbound_owned_quic_datagram_packets` | Payload packets successfully submitted to the owned QUIC datagram backend; excludes probes. |
+| `packet_plane_quic_connection` | Live remote endpoint of a QUIC connection with an installed packet session; may change during migration. |
+| `packet_plane_quic_session` | Signed handshake endpoint and session metadata; not the live endpoint after migration. |
+| `outbound_owned_udp_datagram_packets` | Payload packets successfully submitted to the owned UDP datagram backend; excludes probes. |
 | `outbound_direct_quic_stream_fallback_packets` | Packets sent over direct QUIC stream fallback. |
 | `outbound_direct_tcp_stream_fallback_packets` | Packets sent over direct TCP stream fallback. |
 | `outbound_relay_stream_fallback_packets` | Packets sent over relay stream fallback. |

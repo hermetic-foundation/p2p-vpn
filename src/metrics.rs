@@ -68,6 +68,8 @@ pub struct RuntimeMetrics {
     outbound_direct_tcp_stream_fallback_packets: AtomicU64,
     outbound_relay_stream_fallback_packets: AtomicU64,
     outbound_quic_datagram_packets: AtomicU64,
+    outbound_owned_quic_datagram_packets: AtomicU64,
+    outbound_owned_udp_datagram_packets: AtomicU64,
     outbound_quic_datagram_unavailable_packets: AtomicU64,
     outbound_path_probes_sent: AtomicU64,
     outbound_path_probe_acks_sent: AtomicU64,
@@ -297,6 +299,17 @@ impl RuntimeMetrics {
     pub fn record_outbound_quic_datagram(&self) {
         self.outbound_quic_datagram_packets
             .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_outbound_packet_datagram(&self, path: PathKind) {
+        let counter = match path {
+            PathKind::DirectQuicDatagram => &self.outbound_owned_quic_datagram_packets,
+            PathKind::DirectUdpDatagram => &self.outbound_owned_udp_datagram_packets,
+            _ => return,
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
+        // Retain the historically aggregated counter for existing consumers.
+        self.record_outbound_quic_datagram();
     }
 
     pub fn record_outbound_quic_datagram_unavailable(&self) {
@@ -1180,6 +1193,12 @@ impl RuntimeMetrics {
             .load(Ordering::Relaxed);
         snapshot.outbound_quic_datagram_packets =
             self.outbound_quic_datagram_packets.load(Ordering::Relaxed);
+        snapshot.outbound_owned_quic_datagram_packets = self
+            .outbound_owned_quic_datagram_packets
+            .load(Ordering::Relaxed);
+        snapshot.outbound_owned_udp_datagram_packets = self
+            .outbound_owned_udp_datagram_packets
+            .load(Ordering::Relaxed);
         snapshot.outbound_quic_datagram_unavailable_packets = self
             .outbound_quic_datagram_unavailable_packets
             .load(Ordering::Relaxed);
@@ -1644,6 +1663,8 @@ pub struct RuntimeSnapshot {
     pub outbound_direct_tcp_stream_fallback_packets: u64,
     pub outbound_relay_stream_fallback_packets: u64,
     pub outbound_quic_datagram_packets: u64,
+    pub outbound_owned_quic_datagram_packets: u64,
+    pub outbound_owned_udp_datagram_packets: u64,
     pub outbound_quic_datagram_unavailable_packets: u64,
     pub outbound_path_probes_sent: u64,
     pub outbound_path_probe_acks_sent: u64,
@@ -1863,6 +1884,14 @@ impl RuntimeSnapshot {
             format!(
                 "outbound_quic_datagram_packets {}",
                 self.outbound_quic_datagram_packets
+            ),
+            format!(
+                "outbound_owned_quic_datagram_packets {}",
+                self.outbound_owned_quic_datagram_packets
+            ),
+            format!(
+                "outbound_owned_udp_datagram_packets {}",
+                self.outbound_owned_udp_datagram_packets
             ),
             format!(
                 "outbound_quic_datagram_unavailable_packets {}",
@@ -2681,6 +2710,21 @@ fn is_prometheus_metric_suffix(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn packet_datagram_counters_distinguish_backends_and_preserve_aggregate() {
+        let metrics = RuntimeMetrics::default();
+        metrics.record_outbound_packet_datagram(PathKind::DirectQuicDatagram);
+        metrics.record_outbound_packet_datagram(PathKind::DirectUdpDatagram);
+        metrics.record_outbound_packet_datagram(PathKind::DirectUdpDatagram);
+        metrics.record_outbound_packet_datagram(PathKind::DirectTcpStream);
+        let snapshot = metrics.snapshot_with_paths(Default::default(), Default::default());
+        assert_eq!(snapshot.outbound_quic_datagram_packets, 3);
+        assert_eq!(snapshot.outbound_owned_quic_datagram_packets, 1);
+        assert_eq!(snapshot.outbound_owned_udp_datagram_packets, 2);
+        assert_metric_line(&snapshot, "outbound_owned_quic_datagram_packets 1");
+        assert_metric_line(&snapshot, "outbound_owned_udp_datagram_packets 2");
+    }
 
     fn populated_snapshot() -> RuntimeSnapshot {
         let metrics = RuntimeMetrics::default();

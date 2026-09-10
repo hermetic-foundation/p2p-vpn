@@ -36,6 +36,8 @@ const CHILD_ENV: &str = "P2P_VPN_TUN_E2E_MODE";
 #[cfg(feature = "allocation-review")]
 #[path = "support/allocation_sample.rs"]
 mod allocation_sample;
+#[path = "support/automatic_quic_recovery.rs"]
+mod automatic_quic_recovery;
 #[path = "support/idle_counters.rs"]
 mod idle_counters;
 #[path = "support/idle_sample.rs"]
@@ -68,6 +70,8 @@ const DIRECT_TEST_NAME: &str = "tun_namespace_ping_crosses_two_node_overlay";
 const QUEUE_PRESSURE_TEST_NAME: &str = "tun_namespace_recovers_after_tcp_queue_pressure";
 const DIRECT_QUIC_TEST_NAME: &str = "tun_namespace_ping_crosses_owned_quic_packet_plane";
 const MDNS_TEST_NAME: &str = "tun_namespace_ping_crosses_mdns_discovered_overlay";
+const AUTOMATIC_QUIC_TEST_NAME: &str = "tun_namespace_minimal_config_prefers_quic_datagrams";
+const AUTOMATIC_UDP_COMPAT_TEST_NAME: &str = "tun_namespace_minimal_config_uses_udp_only_peer";
 const RELAY_TEST_NAME: &str = "tun_namespace_ping_crosses_relay_overlay";
 const INVITE_RELAY_TEST_NAME: &str = "tun_namespace_invite_import_crosses_relay_overlay";
 const PAIRING_TEST_NAME: &str = "tun_namespace_pair_accept_crosses_live_pairing_overlay";
@@ -184,9 +188,59 @@ fn tun_namespace_ping_crosses_owned_quic_packet_plane() {
 #[ignore = "requires Linux user and network namespaces plus /dev/net/tun"]
 fn tun_namespace_ping_crosses_mdns_discovered_overlay() {
     match env::var(CHILD_ENV).as_deref() {
-        Ok("orchestrator") => run_mdns_orchestrator(),
+        Ok("orchestrator") => run_mdns_orchestrator(MDNS_TEST_NAME),
         Ok("node") => run_node_child(),
         _ => reexec_orchestrator(MDNS_TEST_NAME),
+    }
+}
+
+#[test]
+#[ignore = "requires Linux user and network namespaces plus /dev/net/tun"]
+fn tun_namespace_minimal_config_prefers_quic_datagrams() {
+    match env::var(CHILD_ENV).as_deref() {
+        Ok("orchestrator") => run_mdns_orchestrator(AUTOMATIC_QUIC_TEST_NAME),
+        Ok("node") => run_node_child(),
+        _ => reexec_orchestrator(AUTOMATIC_QUIC_TEST_NAME),
+    }
+}
+
+#[test]
+#[ignore = "requires Linux user and network namespaces plus /dev/net/tun"]
+fn tun_namespace_minimal_config_uses_udp_only_peer() {
+    match env::var(CHILD_ENV).as_deref() {
+        Ok("orchestrator") => run_mdns_orchestrator(AUTOMATIC_UDP_COMPAT_TEST_NAME),
+        Ok("node") => run_node_child(),
+        _ => reexec_orchestrator(AUTOMATIC_UDP_COMPAT_TEST_NAME),
+    }
+}
+
+#[test]
+#[ignore = "requires Linux namespaces, iptables and /dev/net/tun"]
+fn tun_namespace_minimal_quic_recovers_after_packet_block() {
+    match env::var(CHILD_ENV).as_deref() {
+        Ok("orchestrator") => run_mdns_orchestrator(automatic_quic_recovery::TEST_NAME),
+        Ok("node") => run_node_child(),
+        _ => reexec_orchestrator(automatic_quic_recovery::TEST_NAME),
+    }
+}
+
+#[test]
+#[ignore = "requires Linux namespaces, iptables and /dev/net/tun"]
+fn tun_namespace_minimal_quic_blocked_from_startup_recovers() {
+    match env::var(CHILD_ENV).as_deref() {
+        Ok("orchestrator") => run_mdns_orchestrator(automatic_quic_recovery::STARTUP_TEST_NAME),
+        Ok("node") => run_node_child(),
+        _ => reexec_orchestrator(automatic_quic_recovery::STARTUP_TEST_NAME),
+    }
+}
+
+#[test]
+#[ignore = "requires Linux namespaces and /dev/net/tun"]
+fn tun_namespace_minimal_quic_follows_lan_address_change() {
+    match env::var(CHILD_ENV).as_deref() {
+        Ok("orchestrator") => run_mdns_orchestrator(automatic_quic_recovery::MOVEMENT_TEST_NAME),
+        Ok("node") => run_node_child(),
+        _ => reexec_orchestrator(automatic_quic_recovery::MOVEMENT_TEST_NAME),
     }
 }
 
@@ -422,6 +476,7 @@ fn packet_plane_datagram_state_evidence_is_backend_specific() {
         "healthy_direct_udp_datagram_paths 1".to_owned(),
         "healthy_direct_quic_datagram_paths 0".to_owned(),
         "outbound_quic_datagram_packets 1".to_owned(),
+        "outbound_owned_udp_datagram_packets 1".to_owned(),
     ];
     let quic_lines = vec![
         "packet_plane_sessions 0".to_owned(),
@@ -429,6 +484,7 @@ fn packet_plane_datagram_state_evidence_is_backend_specific() {
         "healthy_direct_udp_datagram_paths 0".to_owned(),
         "healthy_direct_quic_datagram_paths 1".to_owned(),
         "outbound_quic_datagram_packets 1".to_owned(),
+        "outbound_owned_quic_datagram_packets 1".to_owned(),
     ];
     let missing_packets = vec![
         "packet_plane_sessions 1".to_owned(),
@@ -456,6 +512,14 @@ fn packet_plane_datagram_state_evidence_is_backend_specific() {
         &missing_packets,
         PacketPlaneDatagramEvidence::OwnedUdp
     ));
+    let only_aggregate: Vec<_> = quic_lines
+        .into_iter()
+        .filter(|line| !line.starts_with("outbound_owned_quic_datagram_packets "))
+        .collect();
+    assert!(!packet_plane_datagram_state_used(
+        &only_aggregate,
+        PacketPlaneDatagramEvidence::OwnedQuic
+    ));
 }
 
 #[test]
@@ -464,14 +528,14 @@ fn packet_plane_datagram_log_evidence_is_backend_specific() {
 event=packet_plane_session_established backend=owned_udp\n\
 path_healthy_direct_udp_datagram_paths 1\n\
 path_healthy_direct_quic_datagram_paths 0\n\
-outbound_quic_datagram_packets 1\n\
+outbound_owned_udp_datagram_packets 1\n\
 inbound_accepted_packets 1\n";
     let quic_log = "\
 event=packet_plane_session_established backend=owned_quic\n\
 event=packet_plane_quic_listening\n\
 path_healthy_direct_udp_datagram_paths 0\n\
 path_healthy_direct_quic_datagram_paths 1\n\
-outbound_quic_datagram_packets 1\n";
+outbound_owned_quic_datagram_packets 1\n";
 
     assert!(packet_plane_datagrams_used(udp_log));
     assert!(!packet_plane_datagrams_used(quic_log));
@@ -542,7 +606,12 @@ fn reexec_orchestrator(test_name: &str) {
         );
         idle_sample::WARMUP + duration
     });
-    let default_timeout = if test_name == lifecycle_churn::TEST_NAME {
+    let default_timeout = if test_name == automatic_quic_recovery::TEST_NAME
+        || test_name == automatic_quic_recovery::STARTUP_TEST_NAME
+        || test_name == automatic_quic_recovery::MOVEMENT_TEST_NAME
+    {
+        Duration::from_secs(240)
+    } else if test_name == lifecycle_churn::TEST_NAME {
         lifecycle_churn::watchdog()
     } else if test_name == sustained_traffic::TEST_NAME {
         Duration::from_secs(90) + sustained_traffic::duration_budget()
@@ -717,22 +786,36 @@ fn run_direct_orchestrator(test_name: &str) {
     cleanup_temp_dir(temp_dir);
 }
 
-fn run_mdns_orchestrator() {
-    let identity_a = NodeIdentity::generate_ed25519().expect("node A identity");
-    let identity_b = NodeIdentity::generate_ed25519().expect("node B identity");
+fn run_mdns_orchestrator(test_name: &str) {
+    let automatic_quic = test_name == AUTOMATIC_QUIC_TEST_NAME
+        || test_name == automatic_quic_recovery::TEST_NAME
+        || test_name == automatic_quic_recovery::STARTUP_TEST_NAME
+        || test_name == automatic_quic_recovery::MOVEMENT_TEST_NAME;
+    let (identity_a, identity_b) = if test_name == automatic_quic_recovery::MOVEMENT_TEST_NAME {
+        automatic_quic_recovery::movement_identities()
+    } else {
+        (
+            NodeIdentity::generate_ed25519().expect("node A identity"),
+            NodeIdentity::generate_ed25519().expect("node B identity"),
+        )
+    };
     let temp_dir = env::temp_dir().join(format!("p2p-vpn-mdns-tun-e2e-{}", std::process::id()));
-    let temp_dir = init_namespace_temp_dir(&temp_dir, MDNS_TEST_NAME);
+    let temp_dir = init_namespace_temp_dir(&temp_dir, test_name);
     let start_a = temp_dir.join("start-a");
     let start_b = temp_dir.join("start-b");
 
-    let config_b = mdns_overlay_config("b", &identity_b, &identity_a);
+    let config_b = if automatic_quic || test_name == AUTOMATIC_UDP_COMPAT_TEST_NAME {
+        automatic_quic_overlay_config("b", &identity_b, &identity_a)
+    } else {
+        mdns_overlay_config("b", &identity_b, &identity_a)
+    };
     let address_b = TunRuntimeConfig::from_config(&config_b)
         .expect("node B TUN config")
         .addresses
         .ipv4;
 
     let mut node_a = spawn_node(
-        MDNS_TEST_NAME,
+        test_name,
         "a",
         &identity_a,
         Some(&identity_b),
@@ -741,7 +824,7 @@ fn run_mdns_orchestrator() {
         &start_a,
     );
     let mut node_b = spawn_node(
-        MDNS_TEST_NAME,
+        test_name,
         "b",
         &identity_b,
         Some(&identity_a),
@@ -757,17 +840,50 @@ fn run_mdns_orchestrator() {
     fs::write(&start_b, b"start").expect("write node B start file");
     wait_for_file(&temp_dir.join("ready-b"));
     wait_for_daemon_running(&temp_dir, "b");
+    let startup_block = (test_name == automatic_quic_recovery::STARTUP_TEST_NAME)
+        .then(|| automatic_quic_recovery::block_before_discovery(&temp_dir, node_b.id()));
     fs::write(&start_a, b"start").expect("write node A start file");
     wait_for_file(&temp_dir.join("ready-a"));
-    wait_for_packet_plane_sessions(&temp_dir, "a");
-    wait_for_packet_plane_sessions(&temp_dir, "b");
+    if let Some(port) = startup_block {
+        automatic_quic_recovery::finish_startup_block(
+            &temp_dir,
+            node_a.id(),
+            node_b.id(),
+            address_b,
+            &port,
+        );
+    }
+    if automatic_quic {
+        wait_for_owned_quic_packet_plane_sessions(&temp_dir);
+        wait_for_selected_path(&temp_dir, "a", "direct_quic_datagram");
+        wait_for_selected_path(&temp_dir, "b", "direct_quic_datagram");
+    } else {
+        wait_for_packet_plane_sessions(&temp_dir, "a");
+        wait_for_packet_plane_sessions(&temp_dir, "b");
+    }
 
     let host_ping = ping_from_namespace(node_a.id(), "hse2ea", address_b);
     let initiator_addresses = ns_command_output(node_a.id(), "ip", &["addr", "show"]);
     let initiator_routes = ns_command_output(node_a.id(), "ip", &["route", "show", "table", "all"]);
     let responder_addresses = ns_command_output(node_b.id(), "ip", &["addr", "show"]);
     let responder_routes = ns_command_output(node_b.id(), "ip", &["route", "show", "table", "all"]);
-    wait_for_packet_plane_datagrams(&temp_dir);
+    if automatic_quic {
+        wait_for_owned_quic_packet_plane_datagrams(&temp_dir);
+    } else {
+        wait_for_packet_plane_datagrams(&temp_dir);
+    }
+
+    if test_name == automatic_quic_recovery::TEST_NAME {
+        automatic_quic_recovery::capture(&temp_dir, node_a.id(), node_b.id(), address_b);
+    }
+    if test_name == automatic_quic_recovery::MOVEMENT_TEST_NAME {
+        automatic_quic_recovery::move_address_and_return(
+            &temp_dir,
+            node_a.id(),
+            node_b.id(),
+            address_b,
+        );
+    }
 
     stop_child(&mut node_a);
     stop_child(&mut node_b);
@@ -787,8 +903,13 @@ fn run_mdns_orchestrator() {
             && log_metric_positive(&initiator_log, "discovered_address_dial_attempts"),
         "node A did not discover and validate node B through mDNS\nnode-a log:\n{initiator_log}\nnode-b log:\n{responder_log}",
     );
-    assert_packet_plane_datagrams_used("node A", &initiator_log, &responder_log);
-    assert_packet_plane_datagrams_used("node B", &responder_log, &initiator_log);
+    if automatic_quic {
+        assert_owned_quic_packet_plane_datagrams_used("node A", &initiator_log, &responder_log);
+        assert_owned_quic_packet_plane_datagrams_used("node B", &responder_log, &initiator_log);
+    } else {
+        assert_packet_plane_datagrams_used("node A", &initiator_log, &responder_log);
+        assert_packet_plane_datagrams_used("node B", &responder_log, &initiator_log);
+    }
     cleanup_temp_dir(temp_dir);
 }
 
@@ -839,6 +960,21 @@ fn run_relay_orchestrator() {
     wait_for_child_namespace(node_a.id());
     wait_for_child_namespace(node_b.id());
     configure_relay_underlay(relay.id(), node_a.id(), node_b.id());
+    for port in ["veth-a-host", "veth-b-host"] {
+        run_command(
+            "ip",
+            &[
+                "link",
+                "set",
+                "dev",
+                port,
+                "type",
+                "bridge_slave",
+                "isolated",
+                "on",
+            ],
+        );
+    }
     ns_command(node_a.id(), "ping", &["-c", "1", "-W", "2", "10.251.0.254"]);
     ns_command(node_b.id(), "ping", &["-c", "1", "-W", "2", "10.251.0.254"]);
 
@@ -853,6 +989,24 @@ fn run_relay_orchestrator() {
     wait_for_peer_ready(&temp_dir, "b");
 
     let host_ping = ping_from_namespace(node_a.id(), "hse2ea", address_b);
+    for role in ["a", "b"] {
+        wait_for_daemon_state(
+            &temp_dir,
+            role,
+            Duration::from_secs(5),
+            "relay payload",
+            |lines| {
+                state_metric_count(lines, "outbound_relay_stream_fallback_packets")
+                    .is_some_and(|count| count >= 5)
+                    && state_metric_count(lines, "outbound_direct_tcp_stream_fallback_packets")
+                        == Some(0)
+                    && state_metric_count(lines, "outbound_direct_quic_stream_fallback_packets")
+                        == Some(0)
+                    && state_metric_count(lines, "outbound_owned_quic_datagram_packets") == Some(0)
+                    && state_metric_count(lines, "outbound_owned_udp_datagram_packets") == Some(0)
+            },
+        );
+    }
     let initiator_addresses = ns_command_output(node_a.id(), "ip", &["addr", "show"]);
     let initiator_routes = ns_command_output(node_a.id(), "ip", &["route", "show", "table", "all"]);
     let responder_addresses = ns_command_output(node_b.id(), "ip", &["addr", "show"]);
@@ -2340,6 +2494,13 @@ enum PacketPlaneDatagramEvidence {
 }
 
 impl PacketPlaneDatagramEvidence {
+    const fn payload_metric(self) -> &'static str {
+        match self {
+            Self::OwnedUdp => "outbound_owned_udp_datagram_packets",
+            Self::OwnedQuic => "outbound_owned_quic_datagram_packets",
+        }
+    }
+
     const fn context(self) -> &'static str {
         match self {
             Self::OwnedUdp => "owned UDP packet-plane datagrams",
@@ -2749,22 +2910,20 @@ fn packet_plane_datagram_state_used(
 ) -> bool {
     state_metric_count(lines, evidence.session_metric()).is_some_and(|count| count >= 1)
         && state_metric_count(lines, evidence.healthy_path_metric()).is_some_and(|count| count >= 1)
-        && state_metric_count(lines, "outbound_quic_datagram_packets")
-            .is_some_and(|count| count >= 1)
+        && state_metric_count(lines, evidence.payload_metric()).is_some_and(|count| count >= 1)
 }
 
 fn packet_plane_datagrams_used(log: &str) -> bool {
     log.contains("event=packet_plane_session_established")
         && log_metric_positive(log, "path_healthy_direct_udp_datagram_paths")
-        && log_metric_positive(log, "outbound_quic_datagram_packets")
+        && log_metric_positive(log, "outbound_owned_udp_datagram_packets")
         && log_metric_positive(log, "inbound_accepted_packets")
 }
 
 fn owned_quic_packet_plane_datagrams_used(log: &str) -> bool {
     owned_quic_packet_plane_session_established(log)
         && log.contains("event=packet_plane_quic_listening")
-        && (log_metric_positive(log, "outbound_quic_datagram_packets")
-            || log_metric_positive(log, "inbound_accepted_packets"))
+        && log_metric_positive(log, "outbound_owned_quic_datagram_packets")
 }
 
 fn owned_quic_packet_plane_session_established(log: &str) -> bool {
@@ -3130,6 +3289,14 @@ fn run_node_child_inner() {
                 "a" | "b" => relay_overlay_config(&role, &local, &remote, infra),
                 other => panic!("unknown node role {other}"),
             }
+        } else if env::args().any(|argument| {
+            argument == AUTOMATIC_QUIC_TEST_NAME
+                || argument == AUTOMATIC_UDP_COMPAT_TEST_NAME
+                || argument == automatic_quic_recovery::TEST_NAME
+                || argument == automatic_quic_recovery::STARTUP_TEST_NAME
+                || argument == automatic_quic_recovery::MOVEMENT_TEST_NAME
+        }) {
+            automatic_quic_overlay_config(&role, &local, &remote)
         } else if is_direct_quic_test_child() {
             direct_quic_overlay_config(&role, &local, &remote)
         } else if is_mdns_test_child() {
@@ -3440,6 +3607,25 @@ fn read_child_config(temp_dir: &Path, role: &str) -> Config {
 
 fn child_config_path(temp_dir: &Path, role: &str) -> PathBuf {
     temp_dir.join(format!("config-{role}.json"))
+}
+
+fn automatic_quic_overlay_config(
+    role: &str,
+    local: &NodeIdentity,
+    remote: &NodeIdentity,
+) -> Config {
+    let mut config: Config = serde_json::from_value(serde_json::json!({
+        "network": { "name": NETWORK_NAME, "private_key": local.private_key },
+        "interface": { "name": format!("hse2e{role}") },
+        "peers": [{ "id": remote.peer_id }]
+    }))
+    .expect("minimal automatic QUIC config");
+    // Keep discovery inside the isolated test LAN, without supplying peer endpoints.
+    config.network.discovery = mdns_test_discovery();
+    if role == "b" && env::args().any(|argument| argument == AUTOMATIC_UDP_COMPAT_TEST_NAME) {
+        config.network.packet_plane.quic_listen.clear();
+    }
+    config
 }
 
 fn mdns_overlay_config(role: &str, local: &NodeIdentity, remote: &NodeIdentity) -> Config {
@@ -3808,7 +3994,10 @@ fn node_config(
             bootstrap_peers: Vec::new(),
             discovery: p2p_vpn::config::DiscoveryConfig::default(),
             relay: p2p_vpn::config::RelayConfig::default(),
-            packet_plane: p2p_vpn::config::PacketPlaneConfig::default(),
+            packet_plane: p2p_vpn::config::PacketPlaneConfig {
+                quic_listen: Vec::new(),
+                ..p2p_vpn::config::PacketPlaneConfig::default()
+            },
         },
         interface: InterfaceConfig {
             name: interface.to_owned(),

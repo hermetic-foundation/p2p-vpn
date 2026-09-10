@@ -2,8 +2,334 @@
 
 ## Status
 
-Implementation pending. Baseline: `e483775d`.
+Configuration implementation in progress. Baseline: `e483775d`.
 This plan does not certify QUIC-first minimal configuration or physical recovery.
+
+## Implementation Progress
+
+- Shared defaults now request an ephemeral QUIC listener alongside UDP.
+- Deserialization distinguishes omitted QUIC settings from an explicit empty list.
+- Legacy `listen: []` without a QUIC override remains stream-only.
+- Serialization retains explicit QUIC disables; entirely default packet settings remain omitted.
+- Configuration tests: 60 passed, including omission/override/serialization regressions.
+- Library tests: 1,154 passed, 8 ignored, zero failures (46.09 seconds, two test threads).
+- Formatting and whitespace checks passed; no Lean/TLA+/Alloy files found.
+- NixOS allocates QUIC ports from 52820, includes them in collision checks and opens the derived firewall ports.
+- Consumer evaluation passes 17 contracts; QUIC module evaluation passes nine contracts.
+- Six-instance module fixture UDP ports match the strengthened expected list.
+- Runtime integration, workspace, Clippy and Android validation remain pending.
+- No deployments or personal configuration changes have been made for this goal.
+
+Local test build used cached Cargo 1.96.0 with Rust 1.97.1, offline/locked,
+two build jobs, no debug symbols or incremental state. Test executable:
+`/tmp/p2p-vpn-review-target/debug/deps/p2p_vpn-3e67c2326d773a12`.
+
+```sh
+cargo test --offline --locked --lib config::tests::
+timeout 180 /tmp/p2p-vpn-review-target/debug/deps/p2p_vpn-3e67c2326d773a12 \
+  --test-threads=2 --quiet
+```
+
+The build emitted two existing `doc_cfg` warnings from vendored `stats_alloc`.
+Full temporary storage accounting after tests: 9,386,480 KiB, below 10 GiB.
+
+Nix checks ran offline by evaluating derivation contents; no system build or activation:
+
+```sh
+nix eval --offline .#checks.x86_64-linux.nixos-consumer-flake-eval.text
+nix eval --offline .#checks.x86_64-linux.nixos-quic-defaults-eval.text
+nix eval --offline --raw .#checks.x86_64-linux.nixos-module.udpPorts
+```
+
+## Minimal LAN Packet Test
+
+`tun_namespace_minimal_config_prefers_quic_datagrams` uses two isolated network
+namespaces, generated identities and peer IDs. No packet listener, endpoint,
+bootstrap address or route is supplied. Discovery is restricted to mDNS for isolation.
+
+The existing UDP fixture remains explicitly UDP-only; the new test independently
+deserializes minimal configuration. Both require real TUN traffic.
+
+| Attempt | Result | Evidence |
+| --- | --- | --- |
+| Before direct-path advertisement fix | Failed after 74.50 seconds waiting for QUIC selection | Both QUIC listeners bound, but capabilities advertised zero QUIC endpoints; UDP remained selected |
+| After fix | Passed in 12.03 seconds | Both selected QUIC datagrams; overlay ping passed; each log recorded increasing QUIC payload counts through at least four |
+
+The direct-connection helper previously advertised only UDP packet endpoints.
+It now also advertises the QUIC listener's route-derived address and certificate,
+using the existing relay and overlay-address exclusion guards.
+
+No deadline, assertion or underlay was changed between attempts. No runtime was
+manually rescued. The passing artifact includes the explicit UDP fixture override.
+
+```sh
+P2P_VPN_TUN_E2E_KEEP_TEMP=1 TOKIO_WORKER_THREADS=2 timeout 100 \
+  /tmp/p2p-vpn-review-target/debug/deps/tun_namespace-0e281f928ed88e72 \
+  --ignored --exact tun_namespace_minimal_config_prefers_quic_datagrams --nocapture
+```
+
+| Artifact | SHA-256 |
+| --- | --- |
+| Passing test executable | `d2da95110d2a8fa3421f19289afce2bcc4dd10799f770b1110e236a89c7bc3ed` |
+| Failed node A log | `0f79fc5803a8b1905676458490bf2f838bed6646071cb2629db1988296159eea` |
+| Failed node B log | `afcb012f5c120b835b8b4bdff38302d52e019f9bfee334c61a8487f2340d9b87` |
+| Passing node A log | `423b202288c3bd891cc9f8aa56a168bb1e48a7a5d755b35b0ee80e90da2ba49a` |
+| Passing node B log | `3c78f70646a5293fb570621b98b96b5578f2e9f8030f441ebe11151ae68ececb` |
+
+Evidence directories under `/tmp/`:
+
+- Failure: `p2p-vpn-mdns-tun-e2e-1.ca9f98bf52cc62c9`.
+- Pass: `p2p-vpn-mdns-tun-e2e-1.f457ec297d327cc4`.
+
+This single LAN result does not establish blocked-QUIC fallback, movement,
+public NAT reachability, Android behavior or sustained resource bounds.
+
+## Capability Compatibility Follow-Up
+
+The direct QUIC advertisement now uses the existing capability builder, keeping
+the advertised preference consistent with its certificate and support flags.
+
+| Check | Result |
+| --- | --- |
+| Advertisement unit regression | Passed: certificate, preference, deduplication, relay exclusion, overlay exclusion and disabled backend |
+| Minimal config with UDP-only peer | Passed in 11.03 seconds; automatic UDP endpoint discovery and overlay payload traffic |
+| Minimal QUIC repeat on same build | Passed in 12.09 seconds; QUIC selection and payload traffic on both nodes |
+
+The UDP-only peer is a current runtime with its QUIC listener explicitly disabled,
+not an archived release binary. It verifies capability fallback, not full old-release compatibility.
+
+Both namespace scenarios use the existing 100-second outer watchdog and unchanged
+internal deadlines. No test processes remained afterward.
+
+| Artifact | SHA-256 |
+| --- | --- |
+| Follow-up namespace executable | `dc208b85b76394c89388de530cc27d8bacfde50777aea3490c2ac069da07a8e1` |
+| UDP-only node A log | `19e7af71c94a05426b79c718154d3ae6af73face7c7bb5a33b9bf302693ae9be` |
+| UDP-only node B log | `eae2ed649df92dcce1169f3bb3b538f22a896fad846bc0a5340811ce4fc91920` |
+| QUIC repeat node A log | `709c8c272c50da6503222619d14de1c85cf9b9c2ffa4f2c5e01713e127d8e7ee` |
+| QUIC repeat node B log | `5679bed7ba87bb58858cc5140054d8e526544a036107006d013d7810088f7bc6` |
+
+Directories: `/tmp/p2p-vpn-mdns-tun-e2e-1.894702b35cfc5738` (UDP-only),
+`/tmp/p2p-vpn-mdns-tun-e2e-1.f289087954c141af` (QUIC repeat).
+
+The first follow-up build rejected test-only `IpCidr` string parsing. The test now
+uses the existing constructor; the rebuilt unit and integration checks passed.
+
+## Blocked QUIC Regression
+
+`tun_namespace_minimal_quic_recovers_after_packet_block` establishes automatic
+QUIC traffic, drops the two QUIC packet listener ports inside disposable namespaces,
+requires UDP fallback, then removes the block and requires QUIC payload recovery.
+
+| Bound | Value |
+| --- | --- |
+| Orchestrator | 240 seconds, fixed before first execution |
+| Outer watchdog | 250 seconds |
+| Path transition | Existing 60-second wait per node |
+| Traffic checks | Five of five replies per stage; post-restore QUIC counter increase |
+| Intervention | Namespace firewall changes only; no daemon restart or reconfiguration |
+
+First run failed in 72.94 seconds while waiting for UDP selection on node A.
+QUIC probe timeouts demoted the path, but no UDP session formed. A healthy TCP
+path remained; the test stopped before testing fallback traffic or restoration.
+
+Source findings from the failed run:
+
+- `packet_plane_negotiation_backend` prioritizes renewed QUIC negotiation over an absent UDP session.
+- `packet_plane_accept_backend` selects QUIC from capabilities whenever both peers support it.
+- Acceptance chooses that backend before matching the authenticated hello endpoint.
+- A UDP-capable peer with blocked QUIC must be able to negotiate UDP without disabling QUIC support.
+
+This is an unresolved in-scope failure, not evidence that all fallback is broken.
+The unchanged test must pass after correction; its deadline is not a tuning target.
+
+Evidence: `/tmp/p2p-vpn-mdns-tun-e2e-1.00514e8351d97b8a`.
+No test processes remained after failure; the isolated namespaces and their rules exited.
+
+| Artifact | SHA-256 |
+| --- | --- |
+| Test executable | `7ed5c4a354ac14ec857ce8d89a27863ebea70e6ef3a6fe218ecd069440f6be7d` |
+| Node A log | `569b54534c196981a6398bc897c188f9d60420f78f6892a86b5f16b4f7c7b9b0` |
+| Node B log | `f4e9abd2bce44d2fa4a792ae9d2a1ba3947db68e0d5ad8150845a86048937e52` |
+
+### Authenticated Backend Selection
+
+Acceptance now verifies the signed hello before choosing its advertised backend.
+A UDP endpoint can negotiate UDP while both peers continue advertising QUIC.
+QUIC certificate requirements and endpoint ownership checks remain enforced.
+Existing UDP sessions may renew even when QUIC capabilities are present.
+
+| Check | Result |
+| --- | --- |
+| Packet-plane unit group | 76 passed |
+| Full library | 1,157 passed, eight ignored; 46.47 seconds |
+| Dual-capability UDP regression | Signed handshake, encrypted bidirectional traffic and overlapping renewal pass |
+| Endpoint selection negatives | Unadvertised endpoint, missing QUIC certificate and disabled UDP support rejected |
+| Minimal QUIC namespace repeat | Passed in 12.03 seconds with unchanged payload assertions |
+
+Cached offline build used the same toolchain and resource limits as above.
+Library executable SHA-256:
+`8bc93c01f3939197ae90c0034aed78bd4f75faf61056e1fe2ab5a33c23aa881a`.
+
+Namespace evidence: `/tmp/p2p-vpn-mdns-tun-e2e-1.e341dcdfee913b5a`.
+Integration executable SHA-256:
+`e2124bd8b3b47d6ca6e4a7dbc969ef594aa172f18afedae778dce6b31489fdea`.
+No fixture processes remained after completion.
+
+This fixes acceptance, not autonomous recovery. Remaining source findings:
+
+- Probe timeout demotes the packet path and redials control addresses, without retrying packet negotiation.
+- Session maintenance retries expiry/renewal, not every unhealthy packet path.
+- Backend selection uses QUIC session presence before path health, hiding a concurrent UDP session.
+- Periodic probing similarly chooses one datagram backend; independent fallback health needs coverage.
+
+### Recovery Scheduling And Selection
+
+The five-second path maintenance tick now retries packet negotiation with the
+existing authorization, deterministic initiator and pending-handshake guards.
+An absent UDP fallback is negotiated before retrying an established QUIC session.
+
+Selection and diagnostic snapshots now consider datagram path health. Probing
+visits each authenticated backend independently. A follow-up preserves existing
+path scores and allows probes after demotion clears the established-path count.
+
+| Check | Result |
+| --- | --- |
+| Focused packet tests before follow-up | 195 passed |
+| Unchanged blocked-QUIC fixture before follow-up | Passed in 85.72 seconds |
+| Blocked phase | Both peers selected UDP; five of five ping replies |
+| Restored phase | QUIC session renegotiated autonomously; selected QUIC and five of five replies |
+| Full library after score/probe follow-up | 1,158 passed, eight ignored; 46.43 seconds |
+| Unchanged recovery fixture after follow-up | Passed in 70.84 seconds |
+
+Evidence: `/tmp/p2p-vpn-mdns-tun-e2e-1.001a4e8f454f10a2`.
+Integration executable SHA-256:
+`63695efa3926c256005d4ed10b5f4824db4f4f84effbdc8104b3063cd4071271`.
+
+Follow-up evidence: `/tmp/p2p-vpn-mdns-tun-e2e-1.21f627ba4c23436b`.
+Integration executable SHA-256:
+`3e3121d55108c9ef9fc40429dc05c07d1db7da3142f40fbfe252b68c59b57613`.
+
+**Evidence correction:** `outbound_quic_datagram_packets` currently increments for
+both owned UDP and QUIC payload sends. Prior counter claims in this report prove
+aggregate datagram traffic, not QUIC-specific traffic. Add backend-specific
+counters and strengthen the fixtures before accepting QUIC payload certification.
+
+Remaining recovery work includes QUIC blocked from startup, bounded retry behavior,
+endpoint movement and independent backend payload accounting. A passing transition
+fixture does not satisfy these additional requirements.
+
+### Backend Payload Counters
+
+Added `outbound_owned_quic_datagram_packets` and `outbound_owned_udp_datagram_packets`.
+They count successful payload submission to the named backend, excluding probes.
+The legacy aggregate retains its meaning. Delivery still requires receiver or
+round-trip evidence; successful submission alone is insufficient.
+
+The recovery fixture now requires five backend-specific payload sends from each
+node for UDP fallback and QUIC restoration. Minimal transport evidence also requires
+the named counter; the aggregate or inbound traffic cannot substitute for it.
+
+The first strengthened minimal-QUIC run failed after 20.62 seconds because the
+control-state formatter omitted the new counters. Logs showed five QUIC sends,
+zero UDP sends. The formatter and its regression coverage have been corrected;
+the rebuilt artifact passes the full library and minimal transport checks below.
+
+Failed evidence: `/tmp/p2p-vpn-mdns-tun-e2e-1.d33d3e2130c767f5`.
+Executable SHA-256:
+`324c326c8b4cc6220920ccf2494904a4ccce4c9c8d4c99f18dc62d1ca7071015`.
+
+| Strengthened check | Result |
+| --- | --- |
+| Full library | 1,159 passed, eight ignored; 46.43 seconds |
+| Minimal QUIC | Passed in 12.04 seconds, backend-specific sends on both peers |
+| UDP-only capability peer | Passed in 11.08 seconds, backend-specific UDP sends |
+| QUIC block and restore | Passed in 70.88 seconds; both peers sent five UDP payloads during fallback and five QUIC payloads after restoration |
+
+Passing executable SHA-256:
+`ca382092b821ad624aa966f7949757057e570bf114f220aab19d8046b785317a`.
+Evidence directories under `/tmp/`:
+
+- QUIC: `p2p-vpn-mdns-tun-e2e-1.e8b63a1247f3cc4f`.
+- UDP-only: `p2p-vpn-mdns-tun-e2e-1.c8dda59e02868b98`.
+- Recovery: `p2p-vpn-mdns-tun-e2e-1.3137f28009068966`.
+
+### QUIC Blocked From Startup
+
+`tun_namespace_minimal_quic_blocked_from_startup_recovers` blocks node B's QUIC
+packet port before node A starts. Both use minimal configuration and isolated
+mDNS discovery; neither can establish an owned QUIC session before the block lifts.
+
+- Require UDP selection within the existing 60-second per-node bound.
+- Require zero QUIC sessions/payloads and five UDP payload sends per node during the block.
+- Remove only the fixture firewall rule; require QUIC selection and five payload sends per node.
+- Keep the existing 240-second orchestrator and 250-second outer watchdog.
+
+The first run failed after 62.56 seconds: repeated QUIC connection attempts
+prevented any UDP session. TCP control remained healthy. Evidence:
+`/tmp/p2p-vpn-mdns-tun-e2e-1.baf13dfa2d768cb9`.
+Executable SHA-256:
+`5ff5bed3a4aa406bd6ff407fee171dcddb0557429d489217b1571438ce3f96dd`.
+
+The fix schedules QUIC attempts at least 30 seconds apart, permitting
+UDP negotiation between attempts. Cancellation preserves this retry deadline;
+peer removal and network reset clear it. Authorization reconciliation includes
+retry-only peers.
+
+| Check | Result |
+| --- | --- |
+| Full library | 1,160 passed, eight ignored; 46.34 seconds |
+| Non-privileged namespace harness | 60 passed, 30 ignored |
+| Startup-blocked recovery | Passed in 50.28 seconds with unchanged deadlines and backend-specific payload assertions |
+| Established-session block/restore repeat | Passed in 70.85 seconds with backend-specific payload assertions |
+
+Passing evidence: `/tmp/p2p-vpn-mdns-tun-e2e-1.5365daaa3128b8bc`.
+Executable SHA-256:
+`cd6b2b97e88ae50f0ca9708508cabd73602227c90f2a87272e2e5e6f9e9732a2`.
+
+Established-session repeat evidence:
+`/tmp/p2p-vpn-mdns-tun-e2e-1.07e3cdbc15b75635` (same executable).
+Both fixtures exited without remaining owned test processes.
+
+### LAN Address Change And Return
+
+`tun_namespace_minimal_quic_follows_lan_address_change` moves node B from
+`10.250.0.2` to `.3`, then back to `.2`, on the existing namespace interface.
+It changes no VPN configuration and sends no runtime network-change notification.
+
+- Require the remote QUIC session to identify the changed endpoint within 60 seconds.
+- Require QUIC selection and five successful pings plus five QUIC sends per peer at each stage.
+- Keep both daemon processes running; use the 240/250-second fixture watchdogs.
+
+First run failed after 126.67 seconds on return. The move to `.3` passed endpoint,
+selection, ping and payload assertions. On return, capabilities correctly advertised
+`.2` and UDP recovered, but no QUIC session existed at the deadline.
+
+Logs include expired UDP handshakes and a failed QUIC connection attempt before
+another QUIC attempt. Investigate negotiation/session replacement and control-path
+selection; this is not evidence of a missing return-address advertisement.
+
+Evidence: `/tmp/p2p-vpn-mdns-tun-e2e-1.810228d73f43f0c7`.
+Executable SHA-256:
+`2cd3506f2d9a6c30073df1ed486055639ab5da724bef2203f1ae336f3deeff5f`.
+
+Pixel `3C161FDJG00013` reconnected during this test. Read-only ADB confirmed the
+Pixel 8 Pro and running `org.hermeticfoundation.p2pvpn.debug` process. No APK,
+pairing, profile or underlay changes were made to the phone.
+
+### Terminal Handshake Cleanup
+
+The failed movement trace showed control-request timeouts followed much later by
+packet-hello expiry. Terminal transport failures did not retire their corresponding
+packet negotiations; stale-connection replies had the same cleanup gap.
+
+Cleanup now matches both peer and request ID, removes only that initiator's pending
+handshake and aborts its connection task. It preserves QUIC retry backoff and does
+not accept stale responses or change connection-deduplication policy.
+
+The owner-matching regression and full library pass: 1,161 tests passed, eight
+ignored (46.69 seconds). The movement fixture is being repeated without changing
+deadlines or injecting runtime notifications.
 
 ## Baseline Findings
 
@@ -50,6 +376,162 @@ Do not omit an explicit disable when rendering or round-tripping configuration.
 8. Reconcile user documentation and perform the full acceptance audit.
 
 ## Evidence Matrix
+
+### QUIC Migration Diagnostic Review
+
+- A focused client-socket rebind test reproduced stale receive-address metadata.
+  The multi-peer receive loop sampled the remote address before awaiting a datagram.
+- Sample the live connection address after receipt, as the single-peer path does.
+  Keep signed handshake endpoints unchanged; migration does not require new identity keys.
+- The focused regression failed before the fix and passed afterward (0.03 seconds).
+  It verifies authenticated delivery and a changed live address with an unchanged handshake endpoint.
+- Movement fixtures must distinguish handshake endpoints from live connection endpoints.
+  Preserve payload-growth and delivery assertions and the previous failed return-path evidence.
+- Added `packet_plane_quic_connection` diagnostics for live session connection endpoints.
+  Existing `packet_plane_quic_session` output retains its signed handshake metadata.
+- The movement fixture passed in 24.87 seconds using live endpoints: five of five pings
+  and at least five QUIC payload submissions per peer after both movement and return.
+- Evidence: `/tmp/p2p-vpn-mdns-tun-e2e-1.aeadf1e8e7995066`.
+  Harness SHA-256: `8546a22924df12695d28e0eb0d4a02d85649fa7d4e3c58f58b18760e2079d5d2`.
+- This randomized run does not establish all TCP/packet initiator-role combinations.
+  Deterministic role coverage and the earlier failed return-path case remain open.
+
+### Movement Initiator Roles
+
+Set `P2P_VPN_MOVEMENT_INITIATORS` when running
+`tun_namespace_minimal_quic_follows_lan_address_change`.
+
+| Value | Preferred TCP initiator | Packet negotiation initiator |
+| --- | --- | --- |
+| `aa` | Stationary A | Stationary A |
+| `ab` (default) | Stationary A | Moving B |
+| `ba` | Moving B | Stationary A |
+| `bb` | Moving B | Moving B |
+
+- Identities are generated with the requested ordering before daemons start.
+  Generation is bounded to 256 attempts; invalid selectors fail immediately.
+- No path, endpoint, connection or runtime state is overridden to obtain these roles.
+  Each run retains the same address-movement, return and payload assertions.
+- Controlled `ba` failed LAN return after 111.78 seconds total; first movement passed.
+  Evidence: `/tmp/p2p-vpn-mdns-tun-e2e-1.e7dbf3eb88c4ad99`.
+- Harness SHA-256: `3755479962611a67176df14869fd131d33df1d6477f8b8a6740a08e00f380a98`.
+  UDP remained healthy, but the final snapshot contained no QUIC session.
+- B advertised its returned `.2` endpoint; A retained `.3` capabilities after control timeouts.
+  Subsequent signed packet accepts were rejected with `endpoint_not_advertised`.
+- Investigate capability-refresh retry across connection replacement; retain endpoint authorization.
+  The diagnostic correction alone does not resolve this control-plane recovery defect.
+- Recovery now refreshes capabilities at most once per ten seconds for authorized direct peers
+  with negotiated QUIC support but no healthy QUIC packet path. Healthy QUIC stops these refreshes.
+- Retry deadlines survive individual packet-request cancellation and are cleared on peer removal
+  or runtime reset. The focused rate-limit and cleanup regression passes.
+- The refreshed `ba` run still failed on first movement after 72.94 seconds total.
+  Evidence: `/tmp/p2p-vpn-mdns-tun-e2e-1.84c4797737f827e2`.
+- Final capabilities now contain the correct `.3` endpoint; UDP is healthy, QUIC sessions are zero.
+  Capability refresh alone is insufficient; inspect session retirement and negotiation ordering next.
+- Timed-out control requests can now retire their old direct connection when a newer, current,
+  same-peer and same-transport connection exists. Last connections and ordinary deduplication are unchanged.
+- The focused retirement predicate regression passes. Controlled `ba` now passes in 85.81 seconds,
+  with five of five pings and QUIC payload growth after both movement and return.
+- Evidence: `/tmp/p2p-vpn-mdns-tun-e2e-1.bde63c668c75c84f`.
+  Logs show retirement of stalled TCP connections 2 and 3 before replacement QUIC sessions establish.
+- Harness SHA-256: `7e6412b6a80ad3112e316059212f201e79365ded78024739adb8f7afd353f223`.
+  Library regressions: 1,164 passed, eight ignored, zero failures (46.41 seconds).
+
+### Controlled Movement Results
+
+All four role combinations passed on the harness hash above. Each requires five of five pings
+and QUIC payload-counter growth on both peers after address change and after return.
+
+| Roles | Total duration | Evidence directory under `/tmp/` |
+| --- | --- | --- |
+| `aa` | 100.81 s | `p2p-vpn-mdns-tun-e2e-1.def69510631c2737` |
+| `ab` | 25.57 s | `p2p-vpn-mdns-tun-e2e-1.93433767de81058c` |
+| `ba` | 85.81 s | `p2p-vpn-mdns-tun-e2e-1.bde63c668c75c84f` |
+| `bb` | 25.62 s | `p2p-vpn-mdns-tun-e2e-1.c3aae3af8a20b7d8` |
+
+- Total duration includes startup, both movement stages and traffic verification.
+  Per-stage deadlines and delivery assertions were unchanged.
+- These are local namespace results, not physical Android or WAN certification.
+  Repeated stress, MTU-sized traffic and remaining transport regressions are still required.
+
+### MTU-Sized Fallback Evidence
+
+- Recovery traffic now includes five small pings and five IPv4 packets at the smaller selected
+  path MTU of the two peers, with fragmentation prohibited. Each backend must submit ten payloads per peer.
+- The tested path MTU was 1,280 bytes. Both UDP fallback and restored QUIC delivered every packet.
+  This does not establish behavior over a smaller underlay PMTU or IPv6 MTU boundaries.
+
+| Scenario | Duration | Evidence directory under `/tmp/` |
+| --- | --- | --- |
+| Established QUIC blocked, then restored | 74.99 s | `p2p-vpn-mdns-tun-e2e-1.c52f6daa076ec1f8` |
+| QUIC blocked before discovery, then restored | 58.85 s | `p2p-vpn-mdns-tun-e2e-1.7dce33dab5121e6f` |
+
+- Harness SHA-256: `e7c71141eb85fc0e66c1a951569822b2323070cbe0d05890450d44cde1631b3f`.
+  Non-privileged harness tests: 60 passed, 31 ignored, zero failures.
+
+### Android Default Verification
+
+- Android profile creation and inspection use the shared configuration loader.
+  No Android-specific transport-default implementation or profile rewrite was needed.
+- New regressions verify omitted packet settings enable QUIC, reload preserves profile JSON,
+  identity and hostname, and explicit QUIC-disable, stream-only and listener overrides survive reload.
+- Host-executed Android bridge tests: 72 passed, zero failures (0.32 seconds).
+  These tests do not exercise Android JNI or the physical VPN service.
+- Cached offline ARM64 native build passed in 39.35 seconds, with four existing platform dead-code warnings.
+  ELF load segments retain `0x4000` (16 KiB) alignment.
+- Native library SHA-256: `3d48757b7b4bdd2d4f68f9cf8b9f952479bbd3d75e6c875cd85d87c926258cd5`.
+  APK packaging, JVM verification and authorized device deployment remain outstanding.
+- Debug APK packaging passed using the cached SDK and freshly built ARM64 library.
+  SHA-256: `02ead2d9990d90a0d2c4ef914cdaac9923afdcfb50ce438d426f27d2fc6cdb4e`.
+- Forced `:app:testDebugUnitTest` rerun passed: 22 tasks executed, nine seconds.
+  The earlier up-to-date result is not the fresh-test evidence.
+- APK `zipalign -c -P 16 4` passed. Pixel USB visibility was confirmed read-only.
+  No deployment or profile mutation has occurred; fresh physical-test authorization is required.
+
+### Current Module And Fixture Checks
+
+- Offline NixOS consumer evaluation: all 17 contracts true.
+  QUIC-default evaluation: all nine contracts true; module failed assertions: `[]`.
+- These evaluate generated settings, defaults, overrides, collisions and firewall rules.
+  They do not activate a NixOS system or substitute for the full Nix package checks.
+- Android E2E fixture tests: ten passed, one private-bootstrap diagnostic ignored.
+  Explicit stream-only fixture behavior remains intentional and validated.
+- No Lean, TLA+, Alloy or Lake model files were found in the repository file scan.
+  Clippy remains outstanding; cached Clippy uses Rust 1.95 rather than the current build compiler.
+- Physical deployment remains pending explicit authorization; no device or personal-flake mutation.
+
+### Clippy Verification
+
+- Cached Rust 1.95 Clippy passed root-package `--all-targets` with correctness, suspicious and perf
+  groups denied. Non-fatal warnings outside those groups remain; this is not a warning-free audit.
+- The first attempt failed before project checks because the cached rustup LLD wrapper referenced
+  a removed Nix store path. Retrying with `RUSTFLAGS='-C link-arg=-fuse-ld=bfd'` passed in 57.83 seconds.
+- Checks used two jobs, offline dependencies, disabled incremental/debug data and the separate
+  `/tmp/p2p-vpn-clippy-target`. No download or compiler replacement was performed.
+
+### Workspace Regression Run
+
+- `cargo test --offline --locked --workspace --all-targets -- --test-threads=2 --quiet` passed:
+  1,526 passed, 45 ignored, zero failures, using the flake's `RUST_MIN_STACK=8388608` setting.
+- Coverage includes the core library, CLI, authorization, pairing CLI, Kademlia resource tests,
+  resource-measurement helpers, namespace helpers, Android bridge and Android E2E fixture.
+- A preceding direct CLI invocation omitted the documented stack setting and aborted with stack
+  overflow. The corrected run passed 158 CLI tests with one ignored; no test assertions were changed.
+- Ignored tests are not covered by this workspace pass. Namespace scenario evidence above records
+  the ignored integration tests executed separately; physical deployment is still pending approval.
+
+### Relay Evidence Correction
+
+- The old relay-overlay fixture passed in 16.94 seconds but delivered payloads over direct TCP.
+  `/tmp/p2p-vpn-relay-tun-e2e-1.d12e9138cc4e387d` is not proof of relay payload delivery.
+- The fixture now isolates both peer bridge ports while retaining reachability to the relay.
+  It requires at least five relay payloads per peer and zero direct-stream or datagram payloads.
+- Strengthened relay-only test passed in 16.99 seconds.
+  Evidence: `/tmp/p2p-vpn-relay-tun-e2e-1.53e27883ea5c0e76`.
+- Harness SHA-256: `abee3b84e1f0c61c8d2ca74d8b981d132ad896892aed435e613d04e53197e1ce`.
+  Non-privileged harness regressions: 60 passed, 31 ignored, zero failures.
+
+### Required Scenario Evidence
 
 | Scenario | Required observation |
 | --- | --- |

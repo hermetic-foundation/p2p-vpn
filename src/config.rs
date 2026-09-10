@@ -634,6 +634,7 @@ impl AutoRelayConfig {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(from = "PacketPlaneConfigInput")]
 pub struct PacketPlaneConfig {
     #[serde(
         default = "default_packet_plane_listen",
@@ -642,7 +643,6 @@ pub struct PacketPlaneConfig {
     pub listen: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub external_endpoints: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub quic_listen: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub quic_external_endpoints: Vec<String>,
@@ -652,12 +652,58 @@ pub struct PacketPlaneConfig {
     pub max_replay_windows_per_session: usize,
 }
 
+#[derive(Deserialize)]
+struct PacketPlaneConfigInput {
+    #[serde(default = "default_packet_plane_listen")]
+    listen: Vec<String>,
+    #[serde(default)]
+    external_endpoints: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_packet_quic_listeners")]
+    quic_listen: Option<Vec<String>>,
+    #[serde(default)]
+    quic_external_endpoints: Vec<String>,
+    #[serde(default = "default_packet_plane_session_ttl_seconds")]
+    session_ttl_seconds: u64,
+    #[serde(default = "default_packet_plane_replay_windows_per_session")]
+    max_replay_windows_per_session: usize,
+}
+
+fn deserialize_packet_quic_listeners<'de, D>(
+    deserializer: D,
+) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Vec::<String>::deserialize(deserializer).map(Some)
+}
+
+impl From<PacketPlaneConfigInput> for PacketPlaneConfig {
+    fn from(input: PacketPlaneConfigInput) -> Self {
+        // An explicit empty UDP listener list historically requests stream-only operation.
+        let quic_listen = input.quic_listen.unwrap_or_else(|| {
+            if input.listen.is_empty() {
+                Vec::new()
+            } else {
+                default_packet_plane_listen()
+            }
+        });
+        Self {
+            listen: input.listen,
+            external_endpoints: input.external_endpoints,
+            quic_listen,
+            quic_external_endpoints: input.quic_external_endpoints,
+            session_ttl_seconds: input.session_ttl_seconds,
+            max_replay_windows_per_session: input.max_replay_windows_per_session,
+        }
+    }
+}
+
 impl Default for PacketPlaneConfig {
     fn default() -> Self {
         Self {
             listen: default_packet_plane_listen(),
             external_endpoints: Vec::new(),
-            quic_listen: Vec::new(),
+            quic_listen: default_packet_plane_listen(),
             quic_external_endpoints: Vec::new(),
             session_ttl_seconds: default_packet_plane_session_ttl_seconds(),
             max_replay_windows_per_session: default_packet_plane_replay_windows_per_session(),
@@ -1686,6 +1732,61 @@ fn ipv6_mask(prefix_len: u8) -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn packet_plane_automatic_quic_defaults_and_overrides_round_trip() {
+        for (input, udp, quic) in [
+            (r#"{}"#, vec!["0.0.0.0:0"], vec!["0.0.0.0:0"]),
+            (r#"{"listen":[]}"#, vec![], vec![]),
+            (r#"{"quic_listen":[]}"#, vec!["0.0.0.0:0"], vec![]),
+            (
+                r#"{"listen":[],"quic_listen":["127.0.0.1:51822"]}"#,
+                vec![],
+                vec!["127.0.0.1:51822"],
+            ),
+            (
+                r#"{"listen":["0.0.0.0:51820"]}"#,
+                vec!["0.0.0.0:51820"],
+                vec!["0.0.0.0:0"],
+            ),
+        ] {
+            let config: PacketPlaneConfig = serde_json::from_str(input).expect("packet config");
+            assert_eq!(config.listen, udp, "{input}");
+            assert_eq!(config.quic_listen, quic, "{input}");
+            let rendered = serde_json::to_string(&config).expect("serialize");
+            let decoded: PacketPlaneConfig = serde_json::from_str(&rendered).expect("round trip");
+            assert_eq!(decoded, config, "{input}");
+        }
+        assert_eq!(
+            serde_json::from_str::<PacketPlaneConfig>("{}").expect("default"),
+            PacketPlaneConfig::default()
+        );
+        assert!(serde_json::from_str::<PacketPlaneConfig>(r#"{"quic_listen":null}"#).is_err());
+    }
+
+    #[test]
+    fn minimal_network_automatically_enables_quic_without_expanding_serialized_config() {
+        let mut config: Config = serde_json::from_value(serde_json::json!({
+            "network": {
+                "name": "lab",
+                "local_peer": "0000000000000000000000000000000000000000000000000000000000000000"
+            }
+        }))
+        .expect("minimal config");
+        assert_eq!(config.network.packet_plane.quic_listen, ["0.0.0.0:0"]);
+        let rendered = serde_json::to_value(&config).expect("minimal serialization");
+        assert!(rendered["network"].get("packet_plane").is_none());
+
+        config.network.packet_plane.quic_listen.clear();
+        let rendered = serde_json::to_value(&config).expect("explicit disable serialization");
+        assert_eq!(
+            rendered["network"]["packet_plane"]["quic_listen"],
+            serde_json::json!([])
+        );
+        let decoded: Config =
+            serde_json::from_value(rendered).expect("explicit disable round trip");
+        assert!(decoded.network.packet_plane.quic_listen.is_empty());
+    }
 
     #[test]
     fn omitted_listen_addresses_default_to_direct_tcp_listener() {

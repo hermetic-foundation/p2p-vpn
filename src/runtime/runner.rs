@@ -203,6 +203,7 @@ const PACKET_STREAM_IN_FLIGHT_TIMEOUT: Duration = Duration::from_secs(15);
 const PACKET_PLANE_PENDING_HELLO_TIMEOUT: Duration = Duration::from_secs(25);
 const PAIRING_RESPONSE_EXPIRES_IN_SECONDS: u64 = 600;
 const PACKET_PLANE_QUIC_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const PACKET_PLANE_QUIC_RETRY_INTERVAL: Duration = Duration::from_secs(30);
 const AUTO_RELAY_RESERVATION_PENDING_TIMEOUT: Duration = Duration::from_secs(30);
 const AUTO_RELAY_CANDIDATE_FAILURE_EVICTION_THRESHOLD: u8 = 2;
 const MAX_KADEMLIA_MEMBERSHIP_RECORD_BYTES: usize = 64 * 1024;
@@ -268,6 +269,8 @@ fn local_packet_data_plane() -> LocalPacketDataPlane {
 
 #[derive(Default)]
 struct PacketPlaneNegotiator {
+    next_quic_attempt: HashMap<PeerId, Instant>,
+    next_capability_refresh: HashMap<PeerId, Instant>,
     pending: HashMap<PeerId, PendingPacketPlaneHello>,
     pending_responders: HashMap<PeerId, PendingPacketPlaneResponder>,
     quic_connection_tasks: JoinSet<PacketPlaneQuicConnectionTaskResult>,
@@ -321,6 +324,10 @@ impl PacketPlaneNegotiator {
         hello: VerifiedPacketPlaneHandshake,
         backend: PacketDatagramBackend,
     ) {
+        if backend == PacketDatagramBackend::OwnedQuic {
+            self.next_quic_attempt
+                .insert(peer, Instant::now() + PACKET_PLANE_QUIC_RETRY_INTERVAL);
+        }
         self.pending.insert(
             peer,
             PendingPacketPlaneHello {
@@ -368,7 +375,45 @@ impl PacketPlaneNegotiator {
             .is_some_and(|pending| pending.request_id == Some(request_id))
     }
 
+    fn finish_failed_request(
+        &mut self,
+        peer: PeerId,
+        request_id: request_response::OutboundRequestId,
+    ) -> bool {
+        if !self.owns_request(peer, request_id) {
+            return false;
+        }
+        self.pending.remove(&peer);
+        self.abort_quic_connection_task(peer, PacketPlaneQuicNegotiationRole::Initiator);
+        true
+    }
+
     fn remove_peer(&mut self, peer: PeerId) {
+        self.next_quic_attempt.remove(&peer);
+        self.next_capability_refresh.remove(&peer);
+        self.cancel_pending_for_peer(peer);
+    }
+
+    fn take_capability_refresh(&mut self, peer: PeerId, now: Instant) -> bool {
+        if self
+            .next_capability_refresh
+            .get(&peer)
+            .is_some_and(|next| now < *next)
+        {
+            return false;
+        }
+        self.next_capability_refresh
+            .insert(peer, now + Duration::from_secs(10));
+        true
+    }
+
+    fn quic_retry_ready(&self, peer: PeerId, now: Instant) -> bool {
+        self.next_quic_attempt
+            .get(&peer)
+            .is_none_or(|next| now >= *next)
+    }
+
+    fn cancel_pending_for_peer(&mut self, peer: PeerId) {
         self.pending.remove(&peer);
         self.pending_responders.remove(&peer);
         self.abort_quic_connection_task(peer, PacketPlaneQuicNegotiationRole::Initiator);
@@ -376,6 +421,8 @@ impl PacketPlaneNegotiator {
     }
 
     fn clear(&mut self) {
+        self.next_quic_attempt.clear();
+        self.next_capability_refresh.clear();
         self.pending.clear();
         self.pending_responders.clear();
         for (_, task) in self.quic_connection_task_handles.drain() {
@@ -2196,6 +2243,23 @@ where
                     &metrics,
                     Instant::now(),
                 );
+                let mut context = PacketPlaneExpiryContext {
+                    active_connections: &active_connections,
+                    swarm: &mut node.swarm,
+                    forwarder: &forwarder,
+                    paths: &mut paths,
+                    peer_capabilities: &peer_capabilities,
+                    packet_plane: &mut packet_plane,
+                    packet_plane_quic: packet_plane_quic.as_mut(),
+                    negotiator: &mut packet_plane_negotiator,
+                    identity: &node.identity,
+                    local_capabilities: &local_capabilities,
+                    metrics: &metrics,
+                    session_ttl: packet_plane_session_ttl,
+                };
+                for peer in forwarder.configured_overlay_peers() {
+                    retry_packet_plane_negotiation(&mut context, peer);
+                }
                 send_path_probes(
                     &mut node.swarm,
                     &mut forwarder,
@@ -3522,11 +3586,29 @@ async fn send_path_probes(
         if !peer_capabilities.contains(peer) {
             continue;
         }
-        let datagram_backend =
-            local_packet_datagram_backend(peer_capabilities, packet_plane, packet_plane_quic, peer);
-        let datagram_probe_sent = datagram_backend
-            .is_some_and(|backend| has_established_packet_plane_candidate(paths, peer, backend));
-        let datagram_probe_sent = if datagram_probe_sent {
+        let datagram_backend = local_packet_datagram_backend(
+            paths,
+            peer_capabilities,
+            packet_plane,
+            packet_plane_quic,
+            peer,
+        );
+        let mut datagram_probe_sent = false;
+        for (backend, available) in [
+            (
+                PacketDatagramBackend::OwnedQuic,
+                packet_plane_quic.is_some_and(|runtime| runtime.has_session(peer))
+                    && peer_capabilities.supports_owned_quic_packet_plane_for(peer),
+            ),
+            (
+                PacketDatagramBackend::OwnedUdp,
+                packet_plane.is_some_and(|runtime| runtime.has_session(peer))
+                    && peer_capabilities.supports_owned_udp_packet_plane_for(peer),
+            ),
+        ] {
+            if !available {
+                continue;
+            }
             send_packet_plane_path_probe(
                 forwarder,
                 paths,
@@ -3535,15 +3617,13 @@ async fn send_path_probes(
                 packet_plane_quic,
                 path_probe_tracker,
                 metrics,
-                datagram_backend.expect("checked datagram backend"),
+                backend,
                 peer,
                 local_mtu,
             )
             .await;
-            true
-        } else {
-            false
-        };
+            datagram_probe_sent = true;
+        }
         let support =
             packet_transport_support_for_backend(peer_capabilities, peer, datagram_backend);
         if !paths.has_supported_path(peer, support) && !datagram_probe_sent {
@@ -3657,17 +3737,6 @@ fn send_stream_path_probe(
         .send_request_on_connection(transport_peer, connection_id, frame);
 
     Ok(StreamPathProbeDispatch::Pinned(request_id))
-}
-
-fn has_established_packet_plane_candidate(
-    paths: &PathSet,
-    peer: PeerId,
-    backend: PacketDatagramBackend,
-) -> bool {
-    let path = packet_datagram_backend_path_kind(backend);
-    paths
-        .candidates_for(peer)
-        .any(|candidate| candidate.kind == path && candidate.established_connections > 0)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -5332,8 +5401,12 @@ fn runtime_peer_snapshot(
         runtime_peer_inventory(forwarder)?,
         now_unix_seconds,
         |peer, _| {
-            let datagram_backend =
-                local_packet_datagram_backend_from_snapshot(packet_plane, packet_plane_quic, peer);
+            let datagram_backend = local_packet_datagram_backend_from_snapshot(
+                paths,
+                packet_plane,
+                packet_plane_quic,
+                peer,
+            );
             let support =
                 packet_transport_support_for_backend(peer_capabilities, peer, datagram_backend);
             if let Some(selected) = paths
@@ -5375,8 +5448,12 @@ fn runtime_peer_lines(
         let transport = forwarder
             .transport_peer_for_overlay(peer)
             .map_or_else(|| "none".to_owned(), |peer| peer.to_string());
-        let datagram_backend =
-            local_packet_datagram_backend_from_snapshot(packet_plane, packet_plane_quic, peer);
+        let datagram_backend = local_packet_datagram_backend_from_snapshot(
+            paths,
+            packet_plane,
+            packet_plane_quic,
+            peer,
+        );
         let support =
             packet_transport_support_for_backend(peer_capabilities, peer, datagram_backend);
         let selected_path = paths.best_supported_for(peer, support);
@@ -5452,8 +5529,12 @@ fn runtime_path_lines(
     let mut lines = vec![format!("peers: {}", peers.len())];
 
     for peer in peers.drain(..) {
-        let datagram_backend =
-            local_packet_datagram_backend_from_snapshot(packet_plane, packet_plane_quic, peer);
+        let datagram_backend = local_packet_datagram_backend_from_snapshot(
+            paths,
+            packet_plane,
+            packet_plane_quic,
+            peer,
+        );
         let support =
             packet_transport_support_for_backend(peer_capabilities, peer, datagram_backend);
         let selected_path = paths.best_supported_for(peer, support);
@@ -5545,8 +5626,12 @@ fn runtime_mtu_lines(
     ];
 
     for peer in peers.drain(..) {
-        let datagram_backend =
-            local_packet_datagram_backend_from_snapshot(packet_plane, packet_plane_quic, peer);
+        let datagram_backend = local_packet_datagram_backend_from_snapshot(
+            paths,
+            packet_plane,
+            packet_plane_quic,
+            peer,
+        );
         let support =
             packet_transport_support_for_backend(peer_capabilities, peer, datagram_backend);
         let selected_path = paths.best_supported_for(peer, support);
@@ -5988,6 +6073,14 @@ fn runtime_state_summary_lines(view: RuntimeStateSummaryView<'_>) -> Vec<String>
             snapshot.outbound_quic_datagram_packets
         ),
         format!(
+            "outbound_owned_quic_datagram_packets {}",
+            snapshot.outbound_owned_quic_datagram_packets
+        ),
+        format!(
+            "outbound_owned_udp_datagram_packets {}",
+            snapshot.outbound_owned_udp_datagram_packets
+        ),
+        format!(
             "outbound_quic_datagram_unavailable_packets {}",
             snapshot.outbound_quic_datagram_unavailable_packets
         ),
@@ -6237,6 +6330,11 @@ fn extend_runtime_packet_plane_quic_summary_lines(
     if let Some(listener) = packet_plane_quic.listener {
         lines.push(format!("packet_plane_quic_listener {listener}"));
     }
+    for (peer, endpoint) in &packet_plane_quic.live_endpoints {
+        lines.push(format!(
+            "packet_plane_quic_connection {peer} endpoint {endpoint}"
+        ));
+    }
     for session in &packet_plane_quic.sessions {
         lines.push(format!(
             "packet_plane_quic_session {} endpoint {} mtu {} role {} local_session {} remote_session {}",
@@ -6271,7 +6369,7 @@ fn extend_runtime_peer_state_lines(
         .transport_peer_for_overlay(peer)
         .map_or_else(|| "none".to_owned(), |peer| peer.to_string());
     let datagram_backend =
-        local_packet_datagram_backend_from_snapshot(packet_plane, packet_plane_quic, peer);
+        local_packet_datagram_backend_from_snapshot(paths, packet_plane, packet_plane_quic, peer);
     let support = packet_transport_support_for_backend(peer_capabilities, peer, datagram_backend);
     let selected_path = paths.best_supported_for(peer, support);
     let candidates = paths.candidates_for(peer).collect::<Vec<_>>();
@@ -6356,25 +6454,20 @@ fn extend_runtime_peer_state_lines(
 }
 
 fn local_packet_datagram_backend_from_snapshot(
+    paths: &PathSet,
     packet_plane: &PacketPlaneSnapshot,
     packet_plane_quic: &PacketPlaneQuicSnapshot,
     peer: PeerId,
 ) -> Option<PacketDatagramBackend> {
-    if packet_plane_quic
+    let quic = packet_plane_quic
         .sessions
         .iter()
-        .any(|session| session.peer == peer)
-    {
-        return Some(PacketDatagramBackend::OwnedQuic);
-    }
-    if packet_plane
+        .any(|session| session.peer == peer);
+    let udp = packet_plane
         .sessions
         .iter()
-        .any(|session| session.peer == peer)
-    {
-        return Some(PacketDatagramBackend::OwnedUdp);
-    }
-    None
+        .any(|session| session.peer == peer);
+    select_packet_datagram_backend(paths, peer, quic, udp)
 }
 
 fn handle_redial_tick(
@@ -10244,7 +10337,9 @@ async fn send_dequeued_packet_plane_datagram(
         {
             Ok(_) => {
                 context.metrics.record_outbound_sent();
-                context.metrics.record_outbound_quic_datagram();
+                context
+                    .metrics
+                    .record_outbound_packet_datagram(packet_datagram_backend_path_kind(backend));
             }
             Err(error) => {
                 let demoted = maybe_demote_packet_plane_send_path(
@@ -10336,7 +10431,9 @@ async fn send_dequeued_packet_plane_fallback(
                     attempt.peer_mtu,
                 );
                 context.metrics.record_outbound_sent();
-                context.metrics.record_outbound_quic_datagram();
+                context
+                    .metrics
+                    .record_outbound_packet_datagram(packet_datagram_backend_path_kind(backend));
                 log_runtime_event(
                     LogLevel::Warn,
                     "packet_plane_backend_fallback",
@@ -10900,8 +10997,13 @@ fn packet_transport_decision(
         };
     }
 
-    let datagram_backend =
-        local_packet_datagram_backend(peer_capabilities, packet_plane, packet_plane_quic, peer);
+    let datagram_backend = local_packet_datagram_backend(
+        paths,
+        peer_capabilities,
+        packet_plane,
+        packet_plane_quic,
+        peer,
+    );
     let local_datagrams = datagram_backend.is_some();
     let support = packet_transport_support_for_backend(peer_capabilities, peer, datagram_backend);
     if let Some(path) = best_packet_transport_path(paths, peer, support) {
@@ -10936,22 +11038,49 @@ fn best_packet_transport_path(
 }
 
 fn local_packet_datagram_backend(
+    paths: &PathSet,
     peer_capabilities: &PeerCapabilities,
     packet_plane: Option<&PacketPlaneRuntime>,
     packet_plane_quic: Option<&PacketPlaneQuicRuntime>,
     peer: PeerId,
 ) -> Option<PacketDatagramBackend> {
-    if packet_plane_quic.is_some_and(|packet_plane| packet_plane.has_session(peer))
-        && peer_capabilities.supports_owned_quic_packet_plane_for(peer)
+    let quic = packet_plane_quic.is_some_and(|packet_plane| packet_plane.has_session(peer))
+        && peer_capabilities.supports_owned_quic_packet_plane_for(peer);
+    let udp = packet_plane.is_some_and(|packet_plane| packet_plane.has_session(peer))
+        && peer_capabilities.supports_owned_udp_packet_plane_for(peer);
+    select_packet_datagram_backend(paths, peer, quic, udp)
+}
+
+fn select_packet_datagram_backend(
+    paths: &PathSet,
+    peer: PeerId,
+    quic: bool,
+    udp: bool,
+) -> Option<PacketDatagramBackend> {
+    let support = PathTransportSupport {
+        udp_datagrams: udp,
+        quic_datagrams: quic,
+    };
+    if let Some(path) = paths
+        .candidates_for(peer)
+        .filter(|path| {
+            path.healthy && path.kind.requires_quic_datagrams() && support.supports(path.kind)
+        })
+        .max_by_key(|path| path.score())
     {
-        return Some(PacketDatagramBackend::OwnedQuic);
+        return Some(if path.kind == PathKind::DirectQuicDatagram {
+            PacketDatagramBackend::OwnedQuic
+        } else {
+            PacketDatagramBackend::OwnedUdp
+        });
     }
-    if packet_plane.is_some_and(|packet_plane| packet_plane.has_session(peer))
-        && peer_capabilities.supports_owned_udp_packet_plane_for(peer)
-    {
-        return Some(PacketDatagramBackend::OwnedUdp);
+    if quic {
+        Some(PacketDatagramBackend::OwnedQuic)
+    } else if udp {
+        Some(PacketDatagramBackend::OwnedUdp)
+    } else {
+        None
     }
-    None
 }
 
 fn packet_plane_send_fallback_backend(
@@ -11064,8 +11193,13 @@ fn peer_has_healthy_supported_path(
     packet_plane_quic: Option<&PacketPlaneQuicRuntime>,
     peer: PeerId,
 ) -> bool {
-    let datagram_backend =
-        local_packet_datagram_backend(peer_capabilities, packet_plane, packet_plane_quic, peer);
+    let datagram_backend = local_packet_datagram_backend(
+        paths,
+        peer_capabilities,
+        packet_plane,
+        packet_plane_quic,
+        peer,
+    );
     let support = packet_transport_support_for_backend(peer_capabilities, peer, datagram_backend);
     paths
         .candidates_for(peer)
@@ -11984,6 +12118,7 @@ async fn handle_swarm_event(
                 advertise_direct_packet_plane_endpoint_from_path(
                     context.local_capabilities,
                     context.packet_plane.primary_listener(),
+                    context.packet_plane_quic.as_deref(),
                     &endpoint,
                     &context
                         .forwarder
@@ -12685,6 +12820,7 @@ fn peer_lacks_supported_packet_path(
 ) -> bool {
     let overlay_peer = PeerId::from_libp2p(peer);
     let datagram_backend = local_packet_datagram_backend(
+        paths,
         peer_capabilities,
         packet_plane,
         packet_plane_quic,
@@ -12776,6 +12912,17 @@ async fn handle_control_event(
 ) -> Result<(), RunnerError> {
     if !request_response_message_is_usable(context.connection_epochs, &event, "control") {
         // The transport has completed a response even if its connection is now stale.
+        if let request_response::Event::Message {
+            peer,
+            message: Message::Response { request_id, .. },
+            ..
+        } = &event
+            && context
+                .packet_plane_negotiator
+                .finish_failed_request(PeerId::from_libp2p(*peer), *request_id)
+        {
+            context.metrics.record_control_failure();
+        }
         if let request_response::Event::Message {
             peer,
             message: Message::Response { request_id, .. },
@@ -12916,9 +13063,33 @@ async fn handle_control_event(
             peer,
             request_id,
             error,
-            ..
+            connection_id,
         } => {
             let membership_sync_failed = context.membership_record_syncs.contains(request_id);
+            if context.forwarder.is_configured_transport_peer(peer)
+                && matches!(error, request_response::OutboundFailure::Timeout)
+                && has_newer_direct_connection(
+                    context.active_connections,
+                    context.connection_epochs,
+                    peer,
+                    connection_id,
+                )
+                && context.connection_epochs.mark_retiring(connection_id)
+            {
+                let closed = swarm.close_connection(connection_id);
+                log_runtime_event(
+                    LogLevel::Warn,
+                    "control_timed_out_connection_retired",
+                    &[
+                        ("peer", &peer.to_string()),
+                        ("connection_id", &connection_id.to_string()),
+                        ("close_requested", &closed.to_string()),
+                    ],
+                );
+            }
+            context
+                .packet_plane_negotiator
+                .finish_failed_request(PeerId::from_libp2p(peer), request_id);
             if membership_sync_failed {
                 context.membership_record_syncs.take(request_id);
                 fail_membership_record_sync(
@@ -16695,7 +16866,7 @@ fn handle_control_response_event(
                 peer,
                 &handshake,
             ) {
-                packet_plane_negotiator.remove_peer(PeerId::from_libp2p(peer));
+                packet_plane_negotiator.cancel_pending_for_peer(PeerId::from_libp2p(peer));
                 metrics.record_control_failure();
                 eprintln!(
                     "packet-plane accept from {peer} failed: {}",
@@ -16705,7 +16876,7 @@ fn handle_control_response_event(
             false
         }
         ControlResponse::PacketPlaneRejected(reason) => {
-            packet_plane_negotiator.remove_peer(PeerId::from_libp2p(peer));
+            packet_plane_negotiator.cancel_pending_for_peer(PeerId::from_libp2p(peer));
             metrics.record_control_capability_rejection(reason);
             metrics.record_control_failure();
             eprintln!("packet-plane hello rejected by {peer}: {reason:?}");
@@ -17636,7 +17807,7 @@ fn maybe_send_packet_plane_hello(
         &local_capabilities,
         &remote_capabilities,
         packet_plane,
-        packet_plane_quic,
+        packet_plane_quic.filter(|_| negotiator.quic_retry_ready(remote_overlay, Instant::now())),
         remote_overlay,
     );
     let Some(backend) = backend else {
@@ -17681,6 +17852,7 @@ fn maybe_send_packet_plane_hello(
                     &[
                         ("peer", &remote_overlay.to_string()),
                         ("request_id", &request_id.to_string()),
+                        ("backend", packet_datagram_backend_name(backend)),
                     ],
                 );
             }
@@ -17712,6 +17884,16 @@ fn packet_plane_negotiation_backend(
 ) -> Option<PacketDatagramBackend> {
     let local_quic_endpoint = first_packet_plane_quic_endpoint(local_capabilities);
     let remote_quic_endpoint = first_packet_plane_quic_endpoint(remote_capabilities);
+    // Establish the fallback before retrying a previously established QUIC connection.
+    if packet_plane_quic.is_some_and(|runtime| runtime.has_session(peer))
+        && !packet_plane.has_session(peer)
+        && local_capabilities.supports_owned_udp_packet_plane
+        && remote_capabilities.supports_owned_udp_packet_plane
+        && first_packet_plane_endpoint(local_capabilities).is_some()
+        && first_packet_plane_endpoint(remote_capabilities).is_some()
+    {
+        return Some(PacketDatagramBackend::OwnedUdp);
+    }
     if local_capabilities.supports_owned_quic_packet_plane
         && remote_capabilities.supports_owned_quic_packet_plane
         && packet_plane_quic.is_some_and(|packet_plane| {
@@ -17736,9 +17918,7 @@ fn packet_plane_negotiation_backend(
             PathKind::DirectUdpDatagram,
             packet_plane.session_endpoint_for(peer),
             remote_udp_endpoint,
-        ) || (packet_plane.renewal_due_for_peer(peer, Instant::now())
-            && packet_plane_accept_backend(local_capabilities, remote_capabilities)
-                == Some(PacketDatagramBackend::OwnedUdp)))
+        ) || packet_plane.renewal_due_for_peer(peer, Instant::now()))
         && local_udp_endpoint.is_some()
         && remote_udp_endpoint.is_some()
     {
@@ -17761,11 +17941,17 @@ fn packet_plane_quic_session_needs_negotiation(
 fn packet_plane_accept_backend(
     local_capabilities: &ControlCapabilities,
     remote_capabilities: &ControlCapabilities,
+    authenticated_endpoint: SocketAddr,
 ) -> Option<PacketDatagramBackend> {
     if local_capabilities.supports_owned_quic_packet_plane
         && remote_capabilities.supports_owned_quic_packet_plane
         && first_packet_plane_quic_endpoint(local_capabilities).is_some()
         && first_packet_plane_quic_endpoint(remote_capabilities).is_some()
+        && endpoint_is_advertised_for_backend(
+            remote_capabilities,
+            authenticated_endpoint,
+            PacketDatagramBackend::OwnedQuic,
+        )
         && remote_capabilities
             .owned_quic_packet_plane_certificate_der
             .as_ref()
@@ -17777,6 +17963,11 @@ fn packet_plane_accept_backend(
         && remote_capabilities.supports_owned_udp_packet_plane
         && first_packet_plane_endpoint(local_capabilities).is_some()
         && first_packet_plane_endpoint(remote_capabilities).is_some()
+        && endpoint_is_advertised_for_backend(
+            remote_capabilities,
+            authenticated_endpoint,
+            PacketDatagramBackend::OwnedUdp,
+        )
     {
         return Some(PacketDatagramBackend::OwnedUdp);
     }
@@ -17965,8 +18156,6 @@ async fn accept_packet_plane_hello(
             context.active_connections,
             &local_interface_networks(&context.forwarder.config().interface.name),
         );
-    let backend = packet_plane_accept_backend(&local_capabilities, &preferred_remote_capabilities)
-        .ok_or(PacketPlaneNegotiationError::MissingRemoteEndpoint)?;
     if !remote_capabilities.supports_datagram_packet_path() {
         return Err(PacketPlaneNegotiationError::MissingRemoteEndpoint);
     }
@@ -17977,11 +18166,13 @@ async fn accept_packet_plane_hello(
             Some(remote_overlay),
         )
         .map_err(PacketPlaneNegotiationError::Verify)?;
-    if hello.kind != PacketPlaneHandshakeKind::Hello
-        || !endpoint_is_advertised_for_backend(remote_capabilities, hello.endpoint, backend)
-    {
+    if hello.kind != PacketPlaneHandshakeKind::Hello {
         return Err(PacketPlaneNegotiationError::EndpointNotAdvertised);
     }
+    // The signed endpoint identifies the requested backend, not capability preference.
+    let backend =
+        packet_plane_accept_backend(&local_capabilities, remote_capabilities, hello.endpoint)
+            .ok_or(PacketPlaneNegotiationError::EndpointNotAdvertised)?;
     let (secret, accept, verified_accept) = signed_packet_plane_handshake(
         PacketPlaneHandshakeKind::Accept,
         context.identity,
@@ -18314,6 +18505,8 @@ fn reconcile_packet_plane_authorization(
         peers.extend(quic.peers());
     }
     peers.extend(negotiator.pending.keys().copied());
+    peers.extend(negotiator.next_quic_attempt.keys().copied());
+    peers.extend(negotiator.next_capability_refresh.keys().copied());
     peers.extend(negotiator.pending_responders.keys().copied());
     peers.extend(
         negotiator
@@ -18372,7 +18565,7 @@ fn handle_packet_plane_quic_connection_task(
     let connection = match task.result {
         Ok(connection) => connection,
         Err(error) => {
-            context.negotiator.remove_peer(task.peer);
+            context.negotiator.cancel_pending_for_peer(task.peer);
             context.metrics.record_control_failure();
             log_runtime_event(
                 LogLevel::Warn,
@@ -18387,7 +18580,7 @@ fn handle_packet_plane_quic_connection_task(
         }
     };
     let Some(packet_plane_quic) = context.packet_plane_quic.as_deref_mut() else {
-        context.negotiator.remove_peer(task.peer);
+        context.negotiator.cancel_pending_for_peer(task.peer);
         context.metrics.record_control_failure();
         return;
     };
@@ -18404,7 +18597,7 @@ fn handle_packet_plane_quic_connection_task(
         if let Some(packet_plane_quic) = context.packet_plane_quic.as_deref_mut() {
             packet_plane_quic.forget_peer(task.peer);
         }
-        context.negotiator.remove_peer(task.peer);
+        context.negotiator.cancel_pending_for_peer(task.peer);
         context.metrics.record_control_failure();
         log_runtime_event(
             LogLevel::Warn,
@@ -18492,6 +18685,25 @@ fn retry_packet_plane_negotiation(
     if let Some(peer) = context.forwarder.transport_peer_for_overlay(overlay_peer)
         && let Some(capabilities) = context.peer_capabilities.get(overlay_peer)
     {
+        if context.local_capabilities.supports_owned_quic_packet_plane
+            && capabilities.supports_owned_quic_packet_plane
+            && context.packet_plane_quic.is_some()
+            && has_direct_packet_plane_negotiation_path(context.paths, overlay_peer)
+            && !context.paths.candidates_for(overlay_peer).any(|candidate| {
+                candidate.kind == PathKind::DirectQuicDatagram && candidate.healthy
+            })
+            && context
+                .negotiator
+                .take_capability_refresh(overlay_peer, Instant::now())
+        {
+            send_control_capabilities(
+                context.swarm,
+                context.forwarder,
+                peer,
+                context.local_capabilities,
+                context.metrics,
+            );
+        }
         maybe_send_packet_plane_hello(
             context.swarm,
             context.forwarder,
@@ -18812,21 +19024,46 @@ fn remove_nonpersistent_endpoint_candidate(
 fn advertise_direct_packet_plane_endpoint_from_path(
     capabilities: &mut ControlCapabilities,
     udp_listener: Option<SocketAddr>,
+    quic: Option<&PacketPlaneQuicRuntime>,
     endpoint: &ConnectedPoint,
     overlay_prefixes: &[IpCidr],
     metrics: &RuntimeMetrics,
 ) -> bool {
+    let mut quic_updated = false;
+    if let Some(quic) = quic {
+        let snapshot = quic.snapshot();
+        if let (Some(candidate), Some(certificate)) = (
+            direct_packet_plane_endpoint_from_path(snapshot.listener, endpoint, overlay_prefixes),
+            snapshot.certificate_der,
+        ) && capabilities.owned_quic_packet_endpoint_candidates.first() != Some(&candidate)
+        {
+            replace_packet_plane_endpoint_for_listener(
+                &mut capabilities.owned_quic_packet_endpoint_candidates,
+                &candidate,
+            );
+            *capabilities = capabilities
+                .clone()
+                .with_owned_quic_packet_plane_certificate(certificate);
+            metrics.record_observed_packet_plane_quic_endpoint_candidate();
+            log_runtime_event(
+                LogLevel::Info,
+                "direct_quic_packet_plane_endpoint_advertised",
+                &[("endpoint", &candidate)],
+            );
+            quic_updated = true;
+        }
+    }
     let Some(candidate) =
         direct_packet_plane_endpoint_from_path(udp_listener, endpoint, overlay_prefixes)
     else {
-        return false;
+        return quic_updated;
     };
     if capabilities
         .packet_endpoint_candidates
         .first()
         .is_some_and(|existing| existing == &candidate)
     {
-        return false;
+        return quic_updated;
     }
 
     replace_packet_plane_endpoint_for_listener(
@@ -19920,6 +20157,25 @@ fn connection_is_handshake_initiator(endpoint: &ConnectedPoint) -> bool {
         // The pinned QUIC transport dials as a client whenever it reuses a port.
         || (path_kind_for_endpoint(endpoint) == PathKind::DirectQuicStream
             && *port_use == libp2p::core::transport::PortUse::Reuse)
+}
+
+fn has_newer_direct_connection(
+    connections: &HashMap<(Libp2pPeerId, ConnectionId), ConnectedPoint>,
+    epochs: &ConnectionEpochs,
+    peer: Libp2pPeerId,
+    failed: ConnectionId,
+) -> bool {
+    let Some(endpoint) = connections.get(&(peer, failed)) else {
+        return false;
+    };
+    !endpoint.is_relayed()
+        && epochs.is_usable(failed)
+        && connections.iter().any(|((candidate_peer, id), candidate)| {
+            *candidate_peer == peer
+                && *id > failed
+                && epochs.is_usable(*id)
+                && path_kind_for_endpoint(candidate) == path_kind_for_endpoint(endpoint)
+        })
 }
 
 fn redundant_direct_connection_ids(
@@ -21662,8 +21918,13 @@ fn runtime_path_stats(
     packet_plane_quic: Option<&PacketPlaneQuicRuntime>,
 ) -> crate::path::PathRuntimeStats {
     paths.runtime_stats_for_peers(forwarder.configured_overlay_peers(), |peer| {
-        let datagram_backend =
-            local_packet_datagram_backend(peer_capabilities, packet_plane, packet_plane_quic, peer);
+        let datagram_backend = local_packet_datagram_backend(
+            paths,
+            peer_capabilities,
+            packet_plane,
+            packet_plane_quic,
+            peer,
+        );
         packet_transport_support_for_backend(peer_capabilities, peer, datagram_backend)
     })
 }
@@ -21677,8 +21938,13 @@ fn selected_path_mtu(
     local_mtu: u16,
 ) -> u16 {
     let peer_mtu = peer_capabilities.effective_mtu_for(peer, local_mtu);
-    let datagram_backend =
-        local_packet_datagram_backend(peer_capabilities, packet_plane, packet_plane_quic, peer);
+    let datagram_backend = local_packet_datagram_backend(
+        paths,
+        peer_capabilities,
+        packet_plane,
+        packet_plane_quic,
+        peer,
+    );
     let support = packet_transport_support_for_backend(peer_capabilities, peer, datagram_backend);
     let path_mtu = best_packet_transport_path(paths, peer, support)
         .map_or(peer_mtu, |path| path.effective_mtu(peer_mtu));
@@ -27805,6 +28071,10 @@ mod tests {
         let packet_plane_quic = PacketPlaneQuicSnapshot {
             listener: Some("127.0.0.1:51821".parse().expect("quic listener")),
             certificate_der: Some(vec![0x30, 0x01]),
+            live_endpoints: vec![(
+                PeerId::from_bytes([8; 32]),
+                "127.0.0.1:51823".parse().unwrap(),
+            )],
             sessions: vec![PacketPlaneSessionSnapshot {
                 peer: PeerId::from_bytes([8; 32]),
                 endpoint: "127.0.0.1:51822".parse().expect("quic endpoint"),
@@ -27851,9 +28121,30 @@ mod tests {
         assert!(lines.contains(&"pairing_requests_accepted 1".to_owned()));
         assert!(lines.contains(&"packet_plane_quic_listener 127.0.0.1:51821".to_owned()));
         assert!(lines.contains(&format!(
+            "packet_plane_quic_connection {} endpoint 127.0.0.1:51823",
+            PeerId::from_bytes([8; 32])
+        )));
+        assert!(lines.contains(&format!(
             "packet_plane_quic_session {} endpoint 127.0.0.1:51822 mtu 1180 role initiator local_session 17 remote_session 19",
             PeerId::from_bytes([8; 32])
         )));
+    }
+
+    #[test]
+    fn packet_capability_refresh_is_bounded_and_cleared_with_peer_state() {
+        let mut negotiator = PacketPlaneNegotiator::default();
+        let peer = PeerId::from_bytes([8; 32]);
+        let now = Instant::now();
+        assert!(negotiator.take_capability_refresh(peer, now));
+        assert!(!negotiator.take_capability_refresh(peer, now));
+        negotiator.cancel_pending_for_peer(peer);
+        assert!(!negotiator.take_capability_refresh(peer, now + Duration::from_secs(9)));
+        assert!(negotiator.take_capability_refresh(peer, now + Duration::from_secs(10)));
+        negotiator.remove_peer(peer);
+        assert!(negotiator.next_capability_refresh.is_empty());
+        assert!(negotiator.take_capability_refresh(peer, now));
+        negotiator.clear();
+        assert!(negotiator.next_capability_refresh.is_empty());
     }
 
     #[test]
@@ -27875,6 +28166,8 @@ mod tests {
                 "outbound_direct_tcp_stream_fallback_packets 0",
                 "outbound_relay_stream_fallback_packets 0",
                 "outbound_quic_datagram_packets 0",
+                "outbound_owned_quic_datagram_packets 0",
+                "outbound_owned_udp_datagram_packets 0",
                 "outbound_quic_datagram_unavailable_packets 0",
                 "path_promotions_to_direct 0",
                 "path_fallbacks_to_relay 0",
@@ -35847,6 +36140,61 @@ mod tests {
     }
 
     #[test]
+    fn timed_out_connection_requires_a_current_same_peer_direct_replacement() {
+        let peer = peer_id();
+        let old = ConnectionId::new_unchecked(1);
+        let new = ConnectionId::new_unchecked(2);
+        let endpoint = ConnectedPoint::Listener {
+            local_addr: "/ip4/10.250.0.1/tcp/4001".parse().unwrap(),
+            send_back_addr: "/ip4/10.250.0.2/tcp/4001".parse().unwrap(),
+        };
+        let mut epochs = ConnectionEpochs::default();
+        epochs.record_established(old);
+        epochs.record_established(new);
+        let mut connections = HashMap::from([((peer, old), endpoint.clone())]);
+        assert!(!has_newer_direct_connection(
+            &connections,
+            &epochs,
+            peer,
+            old
+        ));
+        connections.insert((peer_id(), new), endpoint.clone());
+        assert!(!has_newer_direct_connection(
+            &connections,
+            &epochs,
+            peer,
+            old
+        ));
+        connections.insert((peer, new), endpoint);
+        assert!(has_newer_direct_connection(
+            &connections,
+            &epochs,
+            peer,
+            old
+        ));
+        assert!(!has_newer_direct_connection(
+            &connections,
+            &epochs,
+            peer,
+            new
+        ));
+        epochs.mark_retiring(new);
+        assert!(!has_newer_direct_connection(
+            &connections,
+            &epochs,
+            peer,
+            old
+        ));
+        epochs.advance();
+        assert!(!has_newer_direct_connection(
+            &connections,
+            &epochs,
+            peer,
+            old
+        ));
+    }
+
+    #[test]
     fn direct_connection_deduplication_keeps_the_preferred_initiator() {
         let first_peer = peer_id();
         let second_peer = peer_id();
@@ -41084,6 +41432,8 @@ mod tests {
         let snapshot = metrics.snapshot(queues.total_stats());
         assert_eq!(snapshot.outbound_sent_packets, 1);
         assert_eq!(snapshot.outbound_quic_datagram_packets, 1);
+        assert_eq!(snapshot.outbound_owned_udp_datagram_packets, 1);
+        assert_eq!(snapshot.outbound_owned_quic_datagram_packets, 0);
         assert_eq!(snapshot.outbound_stream_fallback_packets, 0);
         assert_eq!(snapshot.outbound_dropped_packets, 0);
         assert_eq!(snapshot.queue.queued_packets, 0);
@@ -41238,6 +41588,8 @@ mod tests {
         let snapshot = metrics.snapshot(queues.total_stats());
         assert_eq!(snapshot.outbound_sent_packets, 1);
         assert_eq!(snapshot.outbound_quic_datagram_packets, 1);
+        assert_eq!(snapshot.outbound_owned_quic_datagram_packets, 1);
+        assert_eq!(snapshot.outbound_owned_udp_datagram_packets, 0);
         assert_eq!(snapshot.outbound_stream_fallback_packets, 0);
         assert_eq!(snapshot.outbound_dropped_packets, 0);
         assert_eq!(snapshot.queue.queued_packets, 0);
@@ -41384,6 +41736,8 @@ mod tests {
         let snapshot = metrics.snapshot(queues.total_stats());
         assert_eq!(snapshot.outbound_sent_packets, 1);
         assert_eq!(snapshot.outbound_quic_datagram_packets, 1);
+        assert_eq!(snapshot.outbound_owned_udp_datagram_packets, 1);
+        assert_eq!(snapshot.outbound_owned_quic_datagram_packets, 0);
         assert_eq!(snapshot.outbound_stream_fallback_packets, 0);
         assert_eq!(snapshot.outbound_dropped_packets, 0);
         assert_eq!(snapshot.packet_plane_path_demotions, 1);
@@ -42243,8 +42597,17 @@ mod tests {
     }
 
     #[tokio::test]
-    #[allow(clippy::too_many_lines)]
     async fn packet_plane_control_negotiation_establishes_sessions() {
+        assert_udp_control_negotiation(false).await;
+    }
+
+    #[tokio::test]
+    async fn packet_plane_control_negotiation_accepts_udp_with_quic_capabilities() {
+        assert_udp_control_negotiation(true).await;
+    }
+
+    #[allow(clippy::too_many_lines)]
+    async fn assert_udp_control_negotiation(advertise_quic: bool) {
         let initiator_identity =
             crate::identity::NodeIdentity::generate_ed25519().expect("initiator identity");
         let responder_identity =
@@ -42289,6 +42652,14 @@ mod tests {
                     .to_string(),
             ]);
         responder_capabilities = responder_capabilities.with_owned_udp_packet_plane(true);
+        if advertise_quic {
+            initiator_capabilities = initiator_capabilities
+                .with_owned_quic_packet_endpoint_candidates(vec!["127.0.0.1:1".to_owned()])
+                .with_owned_quic_packet_plane_certificate(vec![1]);
+            responder_capabilities = responder_capabilities
+                .with_owned_quic_packet_endpoint_candidates(vec!["127.0.0.1:2".to_owned()])
+                .with_owned_quic_packet_plane_certificate(vec![2]);
+        }
         let mut responder_peer_capabilities = PeerCapabilities::default();
         responder_peer_capabilities.record(initiator_overlay, initiator_capabilities.clone());
         let mut initiator_peer_capabilities = PeerCapabilities::default();
@@ -42545,6 +42916,42 @@ mod tests {
         assert_eq!(responder_packet_plane.retiring_session_count(), 1);
     }
 
+    #[test]
+    fn packet_plane_accept_backend_requires_matching_advertised_endpoint() {
+        let capabilities = ControlCapabilities::local("lab", None, 1280)
+            .with_owned_udp_packet_plane(true)
+            .with_packet_endpoint_candidates(vec!["127.0.0.1:10001".to_owned()])
+            .with_owned_quic_packet_endpoint_candidates(vec!["127.0.0.1:10002".to_owned()])
+            .with_owned_quic_packet_plane_certificate(vec![1]);
+        let udp = "127.0.0.1:10001".parse().unwrap();
+        let quic = "127.0.0.1:10002".parse().unwrap();
+        for (endpoint, expected) in [
+            (udp, Some(PacketDatagramBackend::OwnedUdp)),
+            (quic, Some(PacketDatagramBackend::OwnedQuic)),
+            ("127.0.0.1:10003".parse().unwrap(), None),
+        ] {
+            assert_eq!(
+                packet_plane_accept_backend(&capabilities, &capabilities, endpoint),
+                expected,
+            );
+        }
+        let mut remote = capabilities.clone();
+        remote.owned_quic_packet_plane_certificate_der = None;
+        assert_eq!(
+            packet_plane_accept_backend(&capabilities, &remote, quic),
+            None
+        );
+        assert_eq!(
+            packet_plane_accept_backend(&capabilities, &remote, udp),
+            Some(PacketDatagramBackend::OwnedUdp),
+        );
+        remote.supports_owned_udp_packet_plane = false;
+        assert_eq!(
+            packet_plane_accept_backend(&capabilities, &remote, udp),
+            None
+        );
+    }
+
     #[tokio::test]
     async fn packet_plane_negotiation_replaces_session_when_remote_endpoint_changes() {
         let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
@@ -42642,7 +43049,11 @@ mod tests {
             None
         );
         assert_eq!(
-            packet_plane_accept_backend(&local_capabilities, &matching_remote_capabilities),
+            packet_plane_accept_backend(
+                &local_capabilities,
+                &matching_remote_capabilities,
+                old_remote_endpoint,
+            ),
             Some(PacketDatagramBackend::OwnedUdp)
         );
         packet_plane
@@ -43431,6 +43842,83 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn direct_quic_advertisement_preserves_certificate_preference_and_address_guards() {
+        let quic = PacketPlaneQuicRuntime::bind("127.0.0.1:0".parse().expect("listener"))
+            .expect("QUIC runtime");
+        let endpoint = ConnectedPoint::Dialer {
+            address: "/ip4/127.0.0.1/tcp/4001".parse().expect("address"),
+            role_override: Endpoint::Dialer,
+            port_use: PortUse::Reuse,
+        };
+        let mut capabilities = ControlCapabilities::local("lab", None, 1280);
+        let metrics = RuntimeMetrics::default();
+        assert!(advertise_direct_packet_plane_endpoint_from_path(
+            &mut capabilities,
+            None,
+            Some(&quic),
+            &endpoint,
+            &[],
+            &metrics,
+        ));
+        assert_eq!(capabilities.preferred_path, "direct_quic_datagram");
+        assert_eq!(
+            capabilities.owned_quic_packet_endpoint_candidates,
+            [quic.local_addr().to_string()]
+        );
+        assert_eq!(
+            capabilities
+                .owned_quic_packet_plane_certificate_der
+                .as_deref(),
+            Some(quic.server_certificate().as_ref())
+        );
+        assert!(!advertise_direct_packet_plane_endpoint_from_path(
+            &mut capabilities,
+            None,
+            Some(&quic),
+            &endpoint,
+            &[],
+            &metrics,
+        ));
+
+        let mut excluded = ControlCapabilities::local("lab", None, 1280);
+        let overlay = [IpCidr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 0)), 8).expect("overlay")];
+        assert!(!advertise_direct_packet_plane_endpoint_from_path(
+            &mut excluded,
+            None,
+            Some(&quic),
+            &endpoint,
+            &overlay,
+            &metrics,
+        ));
+        let relayed = ConnectedPoint::Dialer {
+            address: "/ip4/127.0.0.1/tcp/4001/p2p-circuit"
+                .parse()
+                .expect("relay"),
+            role_override: Endpoint::Dialer,
+            port_use: PortUse::Reuse,
+        };
+        assert!(!advertise_direct_packet_plane_endpoint_from_path(
+            &mut excluded,
+            None,
+            Some(&quic),
+            &relayed,
+            &[],
+            &metrics,
+        ));
+        assert!(!advertise_direct_packet_plane_endpoint_from_path(
+            &mut excluded,
+            None,
+            None,
+            &endpoint,
+            &[],
+            &metrics,
+        ));
+        assert!(!excluded.supports_owned_quic_packet_plane);
+        assert!(excluded.owned_quic_packet_endpoint_candidates.is_empty());
+        assert!(excluded.owned_quic_packet_plane_certificate_der.is_none());
+    }
+
     #[test]
     fn direct_packet_plane_endpoint_uses_concrete_listener_address() {
         let endpoint = ConnectedPoint::Dialer {
@@ -43780,6 +44268,105 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn failed_packet_request_retires_only_its_owner_and_preserves_quic_backoff() {
+        let identity = NodeIdentity::generate_ed25519().expect("identity");
+        let remote = peer_id();
+        let peer = PeerId::from_libp2p(remote);
+        let mut node = pairing_test_node(&identity);
+        let first = node
+            .swarm
+            .behaviour_mut()
+            .control
+            .send_request(&remote, ControlRequest::PacketPlaneHello(Vec::new()));
+        let second = node
+            .swarm
+            .behaviour_mut()
+            .control
+            .send_request(&remote, ControlRequest::PacketPlaneHello(Vec::new()));
+        let secret = test_packet_plane_secret(7);
+        let hello = verified_test_packet_plane_handshake(
+            PacketPlaneHandshakeKind::Hello,
+            &identity,
+            &secret,
+            1280,
+            "127.0.0.1:10001".parse().unwrap(),
+        );
+        let mut negotiator = PacketPlaneNegotiator::default();
+        negotiator.insert(peer, secret, hello, PacketDatagramBackend::OwnedQuic);
+        negotiator.pending.get_mut(&peer).unwrap().request_id = Some(second);
+        assert!(!negotiator.finish_failed_request(peer, first));
+        assert!(!negotiator.finish_failed_request(PeerId::from_libp2p(peer_id()), second));
+        assert!(negotiator.has_pending(peer));
+        assert!(negotiator.finish_failed_request(peer, second));
+        assert!(!negotiator.has_pending(peer));
+        assert!(!negotiator.quic_retry_ready(peer, Instant::now()));
+        assert!(!negotiator.finish_failed_request(peer, second));
+    }
+
+    #[test]
+    fn quic_retry_interval_survives_attempt_failure_but_not_peer_removal() {
+        let identity = NodeIdentity::generate_ed25519().expect("identity");
+        let peer = PeerId::from_libp2p(peer_id());
+        let secret = test_packet_plane_secret(7);
+        let hello = verified_test_packet_plane_handshake(
+            PacketPlaneHandshakeKind::Hello,
+            &identity,
+            &secret,
+            1280,
+            "127.0.0.1:10001".parse().unwrap(),
+        );
+        let mut negotiator = PacketPlaneNegotiator::default();
+        let now = Instant::now();
+        assert!(negotiator.quic_retry_ready(peer, now));
+        negotiator.insert(peer, secret, hello, PacketDatagramBackend::OwnedQuic);
+        let next = negotiator.next_quic_attempt[&peer];
+        assert!(!negotiator.quic_retry_ready(peer, now));
+        negotiator.cancel_pending_for_peer(peer);
+        assert!(!negotiator.has_pending(peer));
+        assert!(!negotiator.quic_retry_ready(peer, now));
+        assert!(negotiator.quic_retry_ready(peer, next));
+        negotiator.remove_peer(peer);
+        assert!(negotiator.next_quic_attempt.is_empty());
+        assert!(negotiator.quic_retry_ready(peer, now));
+        negotiator.next_quic_attempt.insert(peer, next);
+        negotiator.clear();
+        assert!(negotiator.next_quic_attempt.is_empty());
+    }
+
+    #[test]
+    fn packet_datagram_selection_retains_udp_while_quic_is_unhealthy() {
+        let peer = PeerId::from_libp2p(peer_id());
+        let mut paths = PathSet::new();
+        paths.record_established(peer, PathKind::DirectQuicDatagram);
+        paths.record_established(peer, PathKind::DirectUdpDatagram);
+        assert_eq!(
+            select_packet_datagram_backend(&paths, peer, true, true),
+            Some(PacketDatagramBackend::OwnedQuic)
+        );
+        paths.mark_unhealthy(peer, PathKind::DirectQuicDatagram);
+        assert_eq!(
+            select_packet_datagram_backend(&paths, peer, true, true),
+            Some(PacketDatagramBackend::OwnedUdp)
+        );
+        assert_eq!(
+            select_packet_datagram_backend(&paths, peer, false, false),
+            None
+        );
+        paths.record_rtt(peer, PathKind::DirectQuicDatagram, 10);
+        assert_eq!(
+            select_packet_datagram_backend(&paths, peer, true, true),
+            Some(PacketDatagramBackend::OwnedUdp)
+        );
+        for _ in 0..4 {
+            paths.record_rtt(peer, PathKind::DirectQuicDatagram, 10);
+        }
+        assert_eq!(
+            select_packet_datagram_backend(&paths, peer, true, true),
+            Some(PacketDatagramBackend::OwnedQuic)
+        );
+    }
+
     #[test]
     fn packet_transport_decision_blocks_native_only_datagram_claim_without_local_handle() {
         let remote = peer_id();
@@ -43793,7 +44380,7 @@ mod tests {
         );
 
         assert_eq!(
-            local_packet_datagram_backend(&peer_capabilities, None, None, remote_overlay),
+            local_packet_datagram_backend(&paths, &peer_capabilities, None, None, remote_overlay),
             None
         );
         assert_eq!(

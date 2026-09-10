@@ -2954,6 +2954,49 @@ mod tests {
     }
 
     #[test]
+    fn minimal_profiles_inherit_quic_without_serialized_transport_settings() {
+        let profile = create_profile("personal").expect("profile");
+        let config: Config = serde_json::from_str(&profile.config_json).unwrap();
+        assert_eq!(config.network.packet_plane.quic_listen, ["0.0.0.0:0"]);
+        let encoded: serde_json::Value = serde_json::from_str(&profile.config_json).unwrap();
+        assert!(encoded["network"].get("packet_plane").is_none());
+
+        let reloaded = inspect_profile(&profile.config_json).expect("reload existing profile");
+        let reloaded_config: Config = serde_json::from_str(&reloaded.config_json).unwrap();
+        assert_eq!(
+            reloaded_config.network.private_key,
+            config.network.private_key
+        );
+        assert_eq!(reloaded.peer_id, profile.peer_id);
+        assert_eq!(reloaded.hostname, profile.hostname);
+        assert_eq!(
+            reloaded_config.network.packet_plane,
+            config.network.packet_plane
+        );
+        assert_eq!(reloaded.config_json, profile.config_json);
+    }
+
+    #[test]
+    fn profile_reload_preserves_explicit_packet_transport_overrides() {
+        let profile = create_profile("personal").expect("profile");
+        for packet_plane in [
+            serde_json::json!({"quic_listen": []}),
+            serde_json::json!({"listen": []}),
+            serde_json::json!({"quic_listen": ["0.0.0.0:51821"]}),
+        ] {
+            let mut encoded: serde_json::Value =
+                serde_json::from_str(&profile.config_json).unwrap();
+            encoded["network"]["packet_plane"] = packet_plane;
+            let before: Config = serde_json::from_value(encoded.clone()).unwrap();
+            let reloaded = inspect_profile(&encoded.to_string()).expect("reload override");
+            let after: Config = serde_json::from_str(&reloaded.config_json).unwrap();
+            assert_eq!(after.network.packet_plane, before.network.packet_plane);
+            assert_eq!(after.network.private_key, before.network.private_key);
+            assert_eq!(reloaded.peer_id, profile.peer_id);
+        }
+    }
+
+    #[test]
     fn generated_profile_is_minimal_valid_and_has_overlay_routes() {
         let profile = create_profile("personal").expect("profile");
         let encoded: serde_json::Value =

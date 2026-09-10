@@ -51,6 +51,7 @@ pub struct PacketPlaneQuicSnapshot {
     pub listener: Option<SocketAddr>,
     pub certificate_der: Option<Vec<u8>>,
     pub sessions: Vec<PacketPlaneSessionSnapshot>,
+    pub live_endpoints: Vec<(PeerId, SocketAddr)>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1648,10 +1649,19 @@ impl PacketPlaneQuicRuntime {
             .map(PacketPlaneSession::snapshot)
             .collect::<Vec<_>>();
         sessions.sort_by_key(|session| session.peer.to_string());
+        let live_endpoints = sessions
+            .iter()
+            .filter_map(|session| {
+                self.connections
+                    .get(&session.peer)
+                    .map(|connection| (session.peer, connection.remote_address()))
+            })
+            .collect();
         PacketPlaneQuicSnapshot {
             listener: Some(self.local_addr),
             certificate_der: Some(self.server_certificate.as_ref().to_vec()),
             sessions,
+            live_endpoints,
         }
     }
 
@@ -1901,11 +1911,8 @@ impl PacketPlaneQuicRuntime {
                 continue;
             };
             reads.push(Box::pin(async move {
-                (
-                    peer,
-                    connection.remote_address(),
-                    connection.read_datagram().await,
-                )
+                let datagram = connection.read_datagram().await;
+                (peer, connection.remote_address(), datagram)
             }));
         }
         let ((peer, remote_addr, datagram), _, _) = select_all(reads).await;
@@ -3534,6 +3541,63 @@ mod tests {
         assert_eq!(inbound.frame, frame);
         assert_eq!(inbound.remote_addr, sender_addr);
         assert_eq!(inbound.local_addr, receiver_addr);
+    }
+
+    #[tokio::test]
+    async fn quic_client_migration_preserves_session_but_changes_live_endpoint() {
+        let mut sender = PacketPlaneQuicRuntime::bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let mut receiver = PacketPlaneQuicRuntime::bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let sender_addr = sender.local_addr();
+        let receiver_addr = receiver.local_addr();
+        let (initiator_secret, responder_secret, hello, accept) =
+            verified_session_pair_with_endpoints(sender_addr, receiver_addr, 1280);
+        let (connect, incoming) = tokio::join!(
+            sender.connect_peer(accept.peer, receiver_addr, receiver.server_certificate()),
+            receiver.accept_peer(hello.peer)
+        );
+        connect.expect("connect");
+        incoming.expect("accept");
+        sender
+            .establish_session(
+                PacketPlaneSessionRole::Initiator,
+                &initiator_secret,
+                &hello,
+                &accept,
+            )
+            .expect("sender session");
+        receiver
+            .establish_session(
+                PacketPlaneSessionRole::Responder,
+                &responder_secret,
+                &accept,
+                &hello,
+            )
+            .expect("receiver session");
+
+        let socket = std::net::UdpSocket::bind("127.0.0.1:0").expect("new client socket");
+        let moved_addr = socket.local_addr().unwrap();
+        assert_ne!(moved_addr, sender_addr);
+        sender.endpoint.rebind(socket).expect("rebind client");
+        let frame = Frame::packet(77, 42, vec![0x45; 20]).expect("frame");
+        sender
+            .send_frame_to_peer(accept.peer, &frame)
+            .expect("send");
+        let inbound = timeout(Duration::from_secs(2), receiver.recv_frame_from_session())
+            .await
+            .expect("bounded migration")
+            .expect("authenticated payload");
+        assert_eq!(inbound.frame, frame);
+        assert_eq!(inbound.remote_addr, moved_addr);
+        assert_eq!(
+            receiver.connections[&hello.peer].remote_address(),
+            moved_addr
+        );
+        // The signed handshake endpoint is not the connection's migrated address.
+        assert_eq!(receiver.snapshot().sessions[0].endpoint, sender_addr);
+        assert_eq!(
+            receiver.snapshot().live_endpoints,
+            vec![(hello.peer, moved_addr)]
+        );
     }
 
     #[tokio::test]

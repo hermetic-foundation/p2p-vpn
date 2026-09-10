@@ -263,9 +263,12 @@ It does not consume packet forwarding allowance.
 | `packet_plane.quic_external_endpoints` | Advertised QUIC endpoints. |
 | `packet_plane.session_ttl_seconds` | Session lifetime. Default `600`. |
 
-Omit `network.packet_plane` for automatic UDP packet-plane setup.
+Omit `network.packet_plane` for automatic QUIC and UDP packet-plane listeners.
+The daemon assigns available ports and negotiates compatible packet paths.
 
-Use `"listen": []` only to force stream fallback.
+Use `"quic_listen": []` to disable QUIC datagrams explicitly.
+Use `"listen": []` without a QUIC override to retain stream-only operation.
+An explicit nonempty `quic_listen` overrides that stream-only choice.
 
 Datagram forwarding needs compatible direct paths and negotiated sessions.
 
@@ -274,7 +277,7 @@ Default path preference:
 | Available Path | Used As |
 | --- | --- |
 | QUIC datagram packet plane | Preferred packet path. |
-| UDP datagram packet plane | Default minimal-config packet path. |
+| UDP datagram packet plane | Datagram fallback for compatible peers. |
 | Direct QUIC stream | First stream fallback, pinned to the selected connection. |
 | Direct TCP stream | Lower direct stream fallback. |
 | Circuit relay stream | Public fallback, pinned to the selected relay connection. |
