@@ -51,6 +51,19 @@ Record transition times, runtime generations and path/counter snapshots througho
 USB remains management only; no manual endpoint updates or runtime rescue during either transition.
 Failed traffic and fallback use remain evidence, not grounds to extend a failed measurement deadline.
 
+### QUIC Datagram Boundary Coverage
+
+- Extended the existing real-Quinn loopback test with a peer advertising a 1,200-byte UDP limit.
+  The usable overlay payload is Quinn's datagram limit minus authenticated packet framing overhead.
+- The exact boundary is delivered; one byte above returns `SendDatagramError::TooLarge`.
+  A subsequent boundary-sized frame is delivered with the authenticated session still present.
+- The focused test passed, followed by all 44 packet-plane tests with zero failures.
+  Evidence: `/tmp/p2p-vpn-quic-mtu-{boundary,packet-plane}.log`.
+- Formatting and required Clippy correctness/suspicious/perf checks passed; existing warnings remain.
+  Evidence: `/tmp/p2p-vpn-quic-mtu-clippy.log`; no applicable formal models were found.
+- This is a test-only extension; deployed production code and Android artifacts are unchanged.
+  It does not establish physical path-MTU discovery or end-to-end fallback on a smaller underlay.
+
 ## Physical Pixel Check: September 10
 
 The authorized in-place APK upgrade preserved the existing identity, hostname and network.

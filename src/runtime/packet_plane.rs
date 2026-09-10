@@ -3616,6 +3616,42 @@ mod tests {
         assert_eq!(received.frame, small);
         assert_eq!(received.peer, Some(hello.peer));
         assert!(sender.has_session(accept.peer));
+
+        let datagram_limit = sender.connections[&accept.peer]
+            .max_datagram_size()
+            .expect("peer supports datagrams");
+        let payload_limit = datagram_limit
+            .checked_sub(PACKET_PLANE_DATAGRAM_OVERHEAD_LEN)
+            .expect("datagram limit accommodates authenticated framing");
+        let boundary = Frame::packet(77, 44, vec![0x45; payload_limit]).unwrap();
+        assert_eq!(
+            sender.send_frame_to_peer(accept.peer, &boundary).unwrap(),
+            datagram_limit
+        );
+        let received = timeout(Duration::from_secs(2), receiver.recv_frame_from_session())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(received.frame, boundary);
+
+        let over_boundary = Frame::packet(77, 45, vec![0x45; payload_limit + 1]).unwrap();
+        assert!(matches!(
+            sender.send_frame_to_peer(accept.peer, &over_boundary),
+            Err(PacketPlaneQuicError::SendDatagram(
+                quinn::SendDatagramError::TooLarge
+            ))
+        ));
+        let after_rejection = Frame::packet(77, 46, vec![0x45; payload_limit]).unwrap();
+        sender
+            .send_frame_to_peer(accept.peer, &after_rejection)
+            .unwrap();
+        let received = timeout(Duration::from_secs(2), receiver.recv_frame_from_session())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(received.frame, after_rejection);
+        assert_eq!(received.peer, Some(hello.peer));
+        assert!(sender.has_session(accept.peer));
     }
 
     #[tokio::test]
