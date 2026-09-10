@@ -27,23 +27,23 @@ read_stat() {
   done
 }
 
-thread_sample() (
+thread_sample() {
   task=$1 tid=${1##*/}
-  read_stat "$task/stat" || exit 1
+  read_stat "$task/stat" || return 1
   task_start=$start_ticks task_user=$user_ticks task_system=$system_ticks
   task_voluntary=null task_involuntary=null
-  [ -r "$task/status" ] || exit 1
+  [ -r "$task/status" ] || return 1
   while read -r key value _; do
     case "$key" in
       voluntary_ctxt_switches:) unsigned "$value" && task_voluntary=$value ;;
       nonvoluntary_ctxt_switches:) unsigned "$value" && task_involuntary=$value ;;
     esac
   done <"$task/status"
-  read_stat "$task/stat" || exit 1
-  [ "$start_ticks" = "$task_start" ] || exit 1
-  printf '{"tid":%s,"start_ticks":%s,"user_ticks":%s,"system_ticks":%s,"voluntary_context_switches":%s,"involuntary_context_switches":%s}' \
-    "$tid" "$task_start" "$task_user" "$task_system" "$task_voluntary" "$task_involuntary"
-)
+  read_stat "$task/stat" || return 1
+  [ "$start_ticks" = "$task_start" ] || return 1
+  # Numeric fields are validated above; keep assembly in-process to avoid per-thread forks.
+  task_row="{\"tid\":$tid,\"start_ticks\":$task_start,\"user_ticks\":$task_user,\"system_ticks\":$task_system,\"voluntary_context_switches\":$task_voluntary,\"involuntary_context_switches\":$task_involuntary}"
+}
 
 thread_scan() {
   [ -r "$proc/$pid/task" ] && [ -x "$proc/$pid/task" ] || return 1
@@ -57,7 +57,7 @@ thread_scan() {
       set -f
       return 1
     }
-    if task_row=$(thread_sample "$task" 2>/dev/null); then
+    if thread_sample "$task" 2>/dev/null; then
       observed=$((observed + 1))
       task_rows="$task_rows$separator$task_row"
       separator=,

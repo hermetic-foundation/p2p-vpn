@@ -1,0 +1,528 @@
+{
+  "schema_version": 1,
+  "raw_sha256": "29ed640adaf26c440382d985475d40a490057f640cbe82871ff18f23fafa0673",
+  "evidence_sha256": "04b453d032edb3d8ebd796a33f8dc60978a3212e4b237d6d089682f80601c30a",
+  "collector_sha256": "bdebe1c834a5f21cad746eb33c679625082755152b2fc50a566906ac2359b011",
+  "clock_ticks_per_second": 100,
+  "rows": [
+    {
+      "schema_version": 1,
+      "pid": 2083,
+      "start_ticks": 1805,
+      "started_uptime_seconds": 20.16,
+      "finished_uptime_seconds": 20.18,
+      "user_ticks": 60,
+      "system_ticks": 66,
+      "os_threads": 20,
+      "rss_kib": 152436,
+      "fds": 125,
+      "leader_voluntary_context_switches": 83,
+      "leader_involuntary_context_switches": 204,
+      "thread_inventory": {
+        "listed": 20,
+        "observed": 20,
+        "skipped": 0
+      }
+    },
+    {
+      "schema_version": 1,
+      "pid": 2083,
+      "start_ticks": 1805,
+      "started_uptime_seconds": 21.19,
+      "finished_uptime_seconds": 21.21,
+      "user_ticks": 60,
+      "system_ticks": 66,
+      "os_threads": 20,
+      "rss_kib": 152436,
+      "fds": 125,
+      "leader_voluntary_context_switches": 83,
+      "leader_involuntary_context_switches": 204,
+      "thread_inventory": {
+        "listed": 20,
+        "observed": 20,
+        "skipped": 0
+      }
+    },
+    {
+      "schema_version": 1,
+      "pid": 2083,
+      "start_ticks": 1805,
+      "started_uptime_seconds": 22.22,
+      "finished_uptime_seconds": 22.24,
+      "user_ticks": 60,
+      "system_ticks": 66,
+      "os_threads": 20,
+      "rss_kib": 152436,
+      "fds": 125,
+      "leader_voluntary_context_switches": 83,
+      "leader_involuntary_context_switches": 204,
+      "thread_inventory": {
+        "listed": 20,
+        "observed": 20,
+        "skipped": 0
+      }
+    },
+    {
+      "schema_version": 1,
+      "pid": 2083,
+      "start_ticks": 1805,
+      "started_uptime_seconds": 23.25,
+      "finished_uptime_seconds": 23.27,
+      "user_ticks": 60,
+      "system_ticks": 66,
+      "os_threads": 20,
+      "rss_kib": 152692,
+      "fds": 125,
+      "leader_voluntary_context_switches": 83,
+      "leader_involuntary_context_switches": 204,
+      "thread_inventory": {
+        "listed": 20,
+        "observed": 20,
+        "skipped": 0
+      }
+    },
+    {
+      "schema_version": 1,
+      "pid": 2083,
+      "start_ticks": 1805,
+      "started_uptime_seconds": 24.28,
+      "finished_uptime_seconds": 24.3,
+      "user_ticks": 60,
+      "system_ticks": 66,
+      "os_threads": 20,
+      "rss_kib": 152692,
+      "fds": 125,
+      "leader_voluntary_context_switches": 83,
+      "leader_involuntary_context_switches": 204,
+      "thread_inventory": {
+        "listed": 20,
+        "observed": 20,
+        "skipped": 0
+      }
+    },
+    {
+      "schema_version": 1,
+      "pid": 2083,
+      "start_ticks": 1805,
+      "started_uptime_seconds": 25.31,
+      "finished_uptime_seconds": 25.33,
+      "user_ticks": 60,
+      "system_ticks": 66,
+      "os_threads": 20,
+      "rss_kib": 152692,
+      "fds": 125,
+      "leader_voluntary_context_switches": 83,
+      "leader_involuntary_context_switches": 204,
+      "thread_inventory": {
+        "listed": 20,
+        "observed": 20,
+        "skipped": 0
+      }
+    },
+    {
+      "schema_version": 1,
+      "pid": 2083,
+      "start_ticks": 1805,
+      "started_uptime_seconds": 26.34,
+      "finished_uptime_seconds": 26.36,
+      "user_ticks": 60,
+      "system_ticks": 66,
+      "os_threads": 20,
+      "rss_kib": 152692,
+      "fds": 125,
+      "leader_voluntary_context_switches": 83,
+      "leader_involuntary_context_switches": 204,
+      "thread_inventory": {
+        "listed": 20,
+        "observed": 20,
+        "skipped": 0
+      }
+    },
+    {
+      "schema_version": 1,
+      "pid": 2083,
+      "start_ticks": 1805,
+      "started_uptime_seconds": 27.37,
+      "finished_uptime_seconds": 27.39,
+      "user_ticks": 60,
+      "system_ticks": 66,
+      "os_threads": 20,
+      "rss_kib": 152692,
+      "fds": 125,
+      "leader_voluntary_context_switches": 83,
+      "leader_involuntary_context_switches": 204,
+      "thread_inventory": {
+        "listed": 20,
+        "observed": 20,
+        "skipped": 0
+      }
+    },
+    {
+      "schema_version": 1,
+      "pid": 2083,
+      "start_ticks": 1805,
+      "started_uptime_seconds": 28.4,
+      "finished_uptime_seconds": 28.43,
+      "user_ticks": 60,
+      "system_ticks": 66,
+      "os_threads": 20,
+      "rss_kib": 152692,
+      "fds": 125,
+      "leader_voluntary_context_switches": 83,
+      "leader_involuntary_context_switches": 204,
+      "thread_inventory": {
+        "listed": 20,
+        "observed": 20,
+        "skipped": 0
+      }
+    },
+    {
+      "schema_version": 1,
+      "pid": 2083,
+      "start_ticks": 1805,
+      "started_uptime_seconds": 29.43,
+      "finished_uptime_seconds": 29.46,
+      "user_ticks": 60,
+      "system_ticks": 66,
+      "os_threads": 20,
+      "rss_kib": 152692,
+      "fds": 125,
+      "leader_voluntary_context_switches": 83,
+      "leader_involuntary_context_switches": 204,
+      "thread_inventory": {
+        "listed": 20,
+        "observed": 20,
+        "skipped": 0
+      }
+    }
+  ],
+  "first_threads": [
+    {
+      "tid": 2083,
+      "start_ticks": 1805,
+      "user_ticks": 8,
+      "system_ticks": 2,
+      "voluntary_context_switches": 83,
+      "involuntary_context_switches": 204
+    },
+    {
+      "tid": 2084,
+      "start_ticks": 1806,
+      "user_ticks": 0,
+      "system_ticks": 0,
+      "voluntary_context_switches": 1,
+      "involuntary_context_switches": 0
+    },
+    {
+      "tid": 2085,
+      "start_ticks": 1806,
+      "user_ticks": 0,
+      "system_ticks": 0,
+      "voluntary_context_switches": 1,
+      "involuntary_context_switches": 0
+    },
+    {
+      "tid": 2086,
+      "start_ticks": 1806,
+      "user_ticks": 0,
+      "system_ticks": 0,
+      "voluntary_context_switches": 3,
+      "involuntary_context_switches": 0
+    },
+    {
+      "tid": 2087,
+      "start_ticks": 1806,
+      "user_ticks": 48,
+      "system_ticks": 7,
+      "voluntary_context_switches": 17,
+      "involuntary_context_switches": 453
+    },
+    {
+      "tid": 2088,
+      "start_ticks": 1806,
+      "user_ticks": 0,
+      "system_ticks": 0,
+      "voluntary_context_switches": 2,
+      "involuntary_context_switches": 0
+    },
+    {
+      "tid": 2089,
+      "start_ticks": 1806,
+      "user_ticks": 0,
+      "system_ticks": 0,
+      "voluntary_context_switches": 1,
+      "involuntary_context_switches": 0
+    },
+    {
+      "tid": 2090,
+      "start_ticks": 1806,
+      "user_ticks": 0,
+      "system_ticks": 0,
+      "voluntary_context_switches": 1,
+      "involuntary_context_switches": 0
+    },
+    {
+      "tid": 2091,
+      "start_ticks": 1806,
+      "user_ticks": 0,
+      "system_ticks": 0,
+      "voluntary_context_switches": 2,
+      "involuntary_context_switches": 0
+    },
+    {
+      "tid": 2092,
+      "start_ticks": 1806,
+      "user_ticks": 0,
+      "system_ticks": 0,
+      "voluntary_context_switches": 15,
+      "involuntary_context_switches": 0
+    },
+    {
+      "tid": 2093,
+      "start_ticks": 1806,
+      "user_ticks": 0,
+      "system_ticks": 0,
+      "voluntary_context_switches": 2,
+      "involuntary_context_switches": 3
+    },
+    {
+      "tid": 2094,
+      "start_ticks": 1806,
+      "user_ticks": 0,
+      "system_ticks": 0,
+      "voluntary_context_switches": 2,
+      "involuntary_context_switches": 0
+    },
+    {
+      "tid": 2095,
+      "start_ticks": 1807,
+      "user_ticks": 0,
+      "system_ticks": 0,
+      "voluntary_context_switches": 46,
+      "involuntary_context_switches": 8
+    },
+    {
+      "tid": 2096,
+      "start_ticks": 1809,
+      "user_ticks": 0,
+      "system_ticks": 0,
+      "voluntary_context_switches": 122,
+      "involuntary_context_switches": 0
+    },
+    {
+      "tid": 2097,
+      "start_ticks": 1810,
+      "user_ticks": 3,
+      "system_ticks": 54,
+      "voluntary_context_switches": 64,
+      "involuntary_context_switches": 386
+    },
+    {
+      "tid": 2113,
+      "start_ticks": 1819,
+      "user_ticks": 0,
+      "system_ticks": 0,
+      "voluntary_context_switches": 9,
+      "involuntary_context_switches": 5
+    },
+    {
+      "tid": 2114,
+      "start_ticks": 1822,
+      "user_ticks": 0,
+      "system_ticks": 0,
+      "voluntary_context_switches": 3,
+      "involuntary_context_switches": 0
+    },
+    {
+      "tid": 2116,
+      "start_ticks": 1833,
+      "user_ticks": 0,
+      "system_ticks": 0,
+      "voluntary_context_switches": 1,
+      "involuntary_context_switches": 0
+    },
+    {
+      "tid": 2117,
+      "start_ticks": 1833,
+      "user_ticks": 0,
+      "system_ticks": 0,
+      "voluntary_context_switches": 2,
+      "involuntary_context_switches": 1
+    },
+    {
+      "tid": 2155,
+      "start_ticks": 1889,
+      "user_ticks": 0,
+      "system_ticks": 0,
+      "voluntary_context_switches": 19,
+      "involuntary_context_switches": 0
+    }
+  ],
+  "last_threads": [
+    {
+      "tid": 2083,
+      "start_ticks": 1805,
+      "user_ticks": 8,
+      "system_ticks": 2,
+      "voluntary_context_switches": 83,
+      "involuntary_context_switches": 204
+    },
+    {
+      "tid": 2084,
+      "start_ticks": 1806,
+      "user_ticks": 0,
+      "system_ticks": 0,
+      "voluntary_context_switches": 1,
+      "involuntary_context_switches": 0
+    },
+    {
+      "tid": 2085,
+      "start_ticks": 1806,
+      "user_ticks": 0,
+      "system_ticks": 0,
+      "voluntary_context_switches": 1,
+      "involuntary_context_switches": 0
+    },
+    {
+      "tid": 2086,
+      "start_ticks": 1806,
+      "user_ticks": 0,
+      "system_ticks": 0,
+      "voluntary_context_switches": 3,
+      "involuntary_context_switches": 0
+    },
+    {
+      "tid": 2087,
+      "start_ticks": 1806,
+      "user_ticks": 48,
+      "system_ticks": 7,
+      "voluntary_context_switches": 18,
+      "involuntary_context_switches": 453
+    },
+    {
+      "tid": 2088,
+      "start_ticks": 1806,
+      "user_ticks": 0,
+      "system_ticks": 0,
+      "voluntary_context_switches": 4,
+      "involuntary_context_switches": 0
+    },
+    {
+      "tid": 2089,
+      "start_ticks": 1806,
+      "user_ticks": 0,
+      "system_ticks": 0,
+      "voluntary_context_switches": 1,
+      "involuntary_context_switches": 0
+    },
+    {
+      "tid": 2090,
+      "start_ticks": 1806,
+      "user_ticks": 0,
+      "system_ticks": 0,
+      "voluntary_context_switches": 1,
+      "involuntary_context_switches": 0
+    },
+    {
+      "tid": 2091,
+      "start_ticks": 1806,
+      "user_ticks": 0,
+      "system_ticks": 0,
+      "voluntary_context_switches": 2,
+      "involuntary_context_switches": 0
+    },
+    {
+      "tid": 2092,
+      "start_ticks": 1806,
+      "user_ticks": 0,
+      "system_ticks": 0,
+      "voluntary_context_switches": 16,
+      "involuntary_context_switches": 0
+    },
+    {
+      "tid": 2093,
+      "start_ticks": 1806,
+      "user_ticks": 0,
+      "system_ticks": 0,
+      "voluntary_context_switches": 2,
+      "involuntary_context_switches": 3
+    },
+    {
+      "tid": 2094,
+      "start_ticks": 1806,
+      "user_ticks": 0,
+      "system_ticks": 0,
+      "voluntary_context_switches": 15,
+      "involuntary_context_switches": 5
+    },
+    {
+      "tid": 2095,
+      "start_ticks": 1807,
+      "user_ticks": 0,
+      "system_ticks": 0,
+      "voluntary_context_switches": 48,
+      "involuntary_context_switches": 13
+    },
+    {
+      "tid": 2096,
+      "start_ticks": 1809,
+      "user_ticks": 0,
+      "system_ticks": 0,
+      "voluntary_context_switches": 123,
+      "involuntary_context_switches": 0
+    },
+    {
+      "tid": 2097,
+      "start_ticks": 1810,
+      "user_ticks": 3,
+      "system_ticks": 54,
+      "voluntary_context_switches": 64,
+      "involuntary_context_switches": 386
+    },
+    {
+      "tid": 2113,
+      "start_ticks": 1819,
+      "user_ticks": 0,
+      "system_ticks": 0,
+      "voluntary_context_switches": 9,
+      "involuntary_context_switches": 5
+    },
+    {
+      "tid": 2114,
+      "start_ticks": 1822,
+      "user_ticks": 0,
+      "system_ticks": 0,
+      "voluntary_context_switches": 3,
+      "involuntary_context_switches": 0
+    },
+    {
+      "tid": 2116,
+      "start_ticks": 1833,
+      "user_ticks": 0,
+      "system_ticks": 0,
+      "voluntary_context_switches": 1,
+      "involuntary_context_switches": 0
+    },
+    {
+      "tid": 2117,
+      "start_ticks": 1833,
+      "user_ticks": 0,
+      "system_ticks": 0,
+      "voluntary_context_switches": 2,
+      "involuntary_context_switches": 1
+    },
+    {
+      "tid": 2155,
+      "start_ticks": 1889,
+      "user_ticks": 0,
+      "system_ticks": 0,
+      "voluntary_context_switches": 19,
+      "involuntary_context_switches": 0
+    }
+  ],
+  "limitations": [
+    "Ten-sample no-profile compatibility capture; not sustained attribution.",
+    "Comparison to old collector is across separate boots, not controlled CPU measurement.",
+    "Scheduling counters are not hardware wakeups or battery consumption."
+  ]
+}

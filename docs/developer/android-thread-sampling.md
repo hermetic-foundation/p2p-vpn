@@ -52,7 +52,7 @@ observer comparison and physical energy evidence are separate.
 - Ten rows passed; PID 2073 stayed unchanged, with 19-20 listed and observed threads.
 - No skipped threads or missing required counters; all six cleanup flags passed.
 - Maximum scan duration: 130 ms. This is material collector work, not app scheduling latency.
-- Implementation uses a subshell per thread; reduce or attribute that overhead before sustained use.
+- This first capture used a subshell per thread; the follow-up below removes that cost.
 - [Portable results](android-thread-smoke-results.json) retain row metadata and first/last inventories.
 - Evidence SHA-256: `528c400ecfb8f6cbe19eff73e4e1734e714216ca3c8eefb94cfc342e02b40dcd`.
 
@@ -64,3 +64,25 @@ observer comparison and physical energy evidence are separate.
 - ShellCheck and focused formatting passed after correcting the test's ShellCheck directive syntax.
 - Nix structure derivation evaluated offline; the full structure matrix was not executed.
 - No Java/native changes or builds; Android compatibility used the existing cached APK.
+
+## No-fork Follow-up Manifest
+
+- Baseline `2de47d24` plus in-process thread record assembly; schema and skip rules unchanged.
+- Same cached APK, isolated emulator, ten-sample workload and 160/180-second watchdogs.
+- Output: `/tmp/p2p-vpn-android-thread-smoke-2`.
+- No default collector change; no production/runtime build or physical interaction.
+- Compare scan duration descriptively across boots, not as a controlled CPU-overhead estimate.
+- Retain the prior capture and its slower scanner as separate evidence.
+
+## No-fork Results
+
+- Pre-run storage: 9,145,004 KiB, below 10 GiB.
+- Ten rows passed, each with 20 listed/observed threads and no skips; PID 2083 stayed unchanged.
+- Eight scans took 20 ms; two took 30 ms. Previous capture maximum was 130 ms.
+- All six cleanup flags passed. [Portable results](android-thread-no-fork-results.json) preserve evidence hashes.
+- Collector SHA-256: `bdebe1c834a5f21cad746eb33c679625082755152b2fc50a566906ac2359b011`.
+- Local collector tests, ShellCheck and focused formatting passed; Nix structure evaluated offline.
+
+In-process record assembly removes the per-thread subprocesses without changing
+the serialized fields or identity checks. Separate boots limit the timing
+comparison; collector CPU and connected-workload interference remain unmeasured.
