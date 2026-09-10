@@ -1,0 +1,1227 @@
+{
+  "schema_version": 1,
+  "baseline": "c4dcaf14",
+  "binary_sha256": "ce9dd5655f18717a1f84f6bdfb848d879d5845f2fe426795182945856e85d486",
+  "command": "env -u P2P_VPN_TUN_E2E_IDLE_SECONDS -u P2P_VPN_TUN_E2E_ORCHESTRATOR_TIMEOUT_SECONDS -u P2P_VPN_TUN_E2E_WAIT_SCALE PATH=/tmp/p2p-vpn-daemon-large-wrapper:$PATH RUST_MIN_STACK=8388608 P2P_VPN_REVIEW_GRACEFUL_SHUTDOWN=1 P2P_VPN_TUN_E2E_KEEP_TEMP=1 TOKIO_WORKER_THREADS=2 timeout --signal=TERM --kill-after=2s 100 prlimit --fsize=1048576:1048576 -- /tmp/p2p-vpn-review-target/debug/deps/tun_namespace-92e26a895f071361 tun_namespace_ping_crosses_two_node_overlay --ignored --exact --nocapture --test-threads=1",
+  "gdb_script": "set pagination off\nset confirm off\nset debuginfod enabled off\nset auto-load off\nset print frame-arguments none\nset print address off\ntbreak tun_namespace::run_node_child\nrun\nset language c\npython\nimport gdb, json\nlive = {}\nsites = []\nallocated = 0\nfreed = 0\nsnapshots = 0\nfailures = []\nexit_code = None\nselected = {640, 2048, 2072, 2304}\nsizes = set(selected)\ndef fail(message):\n    failures.append(message)\n    raise gdb.GdbError(message)\ndef filters():\n    free_bp.condition = \" || \".join(\"$rsi == %d\" % s for s in sorted(sizes))\n    resize_bp.condition = \"(\" + free_bp.condition + \") || \" + \" || \".join(\"$rcx == %d\" % s for s in sorted(selected))\nclass Returned(gdb.FinishBreakpoint):\n    def __init__(self, owner, old=None):\n        super().__init__(gdb.newest_frame(), internal=True)\n        self.owner, self.old = owner, old\n    def stop(self):\n        address = int(gdb.parse_and_eval(\"$rax\"))\n        if not address:\n            fail(\"allocation or resize failed; old owner retained\")\n        if self.old is not None:\n            live.pop(self.old, None)\n        if address in live:\n            fail(\"duplicate live allocation address\")\n        live[address] = self.owner\n        return False\n    def out_of_scope(self):\n        failures.append(\"return breakpoint out of scope\")\ndef stack_site():\n    frames = []\n    frame = gdb.newest_frame()\n    for _ in range(24):\n        if frame is None:\n            break\n        frames.append((frame.name() or \"?\")[:240])\n        frame = frame.older()\n    if frames not in sites:\n        if len(sites) >= 64:\n            fail(\"site quota exceeded\")\n        sites.append(frames)\n        print(\"SITE\", json.dumps({\"id\": len(sites), \"frames\": frames}))\n    return sites.index(frames) + 1\ndef new_owner(size):\n    global allocated\n    allocated += 1\n    if allocated > 4096:\n        fail(\"allocation quota exceeded\")\n    return (allocated, size, stack_site())\ndef allocate():\n    size = int(gdb.parse_and_eval(\"$rdi\"))\n    if size not in selected:\n        fail(\"allocation filter mismatch\")\n    Returned(new_owner(size))\ndef deallocate():\n    global freed\n    address = int(gdb.parse_and_eval(\"$rdi\"))\n    if address in live:\n        freed += 1\n        live.pop(address)\ndef resize():\n    address = int(gdb.parse_and_eval(\"$rdi\"))\n    size = int(gdb.parse_and_eval(\"$rcx\"))\n    if address in live:\n        ident, _, site = live[address]\n        if size not in sizes:\n            sizes.add(size)\n            filters()\n        Returned((ident, size, site), address)\n    elif size in selected:\n        Returned(new_owner(size))\ndef checkpoint():\n    global snapshots\n    snapshots += 1\n    print(\"CHECKPOINT\", json.dumps({\"index\": snapshots, \"live\": sorted(live.values())}))\nfor symbol in (\"__rust_alloc\", \"__rust_alloc_zeroed\"):\n    bp = gdb.Breakpoint(\"__rustc::\" + symbol, internal=True)\n    bp.condition = \" || \".join(\"$rdi == %d\" % s for s in sorted(selected))\n    bp.commands = \"silent\\npython allocate()\\ncontinue\\n\"\nfree_bp = gdb.Breakpoint(\"__rustc::__rust_dealloc\", internal=True)\nfree_bp.commands = \"silent\\npython deallocate()\\ncontinue\\n\"\nresize_bp = gdb.Breakpoint(\"__rustc::__rust_realloc\", internal=True)\nresize_bp.commands = \"silent\\npython resize()\\ncontinue\\n\"\nfilters()\nbp = gdb.Breakpoint(\"tun_namespace::allocation_sample::emit_sizes\", internal=True)\nbp.commands = \"silent\\npython checkpoint()\\ncontinue\\n\"\ndef ended(event):\n    global exit_code\n    exit_code = getattr(event, \"exit_code\", None)\n    print(\"TRACE_SUMMARY\", json.dumps({\"allocated\": allocated, \"freed\": freed, \"live\": sorted(live.values()), \"snapshots\": snapshots, \"sites\": len(sites), \"failures\": failures, \"exit_code\": exit_code}))\ngdb.events.exited.connect(ended)\n\nend\ncontinue\npython assert exit_code == 0 and snapshots == 3 and not failures, \"incomplete trace\"\nquit\n",
+  "wrapper": "#!/bin/sh\nset -eu\nif [ \"${P2P_VPN_TUN_E2E_MODE-}\" = node ] && [ \"${P2P_VPN_TUN_E2E_ROLE-}\" = a ]; then\n    test \"$1\" = --net\n    shift\n    exec /run/current-system/sw/bin/unshare --net prlimit --fsize=1048576:1048576 -- /nix/store/bg2bp1zmii5spb2hkgv5xn6mzva7nx9r-gdb-17.2/bin/gdb -q -nx -batch -x /tmp/p2p-vpn-daemon-large.gdb --args \"$@\"\nfi\nexec /run/current-system/sw/bin/unshare \"$@\"\n",
+  "repetitions": [
+    {
+      "dir": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.ab123bb6bcaf664f",
+      "checkpoints": [
+        {
+          "index": 1,
+          "live": []
+        },
+        {
+          "index": 2,
+          "live": [
+            [
+              1,
+              2048,
+              1
+            ],
+            [
+              7,
+              640,
+              6
+            ],
+            [
+              9,
+              2072,
+              7
+            ],
+            [
+              10,
+              640,
+              8
+            ],
+            [
+              11,
+              2304,
+              9
+            ],
+            [
+              24,
+              2304,
+              9
+            ],
+            [
+              61,
+              2304,
+              11
+            ],
+            [
+              62,
+              2072,
+              12
+            ],
+            [
+              63,
+              2072,
+              12
+            ]
+          ]
+        },
+        {
+          "index": 3,
+          "live": [
+            [
+              1,
+              2048,
+              1
+            ],
+            [
+              7,
+              640,
+              6
+            ],
+            [
+              9,
+              2072,
+              7
+            ],
+            [
+              10,
+              640,
+              8
+            ],
+            [
+              11,
+              2304,
+              9
+            ],
+            [
+              24,
+              2304,
+              9
+            ],
+            [
+              61,
+              2304,
+              11
+            ],
+            [
+              62,
+              2072,
+              12
+            ],
+            [
+              63,
+              2072,
+              12
+            ]
+          ]
+        }
+      ],
+      "sites": [
+        {
+          "id": 1,
+          "frames": [
+            "__rustc::__rust_alloc",
+            "<alloc::raw_vec::RawVecInner>::try_allocate_in",
+            "<alloc::raw_vec::RawVecInner>::with_capacity_in",
+            "<alloc::vec::Vec<tokio::signal::unix::SignalInfo> as alloc::vec::spec_from_iter_nested::SpecFromIterNested<tokio::signal::unix::SignalInfo, core::iter::adapters::take::Take<core::iter::sources::repeat_with::RepeatWith<<tokio::signal::unix::",
+            "<alloc::vec::Vec<tokio::signal::unix::SignalInfo> as alloc::vec::spec_from_iter::SpecFromIter<tokio::signal::unix::SignalInfo, core::iter::adapters::take::Take<core::iter::sources::repeat_with::RepeatWith<<tokio::signal::unix::SignalInfo as",
+            "<alloc::vec::Vec<tokio::signal::unix::SignalInfo> as core::iter::traits::collect::FromIterator<tokio::signal::unix::SignalInfo>>::from_iter::<core::iter::adapters::take::Take<core::iter::sources::repeat_with::RepeatWith<<tokio::signal::unix",
+            "<core::iter::adapters::take::Take<core::iter::sources::repeat_with::RepeatWith<<tokio::signal::unix::SignalInfo as core::default::Default>::default>> as core::iter::traits::iterator::Iterator>::collect::<alloc::vec::Vec<tokio::signal::unix:",
+            "<alloc::boxed::Box<[tokio::signal::unix::SignalInfo]> as core::iter::traits::collect::FromIterator<tokio::signal::unix::SignalInfo>>::from_iter::<core::iter::adapters::take::Take<core::iter::sources::repeat_with::RepeatWith<<tokio::signal::",
+            "<core::iter::adapters::take::Take<core::iter::sources::repeat_with::RepeatWith<<tokio::signal::unix::SignalInfo as core::default::Default>::default>> as core::iter::traits::iterator::Iterator>::collect::<alloc::boxed::Box<[tokio::signal::un",
+            "<tokio::signal::unix::OsStorage as core::default::Default>::default",
+            "tokio::signal::registry::globals_init",
+            "<tokio::signal::registry::globals_init as core::ops::function::FnOnce<()>>::call_once",
+            "<std::sync::once_lock::OnceLock<tokio::signal::registry::Globals>>::get_or_init::<tokio::signal::registry::globals_init>::{closure#0}",
+            "<std::sync::once_lock::OnceLock<tokio::signal::registry::Globals>>::initialize::<<std::sync::once_lock::OnceLock<tokio::signal::registry::Globals>>::get_or_init<tokio::signal::registry::globals_init>::{closure#0}, !>::{closure#0}",
+            "<std::sync::once::Once>::call_once_force::<<std::sync::once_lock::OnceLock<tokio::signal::registry::Globals>>::initialize<<std::sync::once_lock::OnceLock<tokio::signal::registry::Globals>>::get_or_init<tokio::signal::registry::globals_init>",
+            "<std::sys::sync::once::futex::Once>::call",
+            "<std::sync::once::Once>::call_once_force::<<std::sync::once_lock::OnceLock<tokio::signal::registry::Globals>>::initialize<<std::sync::once_lock::OnceLock<tokio::signal::registry::Globals>>::get_or_init<tokio::signal::registry::globals_init>",
+            "<std::sync::once_lock::OnceLock<tokio::signal::registry::Globals>>::initialize::<<std::sync::once_lock::OnceLock<tokio::signal::registry::Globals>>::get_or_init<tokio::signal::registry::globals_init>::{closure#0}, !>",
+            "<std::sync::once_lock::OnceLock<tokio::signal::registry::Globals>>::get_or_try_init::<<std::sync::once_lock::OnceLock<tokio::signal::registry::Globals>>::get_or_init<tokio::signal::registry::globals_init>::{closure#0}, !>",
+            "<std::sync::once_lock::OnceLock<tokio::signal::registry::Globals>>::get_or_init::<tokio::signal::registry::globals_init>",
+            "tokio::signal::registry::globals",
+            "<tokio::runtime::signal::Driver>::new",
+            "tokio::runtime::driver::create_signal_driver",
+            "tokio::runtime::driver::create_io_stack"
+          ]
+        },
+        {
+          "id": 2,
+          "frames": [
+            "__rustc::__rust_alloc",
+            "<alloc::raw_vec::RawVecInner>::try_allocate_in",
+            "<alloc::raw_vec::RawVecInner>::with_capacity_in",
+            "<alloc::vec::Vec<tokio::loom::std::unsafe_cell::UnsafeCell<core::mem::maybe_uninit::MaybeUninit<tokio::runtime::task::Notified<alloc::sync::Arc<tokio::runtime::scheduler::multi_thread::handle::Handle>>>>> as alloc::vec::spec_from_iter_neste",
+            "<alloc::vec::Vec<tokio::loom::std::unsafe_cell::UnsafeCell<core::mem::maybe_uninit::MaybeUninit<tokio::runtime::task::Notified<alloc::sync::Arc<tokio::runtime::scheduler::multi_thread::handle::Handle>>>>> as alloc::vec::spec_from_iter::Spec",
+            "<alloc::vec::Vec<tokio::loom::std::unsafe_cell::UnsafeCell<core::mem::maybe_uninit::MaybeUninit<tokio::runtime::task::Notified<alloc::sync::Arc<tokio::runtime::scheduler::multi_thread::handle::Handle>>>>> as core::iter::traits::collect::Fro",
+            "<core::iter::adapters::take::Take<core::iter::sources::repeat_with::RepeatWith<tokio::runtime::scheduler::multi_thread::queue::local<alloc::sync::Arc<tokio::runtime::scheduler::multi_thread::handle::Handle>>::{closure#0}>> as core::iter::tr",
+            "<alloc::boxed::Box<[tokio::loom::std::unsafe_cell::UnsafeCell<core::mem::maybe_uninit::MaybeUninit<tokio::runtime::task::Notified<alloc::sync::Arc<tokio::runtime::scheduler::multi_thread::handle::Handle>>>>]> as core::iter::traits::collect:",
+            "<core::iter::adapters::take::Take<core::iter::sources::repeat_with::RepeatWith<tokio::runtime::scheduler::multi_thread::queue::local<alloc::sync::Arc<tokio::runtime::scheduler::multi_thread::handle::Handle>>::{closure#0}>> as core::iter::tr",
+            "tokio::runtime::scheduler::multi_thread::queue::local::<alloc::sync::Arc<tokio::runtime::scheduler::multi_thread::handle::Handle>>",
+            "tokio::runtime::scheduler::multi_thread::worker::create",
+            "<tokio::runtime::scheduler::multi_thread::MultiThread>::new",
+            "<tokio::runtime::builder::Builder>::build_threaded_runtime",
+            "<tokio::runtime::builder::Builder>::build",
+            "tun_namespace::run_node_child_inner",
+            "<tun_namespace::run_node_child_inner as core::ops::function::FnOnce<()>>::call_once",
+            "tun_namespace::allocation_sample::observe_child::<tun_namespace::run_node_child_inner>",
+            "tun_namespace::run_node_child",
+            "tun_namespace::tun_namespace_ping_crosses_two_node_overlay",
+            "tun_namespace::tun_namespace_ping_crosses_two_node_overlay::{closure#0}",
+            "<tun_namespace::tun_namespace_ping_crosses_two_node_overlay::{closure#0} as core::ops::function::FnOnce<()>>::call_once",
+            "test::__rust_begin_short_backtrace::<core::result::Result<(), alloc::string::String>, fn() -> core::result::Result<(), alloc::string::String>>",
+            "<test::types::RunnableTest>::run",
+            "test::run_test::{closure#0}"
+          ]
+        },
+        {
+          "id": 3,
+          "frames": [
+            "__rustc::__rust_alloc",
+            "<alloc::alloc::Global>::alloc_impl_runtime",
+            "alloc::boxed::box_new_uninit",
+            "crossbeam_channel::counter::new::<crossbeam_channel::flavors::array::Channel<moka::common::concurrent::ReadOp<hickory_proto::op::query::Query, hickory_resolver::dns_lru::LruValue>>>",
+            "crossbeam_channel::channel::bounded::<moka::common::concurrent::ReadOp<hickory_proto::op::query::Query, hickory_resolver::dns_lru::LruValue>>",
+            "<moka::sync::base_cache::BaseCache<hickory_proto::op::query::Query, hickory_resolver::dns_lru::LruValue>>::new",
+            "<moka::sync::cache::Cache<hickory_proto::op::query::Query, hickory_resolver::dns_lru::LruValue>>::with_everything",
+            "<moka::sync::builder::CacheBuilder<hickory_proto::op::query::Query, hickory_resolver::dns_lru::LruValue, moka::sync::cache::Cache<hickory_proto::op::query::Query, hickory_resolver::dns_lru::LruValue>>>::build",
+            "<hickory_resolver::dns_lru::DnsLru>::new",
+            "<hickory_resolver::resolver::ResolverBuilder<hickory_resolver::name_server::connection_provider::GenericConnector<hickory_proto::runtime::tokio_runtime::TokioRuntimeProvider>>>::build",
+            "<libp2p_dns::Transport<libp2p_core::transport::map::Map<libp2p_core::transport::choice::OrTransport<libp2p_core::transport::map::Map<libp2p_core::transport::upgrade::Multiplexed<libp2p_core::transport::and_then::AndThen<libp2p_core::transpo",
+            "<libp2p::builder::SwarmBuilder<libp2p::builder::phase::provider::Tokio, libp2p::builder::phase::dns::DnsPhase<libp2p_core::transport::map::Map<libp2p_core::transport::choice::OrTransport<libp2p_core::transport::map::Map<libp2p_core::transpo",
+            "<libp2p::builder::SwarmBuilder<libp2p::builder::phase::provider::Tokio, libp2p::builder::phase::other_transport::OtherTransportPhase<libp2p_core::transport::map::Map<libp2p_core::transport::choice::OrTransport<libp2p_core::transport::map::M",
+            "p2p_vpn::runtime::p2p::build_node_with_dial_observer::<p2p_vpn::runtime::p2p::build_node::{closure#0}>",
+            "p2p_vpn::runtime::p2p::build_node",
+            "tun_namespace::run_ready_node::{closure#0}",
+            "<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>> as core::future::future::Future>::poll",
+            "<tokio::runtime::park::CachedParkThread>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>::{closure#0}",
+            "<tokio::runtime::park::CachedParkThread>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>",
+            "<tokio::runtime::context::blocking::BlockingRegionGuard>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>",
+            "<tokio::runtime::scheduler::multi_thread::MultiThread>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>::{closure#0}",
+            "tokio::runtime::context::runtime::enter_runtime::<<tokio::runtime::scheduler::multi_thread::MultiThread>::block_on<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>::{closure#0}, core::result::Result<(), p2p_vpn",
+            "<tokio::runtime::scheduler::multi_thread::MultiThread>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>",
+            "<tokio::runtime::runtime::Runtime>::block_on_inner::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>"
+          ]
+        },
+        {
+          "id": 4,
+          "frames": [
+            "__rustc::__rust_alloc",
+            "<alloc::alloc::Global>::alloc_impl_runtime",
+            "alloc::boxed::box_new_uninit",
+            "crossbeam_channel::counter::new::<crossbeam_channel::flavors::array::Channel<moka::common::concurrent::WriteOp<hickory_proto::op::query::Query, hickory_resolver::dns_lru::LruValue>>>",
+            "crossbeam_channel::channel::bounded::<moka::common::concurrent::WriteOp<hickory_proto::op::query::Query, hickory_resolver::dns_lru::LruValue>>",
+            "<moka::sync::base_cache::BaseCache<hickory_proto::op::query::Query, hickory_resolver::dns_lru::LruValue>>::new",
+            "<moka::sync::cache::Cache<hickory_proto::op::query::Query, hickory_resolver::dns_lru::LruValue>>::with_everything",
+            "<moka::sync::builder::CacheBuilder<hickory_proto::op::query::Query, hickory_resolver::dns_lru::LruValue, moka::sync::cache::Cache<hickory_proto::op::query::Query, hickory_resolver::dns_lru::LruValue>>>::build",
+            "<hickory_resolver::dns_lru::DnsLru>::new",
+            "<hickory_resolver::resolver::ResolverBuilder<hickory_resolver::name_server::connection_provider::GenericConnector<hickory_proto::runtime::tokio_runtime::TokioRuntimeProvider>>>::build",
+            "<libp2p_dns::Transport<libp2p_core::transport::map::Map<libp2p_core::transport::choice::OrTransport<libp2p_core::transport::map::Map<libp2p_core::transport::upgrade::Multiplexed<libp2p_core::transport::and_then::AndThen<libp2p_core::transpo",
+            "<libp2p::builder::SwarmBuilder<libp2p::builder::phase::provider::Tokio, libp2p::builder::phase::dns::DnsPhase<libp2p_core::transport::map::Map<libp2p_core::transport::choice::OrTransport<libp2p_core::transport::map::Map<libp2p_core::transpo",
+            "<libp2p::builder::SwarmBuilder<libp2p::builder::phase::provider::Tokio, libp2p::builder::phase::other_transport::OtherTransportPhase<libp2p_core::transport::map::Map<libp2p_core::transport::choice::OrTransport<libp2p_core::transport::map::M",
+            "p2p_vpn::runtime::p2p::build_node_with_dial_observer::<p2p_vpn::runtime::p2p::build_node::{closure#0}>",
+            "p2p_vpn::runtime::p2p::build_node",
+            "tun_namespace::run_ready_node::{closure#0}",
+            "<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>> as core::future::future::Future>::poll",
+            "<tokio::runtime::park::CachedParkThread>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>::{closure#0}",
+            "<tokio::runtime::park::CachedParkThread>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>",
+            "<tokio::runtime::context::blocking::BlockingRegionGuard>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>",
+            "<tokio::runtime::scheduler::multi_thread::MultiThread>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>::{closure#0}",
+            "tokio::runtime::context::runtime::enter_runtime::<<tokio::runtime::scheduler::multi_thread::MultiThread>::block_on<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>::{closure#0}, core::result::Result<(), p2p_vpn",
+            "<tokio::runtime::scheduler::multi_thread::MultiThread>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>",
+            "<tokio::runtime::runtime::Runtime>::block_on_inner::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>"
+          ]
+        },
+        {
+          "id": 5,
+          "frames": [
+            "__rustc::__rust_realloc",
+            "<alloc::raw_vec::RawVecInner>::finish_grow",
+            "<alloc::raw_vec::RawVecInner>::grow_amortized",
+            "<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>",
+            "<bytes::bytes_mut::BytesMut>::reserve_inner",
+            "<bytes::bytes_mut::BytesMut>::reserve",
+            "<bytes::bytes_mut::BytesMut>::resize",
+            "libp2p_noise::io::framed::encrypt::<<libp2p_noise::io::framed::Codec<snow::handshakestate::HandshakeState> as asynchronous_codec::encoder::Encoder>::encode::{closure#0}>",
+            "<libp2p_noise::io::framed::Codec<snow::handshakestate::HandshakeState> as asynchronous_codec::encoder::Encoder>::encode",
+            "<asynchronous_codec::fuse::Fuse<multistream_select::negotiated::Negotiated<libp2p_tcp::provider::tokio::TcpStream>, libp2p_noise::io::framed::Codec<snow::handshakestate::HandshakeState>> as asynchronous_codec::encoder::Encoder>::encode",
+            "<asynchronous_codec::framed_write::FramedWrite2<asynchronous_codec::fuse::Fuse<multistream_select::negotiated::Negotiated<libp2p_tcp::provider::tokio::TcpStream>, libp2p_noise::io::framed::Codec<snow::handshakestate::HandshakeState>>> as fu",
+            "<asynchronous_codec::framed_read::FramedRead2<asynchronous_codec::framed_write::FramedWrite2<asynchronous_codec::fuse::Fuse<multistream_select::negotiated::Negotiated<libp2p_tcp::provider::tokio::TcpStream>, libp2p_noise::io::framed::Codec<",
+            "<asynchronous_codec::framed::Framed<multistream_select::negotiated::Negotiated<libp2p_tcp::provider::tokio::TcpStream>, libp2p_noise::io::framed::Codec<snow::handshakestate::HandshakeState>> as futures_sink::Sink<&libp2p_noise::io::handshak",
+            "<&mut asynchronous_codec::framed::Framed<multistream_select::negotiated::Negotiated<libp2p_tcp::provider::tokio::TcpStream>, libp2p_noise::io::framed::Codec<snow::handshakestate::HandshakeState>> as futures_sink::Sink<&libp2p_noise::io::han",
+            "<futures_util::sink::feed::Feed<asynchronous_codec::framed::Framed<multistream_select::negotiated::Negotiated<libp2p_tcp::provider::tokio::TcpStream>, libp2p_noise::io::framed::Codec<snow::handshakestate::HandshakeState>>, &libp2p_noise::io",
+            "<futures_util::sink::send::Send<asynchronous_codec::framed::Framed<multistream_select::negotiated::Negotiated<libp2p_tcp::provider::tokio::TcpStream>, libp2p_noise::io::framed::Codec<snow::handshakestate::HandshakeState>>, &libp2p_noise::io",
+            "libp2p_noise::io::handshake::send_identity::<multistream_select::negotiated::Negotiated<libp2p_tcp::provider::tokio::TcpStream>>::{closure#0}",
+            "<libp2p_noise::Config as libp2p_core::upgrade::OutboundConnectionUpgrade<multistream_select::negotiated::Negotiated<libp2p_tcp::provider::tokio::TcpStream>>>::upgrade_outbound::{closure#0}",
+            "<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<(libp2p_identity::peer_id::PeerId, libp2p_noise::io::Output<multistream_select::negotiated::Negotiated<libp2p_tcp::provider::tokio::TcpStream>>",
+            "<core::pin::Pin<alloc::boxed::Box<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<(libp2p_identity::peer_id::PeerId, libp2p_noise::io::Output<multistream_select::negotiated::Negotiated<libp2p_",
+            "<libp2p_core::upgrade::apply::OutboundUpgradeApply<libp2p_tcp::provider::tokio::TcpStream, libp2p_noise::Config> as core::future::future::Future>::poll",
+            "<futures_util::future::either::Either<libp2p_core::upgrade::apply::InboundUpgradeApply<libp2p_tcp::provider::tokio::TcpStream, libp2p_noise::Config>, libp2p_core::upgrade::apply::OutboundUpgradeApply<libp2p_tcp::provider::tokio::TcpStream, ",
+            "<libp2p_core::transport::upgrade::Authenticate<libp2p_tcp::provider::tokio::TcpStream, libp2p_noise::Config> as core::future::future::Future>::poll",
+            "<libp2p_core::transport::upgrade::Authenticate<libp2p_tcp::provider::tokio::TcpStream, libp2p_noise::Config> as futures_core::future::TryFuture>::try_poll"
+          ]
+        },
+        {
+          "id": 6,
+          "frames": [
+            "__rustc::__rust_realloc",
+            "<alloc::raw_vec::RawVecInner>::finish_grow",
+            "<alloc::raw_vec::RawVecInner>::grow_amortized",
+            "<alloc::raw_vec::RawVec<(futures_timer::native::heap_timer::HeapTimer, usize)>>::grow_one",
+            "<alloc::vec::Vec<(futures_timer::native::heap_timer::HeapTimer, usize)>>::push_mut",
+            "<alloc::vec::Vec<(futures_timer::native::heap_timer::HeapTimer, usize)>>::push",
+            "<futures_timer::native::heap::Heap<futures_timer::native::heap_timer::HeapTimer>>::push",
+            "<futures_timer::native::timer::Timer>::update_or_add",
+            "<futures_timer::native::timer::Timer as core::future::future::Future>::poll",
+            "futures_timer::native::global::run",
+            "<futures_timer::native::global::HelperThread>::new::{closure#0}",
+            "std::sys::backtrace::__rust_begin_short_backtrace::<<futures_timer::native::global::HelperThread>::new::{closure#0}, ()>",
+            "std::thread::lifecycle::spawn_unchecked::<<futures_timer::native::global::HelperThread>::new::{closure#0}, ()>::{closure#1}::{closure#0}",
+            "<core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked<<futures_timer::native::global::HelperThread>::new::{closure#0}, ()>::{closure#1}::{closure#0}> as core::ops::function::FnOnce<()>>::call_once",
+            "std::panicking::catch_unwind::do_call::<core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked<<futures_timer::native::global::HelperThread>::new::{closure#0}, ()>::{closure#1}::{closure#0}>, ()>",
+            "__rust_try",
+            "std::thread::lifecycle::spawn_unchecked::<<futures_timer::native::global::HelperThread>::new::{closure#0}, ()>::{closure#1}",
+            "<std::thread::lifecycle::spawn_unchecked<<futures_timer::native::global::HelperThread>::new::{closure#0}, ()>::{closure#1} as core::ops::function::FnOnce<()>>::call_once::{shim:vtable#0}",
+            "<std::sys::thread::unix::Thread>::new::thread_start",
+            "start_thread",
+            "__clone3"
+          ]
+        },
+        {
+          "id": 7,
+          "frames": [
+            "__rustc::__rust_alloc",
+            "<alloc::alloc::Global>::alloc_impl_runtime",
+            "alloc::boxed::box_new_uninit",
+            "<crossbeam_epoch::sync::queue::Node<crossbeam_epoch::internal::SealedBag> as crossbeam_epoch::atomic::Pointable>::init",
+            "<crossbeam_epoch::atomic::Owned<crossbeam_epoch::sync::queue::Node<crossbeam_epoch::internal::SealedBag>>>::init",
+            "<crossbeam_epoch::atomic::Owned<crossbeam_epoch::sync::queue::Node<crossbeam_epoch::internal::SealedBag>>>::new",
+            "<crossbeam_epoch::sync::queue::Queue<crossbeam_epoch::internal::SealedBag>>::new",
+            "<crossbeam_epoch::internal::Global>::new",
+            "<crossbeam_epoch::collector::Collector as core::default::Default>::default",
+            "<crossbeam_epoch::collector::Collector>::new",
+            "<<crossbeam_epoch::collector::Collector>::new as core::ops::function::FnOnce<()>>::call_once",
+            "<crossbeam_epoch::sync::once_lock::OnceLock<crossbeam_epoch::collector::Collector>>::initialize::<<crossbeam_epoch::collector::Collector>::new>::{closure#0}",
+            "<std::sync::once::Once>::call_once::<<crossbeam_epoch::sync::once_lock::OnceLock<crossbeam_epoch::collector::Collector>>::initialize<<crossbeam_epoch::collector::Collector>::new>::{closure#0}>::{closure#0}",
+            "<std::sys::sync::once::futex::Once>::call",
+            "<std::sync::once::Once>::call_once::<<crossbeam_epoch::sync::once_lock::OnceLock<crossbeam_epoch::collector::Collector>>::initialize<<crossbeam_epoch::collector::Collector>::new>::{closure#0}>",
+            "<crossbeam_epoch::sync::once_lock::OnceLock<crossbeam_epoch::collector::Collector>>::initialize::<<crossbeam_epoch::collector::Collector>::new>",
+            "<crossbeam_epoch::sync::once_lock::OnceLock<crossbeam_epoch::collector::Collector>>::get_or_init::<<crossbeam_epoch::collector::Collector>::new>",
+            "crossbeam_epoch::default::collector",
+            "crossbeam_epoch::default::HANDLE::__rust_std_internal_init_fn",
+            "<crossbeam_epoch::default::HANDLE::__rust_std_internal_init_fn as core::ops::function::FnOnce<()>>::call_once",
+            "<std::sys::thread_local::native::lazy::Storage<crossbeam_epoch::collector::LocalHandle, ()>>::get_or_init_slow::<crossbeam_epoch::default::HANDLE::__rust_std_internal_init_fn>",
+            "<std::sys::thread_local::native::lazy::Storage<crossbeam_epoch::collector::LocalHandle, ()>>::get_or_init::<crossbeam_epoch::default::HANDLE::__rust_std_internal_init_fn>",
+            "crossbeam_epoch::default::HANDLE::{K#0}::{closure#0}",
+            "<crossbeam_epoch::default::HANDLE::{K#0}::{closure#0} as core::ops::function::FnOnce<(core::option::Option<&mut core::option::Option<crossbeam_epoch::collector::LocalHandle>>,)>>::call_once"
+          ]
+        },
+        {
+          "id": 8,
+          "frames": [
+            "__rustc::__rust_alloc",
+            "<alloc::alloc::Global>::alloc_impl_runtime",
+            "alloc::boxed::box_new_uninit",
+            "<alloc::sync::Arc<crossbeam_epoch::internal::Global>>::new",
+            "<crossbeam_epoch::collector::Collector as core::default::Default>::default",
+            "<crossbeam_epoch::collector::Collector>::new",
+            "<<crossbeam_epoch::collector::Collector>::new as core::ops::function::FnOnce<()>>::call_once",
+            "<crossbeam_epoch::sync::once_lock::OnceLock<crossbeam_epoch::collector::Collector>>::initialize::<<crossbeam_epoch::collector::Collector>::new>::{closure#0}",
+            "<std::sync::once::Once>::call_once::<<crossbeam_epoch::sync::once_lock::OnceLock<crossbeam_epoch::collector::Collector>>::initialize<<crossbeam_epoch::collector::Collector>::new>::{closure#0}>::{closure#0}",
+            "<std::sys::sync::once::futex::Once>::call",
+            "<std::sync::once::Once>::call_once::<<crossbeam_epoch::sync::once_lock::OnceLock<crossbeam_epoch::collector::Collector>>::initialize<<crossbeam_epoch::collector::Collector>::new>::{closure#0}>",
+            "<crossbeam_epoch::sync::once_lock::OnceLock<crossbeam_epoch::collector::Collector>>::initialize::<<crossbeam_epoch::collector::Collector>::new>",
+            "<crossbeam_epoch::sync::once_lock::OnceLock<crossbeam_epoch::collector::Collector>>::get_or_init::<<crossbeam_epoch::collector::Collector>::new>",
+            "crossbeam_epoch::default::collector",
+            "crossbeam_epoch::default::HANDLE::__rust_std_internal_init_fn",
+            "<crossbeam_epoch::default::HANDLE::__rust_std_internal_init_fn as core::ops::function::FnOnce<()>>::call_once",
+            "<std::sys::thread_local::native::lazy::Storage<crossbeam_epoch::collector::LocalHandle, ()>>::get_or_init_slow::<crossbeam_epoch::default::HANDLE::__rust_std_internal_init_fn>",
+            "<std::sys::thread_local::native::lazy::Storage<crossbeam_epoch::collector::LocalHandle, ()>>::get_or_init::<crossbeam_epoch::default::HANDLE::__rust_std_internal_init_fn>",
+            "crossbeam_epoch::default::HANDLE::{K#0}::{closure#0}",
+            "<crossbeam_epoch::default::HANDLE::{K#0}::{closure#0} as core::ops::function::FnOnce<(core::option::Option<&mut core::option::Option<crossbeam_epoch::collector::LocalHandle>>,)>>::call_once",
+            "<std::thread::local::LocalKey<crossbeam_epoch::collector::LocalHandle>>::try_with::<crossbeam_epoch::default::with_handle<crossbeam_epoch::default::pin::{closure#0}, crossbeam_epoch::guard::Guard>::{closure#0}, crossbeam_epoch::guard::Guard",
+            "crossbeam_epoch::default::with_handle::<crossbeam_epoch::default::pin::{closure#0}, crossbeam_epoch::guard::Guard>",
+            "crossbeam_epoch::default::pin",
+            "<moka::cht::map::bucket_array_ref::BucketArrayRef<alloc::sync::Arc<hickory_proto::op::query::Query>, moka::common::concurrent::arc::MiniArc<moka::common::concurrent::ValueEntry<hickory_proto::op::query::Query, hickory_resolver::dns_lru::Lru"
+          ]
+        },
+        {
+          "id": 9,
+          "frames": [
+            "__rustc::__rust_alloc",
+            "<alloc::alloc::Global>::alloc_impl_runtime",
+            "alloc::boxed::box_new_uninit",
+            "<crossbeam_epoch::internal::Local as crossbeam_epoch::atomic::Pointable>::init",
+            "<crossbeam_epoch::atomic::Owned<crossbeam_epoch::internal::Local>>::init",
+            "<crossbeam_epoch::atomic::Owned<crossbeam_epoch::internal::Local>>::new",
+            "<crossbeam_epoch::internal::Local>::register",
+            "<crossbeam_epoch::collector::Collector>::register",
+            "crossbeam_epoch::default::HANDLE::__rust_std_internal_init_fn",
+            "<crossbeam_epoch::default::HANDLE::__rust_std_internal_init_fn as core::ops::function::FnOnce<()>>::call_once",
+            "<std::sys::thread_local::native::lazy::Storage<crossbeam_epoch::collector::LocalHandle, ()>>::get_or_init_slow::<crossbeam_epoch::default::HANDLE::__rust_std_internal_init_fn>",
+            "<std::sys::thread_local::native::lazy::Storage<crossbeam_epoch::collector::LocalHandle, ()>>::get_or_init::<crossbeam_epoch::default::HANDLE::__rust_std_internal_init_fn>",
+            "crossbeam_epoch::default::HANDLE::{K#0}::{closure#0}",
+            "<crossbeam_epoch::default::HANDLE::{K#0}::{closure#0} as core::ops::function::FnOnce<(core::option::Option<&mut core::option::Option<crossbeam_epoch::collector::LocalHandle>>,)>>::call_once",
+            "<std::thread::local::LocalKey<crossbeam_epoch::collector::LocalHandle>>::try_with::<crossbeam_epoch::default::with_handle<crossbeam_epoch::default::pin::{closure#0}, crossbeam_epoch::guard::Guard>::{closure#0}, crossbeam_epoch::guard::Guard",
+            "crossbeam_epoch::default::with_handle::<crossbeam_epoch::default::pin::{closure#0}, crossbeam_epoch::guard::Guard>",
+            "crossbeam_epoch::default::pin",
+            "<moka::cht::map::bucket_array_ref::BucketArrayRef<alloc::sync::Arc<hickory_proto::op::query::Query>, moka::common::concurrent::arc::MiniArc<moka::common::concurrent::ValueEntry<hickory_proto::op::query::Query, hickory_resolver::dns_lru::Lru",
+            "<moka::cht::segment::HashMap<alloc::sync::Arc<hickory_proto::op::query::Query>, moka::common::concurrent::arc::MiniArc<moka::common::concurrent::ValueEntry<hickory_proto::op::query::Query, hickory_resolver::dns_lru::LruValue>>>>::get_key_va",
+            "<moka::sync::base_cache::Inner<hickory_proto::op::query::Query, hickory_resolver::dns_lru::LruValue, std::hash::random::RandomState>>::get_key_value_and_then::<hickory_proto::op::query::Query, <moka::sync::base_cache::BaseCache<hickory_prot",
+            "<moka::sync::base_cache::BaseCache<hickory_proto::op::query::Query, hickory_resolver::dns_lru::LruValue>>::do_get_with_hash::<hickory_proto::op::query::Query, <moka::sync::base_cache::BaseCache<hickory_proto::op::query::Query, hickory_resol",
+            "<moka::sync::base_cache::BaseCache<hickory_proto::op::query::Query, hickory_resolver::dns_lru::LruValue>>::get_with_hash::<hickory_proto::op::query::Query>",
+            "<moka::sync::cache::Cache<hickory_proto::op::query::Query, hickory_resolver::dns_lru::LruValue>>::get::<hickory_proto::op::query::Query>",
+            "<hickory_resolver::dns_lru::DnsLru>::get"
+          ]
+        },
+        {
+          "id": 10,
+          "frames": [
+            "__rustc::__rust_alloc",
+            "<alloc::alloc::Global>::alloc_impl_runtime",
+            "alloc::boxed::box_new_uninit",
+            "<tokio::runtime::task::core::Cell<hickory_proto::xfer::dns_exchange::DnsExchangeBackground<hickory_proto::udp::udp_client_stream::UdpClientStream<hickory_proto::runtime::tokio_runtime::TokioRuntimeProvider>, hickory_proto::runtime::TokioTim",
+            "<tokio::runtime::task::raw::RawTask>::new::<hickory_proto::xfer::dns_exchange::DnsExchangeBackground<hickory_proto::udp::udp_client_stream::UdpClientStream<hickory_proto::runtime::tokio_runtime::TokioRuntimeProvider>, hickory_proto::runtime",
+            "tokio::runtime::task::new_task::<hickory_proto::xfer::dns_exchange::DnsExchangeBackground<hickory_proto::udp::udp_client_stream::UdpClientStream<hickory_proto::runtime::tokio_runtime::TokioRuntimeProvider>, hickory_proto::runtime::TokioTime",
+            "<tokio::runtime::task::list::OwnedTasks<alloc::sync::Arc<tokio::runtime::scheduler::multi_thread::handle::Handle>>>::bind::<hickory_proto::xfer::dns_exchange::DnsExchangeBackground<hickory_proto::udp::udp_client_stream::UdpClientStream<hick",
+            "<tokio::runtime::scheduler::multi_thread::handle::Handle>::bind_new_task::<hickory_proto::xfer::dns_exchange::DnsExchangeBackground<hickory_proto::udp::udp_client_stream::UdpClientStream<hickory_proto::runtime::tokio_runtime::TokioRuntimePr",
+            "<tokio::runtime::scheduler::multi_thread::handle::Handle>::spawn::<hickory_proto::xfer::dns_exchange::DnsExchangeBackground<hickory_proto::udp::udp_client_stream::UdpClientStream<hickory_proto::runtime::tokio_runtime::TokioRuntimeProvider>,",
+            "<tokio::runtime::scheduler::Handle>::spawn::<hickory_proto::xfer::dns_exchange::DnsExchangeBackground<hickory_proto::udp::udp_client_stream::UdpClientStream<hickory_proto::runtime::tokio_runtime::TokioRuntimeProvider>, hickory_proto::runtim",
+            "tokio::task::spawn::spawn_inner::<hickory_proto::xfer::dns_exchange::DnsExchangeBackground<hickory_proto::udp::udp_client_stream::UdpClientStream<hickory_proto::runtime::tokio_runtime::TokioRuntimeProvider>, hickory_proto::runtime::TokioTim",
+            "<core::option::Option<&tokio::runtime::scheduler::Handle>>::map::<tokio::runtime::task::join::JoinHandle<core::result::Result<(), hickory_proto::error::ProtoError>>, tokio::task::spawn::spawn_inner<hickory_proto::xfer::dns_exchange::DnsExch",
+            "tokio::runtime::context::current::with_current::<tokio::task::spawn::spawn_inner<hickory_proto::xfer::dns_exchange::DnsExchangeBackground<hickory_proto::udp::udp_client_stream::UdpClientStream<hickory_proto::runtime::tokio_runtime::TokioRun",
+            "<std::thread::local::LocalKey<tokio::runtime::context::Context>>::try_with::<tokio::runtime::context::current::with_current<tokio::task::spawn::spawn_inner<hickory_proto::xfer::dns_exchange::DnsExchangeBackground<hickory_proto::udp::udp_cli",
+            "tokio::runtime::context::current::with_current::<tokio::task::spawn::spawn_inner<hickory_proto::xfer::dns_exchange::DnsExchangeBackground<hickory_proto::udp::udp_client_stream::UdpClientStream<hickory_proto::runtime::tokio_runtime::TokioRun",
+            "tokio::task::spawn::spawn_inner::<hickory_proto::xfer::dns_exchange::DnsExchangeBackground<hickory_proto::udp::udp_client_stream::UdpClientStream<hickory_proto::runtime::tokio_runtime::TokioRuntimeProvider>, hickory_proto::runtime::TokioTim",
+            "tokio::task::spawn::spawn::<hickory_proto::xfer::dns_exchange::DnsExchangeBackground<hickory_proto::udp::udp_client_stream::UdpClientStream<hickory_proto::runtime::tokio_runtime::TokioRuntimeProvider>, hickory_proto::runtime::TokioTime>>",
+            "<tokio::task::join_set::JoinSet<core::result::Result<(), hickory_proto::error::ProtoError>>>::spawn::<hickory_proto::xfer::dns_exchange::DnsExchangeBackground<hickory_proto::udp::udp_client_stream::UdpClientStream<hickory_proto::runtime::to",
+            "<hickory_proto::runtime::tokio_runtime::TokioHandle as hickory_proto::runtime::Spawn>::spawn_bg::<hickory_proto::xfer::dns_exchange::DnsExchangeBackground<hickory_proto::udp::udp_client_stream::UdpClientStream<hickory_proto::runtime::tokio_",
+            "<hickory_resolver::name_server::connection_provider::ConnectionFuture<hickory_proto::runtime::tokio_runtime::TokioRuntimeProvider> as core::future::future::Future>::poll",
+            "<core::pin::Pin<alloc::boxed::Box<hickory_resolver::name_server::connection_provider::ConnectionFuture<hickory_proto::runtime::tokio_runtime::TokioRuntimeProvider>>> as core::future::future::Future>::poll",
+            "<hickory_resolver::name_server::name_server::NameServer<hickory_resolver::name_server::connection_provider::GenericConnector<hickory_proto::runtime::tokio_runtime::TokioRuntimeProvider>>>::connected_mut_client::{closure#0}",
+            "<hickory_resolver::name_server::name_server::NameServer<hickory_resolver::name_server::connection_provider::GenericConnector<hickory_proto::runtime::tokio_runtime::TokioRuntimeProvider>>>::inner_send::<hickory_proto::xfer::dns_request::DnsR",
+            "<futures_util::stream::once::Once<<hickory_resolver::name_server::name_server::NameServer<hickory_resolver::name_server::connection_provider::GenericConnector<hickory_proto::runtime::tokio_runtime::TokioRuntimeProvider>>>::inner_send<hickor"
+          ]
+        },
+        {
+          "id": 11,
+          "frames": [
+            "__rustc::__rust_alloc",
+            "<alloc::alloc::Global>::alloc_impl_runtime",
+            "alloc::boxed::box_new_uninit",
+            "<crossbeam_epoch::internal::Local as crossbeam_epoch::atomic::Pointable>::init",
+            "<crossbeam_epoch::atomic::Owned<crossbeam_epoch::internal::Local>>::init",
+            "<crossbeam_epoch::atomic::Owned<crossbeam_epoch::internal::Local>>::new",
+            "<crossbeam_epoch::internal::Local>::register",
+            "<crossbeam_epoch::collector::Collector>::register",
+            "crossbeam_epoch::default::HANDLE::__rust_std_internal_init_fn",
+            "<crossbeam_epoch::default::HANDLE::__rust_std_internal_init_fn as core::ops::function::FnOnce<()>>::call_once",
+            "<std::sys::thread_local::native::lazy::Storage<crossbeam_epoch::collector::LocalHandle, ()>>::get_or_init_slow::<crossbeam_epoch::default::HANDLE::__rust_std_internal_init_fn>",
+            "<std::sys::thread_local::native::lazy::Storage<crossbeam_epoch::collector::LocalHandle, ()>>::get_or_init::<crossbeam_epoch::default::HANDLE::__rust_std_internal_init_fn>",
+            "crossbeam_epoch::default::HANDLE::{K#0}::{closure#0}",
+            "<crossbeam_epoch::default::HANDLE::{K#0}::{closure#0} as core::ops::function::FnOnce<(core::option::Option<&mut core::option::Option<crossbeam_epoch::collector::LocalHandle>>,)>>::call_once",
+            "<std::thread::local::LocalKey<crossbeam_epoch::collector::LocalHandle>>::try_with::<crossbeam_epoch::default::with_handle<crossbeam_epoch::default::pin::{closure#0}, crossbeam_epoch::guard::Guard>::{closure#0}, crossbeam_epoch::guard::Guard",
+            "crossbeam_epoch::default::with_handle::<crossbeam_epoch::default::pin::{closure#0}, crossbeam_epoch::guard::Guard>",
+            "crossbeam_epoch::default::pin",
+            "<moka::sync::base_cache::Inner<hickory_proto::op::query::Query, hickory_resolver::dns_lru::LruValue, std::hash::random::RandomState> as core::ops::drop::Drop>::drop",
+            "core::ptr::drop_glue::<moka::sync::base_cache::Inner<hickory_proto::op::query::Query, hickory_resolver::dns_lru::LruValue, std::hash::random::RandomState>>",
+            "<alloc::sync::Arc<moka::sync::base_cache::Inner<hickory_proto::op::query::Query, hickory_resolver::dns_lru::LruValue, std::hash::random::RandomState>>>::drop_slow",
+            "<alloc::sync::Arc<moka::sync::base_cache::Inner<hickory_proto::op::query::Query, hickory_resolver::dns_lru::LruValue, std::hash::random::RandomState>> as core::ops::drop::Drop>::drop",
+            "core::ptr::drop_glue::<alloc::sync::Arc<moka::sync::base_cache::Inner<hickory_proto::op::query::Query, hickory_resolver::dns_lru::LruValue, std::hash::random::RandomState>>>",
+            "core::ptr::drop_glue::<moka::sync::base_cache::BaseCache<hickory_proto::op::query::Query, hickory_resolver::dns_lru::LruValue>>",
+            "core::ptr::drop_glue::<moka::sync::cache::Cache<hickory_proto::op::query::Query, hickory_resolver::dns_lru::LruValue>>"
+          ]
+        },
+        {
+          "id": 12,
+          "frames": [
+            "__rustc::__rust_alloc",
+            "<alloc::alloc::Global>::alloc_impl_runtime",
+            "alloc::boxed::box_new_uninit",
+            "<crossbeam_epoch::sync::queue::Node<crossbeam_epoch::internal::SealedBag> as crossbeam_epoch::atomic::Pointable>::init",
+            "<crossbeam_epoch::atomic::Owned<crossbeam_epoch::sync::queue::Node<crossbeam_epoch::internal::SealedBag>>>::init",
+            "<crossbeam_epoch::atomic::Owned<crossbeam_epoch::sync::queue::Node<crossbeam_epoch::internal::SealedBag>>>::new",
+            "<crossbeam_epoch::sync::queue::Queue<crossbeam_epoch::internal::SealedBag>>::push",
+            "<crossbeam_epoch::internal::Global>::push_bag",
+            "<crossbeam_epoch::internal::Local>::finalize",
+            "<crossbeam_epoch::internal::Local>::release_handle",
+            "<crossbeam_epoch::collector::LocalHandle as core::ops::drop::Drop>::drop",
+            "core::ptr::drop_glue::<crossbeam_epoch::collector::LocalHandle>",
+            "std::sys::thread_local::native::lazy::destroy::<crossbeam_epoch::collector::LocalHandle>::{closure#0}",
+            "std::sys::thread_local::abort_on_dtor_unwind::<std::sys::thread_local::native::lazy::destroy<crossbeam_epoch::collector::LocalHandle>::{closure#0}>",
+            "std::sys::thread_local::native::lazy::destroy::<crossbeam_epoch::collector::LocalHandle>",
+            "__call_tls_dtors",
+            "start_thread",
+            "__clone3"
+          ]
+        }
+      ],
+      "summary": [
+        {
+          "allocated": 64,
+          "freed": 54,
+          "live": [
+            [
+              1,
+              2048,
+              1
+            ],
+            [
+              7,
+              640,
+              6
+            ],
+            [
+              9,
+              2072,
+              7
+            ],
+            [
+              10,
+              640,
+              8
+            ],
+            [
+              11,
+              2304,
+              9
+            ],
+            [
+              24,
+              2304,
+              9
+            ],
+            [
+              61,
+              2304,
+              11
+            ],
+            [
+              62,
+              2072,
+              12
+            ],
+            [
+              63,
+              2072,
+              12
+            ],
+            [
+              64,
+              2072,
+              12
+            ]
+          ],
+          "snapshots": 3,
+          "sites": 12,
+          "failures": [],
+          "exit_code": 0
+        }
+      ],
+      "lifecycle": [
+        {
+          "stage": "before_child",
+          "pid": 48,
+          "unix_millis": 1789039739022,
+          "elapsed_millis": 0,
+          "allocations": 618,
+          "deallocations": 195,
+          "reallocations": 22,
+          "bytes_allocated": 74274,
+          "bytes_deallocated": 52675,
+          "bytes_reallocated": 6366,
+          "live_bytes": 21599,
+          "live_blocks": 423
+        },
+        {
+          "stage": "child_returned",
+          "pid": 48,
+          "unix_millis": 1789039754579,
+          "elapsed_millis": 15556,
+          "allocations": 14679,
+          "deallocations": 14166,
+          "reallocations": 5121,
+          "bytes_allocated": 4676433,
+          "bytes_deallocated": 4614033,
+          "bytes_reallocated": 662845,
+          "live_bytes": 62400,
+          "live_blocks": 513
+        },
+        {
+          "stage": "child_settled",
+          "pid": 48,
+          "unix_millis": 1789039754680,
+          "elapsed_millis": 15657,
+          "allocations": 14679,
+          "deallocations": 14166,
+          "reallocations": 5121,
+          "bytes_allocated": 4676433,
+          "bytes_deallocated": 4614033,
+          "bytes_reallocated": 662845,
+          "live_bytes": 62400,
+          "live_blocks": 513
+        }
+      ],
+      "outer_log": "/tmp/p2p-vpn-daemon-large-1.log",
+      "artifacts": [
+        {
+          "sha256": "93bf8ecffdd8cd576709a71617cc4b1cf90a56d778edb679178071d02fcc3df6",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.ab123bb6bcaf664f/node-a.log"
+        },
+        {
+          "sha256": "b24d6d33736ecd5604a4b17bc9c6481039fac362bb7df044ef1c10a2bfd21db6",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.ab123bb6bcaf664f/ready-b"
+        },
+        {
+          "sha256": "4315af13345e97c889444702d6ca6a5d18325408d91cbd552a67dc87a4e0df41",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.ab123bb6bcaf664f/repro-metadata.txt"
+        },
+        {
+          "sha256": "cced28c6dc3f99c2396a5eaad732bf6b28142335892b1cd0e6af6cdb53f5ccfa",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.ab123bb6bcaf664f/start-a"
+        },
+        {
+          "sha256": "b24d6d33736ecd5604a4b17bc9c6481039fac362bb7df044ef1c10a2bfd21db6",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.ab123bb6bcaf664f/ready-a"
+        },
+        {
+          "sha256": "cced28c6dc3f99c2396a5eaad732bf6b28142335892b1cd0e6af6cdb53f5ccfa",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.ab123bb6bcaf664f/start-b"
+        },
+        {
+          "sha256": "c759e3367f2f97f51588fbf1cd96cccd9250b290a38838eaddb1c1b8a5449edb",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.ab123bb6bcaf664f/node-b.log"
+        },
+        {
+          "sha256": "54b55f47e42213813ff72de9cc347e86673722e20d8eb2fe911f03c409a1de52",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.ab123bb6bcaf664f/repro-commands.sh"
+        },
+        {
+          "sha256": "b676c6f7190027f4fab9694dea7dd6ab7ecc1caa4de5dd1e06981ab6fc2dae74",
+          "path": "/tmp/p2p-vpn-daemon-large-1.log"
+        }
+      ]
+    },
+    {
+      "dir": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.9419c5c1ab717353",
+      "checkpoints": [
+        {
+          "index": 1,
+          "live": []
+        },
+        {
+          "index": 2,
+          "live": [
+            [
+              1,
+              2048,
+              1
+            ],
+            [
+              7,
+              640,
+              6
+            ],
+            [
+              9,
+              2072,
+              7
+            ],
+            [
+              10,
+              640,
+              8
+            ],
+            [
+              11,
+              2304,
+              9
+            ],
+            [
+              24,
+              2304,
+              9
+            ],
+            [
+              61,
+              2304,
+              11
+            ],
+            [
+              62,
+              2072,
+              12
+            ],
+            [
+              63,
+              2072,
+              12
+            ]
+          ]
+        },
+        {
+          "index": 3,
+          "live": [
+            [
+              1,
+              2048,
+              1
+            ],
+            [
+              7,
+              640,
+              6
+            ],
+            [
+              9,
+              2072,
+              7
+            ],
+            [
+              10,
+              640,
+              8
+            ],
+            [
+              11,
+              2304,
+              9
+            ],
+            [
+              24,
+              2304,
+              9
+            ],
+            [
+              61,
+              2304,
+              11
+            ],
+            [
+              62,
+              2072,
+              12
+            ],
+            [
+              63,
+              2072,
+              12
+            ]
+          ]
+        }
+      ],
+      "sites": [
+        {
+          "id": 1,
+          "frames": [
+            "__rustc::__rust_alloc",
+            "<alloc::raw_vec::RawVecInner>::try_allocate_in",
+            "<alloc::raw_vec::RawVecInner>::with_capacity_in",
+            "<alloc::vec::Vec<tokio::signal::unix::SignalInfo> as alloc::vec::spec_from_iter_nested::SpecFromIterNested<tokio::signal::unix::SignalInfo, core::iter::adapters::take::Take<core::iter::sources::repeat_with::RepeatWith<<tokio::signal::unix::",
+            "<alloc::vec::Vec<tokio::signal::unix::SignalInfo> as alloc::vec::spec_from_iter::SpecFromIter<tokio::signal::unix::SignalInfo, core::iter::adapters::take::Take<core::iter::sources::repeat_with::RepeatWith<<tokio::signal::unix::SignalInfo as",
+            "<alloc::vec::Vec<tokio::signal::unix::SignalInfo> as core::iter::traits::collect::FromIterator<tokio::signal::unix::SignalInfo>>::from_iter::<core::iter::adapters::take::Take<core::iter::sources::repeat_with::RepeatWith<<tokio::signal::unix",
+            "<core::iter::adapters::take::Take<core::iter::sources::repeat_with::RepeatWith<<tokio::signal::unix::SignalInfo as core::default::Default>::default>> as core::iter::traits::iterator::Iterator>::collect::<alloc::vec::Vec<tokio::signal::unix:",
+            "<alloc::boxed::Box<[tokio::signal::unix::SignalInfo]> as core::iter::traits::collect::FromIterator<tokio::signal::unix::SignalInfo>>::from_iter::<core::iter::adapters::take::Take<core::iter::sources::repeat_with::RepeatWith<<tokio::signal::",
+            "<core::iter::adapters::take::Take<core::iter::sources::repeat_with::RepeatWith<<tokio::signal::unix::SignalInfo as core::default::Default>::default>> as core::iter::traits::iterator::Iterator>::collect::<alloc::boxed::Box<[tokio::signal::un",
+            "<tokio::signal::unix::OsStorage as core::default::Default>::default",
+            "tokio::signal::registry::globals_init",
+            "<tokio::signal::registry::globals_init as core::ops::function::FnOnce<()>>::call_once",
+            "<std::sync::once_lock::OnceLock<tokio::signal::registry::Globals>>::get_or_init::<tokio::signal::registry::globals_init>::{closure#0}",
+            "<std::sync::once_lock::OnceLock<tokio::signal::registry::Globals>>::initialize::<<std::sync::once_lock::OnceLock<tokio::signal::registry::Globals>>::get_or_init<tokio::signal::registry::globals_init>::{closure#0}, !>::{closure#0}",
+            "<std::sync::once::Once>::call_once_force::<<std::sync::once_lock::OnceLock<tokio::signal::registry::Globals>>::initialize<<std::sync::once_lock::OnceLock<tokio::signal::registry::Globals>>::get_or_init<tokio::signal::registry::globals_init>",
+            "<std::sys::sync::once::futex::Once>::call",
+            "<std::sync::once::Once>::call_once_force::<<std::sync::once_lock::OnceLock<tokio::signal::registry::Globals>>::initialize<<std::sync::once_lock::OnceLock<tokio::signal::registry::Globals>>::get_or_init<tokio::signal::registry::globals_init>",
+            "<std::sync::once_lock::OnceLock<tokio::signal::registry::Globals>>::initialize::<<std::sync::once_lock::OnceLock<tokio::signal::registry::Globals>>::get_or_init<tokio::signal::registry::globals_init>::{closure#0}, !>",
+            "<std::sync::once_lock::OnceLock<tokio::signal::registry::Globals>>::get_or_try_init::<<std::sync::once_lock::OnceLock<tokio::signal::registry::Globals>>::get_or_init<tokio::signal::registry::globals_init>::{closure#0}, !>",
+            "<std::sync::once_lock::OnceLock<tokio::signal::registry::Globals>>::get_or_init::<tokio::signal::registry::globals_init>",
+            "tokio::signal::registry::globals",
+            "<tokio::runtime::signal::Driver>::new",
+            "tokio::runtime::driver::create_signal_driver",
+            "tokio::runtime::driver::create_io_stack"
+          ]
+        },
+        {
+          "id": 2,
+          "frames": [
+            "__rustc::__rust_alloc",
+            "<alloc::raw_vec::RawVecInner>::try_allocate_in",
+            "<alloc::raw_vec::RawVecInner>::with_capacity_in",
+            "<alloc::vec::Vec<tokio::loom::std::unsafe_cell::UnsafeCell<core::mem::maybe_uninit::MaybeUninit<tokio::runtime::task::Notified<alloc::sync::Arc<tokio::runtime::scheduler::multi_thread::handle::Handle>>>>> as alloc::vec::spec_from_iter_neste",
+            "<alloc::vec::Vec<tokio::loom::std::unsafe_cell::UnsafeCell<core::mem::maybe_uninit::MaybeUninit<tokio::runtime::task::Notified<alloc::sync::Arc<tokio::runtime::scheduler::multi_thread::handle::Handle>>>>> as alloc::vec::spec_from_iter::Spec",
+            "<alloc::vec::Vec<tokio::loom::std::unsafe_cell::UnsafeCell<core::mem::maybe_uninit::MaybeUninit<tokio::runtime::task::Notified<alloc::sync::Arc<tokio::runtime::scheduler::multi_thread::handle::Handle>>>>> as core::iter::traits::collect::Fro",
+            "<core::iter::adapters::take::Take<core::iter::sources::repeat_with::RepeatWith<tokio::runtime::scheduler::multi_thread::queue::local<alloc::sync::Arc<tokio::runtime::scheduler::multi_thread::handle::Handle>>::{closure#0}>> as core::iter::tr",
+            "<alloc::boxed::Box<[tokio::loom::std::unsafe_cell::UnsafeCell<core::mem::maybe_uninit::MaybeUninit<tokio::runtime::task::Notified<alloc::sync::Arc<tokio::runtime::scheduler::multi_thread::handle::Handle>>>>]> as core::iter::traits::collect:",
+            "<core::iter::adapters::take::Take<core::iter::sources::repeat_with::RepeatWith<tokio::runtime::scheduler::multi_thread::queue::local<alloc::sync::Arc<tokio::runtime::scheduler::multi_thread::handle::Handle>>::{closure#0}>> as core::iter::tr",
+            "tokio::runtime::scheduler::multi_thread::queue::local::<alloc::sync::Arc<tokio::runtime::scheduler::multi_thread::handle::Handle>>",
+            "tokio::runtime::scheduler::multi_thread::worker::create",
+            "<tokio::runtime::scheduler::multi_thread::MultiThread>::new",
+            "<tokio::runtime::builder::Builder>::build_threaded_runtime",
+            "<tokio::runtime::builder::Builder>::build",
+            "tun_namespace::run_node_child_inner",
+            "<tun_namespace::run_node_child_inner as core::ops::function::FnOnce<()>>::call_once",
+            "tun_namespace::allocation_sample::observe_child::<tun_namespace::run_node_child_inner>",
+            "tun_namespace::run_node_child",
+            "tun_namespace::tun_namespace_ping_crosses_two_node_overlay",
+            "tun_namespace::tun_namespace_ping_crosses_two_node_overlay::{closure#0}",
+            "<tun_namespace::tun_namespace_ping_crosses_two_node_overlay::{closure#0} as core::ops::function::FnOnce<()>>::call_once",
+            "test::__rust_begin_short_backtrace::<core::result::Result<(), alloc::string::String>, fn() -> core::result::Result<(), alloc::string::String>>",
+            "<test::types::RunnableTest>::run",
+            "test::run_test::{closure#0}"
+          ]
+        },
+        {
+          "id": 3,
+          "frames": [
+            "__rustc::__rust_alloc",
+            "<alloc::alloc::Global>::alloc_impl_runtime",
+            "alloc::boxed::box_new_uninit",
+            "crossbeam_channel::counter::new::<crossbeam_channel::flavors::array::Channel<moka::common::concurrent::ReadOp<hickory_proto::op::query::Query, hickory_resolver::dns_lru::LruValue>>>",
+            "crossbeam_channel::channel::bounded::<moka::common::concurrent::ReadOp<hickory_proto::op::query::Query, hickory_resolver::dns_lru::LruValue>>",
+            "<moka::sync::base_cache::BaseCache<hickory_proto::op::query::Query, hickory_resolver::dns_lru::LruValue>>::new",
+            "<moka::sync::cache::Cache<hickory_proto::op::query::Query, hickory_resolver::dns_lru::LruValue>>::with_everything",
+            "<moka::sync::builder::CacheBuilder<hickory_proto::op::query::Query, hickory_resolver::dns_lru::LruValue, moka::sync::cache::Cache<hickory_proto::op::query::Query, hickory_resolver::dns_lru::LruValue>>>::build",
+            "<hickory_resolver::dns_lru::DnsLru>::new",
+            "<hickory_resolver::resolver::ResolverBuilder<hickory_resolver::name_server::connection_provider::GenericConnector<hickory_proto::runtime::tokio_runtime::TokioRuntimeProvider>>>::build",
+            "<libp2p_dns::Transport<libp2p_core::transport::map::Map<libp2p_core::transport::choice::OrTransport<libp2p_core::transport::map::Map<libp2p_core::transport::upgrade::Multiplexed<libp2p_core::transport::and_then::AndThen<libp2p_core::transpo",
+            "<libp2p::builder::SwarmBuilder<libp2p::builder::phase::provider::Tokio, libp2p::builder::phase::dns::DnsPhase<libp2p_core::transport::map::Map<libp2p_core::transport::choice::OrTransport<libp2p_core::transport::map::Map<libp2p_core::transpo",
+            "<libp2p::builder::SwarmBuilder<libp2p::builder::phase::provider::Tokio, libp2p::builder::phase::other_transport::OtherTransportPhase<libp2p_core::transport::map::Map<libp2p_core::transport::choice::OrTransport<libp2p_core::transport::map::M",
+            "p2p_vpn::runtime::p2p::build_node_with_dial_observer::<p2p_vpn::runtime::p2p::build_node::{closure#0}>",
+            "p2p_vpn::runtime::p2p::build_node",
+            "tun_namespace::run_ready_node::{closure#0}",
+            "<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>> as core::future::future::Future>::poll",
+            "<tokio::runtime::park::CachedParkThread>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>::{closure#0}",
+            "<tokio::runtime::park::CachedParkThread>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>",
+            "<tokio::runtime::context::blocking::BlockingRegionGuard>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>",
+            "<tokio::runtime::scheduler::multi_thread::MultiThread>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>::{closure#0}",
+            "tokio::runtime::context::runtime::enter_runtime::<<tokio::runtime::scheduler::multi_thread::MultiThread>::block_on<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>::{closure#0}, core::result::Result<(), p2p_vpn",
+            "<tokio::runtime::scheduler::multi_thread::MultiThread>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>",
+            "<tokio::runtime::runtime::Runtime>::block_on_inner::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>"
+          ]
+        },
+        {
+          "id": 4,
+          "frames": [
+            "__rustc::__rust_alloc",
+            "<alloc::alloc::Global>::alloc_impl_runtime",
+            "alloc::boxed::box_new_uninit",
+            "crossbeam_channel::counter::new::<crossbeam_channel::flavors::array::Channel<moka::common::concurrent::WriteOp<hickory_proto::op::query::Query, hickory_resolver::dns_lru::LruValue>>>",
+            "crossbeam_channel::channel::bounded::<moka::common::concurrent::WriteOp<hickory_proto::op::query::Query, hickory_resolver::dns_lru::LruValue>>",
+            "<moka::sync::base_cache::BaseCache<hickory_proto::op::query::Query, hickory_resolver::dns_lru::LruValue>>::new",
+            "<moka::sync::cache::Cache<hickory_proto::op::query::Query, hickory_resolver::dns_lru::LruValue>>::with_everything",
+            "<moka::sync::builder::CacheBuilder<hickory_proto::op::query::Query, hickory_resolver::dns_lru::LruValue, moka::sync::cache::Cache<hickory_proto::op::query::Query, hickory_resolver::dns_lru::LruValue>>>::build",
+            "<hickory_resolver::dns_lru::DnsLru>::new",
+            "<hickory_resolver::resolver::ResolverBuilder<hickory_resolver::name_server::connection_provider::GenericConnector<hickory_proto::runtime::tokio_runtime::TokioRuntimeProvider>>>::build",
+            "<libp2p_dns::Transport<libp2p_core::transport::map::Map<libp2p_core::transport::choice::OrTransport<libp2p_core::transport::map::Map<libp2p_core::transport::upgrade::Multiplexed<libp2p_core::transport::and_then::AndThen<libp2p_core::transpo",
+            "<libp2p::builder::SwarmBuilder<libp2p::builder::phase::provider::Tokio, libp2p::builder::phase::dns::DnsPhase<libp2p_core::transport::map::Map<libp2p_core::transport::choice::OrTransport<libp2p_core::transport::map::Map<libp2p_core::transpo",
+            "<libp2p::builder::SwarmBuilder<libp2p::builder::phase::provider::Tokio, libp2p::builder::phase::other_transport::OtherTransportPhase<libp2p_core::transport::map::Map<libp2p_core::transport::choice::OrTransport<libp2p_core::transport::map::M",
+            "p2p_vpn::runtime::p2p::build_node_with_dial_observer::<p2p_vpn::runtime::p2p::build_node::{closure#0}>",
+            "p2p_vpn::runtime::p2p::build_node",
+            "tun_namespace::run_ready_node::{closure#0}",
+            "<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>> as core::future::future::Future>::poll",
+            "<tokio::runtime::park::CachedParkThread>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>::{closure#0}",
+            "<tokio::runtime::park::CachedParkThread>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>",
+            "<tokio::runtime::context::blocking::BlockingRegionGuard>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>",
+            "<tokio::runtime::scheduler::multi_thread::MultiThread>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>::{closure#0}",
+            "tokio::runtime::context::runtime::enter_runtime::<<tokio::runtime::scheduler::multi_thread::MultiThread>::block_on<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>::{closure#0}, core::result::Result<(), p2p_vpn",
+            "<tokio::runtime::scheduler::multi_thread::MultiThread>::block_on::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>",
+            "<tokio::runtime::runtime::Runtime>::block_on_inner::<core::pin::Pin<alloc::boxed::Box<tun_namespace::run_ready_node::{closure#0}>>>"
+          ]
+        },
+        {
+          "id": 5,
+          "frames": [
+            "__rustc::__rust_realloc",
+            "<alloc::raw_vec::RawVecInner>::finish_grow",
+            "<alloc::raw_vec::RawVecInner>::grow_amortized",
+            "<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>",
+            "<bytes::bytes_mut::BytesMut>::reserve_inner",
+            "<bytes::bytes_mut::BytesMut>::reserve",
+            "<bytes::bytes_mut::BytesMut>::resize",
+            "libp2p_noise::io::framed::encrypt::<<libp2p_noise::io::framed::Codec<snow::handshakestate::HandshakeState> as asynchronous_codec::encoder::Encoder>::encode::{closure#0}>",
+            "<libp2p_noise::io::framed::Codec<snow::handshakestate::HandshakeState> as asynchronous_codec::encoder::Encoder>::encode",
+            "<asynchronous_codec::fuse::Fuse<multistream_select::negotiated::Negotiated<libp2p_tcp::provider::tokio::TcpStream>, libp2p_noise::io::framed::Codec<snow::handshakestate::HandshakeState>> as asynchronous_codec::encoder::Encoder>::encode",
+            "<asynchronous_codec::framed_write::FramedWrite2<asynchronous_codec::fuse::Fuse<multistream_select::negotiated::Negotiated<libp2p_tcp::provider::tokio::TcpStream>, libp2p_noise::io::framed::Codec<snow::handshakestate::HandshakeState>>> as fu",
+            "<asynchronous_codec::framed_read::FramedRead2<asynchronous_codec::framed_write::FramedWrite2<asynchronous_codec::fuse::Fuse<multistream_select::negotiated::Negotiated<libp2p_tcp::provider::tokio::TcpStream>, libp2p_noise::io::framed::Codec<",
+            "<asynchronous_codec::framed::Framed<multistream_select::negotiated::Negotiated<libp2p_tcp::provider::tokio::TcpStream>, libp2p_noise::io::framed::Codec<snow::handshakestate::HandshakeState>> as futures_sink::Sink<&libp2p_noise::io::handshak",
+            "<&mut asynchronous_codec::framed::Framed<multistream_select::negotiated::Negotiated<libp2p_tcp::provider::tokio::TcpStream>, libp2p_noise::io::framed::Codec<snow::handshakestate::HandshakeState>> as futures_sink::Sink<&libp2p_noise::io::han",
+            "<futures_util::sink::feed::Feed<asynchronous_codec::framed::Framed<multistream_select::negotiated::Negotiated<libp2p_tcp::provider::tokio::TcpStream>, libp2p_noise::io::framed::Codec<snow::handshakestate::HandshakeState>>, &libp2p_noise::io",
+            "<futures_util::sink::send::Send<asynchronous_codec::framed::Framed<multistream_select::negotiated::Negotiated<libp2p_tcp::provider::tokio::TcpStream>, libp2p_noise::io::framed::Codec<snow::handshakestate::HandshakeState>>, &libp2p_noise::io",
+            "libp2p_noise::io::handshake::send_identity::<multistream_select::negotiated::Negotiated<libp2p_tcp::provider::tokio::TcpStream>>::{closure#0}",
+            "<libp2p_noise::Config as libp2p_core::upgrade::OutboundConnectionUpgrade<multistream_select::negotiated::Negotiated<libp2p_tcp::provider::tokio::TcpStream>>>::upgrade_outbound::{closure#0}",
+            "<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<(libp2p_identity::peer_id::PeerId, libp2p_noise::io::Output<multistream_select::negotiated::Negotiated<libp2p_tcp::provider::tokio::TcpStream>>",
+            "<core::pin::Pin<alloc::boxed::Box<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = core::result::Result<(libp2p_identity::peer_id::PeerId, libp2p_noise::io::Output<multistream_select::negotiated::Negotiated<libp2p_",
+            "<libp2p_core::upgrade::apply::OutboundUpgradeApply<libp2p_tcp::provider::tokio::TcpStream, libp2p_noise::Config> as core::future::future::Future>::poll",
+            "<futures_util::future::either::Either<libp2p_core::upgrade::apply::InboundUpgradeApply<libp2p_tcp::provider::tokio::TcpStream, libp2p_noise::Config>, libp2p_core::upgrade::apply::OutboundUpgradeApply<libp2p_tcp::provider::tokio::TcpStream, ",
+            "<libp2p_core::transport::upgrade::Authenticate<libp2p_tcp::provider::tokio::TcpStream, libp2p_noise::Config> as core::future::future::Future>::poll",
+            "<libp2p_core::transport::upgrade::Authenticate<libp2p_tcp::provider::tokio::TcpStream, libp2p_noise::Config> as futures_core::future::TryFuture>::try_poll"
+          ]
+        },
+        {
+          "id": 6,
+          "frames": [
+            "__rustc::__rust_realloc",
+            "<alloc::raw_vec::RawVecInner>::finish_grow",
+            "<alloc::raw_vec::RawVecInner>::grow_amortized",
+            "<alloc::raw_vec::RawVec<(futures_timer::native::heap_timer::HeapTimer, usize)>>::grow_one",
+            "<alloc::vec::Vec<(futures_timer::native::heap_timer::HeapTimer, usize)>>::push_mut",
+            "<alloc::vec::Vec<(futures_timer::native::heap_timer::HeapTimer, usize)>>::push",
+            "<futures_timer::native::heap::Heap<futures_timer::native::heap_timer::HeapTimer>>::push",
+            "<futures_timer::native::timer::Timer>::update_or_add",
+            "<futures_timer::native::timer::Timer as core::future::future::Future>::poll",
+            "futures_timer::native::global::run",
+            "<futures_timer::native::global::HelperThread>::new::{closure#0}",
+            "std::sys::backtrace::__rust_begin_short_backtrace::<<futures_timer::native::global::HelperThread>::new::{closure#0}, ()>",
+            "std::thread::lifecycle::spawn_unchecked::<<futures_timer::native::global::HelperThread>::new::{closure#0}, ()>::{closure#1}::{closure#0}",
+            "<core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked<<futures_timer::native::global::HelperThread>::new::{closure#0}, ()>::{closure#1}::{closure#0}> as core::ops::function::FnOnce<()>>::call_once",
+            "std::panicking::catch_unwind::do_call::<core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked<<futures_timer::native::global::HelperThread>::new::{closure#0}, ()>::{closure#1}::{closure#0}>, ()>",
+            "__rust_try",
+            "std::thread::lifecycle::spawn_unchecked::<<futures_timer::native::global::HelperThread>::new::{closure#0}, ()>::{closure#1}",
+            "<std::thread::lifecycle::spawn_unchecked<<futures_timer::native::global::HelperThread>::new::{closure#0}, ()>::{closure#1} as core::ops::function::FnOnce<()>>::call_once::{shim:vtable#0}",
+            "<std::sys::thread::unix::Thread>::new::thread_start",
+            "start_thread",
+            "__clone3"
+          ]
+        },
+        {
+          "id": 7,
+          "frames": [
+            "__rustc::__rust_alloc",
+            "<alloc::alloc::Global>::alloc_impl_runtime",
+            "alloc::boxed::box_new_uninit",
+            "<crossbeam_epoch::sync::queue::Node<crossbeam_epoch::internal::SealedBag> as crossbeam_epoch::atomic::Pointable>::init",
+            "<crossbeam_epoch::atomic::Owned<crossbeam_epoch::sync::queue::Node<crossbeam_epoch::internal::SealedBag>>>::init",
+            "<crossbeam_epoch::atomic::Owned<crossbeam_epoch::sync::queue::Node<crossbeam_epoch::internal::SealedBag>>>::new",
+            "<crossbeam_epoch::sync::queue::Queue<crossbeam_epoch::internal::SealedBag>>::new",
+            "<crossbeam_epoch::internal::Global>::new",
+            "<crossbeam_epoch::collector::Collector as core::default::Default>::default",
+            "<crossbeam_epoch::collector::Collector>::new",
+            "<<crossbeam_epoch::collector::Collector>::new as core::ops::function::FnOnce<()>>::call_once",
+            "<crossbeam_epoch::sync::once_lock::OnceLock<crossbeam_epoch::collector::Collector>>::initialize::<<crossbeam_epoch::collector::Collector>::new>::{closure#0}",
+            "<std::sync::once::Once>::call_once::<<crossbeam_epoch::sync::once_lock::OnceLock<crossbeam_epoch::collector::Collector>>::initialize<<crossbeam_epoch::collector::Collector>::new>::{closure#0}>::{closure#0}",
+            "<std::sys::sync::once::futex::Once>::call",
+            "<std::sync::once::Once>::call_once::<<crossbeam_epoch::sync::once_lock::OnceLock<crossbeam_epoch::collector::Collector>>::initialize<<crossbeam_epoch::collector::Collector>::new>::{closure#0}>",
+            "<crossbeam_epoch::sync::once_lock::OnceLock<crossbeam_epoch::collector::Collector>>::initialize::<<crossbeam_epoch::collector::Collector>::new>",
+            "<crossbeam_epoch::sync::once_lock::OnceLock<crossbeam_epoch::collector::Collector>>::get_or_init::<<crossbeam_epoch::collector::Collector>::new>",
+            "crossbeam_epoch::default::collector",
+            "crossbeam_epoch::default::HANDLE::__rust_std_internal_init_fn",
+            "<crossbeam_epoch::default::HANDLE::__rust_std_internal_init_fn as core::ops::function::FnOnce<()>>::call_once",
+            "<std::sys::thread_local::native::lazy::Storage<crossbeam_epoch::collector::LocalHandle, ()>>::get_or_init_slow::<crossbeam_epoch::default::HANDLE::__rust_std_internal_init_fn>",
+            "<std::sys::thread_local::native::lazy::Storage<crossbeam_epoch::collector::LocalHandle, ()>>::get_or_init::<crossbeam_epoch::default::HANDLE::__rust_std_internal_init_fn>",
+            "crossbeam_epoch::default::HANDLE::{K#0}::{closure#0}",
+            "<crossbeam_epoch::default::HANDLE::{K#0}::{closure#0} as core::ops::function::FnOnce<(core::option::Option<&mut core::option::Option<crossbeam_epoch::collector::LocalHandle>>,)>>::call_once"
+          ]
+        },
+        {
+          "id": 8,
+          "frames": [
+            "__rustc::__rust_alloc",
+            "<alloc::alloc::Global>::alloc_impl_runtime",
+            "alloc::boxed::box_new_uninit",
+            "<alloc::sync::Arc<crossbeam_epoch::internal::Global>>::new",
+            "<crossbeam_epoch::collector::Collector as core::default::Default>::default",
+            "<crossbeam_epoch::collector::Collector>::new",
+            "<<crossbeam_epoch::collector::Collector>::new as core::ops::function::FnOnce<()>>::call_once",
+            "<crossbeam_epoch::sync::once_lock::OnceLock<crossbeam_epoch::collector::Collector>>::initialize::<<crossbeam_epoch::collector::Collector>::new>::{closure#0}",
+            "<std::sync::once::Once>::call_once::<<crossbeam_epoch::sync::once_lock::OnceLock<crossbeam_epoch::collector::Collector>>::initialize<<crossbeam_epoch::collector::Collector>::new>::{closure#0}>::{closure#0}",
+            "<std::sys::sync::once::futex::Once>::call",
+            "<std::sync::once::Once>::call_once::<<crossbeam_epoch::sync::once_lock::OnceLock<crossbeam_epoch::collector::Collector>>::initialize<<crossbeam_epoch::collector::Collector>::new>::{closure#0}>",
+            "<crossbeam_epoch::sync::once_lock::OnceLock<crossbeam_epoch::collector::Collector>>::initialize::<<crossbeam_epoch::collector::Collector>::new>",
+            "<crossbeam_epoch::sync::once_lock::OnceLock<crossbeam_epoch::collector::Collector>>::get_or_init::<<crossbeam_epoch::collector::Collector>::new>",
+            "crossbeam_epoch::default::collector",
+            "crossbeam_epoch::default::HANDLE::__rust_std_internal_init_fn",
+            "<crossbeam_epoch::default::HANDLE::__rust_std_internal_init_fn as core::ops::function::FnOnce<()>>::call_once",
+            "<std::sys::thread_local::native::lazy::Storage<crossbeam_epoch::collector::LocalHandle, ()>>::get_or_init_slow::<crossbeam_epoch::default::HANDLE::__rust_std_internal_init_fn>",
+            "<std::sys::thread_local::native::lazy::Storage<crossbeam_epoch::collector::LocalHandle, ()>>::get_or_init::<crossbeam_epoch::default::HANDLE::__rust_std_internal_init_fn>",
+            "crossbeam_epoch::default::HANDLE::{K#0}::{closure#0}",
+            "<crossbeam_epoch::default::HANDLE::{K#0}::{closure#0} as core::ops::function::FnOnce<(core::option::Option<&mut core::option::Option<crossbeam_epoch::collector::LocalHandle>>,)>>::call_once",
+            "<std::thread::local::LocalKey<crossbeam_epoch::collector::LocalHandle>>::try_with::<crossbeam_epoch::default::with_handle<crossbeam_epoch::default::pin::{closure#0}, crossbeam_epoch::guard::Guard>::{closure#0}, crossbeam_epoch::guard::Guard",
+            "crossbeam_epoch::default::with_handle::<crossbeam_epoch::default::pin::{closure#0}, crossbeam_epoch::guard::Guard>",
+            "crossbeam_epoch::default::pin",
+            "<moka::cht::map::bucket_array_ref::BucketArrayRef<alloc::sync::Arc<hickory_proto::op::query::Query>, moka::common::concurrent::arc::MiniArc<moka::common::concurrent::ValueEntry<hickory_proto::op::query::Query, hickory_resolver::dns_lru::Lru"
+          ]
+        },
+        {
+          "id": 9,
+          "frames": [
+            "__rustc::__rust_alloc",
+            "<alloc::alloc::Global>::alloc_impl_runtime",
+            "alloc::boxed::box_new_uninit",
+            "<crossbeam_epoch::internal::Local as crossbeam_epoch::atomic::Pointable>::init",
+            "<crossbeam_epoch::atomic::Owned<crossbeam_epoch::internal::Local>>::init",
+            "<crossbeam_epoch::atomic::Owned<crossbeam_epoch::internal::Local>>::new",
+            "<crossbeam_epoch::internal::Local>::register",
+            "<crossbeam_epoch::collector::Collector>::register",
+            "crossbeam_epoch::default::HANDLE::__rust_std_internal_init_fn",
+            "<crossbeam_epoch::default::HANDLE::__rust_std_internal_init_fn as core::ops::function::FnOnce<()>>::call_once",
+            "<std::sys::thread_local::native::lazy::Storage<crossbeam_epoch::collector::LocalHandle, ()>>::get_or_init_slow::<crossbeam_epoch::default::HANDLE::__rust_std_internal_init_fn>",
+            "<std::sys::thread_local::native::lazy::Storage<crossbeam_epoch::collector::LocalHandle, ()>>::get_or_init::<crossbeam_epoch::default::HANDLE::__rust_std_internal_init_fn>",
+            "crossbeam_epoch::default::HANDLE::{K#0}::{closure#0}",
+            "<crossbeam_epoch::default::HANDLE::{K#0}::{closure#0} as core::ops::function::FnOnce<(core::option::Option<&mut core::option::Option<crossbeam_epoch::collector::LocalHandle>>,)>>::call_once",
+            "<std::thread::local::LocalKey<crossbeam_epoch::collector::LocalHandle>>::try_with::<crossbeam_epoch::default::with_handle<crossbeam_epoch::default::pin::{closure#0}, crossbeam_epoch::guard::Guard>::{closure#0}, crossbeam_epoch::guard::Guard",
+            "crossbeam_epoch::default::with_handle::<crossbeam_epoch::default::pin::{closure#0}, crossbeam_epoch::guard::Guard>",
+            "crossbeam_epoch::default::pin",
+            "<moka::cht::map::bucket_array_ref::BucketArrayRef<alloc::sync::Arc<hickory_proto::op::query::Query>, moka::common::concurrent::arc::MiniArc<moka::common::concurrent::ValueEntry<hickory_proto::op::query::Query, hickory_resolver::dns_lru::Lru",
+            "<moka::cht::segment::HashMap<alloc::sync::Arc<hickory_proto::op::query::Query>, moka::common::concurrent::arc::MiniArc<moka::common::concurrent::ValueEntry<hickory_proto::op::query::Query, hickory_resolver::dns_lru::LruValue>>>>::get_key_va",
+            "<moka::sync::base_cache::Inner<hickory_proto::op::query::Query, hickory_resolver::dns_lru::LruValue, std::hash::random::RandomState>>::get_key_value_and_then::<hickory_proto::op::query::Query, <moka::sync::base_cache::BaseCache<hickory_prot",
+            "<moka::sync::base_cache::BaseCache<hickory_proto::op::query::Query, hickory_resolver::dns_lru::LruValue>>::do_get_with_hash::<hickory_proto::op::query::Query, <moka::sync::base_cache::BaseCache<hickory_proto::op::query::Query, hickory_resol",
+            "<moka::sync::base_cache::BaseCache<hickory_proto::op::query::Query, hickory_resolver::dns_lru::LruValue>>::get_with_hash::<hickory_proto::op::query::Query>",
+            "<moka::sync::cache::Cache<hickory_proto::op::query::Query, hickory_resolver::dns_lru::LruValue>>::get::<hickory_proto::op::query::Query>",
+            "<hickory_resolver::dns_lru::DnsLru>::get"
+          ]
+        },
+        {
+          "id": 10,
+          "frames": [
+            "__rustc::__rust_alloc",
+            "<alloc::alloc::Global>::alloc_impl_runtime",
+            "alloc::boxed::box_new_uninit",
+            "<tokio::runtime::task::core::Cell<hickory_proto::xfer::dns_exchange::DnsExchangeBackground<hickory_proto::udp::udp_client_stream::UdpClientStream<hickory_proto::runtime::tokio_runtime::TokioRuntimeProvider>, hickory_proto::runtime::TokioTim",
+            "<tokio::runtime::task::raw::RawTask>::new::<hickory_proto::xfer::dns_exchange::DnsExchangeBackground<hickory_proto::udp::udp_client_stream::UdpClientStream<hickory_proto::runtime::tokio_runtime::TokioRuntimeProvider>, hickory_proto::runtime",
+            "tokio::runtime::task::new_task::<hickory_proto::xfer::dns_exchange::DnsExchangeBackground<hickory_proto::udp::udp_client_stream::UdpClientStream<hickory_proto::runtime::tokio_runtime::TokioRuntimeProvider>, hickory_proto::runtime::TokioTime",
+            "<tokio::runtime::task::list::OwnedTasks<alloc::sync::Arc<tokio::runtime::scheduler::multi_thread::handle::Handle>>>::bind::<hickory_proto::xfer::dns_exchange::DnsExchangeBackground<hickory_proto::udp::udp_client_stream::UdpClientStream<hick",
+            "<tokio::runtime::scheduler::multi_thread::handle::Handle>::bind_new_task::<hickory_proto::xfer::dns_exchange::DnsExchangeBackground<hickory_proto::udp::udp_client_stream::UdpClientStream<hickory_proto::runtime::tokio_runtime::TokioRuntimePr",
+            "<tokio::runtime::scheduler::multi_thread::handle::Handle>::spawn::<hickory_proto::xfer::dns_exchange::DnsExchangeBackground<hickory_proto::udp::udp_client_stream::UdpClientStream<hickory_proto::runtime::tokio_runtime::TokioRuntimeProvider>,",
+            "<tokio::runtime::scheduler::Handle>::spawn::<hickory_proto::xfer::dns_exchange::DnsExchangeBackground<hickory_proto::udp::udp_client_stream::UdpClientStream<hickory_proto::runtime::tokio_runtime::TokioRuntimeProvider>, hickory_proto::runtim",
+            "tokio::task::spawn::spawn_inner::<hickory_proto::xfer::dns_exchange::DnsExchangeBackground<hickory_proto::udp::udp_client_stream::UdpClientStream<hickory_proto::runtime::tokio_runtime::TokioRuntimeProvider>, hickory_proto::runtime::TokioTim",
+            "<core::option::Option<&tokio::runtime::scheduler::Handle>>::map::<tokio::runtime::task::join::JoinHandle<core::result::Result<(), hickory_proto::error::ProtoError>>, tokio::task::spawn::spawn_inner<hickory_proto::xfer::dns_exchange::DnsExch",
+            "tokio::runtime::context::current::with_current::<tokio::task::spawn::spawn_inner<hickory_proto::xfer::dns_exchange::DnsExchangeBackground<hickory_proto::udp::udp_client_stream::UdpClientStream<hickory_proto::runtime::tokio_runtime::TokioRun",
+            "<std::thread::local::LocalKey<tokio::runtime::context::Context>>::try_with::<tokio::runtime::context::current::with_current<tokio::task::spawn::spawn_inner<hickory_proto::xfer::dns_exchange::DnsExchangeBackground<hickory_proto::udp::udp_cli",
+            "tokio::runtime::context::current::with_current::<tokio::task::spawn::spawn_inner<hickory_proto::xfer::dns_exchange::DnsExchangeBackground<hickory_proto::udp::udp_client_stream::UdpClientStream<hickory_proto::runtime::tokio_runtime::TokioRun",
+            "tokio::task::spawn::spawn_inner::<hickory_proto::xfer::dns_exchange::DnsExchangeBackground<hickory_proto::udp::udp_client_stream::UdpClientStream<hickory_proto::runtime::tokio_runtime::TokioRuntimeProvider>, hickory_proto::runtime::TokioTim",
+            "tokio::task::spawn::spawn::<hickory_proto::xfer::dns_exchange::DnsExchangeBackground<hickory_proto::udp::udp_client_stream::UdpClientStream<hickory_proto::runtime::tokio_runtime::TokioRuntimeProvider>, hickory_proto::runtime::TokioTime>>",
+            "<tokio::task::join_set::JoinSet<core::result::Result<(), hickory_proto::error::ProtoError>>>::spawn::<hickory_proto::xfer::dns_exchange::DnsExchangeBackground<hickory_proto::udp::udp_client_stream::UdpClientStream<hickory_proto::runtime::to",
+            "<hickory_proto::runtime::tokio_runtime::TokioHandle as hickory_proto::runtime::Spawn>::spawn_bg::<hickory_proto::xfer::dns_exchange::DnsExchangeBackground<hickory_proto::udp::udp_client_stream::UdpClientStream<hickory_proto::runtime::tokio_",
+            "<hickory_resolver::name_server::connection_provider::ConnectionFuture<hickory_proto::runtime::tokio_runtime::TokioRuntimeProvider> as core::future::future::Future>::poll",
+            "<core::pin::Pin<alloc::boxed::Box<hickory_resolver::name_server::connection_provider::ConnectionFuture<hickory_proto::runtime::tokio_runtime::TokioRuntimeProvider>>> as core::future::future::Future>::poll",
+            "<hickory_resolver::name_server::name_server::NameServer<hickory_resolver::name_server::connection_provider::GenericConnector<hickory_proto::runtime::tokio_runtime::TokioRuntimeProvider>>>::connected_mut_client::{closure#0}",
+            "<hickory_resolver::name_server::name_server::NameServer<hickory_resolver::name_server::connection_provider::GenericConnector<hickory_proto::runtime::tokio_runtime::TokioRuntimeProvider>>>::inner_send::<hickory_proto::xfer::dns_request::DnsR",
+            "<futures_util::stream::once::Once<<hickory_resolver::name_server::name_server::NameServer<hickory_resolver::name_server::connection_provider::GenericConnector<hickory_proto::runtime::tokio_runtime::TokioRuntimeProvider>>>::inner_send<hickor"
+          ]
+        },
+        {
+          "id": 11,
+          "frames": [
+            "__rustc::__rust_alloc",
+            "<alloc::alloc::Global>::alloc_impl_runtime",
+            "alloc::boxed::box_new_uninit",
+            "<crossbeam_epoch::internal::Local as crossbeam_epoch::atomic::Pointable>::init",
+            "<crossbeam_epoch::atomic::Owned<crossbeam_epoch::internal::Local>>::init",
+            "<crossbeam_epoch::atomic::Owned<crossbeam_epoch::internal::Local>>::new",
+            "<crossbeam_epoch::internal::Local>::register",
+            "<crossbeam_epoch::collector::Collector>::register",
+            "crossbeam_epoch::default::HANDLE::__rust_std_internal_init_fn",
+            "<crossbeam_epoch::default::HANDLE::__rust_std_internal_init_fn as core::ops::function::FnOnce<()>>::call_once",
+            "<std::sys::thread_local::native::lazy::Storage<crossbeam_epoch::collector::LocalHandle, ()>>::get_or_init_slow::<crossbeam_epoch::default::HANDLE::__rust_std_internal_init_fn>",
+            "<std::sys::thread_local::native::lazy::Storage<crossbeam_epoch::collector::LocalHandle, ()>>::get_or_init::<crossbeam_epoch::default::HANDLE::__rust_std_internal_init_fn>",
+            "crossbeam_epoch::default::HANDLE::{K#0}::{closure#0}",
+            "<crossbeam_epoch::default::HANDLE::{K#0}::{closure#0} as core::ops::function::FnOnce<(core::option::Option<&mut core::option::Option<crossbeam_epoch::collector::LocalHandle>>,)>>::call_once",
+            "<std::thread::local::LocalKey<crossbeam_epoch::collector::LocalHandle>>::try_with::<crossbeam_epoch::default::with_handle<crossbeam_epoch::default::pin::{closure#0}, crossbeam_epoch::guard::Guard>::{closure#0}, crossbeam_epoch::guard::Guard",
+            "crossbeam_epoch::default::with_handle::<crossbeam_epoch::default::pin::{closure#0}, crossbeam_epoch::guard::Guard>",
+            "crossbeam_epoch::default::pin",
+            "<moka::sync::base_cache::Inner<hickory_proto::op::query::Query, hickory_resolver::dns_lru::LruValue, std::hash::random::RandomState> as core::ops::drop::Drop>::drop",
+            "core::ptr::drop_glue::<moka::sync::base_cache::Inner<hickory_proto::op::query::Query, hickory_resolver::dns_lru::LruValue, std::hash::random::RandomState>>",
+            "<alloc::sync::Arc<moka::sync::base_cache::Inner<hickory_proto::op::query::Query, hickory_resolver::dns_lru::LruValue, std::hash::random::RandomState>>>::drop_slow",
+            "<alloc::sync::Arc<moka::sync::base_cache::Inner<hickory_proto::op::query::Query, hickory_resolver::dns_lru::LruValue, std::hash::random::RandomState>> as core::ops::drop::Drop>::drop",
+            "core::ptr::drop_glue::<alloc::sync::Arc<moka::sync::base_cache::Inner<hickory_proto::op::query::Query, hickory_resolver::dns_lru::LruValue, std::hash::random::RandomState>>>",
+            "core::ptr::drop_glue::<moka::sync::base_cache::BaseCache<hickory_proto::op::query::Query, hickory_resolver::dns_lru::LruValue>>",
+            "core::ptr::drop_glue::<moka::sync::cache::Cache<hickory_proto::op::query::Query, hickory_resolver::dns_lru::LruValue>>"
+          ]
+        },
+        {
+          "id": 12,
+          "frames": [
+            "__rustc::__rust_alloc",
+            "<alloc::alloc::Global>::alloc_impl_runtime",
+            "alloc::boxed::box_new_uninit",
+            "<crossbeam_epoch::sync::queue::Node<crossbeam_epoch::internal::SealedBag> as crossbeam_epoch::atomic::Pointable>::init",
+            "<crossbeam_epoch::atomic::Owned<crossbeam_epoch::sync::queue::Node<crossbeam_epoch::internal::SealedBag>>>::init",
+            "<crossbeam_epoch::atomic::Owned<crossbeam_epoch::sync::queue::Node<crossbeam_epoch::internal::SealedBag>>>::new",
+            "<crossbeam_epoch::sync::queue::Queue<crossbeam_epoch::internal::SealedBag>>::push",
+            "<crossbeam_epoch::internal::Global>::push_bag",
+            "<crossbeam_epoch::internal::Local>::finalize",
+            "<crossbeam_epoch::internal::Local>::release_handle",
+            "<crossbeam_epoch::collector::LocalHandle as core::ops::drop::Drop>::drop",
+            "core::ptr::drop_glue::<crossbeam_epoch::collector::LocalHandle>",
+            "std::sys::thread_local::native::lazy::destroy::<crossbeam_epoch::collector::LocalHandle>::{closure#0}",
+            "std::sys::thread_local::abort_on_dtor_unwind::<std::sys::thread_local::native::lazy::destroy<crossbeam_epoch::collector::LocalHandle>::{closure#0}>",
+            "std::sys::thread_local::native::lazy::destroy::<crossbeam_epoch::collector::LocalHandle>",
+            "__call_tls_dtors",
+            "start_thread",
+            "__clone3"
+          ]
+        }
+      ],
+      "summary": [
+        {
+          "allocated": 64,
+          "freed": 54,
+          "live": [
+            [
+              1,
+              2048,
+              1
+            ],
+            [
+              7,
+              640,
+              6
+            ],
+            [
+              9,
+              2072,
+              7
+            ],
+            [
+              10,
+              640,
+              8
+            ],
+            [
+              11,
+              2304,
+              9
+            ],
+            [
+              24,
+              2304,
+              9
+            ],
+            [
+              61,
+              2304,
+              11
+            ],
+            [
+              62,
+              2072,
+              12
+            ],
+            [
+              63,
+              2072,
+              12
+            ],
+            [
+              64,
+              2072,
+              12
+            ]
+          ],
+          "snapshots": 3,
+          "sites": 12,
+          "failures": [],
+          "exit_code": 0
+        }
+      ],
+      "lifecycle": [
+        {
+          "stage": "before_child",
+          "pid": 48,
+          "unix_millis": 1789039768069,
+          "elapsed_millis": 0,
+          "allocations": 618,
+          "deallocations": 195,
+          "reallocations": 22,
+          "bytes_allocated": 74274,
+          "bytes_deallocated": 52675,
+          "bytes_reallocated": 6366,
+          "live_bytes": 21599,
+          "live_blocks": 423
+        },
+        {
+          "stage": "child_returned",
+          "pid": 48,
+          "unix_millis": 1789039822982,
+          "elapsed_millis": 54912,
+          "allocations": 39651,
+          "deallocations": 39138,
+          "reallocations": 21871,
+          "bytes_allocated": 8054927,
+          "bytes_deallocated": 7992527,
+          "bytes_reallocated": 2510389,
+          "live_bytes": 62400,
+          "live_blocks": 513
+        },
+        {
+          "stage": "child_settled",
+          "pid": 48,
+          "unix_millis": 1789039823084,
+          "elapsed_millis": 55014,
+          "allocations": 39651,
+          "deallocations": 39138,
+          "reallocations": 21871,
+          "bytes_allocated": 8054927,
+          "bytes_deallocated": 7992527,
+          "bytes_reallocated": 2510389,
+          "live_bytes": 62400,
+          "live_blocks": 513
+        }
+      ],
+      "outer_log": "/tmp/p2p-vpn-daemon-large-2.log",
+      "artifacts": [
+        {
+          "sha256": "94d7167a4d30b68155d95920fe0b1c733c81feb9a9e429d8d1de9f0cd1a889a3",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.9419c5c1ab717353/node-a.log"
+        },
+        {
+          "sha256": "b24d6d33736ecd5604a4b17bc9c6481039fac362bb7df044ef1c10a2bfd21db6",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.9419c5c1ab717353/ready-b"
+        },
+        {
+          "sha256": "9d0a121fc7357d40a10e7e4a0f7b3511bd503efed2eba744cb63bff33c27a085",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.9419c5c1ab717353/repro-metadata.txt"
+        },
+        {
+          "sha256": "cced28c6dc3f99c2396a5eaad732bf6b28142335892b1cd0e6af6cdb53f5ccfa",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.9419c5c1ab717353/start-a"
+        },
+        {
+          "sha256": "b24d6d33736ecd5604a4b17bc9c6481039fac362bb7df044ef1c10a2bfd21db6",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.9419c5c1ab717353/ready-a"
+        },
+        {
+          "sha256": "cced28c6dc3f99c2396a5eaad732bf6b28142335892b1cd0e6af6cdb53f5ccfa",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.9419c5c1ab717353/start-b"
+        },
+        {
+          "sha256": "059d8414f09f902457ee3d03c1b53781fdf9ecd6b120327572cae8895586c042",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.9419c5c1ab717353/node-b.log"
+        },
+        {
+          "sha256": "ffcef30dd686744da27d5b9523021c491477ac41ce7835280017652a18421bdb",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.9419c5c1ab717353/repro-commands.sh"
+        },
+        {
+          "sha256": "2dd04e5e2900c4fb3b2b2121a608539d7b06f606c504b69d63dad8c6bdaf4ff9",
+          "path": "/tmp/p2p-vpn-daemon-large-2.log"
+        }
+      ]
+    }
+  ],
+  "durations_seconds": [
+    16.63,
+    55.95
+  ],
+  "node_a_log_bytes": [
+    175944,
+    486027
+  ],
+  "source_evidence": [
+    {
+      "path": "/home/midischwarz12/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.20/src/default.rs",
+      "sha256": "a153392422d2a473afb01873d83c8d92f34a3bab5dde2f3743d916acce36f9b9"
+    },
+    {
+      "path": "/home/midischwarz12/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.20/src/internal.rs",
+      "sha256": "75db50474a2b17c1808746917299fe9bba6657c6d409ada1794c596d8dc0961f"
+    }
+  ],
+  "remaining_unattributed_direct_residual": {
+    "bytes": 2505,
+    "blocks": 16
+  },
+  "limitations": [
+    "Selected-size stack attribution does not prove all deferred reclamation bounded across workloads.",
+    "The inferior-exit live set adds a 2072-byte thread-local-finalizer allocation after the last measured checkpoint.",
+    "No production code or dependency changed."
+  ]
+}
