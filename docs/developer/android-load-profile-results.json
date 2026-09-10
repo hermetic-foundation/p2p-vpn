@@ -1,0 +1,229 @@
+{
+  "native_address_rows": 3732,
+  "native_samples": 4513,
+  "unknown_native_samples": 0,
+  "distinct_functions": 2468,
+  "top_functions": [
+    {
+      "function": "core::ub_checks::check_language_ub",
+      "samples": 144,
+      "period": 1454545440
+    },
+    {
+      "function": "<core::sync::atomic::Atomic<usize>>::load",
+      "samples": 48,
+      "period": 484848480
+    },
+    {
+      "function": "<core::option::Option<core::cmp::Ordering>>::is_some_and::<<core::cmp::Ordering>::is_le>",
+      "samples": 42,
+      "period": 424242420
+    },
+    {
+      "function": "<tracing::span::Span>::log",
+      "samples": 31,
+      "period": 313131310
+    },
+    {
+      "function": "<usize>::checked_mul",
+      "samples": 27,
+      "period": 272727270
+    },
+    {
+      "function": "<<core::cmp::Ordering>::is_le as core::ops::function::FnOnce<(core::cmp::Ordering,)>>::call_once",
+      "samples": 26,
+      "period": 262626260
+    },
+    {
+      "function": "<*const ()>::is_null",
+      "samples": 25,
+      "period": 252525250
+    },
+    {
+      "function": "core::sync::atomic::atomic_load::<usize>",
+      "samples": 23,
+      "period": 232323230
+    },
+    {
+      "function": "core::intrinsics::rotate_left::<u64>",
+      "samples": 23,
+      "period": 232323230
+    },
+    {
+      "function": "<libp2p_swarm::connection::Connection<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<p2p_vpn::runtime::connection_retention::Handler, libp2p_swarm::dummy::ConnectionHandler>, libp2p_swarm::dummy::ConnectionHandler>, libp2p_identify::handler::Handler>, libp2p_ping::handler::Handler>, libp2p_kad::handler::Handler>, libp2p_swarm::behaviour::toggle::ToggleConnectionHandler<libp2p_kad::handler::Handler>>, either::Either<libp2p_relay::priv_client::handler::Handler, libp2p_swarm::dummy::ConnectionHandler>>, libp2p_swarm::behaviour::toggle::ToggleConnectionHandler<either::Either<libp2p_relay::behaviour::handler::Handler, libp2p_swarm::dummy::ConnectionHandler>>>, libp2p_swarm::behaviour::toggle::ToggleConnectionHandler<either::Either<libp2p_dcutr::handler::relayed::Handler, libp2p_swarm::dummy::ConnectionHandler>>>, libp2p_swarm::behaviour::toggle::ToggleConnectionHandler<libp2p_request_response::handler::Handler<libp2p_autonat::v1::protocol::AutoNatCodec>>>, libp2p_swarm::behaviour::toggle::ToggleConnectionHandler<libp2p_swarm::dummy::ConnectionHandler>>, libp2p_swarm::behaviour::toggle::ToggleConnectionHandler<libp2p_swarm::dummy::ConnectionHandler>>, libp2p_request_response::handler::Handler<p2p_vpn::runtime::control::ControlCodec>>, libp2p_request_response::handler::Handler<p2p_vpn::runtime::packet::PacketCodec>>, libp2p_request_response::handler::Handler<p2p_vpn::runtime::pairing::PairingCodec>>, libp2p_request_response::handler::Handler<p2p_vpn::runtime::pairing_code::PairingCodeCodec>>, libp2p_request_response::handler::Handler<p2p_vpn::runtime::pairing_code::PairingCodeV2Codec>>, p2p_vpn::runtime::pinned_packet_stream::Handler>, libp2p_request_response::handler::Handler<p2p_vpn::runtime::service::ServiceCodec>>>>::poll",
+      "samples": 20,
+      "period": 202020200
+    },
+    {
+      "function": "core::ub_checks::maybe_is_aligned_and_not_null",
+      "samples": 20,
+      "period": 202020200
+    },
+    {
+      "function": "core::sync::atomic::atomic_compare_exchange::<usize>",
+      "samples": 18,
+      "period": 181818180
+    },
+    {
+      "function": "<*const ()>::is_aligned_to",
+      "samples": 17,
+      "period": 171717170
+    },
+    {
+      "function": "<*mut _>::add::runtime_add_nowrap::runtime",
+      "samples": 17,
+      "period": 171717170
+    },
+    {
+      "function": "<log::Level as core::cmp::PartialOrd<log::LevelFilter>>::le",
+      "samples": 15,
+      "period": 151515150
+    },
+    {
+      "function": "<core::option::Option<tracing::span::Inner>>::as_ref",
+      "samples": 14,
+      "period": 141414140
+    },
+    {
+      "function": "core::ptr::drop_glue::<tracing::span::Span>",
+      "samples": 13,
+      "period": 131313130
+    },
+    {
+      "function": "<tracing::span::Span>::record_all",
+      "samples": 13,
+      "period": 131313130
+    },
+    {
+      "function": "<core::hash::sip::Sip13Rounds as core::hash::sip::Sip>::d_rounds",
+      "samples": 13,
+      "period": 131313130
+    },
+    {
+      "function": "core::ptr::copy_nonoverlapping::precondition_check",
+      "samples": 12,
+      "period": 121212120
+    },
+    {
+      "function": "<libp2p_request_response::handler::Handler<p2p_vpn::runtime::packet::PacketCodec> as libp2p_swarm::handler::ConnectionHandler>::poll",
+      "samples": 12,
+      "period": 121212120
+    },
+    {
+      "function": "<libp2p_request_response::handler::Handler<p2p_vpn::runtime::control::ControlCodec> as libp2p_swarm::handler::ConnectionHandler>::poll",
+      "samples": 12,
+      "period": 121212120
+    },
+    {
+      "function": "<usize as core::cmp::Ord>::cmp",
+      "samples": 11,
+      "period": 111111110
+    },
+    {
+      "function": "<p2p_vpn::runtime::p2p::Behaviour as libp2p_swarm::behaviour::NetworkBehaviour>::poll",
+      "samples": 11,
+      "period": 111111110
+    },
+    {
+      "function": "<core::sync::atomic::Atomic<usize>>::compare_exchange",
+      "samples": 11,
+      "period": 111111110
+    },
+    {
+      "function": "core::ub_checks::check_language_ub::runtime",
+      "samples": 11,
+      "period": 111111110
+    },
+    {
+      "function": "<core::cmp::Ordering>::as_raw",
+      "samples": 10,
+      "period": 101010100
+    },
+    {
+      "function": "core::sync::atomic::atomic_sub::<usize, usize>",
+      "samples": 10,
+      "period": 101010100
+    },
+    {
+      "function": "<core::mem::alignment::Alignment>::new_unchecked::precondition_check",
+      "samples": 10,
+      "period": 101010100
+    },
+    {
+      "function": "<futures_core::task::__internal::atomic_waker::AtomicWaker>::register",
+      "samples": 9,
+      "period": 90909090
+    },
+    {
+      "function": "<core::hash::sip::Sip13Rounds as core::hash::sip::Sip>::c_rounds",
+      "samples": 9,
+      "period": 90909090
+    },
+    {
+      "function": "<libp2p_request_response::handler::Handler<p2p_vpn::runtime::pairing_code::PairingCodeV2Codec> as libp2p_swarm::handler::ConnectionHandler>::poll",
+      "samples": 9,
+      "period": 90909090
+    },
+    {
+      "function": "<*mut _>::add::precondition_check",
+      "samples": 9,
+      "period": 90909090
+    },
+    {
+      "function": "core::sync::atomic::atomic_load::<u8>",
+      "samples": 9,
+      "period": 90909090
+    },
+    {
+      "function": "p2p_vpn::runtime::runner::run_node_until_with_membership_state::<p2p_vpn_android::android::supervise_network::{closure#0}::{closure#0}::{closure#0}>::{closure#0}::{closure#8}",
+      "samples": 9,
+      "period": 90909090
+    },
+    {
+      "function": "<yamux::connection::stream::Stream as futures_io::if_std::AsyncRead>::poll_read",
+      "samples": 9,
+      "period": 90909090
+    },
+    {
+      "function": "<tracing_core::field::FieldSet>::len",
+      "samples": 8,
+      "period": 80808080
+    },
+    {
+      "function": "libp2p_swarm::connection::pool::task::new_for_established_connection::<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<libp2p_swarm::handler::select::ConnectionHandlerSelect<p2p_vpn::runtime::connection_retention::Handler, libp2p_swarm::dummy::ConnectionHandler>, libp2p_swarm::dummy::ConnectionHandler>, libp2p_identify::handler::Handler>, libp2p_ping::handler::Handler>, libp2p_kad::handler::Handler>, libp2p_swarm::behaviour::toggle::ToggleConnectionHandler<libp2p_kad::handler::Handler>>, either::Either<libp2p_relay::priv_client::handler::Handler, libp2p_swarm::dummy::ConnectionHandler>>, libp2p_swarm::behaviour::toggle::ToggleConnectionHandler<either::Either<libp2p_relay::behaviour::handler::Handler, libp2p_swarm::dummy::ConnectionHandler>>>, libp2p_swarm::behaviour::toggle::ToggleConnectionHandler<either::Either<libp2p_dcutr::handler::relayed::Handler, libp2p_swarm::dummy::ConnectionHandler>>>, libp2p_swarm::behaviour::toggle::ToggleConnectionHandler<libp2p_request_response::handler::Handler<libp2p_autonat::v1::protocol::AutoNatCodec>>>, libp2p_swarm::behaviour::toggle::ToggleConnectionHandler<libp2p_swarm::dummy::ConnectionHandler>>, libp2p_swarm::behaviour::toggle::ToggleConnectionHandler<libp2p_swarm::dummy::ConnectionHandler>>, libp2p_request_response::handler::Handler<p2p_vpn::runtime::control::ControlCodec>>, libp2p_request_response::handler::Handler<p2p_vpn::runtime::packet::PacketCodec>>, libp2p_request_response::handler::Handler<p2p_vpn::runtime::pairing::PairingCodec>>, libp2p_request_response::handler::Handler<p2p_vpn::runtime::pairing_code::PairingCodeCodec>>, libp2p_request_response::handler::Handler<p2p_vpn::runtime::pairing_code::PairingCodeV2Codec>>, p2p_vpn::runtime::pinned_packet_stream::Handler>, libp2p_request_response::handler::Handler<p2p_vpn::runtime::service::ServiceCodec>>>::{closure#0}",
+      "samples": 8,
+      "period": 80808080
+    },
+    {
+      "function": "<alloc::raw_vec::RawVecInner>::capacity",
+      "samples": 8,
+      "period": 80808080
+    },
+    {
+      "function": "<parking_lot::raw_mutex::RawMutex as lock_api::mutex::RawMutex>::unlock",
+      "samples": 8,
+      "period": 80808080
+    }
+  ],
+  "schema_version": 1,
+  "baseline": "3a7ee380",
+  "raw_directory": "/tmp/p2p-vpn-android-load-profile-2",
+  "recorded_seconds": 59.9909,
+  "total_samples": 4847,
+  "lost_samples": 0,
+  "profile_bytes": 2192902,
+  "native_text_sha256": "02b77130855a780df2319a2fccd71c7a0cf79786d82fbff50ad347072c6e935e",
+  "artifacts": {
+    "profile.data": "137e4aa9d8c572affabbe2ac4b9c6e5a22729d34b074a7b6b31dd35b3d530cf8",
+    "profile-record.txt": "b3fa25620f7eb4ea9e3378a775b63a256faec88a1cb820cd8bc39ef336f79bc3",
+    "profile-addresses.csv": "ed35e5381386b8394e8f164db7a9c72eca41fd2a5bbb417300a7fbf2ac341ffc",
+    "evidence.json": "2fe1ca50894e86b1a4a8bbb905e7872cbf98d748585740049519c9e1257b7b1b"
+  },
+  "limitations": [
+    "Two TCP stream overlay paths, not transport matched with preceding all-QUIC sustained run.",
+    "User-space instruction samples, no caller attribution or kernel CPU profile.",
+    "334 non-native samples are not symbolized; missing Android system symbols.",
+    "No debug line sections; functions resolved from matching native symbol table.",
+    "Top 40 functions retained; percentages must use all 4847 samples, not only this subset."
+  ]
+}

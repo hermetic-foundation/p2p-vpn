@@ -88,8 +88,9 @@ was traced to an unresolved notification dialog; corrected resource admission pa
 Optional [thread sampling](android-thread-sampling.md) passed Android compatibility
 and the [sustained repeat](android-sustained-load.md#thread-attempt-2-results).
 Two stable threads account for about 93.5% of sampled load CPU; function-level attribution remains open.
-The [bounded load profiler](android-load-profile.md) is prepared; its first run
-stopped at the storage guard before profiling, so it provides no function samples yet.
+The [bounded load profile](android-load-profile.md#attempt-2-results) recorded 4847
+userspace samples without reported loss. Native Tokio workers dominate, with cost
+spread across debug helpers and protocol polling; caller-level causality remains unproven.
 The [paired thread controls](android-thread-controls.md) passed four windows with
 stable thread identities. Added scanning cost averaged +2.403 emulator CPU percentage
 points. Thread timing drift was subsequently corrected; full sustained cadence passed.

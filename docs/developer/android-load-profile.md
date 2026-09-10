@@ -79,3 +79,77 @@ Raw profile data remains local and may contain synthetic app paths and thread na
 - ShellCheck and formatting pass. No Java/Rust production source changed.
 - Actual recorder permissions, symbol resolution and function attribution remain unverified.
 - A fresh bounded attempt is required; this setup failure is not profiling acceptance.
+
+## Attempt 2 Manifest
+
+- Baseline `3a7ee380`; capture code, APK, recorder and fixtures unchanged.
+- Output: `/tmp/p2p-vpn-android-load-profile-2`.
+- Pre-run project temporary storage: 8,251,928 KiB; no emulator, fixture or build running.
+- Free-space check over at least 30 seconds: 683578662912 to 683582525440 bytes available.
+- Same 60-second profile/load, 8 MiB output cap, 440/480-second watchdogs and 1,258,291,200-byte growth guard.
+- Preserve attempt 1; no measured traffic retry, deadline extension or manual runtime rescue.
+
+## Attempt 2 Results
+
+Capture and cleanup passed. [Portable results](android-load-profile-results.json)
+retain the leading resolved native functions and hashes of the raw profile,
+recorder log, address report and E2E evidence.
+
+| Measurement | Result |
+| --- | --- |
+| Recording duration | 59.9909 seconds |
+| Samples / reported lost samples | 4847 / 0 |
+| Profile size | 2192902 bytes, below 8 MiB |
+| Load traffic | Four legs, each 3000 sent / 3000 received |
+| Overlay paths | Two TCP streams throughout sampled runtime states |
+| Infrastructure peers | Zero or two private fixture peers, no public WAN |
+| Resolved native samples | 4513, across 3732 sampled addresses and 2468 functions |
+| Other samples | 334; Android system/JIT symbols not resolved |
+
+### Busy Threads
+
+- TIDs 2538 and 2539 are named `tokio-rt-worker` in this capture.
+- Their native-library shares are 43.90% and 44.30% of sampled periods.
+- Their additional libc shares are 3.26% and 2.50%; libc functions remain unresolved.
+- TUN reader/writer native-library shares are 1.30% and 0.72%.
+- Thread IDs are local to this capture, not identities carried over from earlier runs.
+
+### Leading Native Functions
+
+| Function, Abbreviated | Samples | Share of All Samples |
+| --- | --- | --- |
+| `core::ub_checks::check_language_ub` | 144 | 2.97% |
+| `Atomic<usize>::load` | 48 | 0.99% |
+| `Option<Ordering>::is_some_and` | 42 | 0.87% |
+| `tracing::span::Span::log` | 31 | 0.64% |
+| `usize::checked_mul` | 27 | 0.56% |
+
+Cost is distributed across debug checks, atomics, tracing, generic helpers and
+libp2p polling. No individual resolved function dominates. This is sampled
+instruction attribution, not proof of which callers cause the work.
+
+### Symbol Verification
+
+1. Extract the x86_64 JNI library from the selected APK using `jar --extract`.
+2. Its SHA-256 matches the stripped build artifact: `9430fcd79dba9ccd5d3290d031de750bc72cf8bd6f1a4d765da5eacb377e013c`.
+3. Dump `.text` with `llvm-objcopy --dump-section .text=/dev/stdout LIBRARY /dev/null` and hash stdout.
+4. Stripped and unstripped `.text` hashes both equal `02b77130855a780df2319a2fccd71c7a0cf79786d82fbff50ad347072c6e935e`.
+5. Generate `simpleperf report --csv --raw-period -n --sort dso,vaddr_in_file -i profile.data`.
+6. Resolve native `VaddrInFile` values with `llvm-symbolizer --output-style=JSON --obj=UNSTRIPPED_LIBRARY`.
+
+- Address input/output equality was checked for all 3732 native rows; none resolved to an empty function.
+- Aggregate CSV sample/period counts by resolved function; the portable report retains the leading 40.
+- Native symbols lack a build ID and debug line sections. Direct APK `--symdir`/`--symfs` lookup did not resolve them.
+- Local archive/symlink cache experiments were unsuccessful; address resolution used the original matching ELF.
+- APK, recorder and runtime code were not changed for symbol analysis.
+
+## Interpretation
+
+The profile confirms the workload's CPU concentrates in native Tokio workers,
+not the main UI thread or TUN reader/writer. It does not prove that debug-check
+removal or any specific production optimization would be correct or sufficient.
+
+- This is a 60-second profiled TCP diagnostic, not a repeat of the all-QUIC sustained workload.
+- Recorder interference, missing system symbols and absent call chains limit causal conclusions.
+- No production fix is justified solely by this profile; retained-allocation review remains open.
+- Full release/platform acceptance and physical energy testing remain separate.
