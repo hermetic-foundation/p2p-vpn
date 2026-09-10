@@ -14,7 +14,7 @@ The goal remains active. Local evidence does not certify physical Android or pub
 | Compatibility | Explicit UDP-only and stream-only current peers; override round trips; isolated relay payloads | Archived-release compatibility is not established |
 | Autonomous recovery | Four initiator orderings; startup and established QUIC blocking | Physical movement and sustained settling evidence |
 | MTU and isolation | 1,280-byte IPv4 fallback/recovery traffic; Android supervisor tests | Smaller-underlay MTU boundaries and physical multi-network behavior |
-| Verification | 1,526 workspace tests; required root Clippy groups; ARM64 build; fresh JVM tests | Full Nix package/source-parity audit and remaining targeted scenarios |
+| Verification | 1,526 workspace tests; required root Clippy groups; ARM64 build; fresh JVM tests; cached source parity | Full Nix package realization and remaining targeted scenarios |
 | Deployment | Verified debug APK installed on Pixel preserving profile | Physical stability, fallback and recovery checks |
 | Delivery | Core and NixOS commits pushed to main | Final evidence review and requirement-by-requirement closeout |
 
@@ -120,6 +120,26 @@ The run used TCP streams; it does not independently certify QUIC stream-only beh
 - Rustfmt and whitespace checks passed. No production code or device configuration changed.
 - Final harness SHA-256: `cd3c041004f256a82261591eb2dd5f6e71d8233900f5146757378ee57ad4b6b7`.
 - QUIC/UDP regression runs preceded the final stream-only assertion strengthening.
+
+## Cached Nix Source-Parity Audit
+
+Audited at application revision `a222b56f`, without building derivations or activating a host.
+
+| Source | Store path | Result |
+| --- | --- | --- |
+| Desktop Rust package | `/nix/store/nif86ggk4wnxzixr0d9yn6479ajq1pyh-source` | Rust source, crates, vendors and lockfile match |
+| Android ARM64 and x86_64 native | `/nix/store/j31i509jj64pczng994298736bmv305j-source` | Rust source, crates and vendors match |
+| Android APK source | `/nix/store/vzkl8860h3rq6q731y6w1jldd8i7j2ij-android` | `app/src` matches, including backend counter changes |
+
+- Cached Cargo metadata reports identical test targets for worktree and desktop package source.
+- Rust test file lists and contents match; non-Rust test assets are excluded by the declared fileset.
+- NixOS consumer evaluation: 17 contracts true; QUIC-default evaluation: nine contracts true.
+- Six-instance firewall output includes QUIC UDP ports 52820 through 52825.
+- Repository search found no Lean, TLA+, Alloy or Lake model files.
+
+The offline `rust-test-sources` build plan requires 704 derivations and was not executed.
+The comparisons above used cached host tools against Nix-evaluated source paths.
+They do not certify full package builds, Android Nix cross-builds or system activation.
 
 ## Historical Implementation Progress
 
