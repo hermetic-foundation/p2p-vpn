@@ -1,0 +1,890 @@
+{
+  "schema_version": 1,
+  "baseline": "ea3d9741",
+  "command": "env -u P2P_VPN_TUN_E2E_IDLE_SECONDS -u P2P_VPN_TUN_E2E_ORCHESTRATOR_TIMEOUT_SECONDS -u P2P_VPN_TUN_E2E_WAIT_SCALE PATH=/tmp/p2p-vpn-daemon-small-wrapper:$PATH RUST_MIN_STACK=8388608 P2P_VPN_REVIEW_GRACEFUL_SHUTDOWN=1 P2P_VPN_TUN_E2E_KEEP_TEMP=1 TOKIO_WORKER_THREADS=2 timeout --signal=TERM --kill-after=2s 100 prlimit --fsize=1048576:1048576 -- /tmp/p2p-vpn-review-target/debug/deps/tun_namespace-92e26a895f071361 tun_namespace_ping_crosses_two_node_overlay --ignored --exact --nocapture --test-threads=1",
+  "wrapper": "#!/bin/sh\nset -eu\nif [ \"${P2P_VPN_TUN_E2E_MODE-}\" = node ] && [ \"${P2P_VPN_TUN_E2E_ROLE-}\" = a ]; then\n    test \"$1\" = --net\n    shift\n    exec /run/current-system/sw/bin/unshare --net prlimit --fsize=1048576:1048576 -- /nix/store/bg2bp1zmii5spb2hkgv5xn6mzva7nx9r-gdb-17.2/bin/gdb -q -nx -batch -x /tmp/p2p-vpn-daemon-small.gdb --args \"$@\"\nfi\nexec /run/current-system/sw/bin/unshare \"$@\"\n",
+  "scripts": {
+    "seven_sizes": "set pagination off\nset confirm off\nset debuginfod enabled off\nset auto-load off\nset print frame-arguments none\nset print address off\ntbreak tun_namespace::run_node_child\nrun\nset language c\npython\nimport gdb, json\nlive = {}\nsites = []\nallocated = 0\nfreed = 0\nsnapshots = 0\nfailures = []\nexit_code = None\nselected = {13, 14, 70, 112, 352, 368, 1024}\nsizes = set(selected)\ndef fail(message):\n    failures.append(message)\n    raise gdb.GdbError(message)\ndef filters():\n    free_bp.condition = \" || \".join(\"$rsi == %d\" % s for s in sorted(sizes))\n    resize_bp.condition = \"(\" + free_bp.condition + \") || \" + \" || \".join(\"$rcx == %d\" % s for s in sorted(selected))\nclass Returned(gdb.FinishBreakpoint):\n    def __init__(self, owner, old=None):\n        super().__init__(gdb.newest_frame(), internal=True)\n        self.owner, self.old = owner, old\n    def stop(self):\n        address = int(gdb.parse_and_eval(\"$rax\"))\n        if not address:\n            fail(\"allocation or resize failed; old owner retained\")\n        if self.old is not None:\n            live.pop(self.old, None)\n        if address in live:\n            fail(\"duplicate live allocation address\")\n        live[address] = self.owner\n        return False\n    def out_of_scope(self):\n        failures.append(\"return breakpoint out of scope\")\ndef stack_site():\n    frames = []\n    frame = gdb.newest_frame()\n    for _ in range(24):\n        if frame is None:\n            break\n        frames.append((frame.name() or \"?\")[:240])\n        frame = frame.older()\n    if frames not in sites:\n        if len(sites) >= 64:\n            fail(\"site quota exceeded\")\n        sites.append(frames)\n        print(\"SITE\", json.dumps({\"id\": len(sites), \"frames\": frames}))\n    return sites.index(frames) + 1\ndef new_owner(size):\n    global allocated\n    allocated += 1\n    if allocated > 4096:\n        fail(\"allocation quota exceeded\")\n    return (allocated, size, stack_site())\ndef allocate():\n    size = int(gdb.parse_and_eval(\"$rdi\"))\n    if size not in selected:\n        fail(\"allocation filter mismatch\")\n    Returned(new_owner(size))\ndef deallocate():\n    global freed\n    address = int(gdb.parse_and_eval(\"$rdi\"))\n    if address in live:\n        freed += 1\n        live.pop(address)\ndef resize():\n    address = int(gdb.parse_and_eval(\"$rdi\"))\n    size = int(gdb.parse_and_eval(\"$rcx\"))\n    if address in live:\n        ident, _, site = live[address]\n        if size not in sizes:\n            sizes.add(size)\n            filters()\n        Returned((ident, size, site), address)\n    elif size in selected:\n        Returned(new_owner(size))\ndef checkpoint():\n    global snapshots\n    snapshots += 1\n    print(\"CHECKPOINT\", json.dumps({\"index\": snapshots, \"live\": sorted(live.values())}))\nfor symbol in (\"__rust_alloc\", \"__rust_alloc_zeroed\"):\n    bp = gdb.Breakpoint(\"__rustc::\" + symbol, internal=True)\n    bp.condition = \" || \".join(\"$rdi == %d\" % s for s in sorted(selected))\n    bp.commands = \"silent\\npython allocate()\\ncontinue\\n\"\nfree_bp = gdb.Breakpoint(\"__rustc::__rust_dealloc\", internal=True)\nfree_bp.commands = \"silent\\npython deallocate()\\ncontinue\\n\"\nresize_bp = gdb.Breakpoint(\"__rustc::__rust_realloc\", internal=True)\nresize_bp.commands = \"silent\\npython resize()\\ncontinue\\n\"\nfilters()\nbp = gdb.Breakpoint(\"tun_namespace::allocation_sample::emit_sizes\", internal=True)\nbp.commands = \"silent\\npython checkpoint()\\ncontinue\\n\"\ndef ended(event):\n    global exit_code\n    exit_code = getattr(event, \"exit_code\", None)\n    print(\"TRACE_SUMMARY\", json.dumps({\"allocated\": allocated, \"freed\": freed, \"live\": sorted(live.values()), \"snapshots\": snapshots, \"sites\": len(sites), \"failures\": failures, \"exit_code\": exit_code}))\ngdb.events.exited.connect(ended)\n\nend\ncontinue\npython assert exit_code == 0 and snapshots == 3 and not failures, \"incomplete trace\"\nquit\n",
+    "five_sizes": "set pagination off\nset confirm off\nset debuginfod enabled off\nset auto-load off\nset print frame-arguments none\nset print address off\ntbreak tun_namespace::run_node_child\nrun\nset language c\npython\nimport gdb, json\nlive = {}\nsites = []\nallocated = 0\nfreed = 0\nsnapshots = 0\nfailures = []\nexit_code = None\nselected = {13, 14, 352, 368, 1024}\nsizes = set(selected)\ndef fail(message):\n    failures.append(message)\n    raise gdb.GdbError(message)\ndef filters():\n    free_bp.condition = \" || \".join(\"$rsi == %d\" % s for s in sorted(sizes))\n    resize_bp.condition = \"(\" + free_bp.condition + \") || \" + \" || \".join(\"$rcx == %d\" % s for s in sorted(selected))\nclass Returned(gdb.FinishBreakpoint):\n    def __init__(self, owner, old=None):\n        super().__init__(gdb.newest_frame(), internal=True)\n        self.owner, self.old = owner, old\n    def stop(self):\n        address = int(gdb.parse_and_eval(\"$rax\"))\n        if not address:\n            fail(\"allocation or resize failed; old owner retained\")\n        if self.old is not None:\n            live.pop(self.old, None)\n        if address in live:\n            fail(\"duplicate live allocation address\")\n        live[address] = self.owner\n        return False\n    def out_of_scope(self):\n        failures.append(\"return breakpoint out of scope\")\ndef stack_site():\n    frames = []\n    frame = gdb.newest_frame()\n    for _ in range(24):\n        if frame is None:\n            break\n        frames.append((frame.name() or \"?\")[:240])\n        frame = frame.older()\n    if frames not in sites:\n        if len(sites) >= 64:\n            fail(\"site quota exceeded\")\n        sites.append(frames)\n        print(\"SITE\", json.dumps({\"id\": len(sites), \"frames\": frames}))\n    return sites.index(frames) + 1\ndef new_owner(size):\n    global allocated\n    allocated += 1\n    if allocated > 4096:\n        fail(\"allocation quota exceeded\")\n    return (allocated, size, stack_site())\ndef allocate():\n    size = int(gdb.parse_and_eval(\"$rdi\"))\n    if size not in selected:\n        fail(\"allocation filter mismatch\")\n    Returned(new_owner(size))\ndef deallocate():\n    global freed\n    address = int(gdb.parse_and_eval(\"$rdi\"))\n    if address in live:\n        freed += 1\n        live.pop(address)\ndef resize():\n    address = int(gdb.parse_and_eval(\"$rdi\"))\n    size = int(gdb.parse_and_eval(\"$rcx\"))\n    if address in live:\n        ident, _, site = live[address]\n        if size not in sizes:\n            sizes.add(size)\n            filters()\n        Returned((ident, size, site), address)\n    elif size in selected:\n        Returned(new_owner(size))\ndef checkpoint():\n    global snapshots\n    snapshots += 1\n    print(\"CHECKPOINT\", json.dumps({\"index\": snapshots, \"live\": sorted(live.values())}))\nfor symbol in (\"__rust_alloc\", \"__rust_alloc_zeroed\"):\n    bp = gdb.Breakpoint(\"__rustc::\" + symbol, internal=True)\n    bp.condition = \" || \".join(\"$rdi == %d\" % s for s in sorted(selected))\n    bp.commands = \"silent\\npython allocate()\\ncontinue\\n\"\nfree_bp = gdb.Breakpoint(\"__rustc::__rust_dealloc\", internal=True)\nfree_bp.commands = \"silent\\npython deallocate()\\ncontinue\\n\"\nresize_bp = gdb.Breakpoint(\"__rustc::__rust_realloc\", internal=True)\nresize_bp.commands = \"silent\\npython resize()\\ncontinue\\n\"\nfilters()\nbp = gdb.Breakpoint(\"tun_namespace::allocation_sample::emit_sizes\", internal=True)\nbp.commands = \"silent\\npython checkpoint()\\ncontinue\\n\"\ndef ended(event):\n    global exit_code\n    exit_code = getattr(event, \"exit_code\", None)\n    print(\"TRACE_SUMMARY\", json.dumps({\"allocated\": allocated, \"freed\": freed, \"live\": sorted(live.values()), \"snapshots\": snapshots, \"sites\": len(sites), \"failures\": failures, \"exit_code\": exit_code}))\ngdb.events.exited.connect(ended)\n\nend\ncontinue\npython assert exit_code == 0 and snapshots == 3 and not failures, \"incomplete trace\"\nquit\n",
+    "return_diagnostic": "set pagination off\nset confirm off\nset debuginfod enabled off\nset auto-load off\nset print frame-arguments none\nset print address off\ntbreak tun_namespace::run_node_child\nrun\nset language c\npython\nimport gdb, json\nlive = {}\nsites = []\nallocated = 0\nfreed = 0\nsnapshots = 0\nfailures = []\nexit_code = None\nselected = {13, 14, 352, 368, 1024}\nsizes = set(selected)\ndef fail(message):\n    failures.append(message)\n    raise gdb.GdbError(message)\ndef filters():\n    free_bp.condition = \" || \".join(\"$rsi == %d\" % s for s in sorted(sizes))\n    resize_bp.condition = \"(\" + free_bp.condition + \") || \" + \" || \".join(\"$rcx == %d\" % s for s in sorted(selected))\nclass Returned(gdb.FinishBreakpoint):\n    def __init__(self, owner, old=None):\n        super().__init__(gdb.newest_frame(), internal=True)\n        self.owner, self.old = owner, old\n    def stop(self):\n        address = int(gdb.parse_and_eval(\"$rax\"))\n        if not address:\n            fail(\"allocation or resize failed; old owner retained\")\n        if self.old is not None:\n            live.pop(self.old, None)\n        if address in live:\n            fail(\"duplicate live allocation address\")\n        live[address] = self.owner\n        return False\n    def out_of_scope(self):\n        failures.append({\"error\": \"return breakpoint out of scope\", \"owner\": self.owner})\ndef stack_site():\n    frames = []\n    frame = gdb.newest_frame()\n    for _ in range(24):\n        if frame is None:\n            break\n        frames.append((frame.name() or \"?\")[:240])\n        frame = frame.older()\n    if frames not in sites:\n        if len(sites) >= 64:\n            fail(\"site quota exceeded\")\n        sites.append(frames)\n        print(\"SITE\", json.dumps({\"id\": len(sites), \"frames\": frames}))\n    return sites.index(frames) + 1\ndef new_owner(size):\n    global allocated\n    allocated += 1\n    if allocated > 4096:\n        fail(\"allocation quota exceeded\")\n    return (allocated, size, stack_site())\ndef allocate():\n    size = int(gdb.parse_and_eval(\"$rdi\"))\n    if size not in selected:\n        fail(\"allocation filter mismatch\")\n    Returned(new_owner(size))\ndef deallocate():\n    global freed\n    address = int(gdb.parse_and_eval(\"$rdi\"))\n    if address in live:\n        freed += 1\n        live.pop(address)\ndef resize():\n    address = int(gdb.parse_and_eval(\"$rdi\"))\n    size = int(gdb.parse_and_eval(\"$rcx\"))\n    if address in live:\n        ident, _, site = live[address]\n        if size not in sizes:\n            sizes.add(size)\n            filters()\n        Returned((ident, size, site), address)\n    elif size in selected:\n        Returned(new_owner(size))\ndef checkpoint():\n    global snapshots\n    snapshots += 1\n    print(\"CHECKPOINT\", json.dumps({\"index\": snapshots, \"live\": sorted(live.values())}))\nfor symbol in (\"__rust_alloc\", \"__rust_alloc_zeroed\"):\n    bp = gdb.Breakpoint(\"__rustc::\" + symbol, internal=True)\n    bp.condition = \" || \".join(\"$rdi == %d\" % s for s in sorted(selected))\n    bp.commands = \"silent\\npython allocate()\\ncontinue\\n\"\nfree_bp = gdb.Breakpoint(\"__rustc::__rust_dealloc\", internal=True)\nfree_bp.commands = \"silent\\npython deallocate()\\ncontinue\\n\"\nresize_bp = gdb.Breakpoint(\"__rustc::__rust_realloc\", internal=True)\nresize_bp.commands = \"silent\\npython resize()\\ncontinue\\n\"\nfilters()\nbp = gdb.Breakpoint(\"tun_namespace::allocation_sample::emit_sizes\", internal=True)\nbp.commands = \"silent\\npython checkpoint()\\ncontinue\\n\"\ndef ended(event):\n    global exit_code\n    exit_code = getattr(event, \"exit_code\", None)\n    print(\"TRACE_SUMMARY\", json.dumps({\"allocated\": allocated, \"freed\": freed, \"live\": sorted(live.values()), \"snapshots\": snapshots, \"sites\": len(sites), \"failures\": failures, \"exit_code\": exit_code}))\ngdb.events.exited.connect(ended)\n\nend\ncontinue\npython assert exit_code == 0 and snapshots == 3 and not failures, \"incomplete trace\"\nquit\n",
+    "calibration": "set pagination off\nset confirm off\nset debuginfod enabled off\nset auto-load off\nset print frame-arguments none\nset print address off\ntbreak tun_namespace::allocation_sample::allocator_calibration\nrun\nset language c\npython\nimport gdb, json\nlive = {}\nsites = []\nallocated = 0\nfreed = 0\nsnapshots = 0\nfailures = []\nexit_code = None\nselected = {13, 14, 352, 368, 1024}\nsizes = set(selected)\ndef fail(message):\n    failures.append(message)\n    raise gdb.GdbError(message)\ndef filters():\n    free_bp.condition = \" || \".join(\"$rsi == %d\" % s for s in sorted(sizes))\n    resize_bp.condition = \"(\" + free_bp.condition + \") || \" + \" || \".join(\"$rcx == %d\" % s for s in sorted(selected))\nclass Returned(gdb.FinishBreakpoint):\n    def __init__(self, owner, old=None):\n        super().__init__(gdb.newest_frame(), internal=True)\n        self.owner, self.old = owner, old\n    def stop(self):\n        address = int(gdb.parse_and_eval(\"$rax\"))\n        if not address:\n            fail(\"allocation or resize failed; old owner retained\")\n        if self.old is not None:\n            live.pop(self.old, None)\n        if address in live:\n            fail(\"duplicate live allocation address\")\n        live[address] = self.owner\n        return False\n    def out_of_scope(self):\n        failures.append({\"error\": \"return breakpoint out of scope\", \"owner\": self.owner})\ndef stack_site():\n    frames = []\n    frame = gdb.newest_frame()\n    for _ in range(24):\n        if frame is None:\n            break\n        frames.append((frame.name() or \"?\")[:240])\n        frame = frame.older()\n    if frames not in sites:\n        if len(sites) >= 64:\n            fail(\"site quota exceeded\")\n        sites.append(frames)\n        print(\"SITE\", json.dumps({\"id\": len(sites), \"frames\": frames}))\n    return sites.index(frames) + 1\ndef new_owner(size):\n    global allocated\n    allocated += 1\n    if allocated > 4096:\n        fail(\"allocation quota exceeded\")\n    return (allocated, size, stack_site())\ndef allocate():\n    size = int(gdb.parse_and_eval(\"$rdi\"))\n    if size not in selected:\n        fail(\"allocation filter mismatch\")\n    Returned(new_owner(size))\ndef deallocate():\n    global freed\n    address = int(gdb.parse_and_eval(\"$rdi\"))\n    if address in live:\n        freed += 1\n        live.pop(address)\ndef resize():\n    address = int(gdb.parse_and_eval(\"$rdi\"))\n    size = int(gdb.parse_and_eval(\"$rcx\"))\n    if address in live:\n        ident, _, site = live[address]\n        if size not in sizes:\n            sizes.add(size)\n            filters()\n        Returned((ident, size, site), address)\n    elif size in selected:\n        Returned(new_owner(size))\ndef checkpoint():\n    global snapshots\n    snapshots += 1\n    print(\"CHECKPOINT\", json.dumps({\"index\": snapshots, \"live\": sorted(live.values())}))\nfor symbol in (\"__rust_alloc\", \"__rust_alloc_zeroed\"):\n    bp = gdb.Breakpoint(\"__rustc::\" + symbol, internal=True)\n    bp.condition = \" || \".join(\"$rdi == %d\" % s for s in sorted(selected))\n    bp.commands = \"silent\\npython allocate()\\ncontinue\\n\"\nfree_bp = gdb.Breakpoint(\"__rustc::__rust_dealloc\", internal=True)\nfree_bp.commands = \"silent\\npython deallocate()\\ncontinue\\n\"\nresize_bp = gdb.Breakpoint(\"__rustc::__rust_realloc\", internal=True)\nresize_bp.commands = \"silent\\npython resize()\\ncontinue\\n\"\nfilters()\nbp = gdb.Breakpoint(\"tun_namespace::allocation_sample::emit_sizes\", internal=True)\nbp.commands = \"silent\\npython checkpoint()\\ncontinue\\n\"\ndef ended(event):\n    global exit_code\n    exit_code = getattr(event, \"exit_code\", None)\n    print(\"TRACE_SUMMARY\", json.dumps({\"allocated\": allocated, \"freed\": freed, \"live\": sorted(live.values()), \"snapshots\": snapshots, \"sites\": len(sites), \"failures\": failures, \"exit_code\": exit_code}))\ngdb.events.exited.connect(ended)\n\nend\ncontinue\npython assert exit_code == 0 and snapshots == 0 and not failures, \"incomplete trace\"\nquit\n"
+  },
+  "failed_captures": [
+    {
+      "dir": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.2f9ac2f0600e04e7",
+      "outer_log": "/tmp/p2p-vpn-daemon-small-1.log",
+      "outer_exit": 101,
+      "valid": false,
+      "checkpoints": [
+        {
+          "index": 1,
+          "live": []
+        }
+      ],
+      "summary": [
+        {
+          "allocated": 86,
+          "freed": 33,
+          "live": [
+            [
+              2,
+              1024,
+              2
+            ],
+            [
+              5,
+              368,
+              5
+            ],
+            [
+              8,
+              1024,
+              8
+            ],
+            [
+              9,
+              352,
+              9
+            ],
+            [
+              12,
+              352,
+              11
+            ],
+            [
+              13,
+              1024,
+              12
+            ],
+            [
+              14,
+              1024,
+              13
+            ],
+            [
+              16,
+              14,
+              15
+            ],
+            [
+              17,
+              112,
+              16
+            ],
+            [
+              18,
+              13,
+              17
+            ],
+            [
+              19,
+              112,
+              18
+            ],
+            [
+              20,
+              14,
+              19
+            ],
+            [
+              23,
+              352,
+              22
+            ],
+            [
+              25,
+              352,
+              24
+            ],
+            [
+              26,
+              14,
+              25
+            ],
+            [
+              27,
+              112,
+              26
+            ],
+            [
+              28,
+              112,
+              27
+            ],
+            [
+              29,
+              112,
+              28
+            ],
+            [
+              30,
+              112,
+              29
+            ],
+            [
+              31,
+              112,
+              30
+            ],
+            [
+              32,
+              112,
+              31
+            ],
+            [
+              33,
+              112,
+              32
+            ],
+            [
+              34,
+              14,
+              33
+            ],
+            [
+              36,
+              1408,
+              35
+            ],
+            [
+              56,
+              112,
+              49
+            ],
+            [
+              58,
+              112,
+              50
+            ],
+            [
+              59,
+              112,
+              51
+            ],
+            [
+              60,
+              112,
+              52
+            ],
+            [
+              61,
+              112,
+              51
+            ],
+            [
+              62,
+              112,
+              51
+            ],
+            [
+              63,
+              112,
+              53
+            ],
+            [
+              64,
+              368,
+              54
+            ],
+            [
+              66,
+              14,
+              56
+            ],
+            [
+              68,
+              14,
+              57
+            ],
+            [
+              70,
+              112,
+              58
+            ],
+            [
+              71,
+              112,
+              40
+            ],
+            [
+              72,
+              112,
+              59
+            ],
+            [
+              76,
+              70,
+              61
+            ],
+            [
+              77,
+              112,
+              40
+            ],
+            [
+              79,
+              70,
+              62
+            ],
+            [
+              80,
+              70,
+              62
+            ],
+            [
+              81,
+              70,
+              63
+            ],
+            [
+              82,
+              70,
+              63
+            ],
+            [
+              83,
+              70,
+              64
+            ],
+            [
+              84,
+              112,
+              40
+            ],
+            [
+              85,
+              112,
+              59
+            ]
+          ],
+          "snapshots": 1,
+          "sites": 64,
+          "failures": [
+            "return breakpoint out of scope",
+            "return breakpoint out of scope",
+            "return breakpoint out of scope",
+            "return breakpoint out of scope",
+            "return breakpoint out of scope",
+            "return breakpoint out of scope",
+            "return breakpoint out of scope",
+            "return breakpoint out of scope",
+            "return breakpoint out of scope",
+            "return breakpoint out of scope",
+            "return breakpoint out of scope",
+            "return breakpoint out of scope",
+            "site quota exceeded"
+          ],
+          "exit_code": null
+        }
+      ],
+      "lifecycle": [
+        {
+          "stage": "before_child",
+          "pid": 48,
+          "unix_millis": 1789039966906,
+          "elapsed_millis": 0,
+          "allocations": 618,
+          "deallocations": 195,
+          "reallocations": 22,
+          "bytes_allocated": 74274,
+          "bytes_deallocated": 52675,
+          "bytes_reallocated": 6366,
+          "live_bytes": 21599,
+          "live_blocks": 423
+        }
+      ],
+      "artifacts": [
+        {
+          "sha256": "04551a913f395fbaa3700d9481f2b89248a5511b131b18a657b42515217a83b3",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.2f9ac2f0600e04e7/daemon-mtu-a.txt"
+        },
+        {
+          "sha256": "151c4d38a00be670a4e1bcd60df1400a54f6774f2684c344517e0bbeb95bb423",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.2f9ac2f0600e04e7/daemon-peers-a.json"
+        },
+        {
+          "sha256": "67f8f4999c5fbbcf5b08baf4b7c666e9f65e88e2f7f933067db1dd42871a2774",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.2f9ac2f0600e04e7/daemon-capabilities-a.txt"
+        },
+        {
+          "sha256": "d03d0dbd92af034820f113c5432d87a495f579c49412be6a59a1decd03f11768",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.2f9ac2f0600e04e7/node-a.log"
+        },
+        {
+          "sha256": "b24d6d33736ecd5604a4b17bc9c6481039fac362bb7df044ef1c10a2bfd21db6",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.2f9ac2f0600e04e7/ready-b"
+        },
+        {
+          "sha256": "81898bf5409fb7999fae9fdaedf0d3f7a89aca6a6ee28c13faa6eeb662104c13",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.2f9ac2f0600e04e7/repro-metadata.txt"
+        },
+        {
+          "sha256": "cced28c6dc3f99c2396a5eaad732bf6b28142335892b1cd0e6af6cdb53f5ccfa",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.2f9ac2f0600e04e7/start-a"
+        },
+        {
+          "sha256": "b24d6d33736ecd5604a4b17bc9c6481039fac362bb7df044ef1c10a2bfd21db6",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.2f9ac2f0600e04e7/ready-a"
+        },
+        {
+          "sha256": "cced28c6dc3f99c2396a5eaad732bf6b28142335892b1cd0e6af6cdb53f5ccfa",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.2f9ac2f0600e04e7/start-b"
+        },
+        {
+          "sha256": "c900a452c9a1a8d83bab776edd699eaccbf346142936d45d7ab2f919d2480844",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.2f9ac2f0600e04e7/daemon-peers-a.txt"
+        },
+        {
+          "sha256": "179ea4c978b2ed16567685a0a34337ffe76c044a3722b3776daf107886b58efc",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.2f9ac2f0600e04e7/node-b.log"
+        },
+        {
+          "sha256": "059ea7a20e10be28bce91ab67b91bedbd2f226410660b7c545a2dc68b7b451bd",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.2f9ac2f0600e04e7/daemon-capabilities-a.json"
+        },
+        {
+          "sha256": "2d5cc25b2b84aa2ff31250ebbe18037e4803d2d46d69fb664e0cfefa25fe0cd2",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.2f9ac2f0600e04e7/daemon-state-a.json"
+        },
+        {
+          "sha256": "7ad295dd0b5539911c0d6bb2ccd307ff33dcf3f30dca0bb4bd16b4a111743e0a",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.2f9ac2f0600e04e7/daemon-status-a.txt"
+        },
+        {
+          "sha256": "072cd79ccab6123fc8d2d620bbe8db40c23bc41cd002cae7a9c7b0d427d5dff7",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.2f9ac2f0600e04e7/daemon-routes-a.txt"
+        },
+        {
+          "sha256": "f13753e80b7b1e34cb9f7cd3cb01e8139f9e6fe29e8a2718a3e42a10cd205c89",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.2f9ac2f0600e04e7/daemon-routes-a.json"
+        },
+        {
+          "sha256": "0dce306b16e83ed09d155974004b17ec020873d308bf130c637afe7e350676c8",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.2f9ac2f0600e04e7/daemon-mtu-a.json"
+        },
+        {
+          "sha256": "bc4676d8131b1c85935bb4e8a5badc1f899cab15c6c61acce751dcdc5a43e254",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.2f9ac2f0600e04e7/daemon-state-a.txt"
+        },
+        {
+          "sha256": "6edb94f3d2c9235a626bfb804546b4c91ad0f26391082c964d906429e88470b3",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.2f9ac2f0600e04e7/daemon-paths-a.txt"
+        },
+        {
+          "sha256": "926dfe3b3c2535123a3aa456803eb1fcc2ee67adec3d912a2e1d7112783820ee",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.2f9ac2f0600e04e7/repro-commands.sh"
+        },
+        {
+          "sha256": "1883a59aab2ded64f308a54b12509e85e6c84265ccc06190fb681c36ee321755",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.2f9ac2f0600e04e7/daemon-paths-a.json"
+        },
+        {
+          "sha256": "ddde4869b7611921e4ab177ee15e44f47bfb006397ee3708bc22722a6eedbdd5",
+          "path": "/tmp/p2p-vpn-daemon-small-1.log"
+        }
+      ]
+    },
+    {
+      "dir": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.1b6fa49c7bb5398f",
+      "outer_log": "/tmp/p2p-vpn-daemon-small-2.log",
+      "outer_exit": 101,
+      "valid": false,
+      "checkpoints": [
+        {
+          "index": 1,
+          "live": []
+        },
+        {
+          "index": 2,
+          "live": [
+            [
+              2,
+              1024,
+              2
+            ],
+            [
+              5,
+              368,
+              5
+            ],
+            [
+              10,
+              352,
+              9
+            ],
+            [
+              14,
+              14,
+              13
+            ],
+            [
+              15,
+              13,
+              14
+            ]
+          ]
+        },
+        {
+          "index": 3,
+          "live": [
+            [
+              2,
+              1024,
+              2
+            ],
+            [
+              5,
+              368,
+              5
+            ],
+            [
+              10,
+              352,
+              9
+            ],
+            [
+              14,
+              14,
+              13
+            ],
+            [
+              15,
+              13,
+              14
+            ]
+          ]
+        }
+      ],
+      "summary": [
+        {
+          "allocated": 202,
+          "freed": 198,
+          "live": [
+            [
+              2,
+              1024,
+              2
+            ],
+            [
+              14,
+              14,
+              13
+            ],
+            [
+              15,
+              13,
+              14
+            ]
+          ],
+          "snapshots": 3,
+          "sites": 59,
+          "failures": [
+            "return breakpoint out of scope",
+            "return breakpoint out of scope"
+          ],
+          "exit_code": 0
+        }
+      ],
+      "lifecycle": [
+        {
+          "stage": "before_child",
+          "pid": 48,
+          "unix_millis": 1789040028206,
+          "elapsed_millis": 0,
+          "allocations": 618,
+          "deallocations": 195,
+          "reallocations": 22,
+          "bytes_allocated": 74274,
+          "bytes_deallocated": 52675,
+          "bytes_reallocated": 6366,
+          "live_bytes": 21599,
+          "live_blocks": 423
+        },
+        {
+          "stage": "child_returned",
+          "pid": 48,
+          "unix_millis": 1789040083260,
+          "elapsed_millis": 55054,
+          "allocations": 38882,
+          "deallocations": 38369,
+          "reallocations": 21002,
+          "bytes_allocated": 7944640,
+          "bytes_deallocated": 7882240,
+          "bytes_reallocated": 2427986,
+          "live_bytes": 62400,
+          "live_blocks": 513
+        },
+        {
+          "stage": "child_settled",
+          "pid": 48,
+          "unix_millis": 1789040083362,
+          "elapsed_millis": 55155,
+          "allocations": 38882,
+          "deallocations": 38369,
+          "reallocations": 21002,
+          "bytes_allocated": 7944640,
+          "bytes_deallocated": 7882240,
+          "bytes_reallocated": 2427986,
+          "live_bytes": 62400,
+          "live_blocks": 513
+        }
+      ],
+      "artifacts": [
+        {
+          "sha256": "e8c6909728ea2e14e0c7694ccfe91246827aef80ef4f4da03d970eb3e356ba4f",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.1b6fa49c7bb5398f/node-a.log"
+        },
+        {
+          "sha256": "b24d6d33736ecd5604a4b17bc9c6481039fac362bb7df044ef1c10a2bfd21db6",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.1b6fa49c7bb5398f/ready-b"
+        },
+        {
+          "sha256": "3541744b586a300382f9a1cb4042a5bc50e846c07a6d1914f57f8582468949eb",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.1b6fa49c7bb5398f/repro-metadata.txt"
+        },
+        {
+          "sha256": "cced28c6dc3f99c2396a5eaad732bf6b28142335892b1cd0e6af6cdb53f5ccfa",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.1b6fa49c7bb5398f/start-a"
+        },
+        {
+          "sha256": "b24d6d33736ecd5604a4b17bc9c6481039fac362bb7df044ef1c10a2bfd21db6",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.1b6fa49c7bb5398f/ready-a"
+        },
+        {
+          "sha256": "cced28c6dc3f99c2396a5eaad732bf6b28142335892b1cd0e6af6cdb53f5ccfa",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.1b6fa49c7bb5398f/start-b"
+        },
+        {
+          "sha256": "5b8b61fb368a6a78d708ca196c4727ede2be996593deb376ff0976f5a8ab9551",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.1b6fa49c7bb5398f/node-b.log"
+        },
+        {
+          "sha256": "902735e44dd8b719e2fbde78ab45a959f8535d67bdefb365e24495ac9b4ed733",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.1b6fa49c7bb5398f/repro-commands.sh"
+        },
+        {
+          "sha256": "20792f8a69f26fea2b49f7de2f9785cdcef3a0bf131325a0ac6b8bbae190fcac",
+          "path": "/tmp/p2p-vpn-daemon-small-2.log"
+        }
+      ]
+    },
+    {
+      "dir": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.fabeeeda958bf5e6",
+      "outer_log": "/tmp/p2p-vpn-daemon-small-3.log",
+      "outer_exit": 101,
+      "valid": false,
+      "checkpoints": [
+        {
+          "index": 1,
+          "live": []
+        }
+      ],
+      "summary": [
+        {
+          "allocated": 52,
+          "freed": 28,
+          "live": [
+            [
+              3,
+              1024,
+              3
+            ],
+            [
+              6,
+              368,
+              6
+            ],
+            [
+              8,
+              1024,
+              8
+            ],
+            [
+              9,
+              352,
+              9
+            ],
+            [
+              11,
+              352,
+              10
+            ],
+            [
+              12,
+              1024,
+              11
+            ],
+            [
+              13,
+              1024,
+              12
+            ],
+            [
+              15,
+              14,
+              14
+            ],
+            [
+              16,
+              13,
+              15
+            ],
+            [
+              17,
+              14,
+              16
+            ],
+            [
+              20,
+              352,
+              19
+            ],
+            [
+              22,
+              352,
+              21
+            ],
+            [
+              23,
+              14,
+              22
+            ],
+            [
+              24,
+              14,
+              23
+            ],
+            [
+              26,
+              1408,
+              25
+            ],
+            [
+              29,
+              368,
+              28
+            ],
+            [
+              40,
+              368,
+              36
+            ],
+            [
+              44,
+              14,
+              39
+            ],
+            [
+              49,
+              1024,
+              17
+            ]
+          ],
+          "snapshots": 1,
+          "sites": 43,
+          "failures": [
+            {
+              "error": "return breakpoint out of scope",
+              "owner": [
+                28,
+                14,
+                27
+              ]
+            },
+            {
+              "error": "return breakpoint out of scope",
+              "owner": [
+                28,
+                14,
+                27
+              ]
+            },
+            {
+              "error": "return breakpoint out of scope",
+              "owner": [
+                33,
+                14,
+                31
+              ]
+            },
+            {
+              "error": "return breakpoint out of scope",
+              "owner": [
+                33,
+                14,
+                31
+              ]
+            },
+            {
+              "error": "return breakpoint out of scope",
+              "owner": [
+                34,
+                352,
+                4
+              ]
+            },
+            {
+              "error": "return breakpoint out of scope",
+              "owner": [
+                34,
+                352,
+                4
+              ]
+            },
+            {
+              "error": "return breakpoint out of scope",
+              "owner": [
+                35,
+                352,
+                32
+              ]
+            },
+            {
+              "error": "return breakpoint out of scope",
+              "owner": [
+                35,
+                352,
+                32
+              ]
+            },
+            {
+              "error": "return breakpoint out of scope",
+              "owner": [
+                49,
+                2048,
+                17
+              ]
+            },
+            {
+              "error": "return breakpoint out of scope",
+              "owner": [
+                49,
+                2048,
+                17
+              ]
+            },
+            "duplicate live allocation address"
+          ],
+          "exit_code": null
+        }
+      ],
+      "lifecycle": [
+        {
+          "stage": "before_child",
+          "pid": 48,
+          "unix_millis": 1789040120975,
+          "elapsed_millis": 0,
+          "allocations": 618,
+          "deallocations": 195,
+          "reallocations": 22,
+          "bytes_allocated": 74274,
+          "bytes_deallocated": 52675,
+          "bytes_reallocated": 6366,
+          "live_bytes": 21599,
+          "live_blocks": 423
+        }
+      ],
+      "artifacts": [
+        {
+          "sha256": "04551a913f395fbaa3700d9481f2b89248a5511b131b18a657b42515217a83b3",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.fabeeeda958bf5e6/daemon-mtu-a.txt"
+        },
+        {
+          "sha256": "151c4d38a00be670a4e1bcd60df1400a54f6774f2684c344517e0bbeb95bb423",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.fabeeeda958bf5e6/daemon-peers-a.json"
+        },
+        {
+          "sha256": "67f8f4999c5fbbcf5b08baf4b7c666e9f65e88e2f7f933067db1dd42871a2774",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.fabeeeda958bf5e6/daemon-capabilities-a.txt"
+        },
+        {
+          "sha256": "658250efbcef8230695ae93b9e6a43e2082b9077fb343ff408b1997cefb7cf06",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.fabeeeda958bf5e6/node-a.log"
+        },
+        {
+          "sha256": "b24d6d33736ecd5604a4b17bc9c6481039fac362bb7df044ef1c10a2bfd21db6",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.fabeeeda958bf5e6/ready-b"
+        },
+        {
+          "sha256": "48ea799cd78398cb856fea7abf544408f2d6d5f69f95e04ef37a8aa1d0a7cceb",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.fabeeeda958bf5e6/repro-metadata.txt"
+        },
+        {
+          "sha256": "cced28c6dc3f99c2396a5eaad732bf6b28142335892b1cd0e6af6cdb53f5ccfa",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.fabeeeda958bf5e6/start-a"
+        },
+        {
+          "sha256": "b24d6d33736ecd5604a4b17bc9c6481039fac362bb7df044ef1c10a2bfd21db6",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.fabeeeda958bf5e6/ready-a"
+        },
+        {
+          "sha256": "cced28c6dc3f99c2396a5eaad732bf6b28142335892b1cd0e6af6cdb53f5ccfa",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.fabeeeda958bf5e6/start-b"
+        },
+        {
+          "sha256": "c900a452c9a1a8d83bab776edd699eaccbf346142936d45d7ab2f919d2480844",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.fabeeeda958bf5e6/daemon-peers-a.txt"
+        },
+        {
+          "sha256": "572139b231865bfba71a1909cc004f720b7e13c76d5d0e38cd4c9c8164184027",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.fabeeeda958bf5e6/node-b.log"
+        },
+        {
+          "sha256": "059ea7a20e10be28bce91ab67b91bedbd2f226410660b7c545a2dc68b7b451bd",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.fabeeeda958bf5e6/daemon-capabilities-a.json"
+        },
+        {
+          "sha256": "2d5cc25b2b84aa2ff31250ebbe18037e4803d2d46d69fb664e0cfefa25fe0cd2",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.fabeeeda958bf5e6/daemon-state-a.json"
+        },
+        {
+          "sha256": "7ad295dd0b5539911c0d6bb2ccd307ff33dcf3f30dca0bb4bd16b4a111743e0a",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.fabeeeda958bf5e6/daemon-status-a.txt"
+        },
+        {
+          "sha256": "072cd79ccab6123fc8d2d620bbe8db40c23bc41cd002cae7a9c7b0d427d5dff7",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.fabeeeda958bf5e6/daemon-routes-a.txt"
+        },
+        {
+          "sha256": "f13753e80b7b1e34cb9f7cd3cb01e8139f9e6fe29e8a2718a3e42a10cd205c89",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.fabeeeda958bf5e6/daemon-routes-a.json"
+        },
+        {
+          "sha256": "0dce306b16e83ed09d155974004b17ec020873d308bf130c637afe7e350676c8",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.fabeeeda958bf5e6/daemon-mtu-a.json"
+        },
+        {
+          "sha256": "bc4676d8131b1c85935bb4e8a5badc1f899cab15c6c61acce751dcdc5a43e254",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.fabeeeda958bf5e6/daemon-state-a.txt"
+        },
+        {
+          "sha256": "6edb94f3d2c9235a626bfb804546b4c91ad0f26391082c964d906429e88470b3",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.fabeeeda958bf5e6/daemon-paths-a.txt"
+        },
+        {
+          "sha256": "a73a900caf3c04894b35339a238c9c73cca18f6407745d60314c2bf6c1b28127",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.fabeeeda958bf5e6/repro-commands.sh"
+        },
+        {
+          "sha256": "1883a59aab2ded64f308a54b12509e85e6c84265ccc06190fb681c36ee321755",
+          "path": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1.fabeeeda958bf5e6/daemon-paths-a.json"
+        },
+        {
+          "sha256": "0cb5175ab2bd7f8e22fc8a1e0923549ed56978332e6784a576dbc135fb0cb548",
+          "path": "/tmp/p2p-vpn-daemon-small-3.log"
+        }
+      ]
+    }
+  ],
+  "calibration": {
+    "path": "/tmp/p2p-vpn-small-calibration.log",
+    "sha256": "aeb9bb4e94beebc891eb983e10df655809a48f729e8c95dac30ac5d70ac3b998",
+    "exit_code": 0,
+    "allocations": 1,
+    "frees": 1,
+    "live": [],
+    "failures": [],
+    "test_seconds": 0.02
+  },
+  "conclusion": "No smaller-size attribution accepted. Single-thread calibration passed; concurrent daemon observer has missing returns, and one diagnostic reported duplicate live addresses. Root cause not established."
+}
