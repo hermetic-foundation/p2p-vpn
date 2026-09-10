@@ -1,0 +1,1979 @@
+{
+  "schema_version": 1,
+  "source_revision": "575ef4ac",
+  "binary": {
+    "path": "/tmp/p2p-vpn-review-target/debug/deps/tun_namespace-b64312792e9e0507",
+    "sha256": "6516ee1bcb7b227fac264fabfd6e7a47a86d0f9fdba93e15819bea32953fa6ab"
+  },
+  "scope": "Five-round TCP pressure captures followed by real graceful shutdown; isolated namespaces without Internet routing.",
+  "limitations": [
+    "Requested Rust allocation samples, not whole native heap or RSS attribution.",
+    "100 ms post-child settling, not proof of long-term stability.",
+    "Residual allocation owners remain unattributed.",
+    "No physical device, deployment, public network or release-profile acceptance."
+  ],
+  "cases": [
+    {
+      "name": "packets",
+      "seconds": 163.27,
+      "dir": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e",
+      "series": {
+        "complete": true,
+        "completed_rounds": 5,
+        "requested_rounds": 5,
+        "rounds": [
+          {
+            "round": 1,
+            "transmitted_packets": 1951,
+            "received_packets": 18,
+            "before": {
+              "a": {
+                "process": {
+                  "capture_seconds": 0.002682781,
+                  "cpu_ticks": 10,
+                  "elapsed_seconds": 0.004138653,
+                  "pid": 18,
+                  "process_tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "role": "a",
+                  "rss_kib": 36060,
+                  "socket_fds": 6,
+                  "start_ticks": 90719520,
+                  "tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "threads": 6,
+                  "total_fds": 16,
+                  "vanished_fds": 0
+                }
+              },
+              "b": {
+                "process": {
+                  "capture_seconds": 0.002760912,
+                  "cpu_ticks": 10,
+                  "elapsed_seconds": 0.008276935,
+                  "pid": 19,
+                  "process_tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "role": "b",
+                  "rss_kib": 36000,
+                  "socket_fds": 6,
+                  "start_ticks": 90719520,
+                  "tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "threads": 6,
+                  "total_fds": 16,
+                  "vanished_fds": 0
+                }
+              }
+            },
+            "after": {
+              "a": {
+                "queued_bytes": 0,
+                "queued_packets": 0,
+                "stream_in_flight": 0,
+                "healthy_tcp_paths": 1,
+                "peers_without_supported_path": 0,
+                "dropped_packets": 1354,
+                "expired_packets": 16,
+                "process": {
+                  "capture_seconds": 0.002666082,
+                  "cpu_ticks": 222,
+                  "elapsed_seconds": 29.754364916,
+                  "pid": 18,
+                  "process_tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "role": "a",
+                  "rss_kib": 37760,
+                  "socket_fds": 6,
+                  "start_ticks": 90719520,
+                  "tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "threads": 6,
+                  "total_fds": 16,
+                  "vanished_fds": 0
+                }
+              },
+              "b": {
+                "queued_bytes": 0,
+                "queued_packets": 0,
+                "stream_in_flight": 0,
+                "healthy_tcp_paths": 1,
+                "peers_without_supported_path": 0,
+                "dropped_packets": 0,
+                "expired_packets": 0,
+                "process": {
+                  "capture_seconds": 0.002516582,
+                  "cpu_ticks": 88,
+                  "elapsed_seconds": 29.75809593,
+                  "pid": 19,
+                  "process_tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "role": "b",
+                  "rss_kib": 37360,
+                  "socket_fds": 6,
+                  "start_ticks": 90719520,
+                  "tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "threads": 6,
+                  "total_fds": 16,
+                  "vanished_fds": 0
+                }
+              }
+            }
+          },
+          {
+            "round": 2,
+            "transmitted_packets": 1944,
+            "received_packets": 17,
+            "before": {
+              "a": {
+                "process": {
+                  "capture_seconds": 0.00251486,
+                  "cpu_ticks": 222,
+                  "elapsed_seconds": 0.003701326,
+                  "pid": 18,
+                  "process_tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "role": "a",
+                  "rss_kib": 37760,
+                  "socket_fds": 6,
+                  "start_ticks": 90719520,
+                  "tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "threads": 6,
+                  "total_fds": 16,
+                  "vanished_fds": 0
+                }
+              },
+              "b": {
+                "process": {
+                  "capture_seconds": 0.002489821,
+                  "cpu_ticks": 88,
+                  "elapsed_seconds": 0.007141207,
+                  "pid": 19,
+                  "process_tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "role": "b",
+                  "rss_kib": 37360,
+                  "socket_fds": 6,
+                  "start_ticks": 90719520,
+                  "tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "threads": 6,
+                  "total_fds": 16,
+                  "vanished_fds": 0
+                }
+              }
+            },
+            "after": {
+              "a": {
+                "queued_bytes": 0,
+                "queued_packets": 0,
+                "stream_in_flight": 0,
+                "healthy_tcp_paths": 1,
+                "peers_without_supported_path": 0,
+                "dropped_packets": 2701,
+                "expired_packets": 37,
+                "process": {
+                  "capture_seconds": 0.002598666,
+                  "cpu_ticks": 444,
+                  "elapsed_seconds": 30.786253828,
+                  "pid": 18,
+                  "process_tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "role": "a",
+                  "rss_kib": 38168,
+                  "socket_fds": 6,
+                  "start_ticks": 90719520,
+                  "tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "threads": 6,
+                  "total_fds": 16,
+                  "vanished_fds": 0
+                }
+              },
+              "b": {
+                "queued_bytes": 0,
+                "queued_packets": 0,
+                "stream_in_flight": 0,
+                "healthy_tcp_paths": 1,
+                "peers_without_supported_path": 0,
+                "dropped_packets": 9,
+                "expired_packets": 0,
+                "process": {
+                  "capture_seconds": 0.00280234,
+                  "cpu_ticks": 165,
+                  "elapsed_seconds": 30.790428722,
+                  "pid": 19,
+                  "process_tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "role": "b",
+                  "rss_kib": 37476,
+                  "socket_fds": 6,
+                  "start_ticks": 90719520,
+                  "tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "threads": 6,
+                  "total_fds": 16,
+                  "vanished_fds": 0
+                }
+              }
+            }
+          },
+          {
+            "round": 3,
+            "transmitted_packets": 1946,
+            "received_packets": 9,
+            "before": {
+              "a": {
+                "process": {
+                  "capture_seconds": 0.002629796,
+                  "cpu_ticks": 444,
+                  "elapsed_seconds": 0.00397122,
+                  "pid": 18,
+                  "process_tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "role": "a",
+                  "rss_kib": 38168,
+                  "socket_fds": 6,
+                  "start_ticks": 90719520,
+                  "tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "threads": 6,
+                  "total_fds": 16,
+                  "vanished_fds": 0
+                }
+              },
+              "b": {
+                "process": {
+                  "capture_seconds": 0.002647711,
+                  "cpu_ticks": 165,
+                  "elapsed_seconds": 0.008064055,
+                  "pid": 19,
+                  "process_tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "role": "b",
+                  "rss_kib": 37476,
+                  "socket_fds": 6,
+                  "start_ticks": 90719520,
+                  "tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "threads": 6,
+                  "total_fds": 16,
+                  "vanished_fds": 0
+                }
+              }
+            },
+            "after": {
+              "a": {
+                "queued_bytes": 0,
+                "queued_packets": 0,
+                "stream_in_flight": 0,
+                "healthy_tcp_paths": 1,
+                "peers_without_supported_path": 0,
+                "dropped_packets": 4031,
+                "expired_packets": 52,
+                "process": {
+                  "capture_seconds": 0.002492254,
+                  "cpu_ticks": 648,
+                  "elapsed_seconds": 30.54819531,
+                  "pid": 18,
+                  "process_tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "role": "a",
+                  "rss_kib": 38168,
+                  "socket_fds": 6,
+                  "start_ticks": 90719520,
+                  "tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "threads": 6,
+                  "total_fds": 16,
+                  "vanished_fds": 0
+                }
+              },
+              "b": {
+                "queued_bytes": 0,
+                "queued_packets": 0,
+                "stream_in_flight": 0,
+                "healthy_tcp_paths": 1,
+                "peers_without_supported_path": 0,
+                "dropped_packets": 9,
+                "expired_packets": 0,
+                "process": {
+                  "capture_seconds": 0.002473548,
+                  "cpu_ticks": 229,
+                  "elapsed_seconds": 30.551843747,
+                  "pid": 19,
+                  "process_tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "role": "b",
+                  "rss_kib": 37376,
+                  "socket_fds": 6,
+                  "start_ticks": 90719520,
+                  "tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "threads": 6,
+                  "total_fds": 16,
+                  "vanished_fds": 0
+                }
+              }
+            }
+          },
+          {
+            "round": 4,
+            "transmitted_packets": 1946,
+            "received_packets": 8,
+            "before": {
+              "a": {
+                "process": {
+                  "capture_seconds": 0.002529877,
+                  "cpu_ticks": 648,
+                  "elapsed_seconds": 0.0038564,
+                  "pid": 18,
+                  "process_tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "role": "a",
+                  "rss_kib": 38168,
+                  "socket_fds": 6,
+                  "start_ticks": 90719520,
+                  "tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "threads": 6,
+                  "total_fds": 16,
+                  "vanished_fds": 0
+                }
+              },
+              "b": {
+                "process": {
+                  "capture_seconds": 0.002532021,
+                  "cpu_ticks": 229,
+                  "elapsed_seconds": 0.007773206,
+                  "pid": 19,
+                  "process_tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "role": "b",
+                  "rss_kib": 37376,
+                  "socket_fds": 6,
+                  "start_ticks": 90719520,
+                  "tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "threads": 6,
+                  "total_fds": 16,
+                  "vanished_fds": 0
+                }
+              }
+            },
+            "after": {
+              "a": {
+                "queued_bytes": 0,
+                "queued_packets": 0,
+                "stream_in_flight": 0,
+                "healthy_tcp_paths": 1,
+                "peers_without_supported_path": 0,
+                "dropped_packets": 5418,
+                "expired_packets": 100,
+                "process": {
+                  "capture_seconds": 0.002567695,
+                  "cpu_ticks": 854,
+                  "elapsed_seconds": 31.056925131,
+                  "pid": 18,
+                  "process_tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "role": "a",
+                  "rss_kib": 38252,
+                  "socket_fds": 6,
+                  "start_ticks": 90719520,
+                  "tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "threads": 6,
+                  "total_fds": 16,
+                  "vanished_fds": 0
+                }
+              },
+              "b": {
+                "queued_bytes": 0,
+                "queued_packets": 0,
+                "stream_in_flight": 0,
+                "healthy_tcp_paths": 1,
+                "peers_without_supported_path": 0,
+                "dropped_packets": 9,
+                "expired_packets": 0,
+                "process": {
+                  "capture_seconds": 0.003080615,
+                  "cpu_ticks": 301,
+                  "elapsed_seconds": 31.061380789,
+                  "pid": 19,
+                  "process_tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "role": "b",
+                  "rss_kib": 37700,
+                  "socket_fds": 6,
+                  "start_ticks": 90719520,
+                  "tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "threads": 6,
+                  "total_fds": 16,
+                  "vanished_fds": 0
+                }
+              }
+            }
+          },
+          {
+            "round": 5,
+            "transmitted_packets": 1945,
+            "received_packets": 9,
+            "before": {
+              "a": {
+                "process": {
+                  "capture_seconds": 0.00257553,
+                  "cpu_ticks": 854,
+                  "elapsed_seconds": 0.003970531,
+                  "pid": 18,
+                  "process_tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "role": "a",
+                  "rss_kib": 38252,
+                  "socket_fds": 6,
+                  "start_ticks": 90719520,
+                  "tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "threads": 6,
+                  "total_fds": 16,
+                  "vanished_fds": 0
+                }
+              },
+              "b": {
+                "process": {
+                  "capture_seconds": 0.002548277,
+                  "cpu_ticks": 301,
+                  "elapsed_seconds": 0.00752492,
+                  "pid": 19,
+                  "process_tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "role": "b",
+                  "rss_kib": 37700,
+                  "socket_fds": 6,
+                  "start_ticks": 90719520,
+                  "tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "threads": 6,
+                  "total_fds": 16,
+                  "vanished_fds": 0
+                }
+              }
+            },
+            "after": {
+              "a": {
+                "queued_bytes": 0,
+                "queued_packets": 0,
+                "stream_in_flight": 0,
+                "healthy_tcp_paths": 1,
+                "peers_without_supported_path": 0,
+                "dropped_packets": 6552,
+                "expired_packets": 114,
+                "process": {
+                  "capture_seconds": 0.0025525,
+                  "cpu_ticks": 1089,
+                  "elapsed_seconds": 30.800721992,
+                  "pid": 18,
+                  "process_tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "role": "a",
+                  "rss_kib": 38424,
+                  "socket_fds": 6,
+                  "start_ticks": 90719520,
+                  "tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "threads": 6,
+                  "total_fds": 16,
+                  "vanished_fds": 0
+                }
+              },
+              "b": {
+                "queued_bytes": 0,
+                "queued_packets": 0,
+                "stream_in_flight": 0,
+                "healthy_tcp_paths": 1,
+                "peers_without_supported_path": 0,
+                "dropped_packets": 9,
+                "expired_packets": 0,
+                "process": {
+                  "capture_seconds": 0.002501071,
+                  "cpu_ticks": 382,
+                  "elapsed_seconds": 30.804484525,
+                  "pid": 19,
+                  "process_tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "role": "b",
+                  "rss_kib": 37920,
+                  "socket_fds": 6,
+                  "start_ticks": 90719520,
+                  "tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "threads": 6,
+                  "total_fds": 16,
+                  "vanished_fds": 0
+                }
+              }
+            }
+          }
+        ]
+      },
+      "roles": {
+        "a": {
+          "lifecycle": [
+            {
+              "stage": "before_child",
+              "pid": 18,
+              "unix_millis": 1789034265614,
+              "elapsed_millis": 0,
+              "allocations": 617,
+              "deallocations": 194,
+              "reallocations": 22,
+              "bytes_allocated": 74135,
+              "bytes_deallocated": 52520,
+              "bytes_reallocated": 6366,
+              "live_bytes": 21615,
+              "live_blocks": 423
+            },
+            {
+              "stage": "child_returned",
+              "pid": 18,
+              "unix_millis": 1789034428276,
+              "elapsed_millis": 162661,
+              "allocations": 589633,
+              "deallocations": 589126,
+              "reallocations": 355604,
+              "bytes_allocated": 107930005,
+              "bytes_deallocated": 107848683,
+              "bytes_reallocated": 37929560,
+              "live_bytes": 81322,
+              "live_blocks": 507
+            },
+            {
+              "stage": "child_settled",
+              "pid": 18,
+              "unix_millis": 1789034428376,
+              "elapsed_millis": 162761,
+              "allocations": 589633,
+              "deallocations": 589126,
+              "reallocations": 355604,
+              "bytes_allocated": 107930005,
+              "bytes_deallocated": 107848683,
+              "bytes_reallocated": 37929560,
+              "live_bytes": 81322,
+              "live_blocks": 507
+            }
+          ],
+          "sample_count": 34,
+          "max_gap_ms": 5003,
+          "peak_bytes": 5580455,
+          "last_periodic": {
+            "stage": "periodic",
+            "pid": 18,
+            "unix_millis": 1789034426887,
+            "elapsed_millis": 160001,
+            "allocations": 587464,
+            "deallocations": 585838,
+            "reallocations": 354118,
+            "bytes_allocated": 107629288,
+            "bytes_deallocated": 102750151,
+            "bytes_reallocated": 37761969,
+            "live_bytes": 4879137,
+            "live_blocks": 1626
+          },
+          "runner_returned": {
+            "stage": "returned",
+            "pid": 18,
+            "unix_millis": 1789034428223,
+            "elapsed_millis": 161338,
+            "allocations": 589559,
+            "deallocations": 588966,
+            "reallocations": 355597,
+            "bytes_allocated": 107923851,
+            "bytes_deallocated": 107747519,
+            "bytes_reallocated": 37928520,
+            "live_bytes": 176332,
+            "live_blocks": 593
+          },
+          "residual_bytes": 59707,
+          "residual_blocks": 84
+        },
+        "b": {
+          "lifecycle": [
+            {
+              "stage": "before_child",
+              "pid": 19,
+              "unix_millis": 1789034265615,
+              "elapsed_millis": 0,
+              "allocations": 617,
+              "deallocations": 194,
+              "reallocations": 22,
+              "bytes_allocated": 74135,
+              "bytes_deallocated": 52520,
+              "bytes_reallocated": 6366,
+              "live_bytes": 21615,
+              "live_blocks": 423
+            },
+            {
+              "stage": "child_returned",
+              "pid": 19,
+              "unix_millis": 1789034428472,
+              "elapsed_millis": 162856,
+              "allocations": 564059,
+              "deallocations": 563552,
+              "reallocations": 350475,
+              "bytes_allocated": 93511294,
+              "bytes_deallocated": 93429972,
+              "bytes_reallocated": 36169951,
+              "live_bytes": 81322,
+              "live_blocks": 507
+            },
+            {
+              "stage": "child_settled",
+              "pid": 19,
+              "unix_millis": 1789034428573,
+              "elapsed_millis": 162957,
+              "allocations": 564059,
+              "deallocations": 563552,
+              "reallocations": 350475,
+              "bytes_allocated": 93511294,
+              "bytes_deallocated": 93429972,
+              "bytes_reallocated": 36169951,
+              "live_bytes": 81322,
+              "live_blocks": 507
+            }
+          ],
+          "sample_count": 34,
+          "max_gap_ms": 5003,
+          "peak_bytes": 5232996,
+          "last_periodic": {
+            "stage": "periodic",
+            "pid": 19,
+            "unix_millis": 1789034426638,
+            "elapsed_millis": 160003,
+            "allocations": 561970,
+            "deallocations": 560358,
+            "reallocations": 348945,
+            "bytes_allocated": 93215124,
+            "bytes_deallocated": 88494375,
+            "bytes_reallocated": 36007567,
+            "live_bytes": 4720749,
+            "live_blocks": 1612
+          },
+          "runner_returned": {
+            "stage": "returned",
+            "pid": 19,
+            "unix_millis": 1789034428420,
+            "elapsed_millis": 161784,
+            "allocations": 564014,
+            "deallocations": 563439,
+            "reallocations": 350469,
+            "bytes_allocated": 93507937,
+            "bytes_deallocated": 93363798,
+            "bytes_reallocated": 36169423,
+            "live_bytes": 144139,
+            "live_blocks": 575
+          },
+          "residual_bytes": 59707,
+          "residual_blocks": 84
+        }
+      },
+      "artifacts": [
+        {
+          "sha256": "a2f2b607cc1244090e8ee72feb9cae441a7a542e85e0eed824f6cf1b8934df06",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/node-a.log"
+        },
+        {
+          "sha256": "86b1672cb0b509f12cbf11af3aef5f630e6fd0f1f89e5ddfc8df1d827fef913a",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/node-b.log"
+        },
+        {
+          "sha256": "e3d6c508e5bb2127d329875558215292fe93411fc5e734e625806251ac20282d",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/queue-pressure-series.json"
+        },
+        {
+          "sha256": "7f00eee1e8a212e86b2bc89290ad09b1aa74f15502a26b8ffbb07115ead5333e",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-1/pressure-ping.log"
+        },
+        {
+          "sha256": "3e5dc495a0e3537ec256d028c178498dd9008ea1251b08ac69c55baf96a5ef33",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-1/queue-pressure-drain.json"
+        },
+        {
+          "sha256": "a41e3e0630588f4aa070e7a3d82a22834ea4e4ec9cc06bcdae23e67637eae6dc",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-1/queue-pressure-partial.json"
+        },
+        {
+          "sha256": "1c7dcd4bccd49364f1636d8da66fa5673bc4e28dc4733706166325c6ccb53ef3",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-1/queue-pressure.json"
+        },
+        {
+          "sha256": "789f7dec9998fe332e1392b62935b92cf79ddd48d0a47a37266a8c448b562483",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-1/recovery-ping-a.json"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-1/recovery-ping-a.stderr"
+        },
+        {
+          "sha256": "3b7df2923782afbd25eaac340a4a20a17ade6af64d94bcccb1fe8950c2a167ac",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-1/recovery-ping-a.stdout"
+        },
+        {
+          "sha256": "853b621c4cedf13899cf5fe26e9eae570a15e48f403ef101787f31e3fc71859c",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-1/recovery-ping-b.json"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-1/recovery-ping-b.stderr"
+        },
+        {
+          "sha256": "4c7f0c517a1914f948224fdf45d7b3f189719eaf747d3a403140703867caa14c",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-1/recovery-ping-b.stdout"
+        },
+        {
+          "sha256": "5b1e01085e68000e98291649eff6c85f85490fbaa2a0c38525ec0609b3f753b2",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-2/pressure-ping.log"
+        },
+        {
+          "sha256": "a715bd43831576d75ac8fb68fbca0d3e38ae453dd2429c219b52dc24ffced2ad",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-2/queue-pressure-drain.json"
+        },
+        {
+          "sha256": "7da1b123e7c9a21307140559fe0ad02aa8753de38573c36d48985de07c03cf19",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-2/queue-pressure-partial.json"
+        },
+        {
+          "sha256": "280a0a9423e57cb473df6d2d8e5269c2a3373e096f7df6b8013f8bf310e41d67",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-2/queue-pressure.json"
+        },
+        {
+          "sha256": "9e994f02a9ad2c83037bd6e31f317e7ff9172c50f4c20bcca2c06a729d316243",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-2/recovery-ping-a.json"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-2/recovery-ping-a.stderr"
+        },
+        {
+          "sha256": "7f3ea58beef74eeb217f636ab5001d15ee615921de23ebfdf52fcde33d7f3111",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-2/recovery-ping-a.stdout"
+        },
+        {
+          "sha256": "7a42f3d3ef8b263a27448800e793a46fa1c2a5c5e58bf5ce10844e6ace71006d",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-2/recovery-ping-b.json"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-2/recovery-ping-b.stderr"
+        },
+        {
+          "sha256": "5f112edb8a8a24081d8858026047a142487928a8d98691792f590da012012d45",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-2/recovery-ping-b.stdout"
+        },
+        {
+          "sha256": "d5e195141786fd24c07071d6e01db8237542ce61eeddd4ab574f2a66db1e51d0",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-3/pressure-ping.log"
+        },
+        {
+          "sha256": "37e3714f7ad38e3e06bcb10433d2183c6f3b06b5a542630dff9a059336644e96",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-3/queue-pressure-drain.json"
+        },
+        {
+          "sha256": "2c2f4f20cf207604126b9ee5cf906eff0275d930065c947c63b5d6878de10984",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-3/queue-pressure-partial.json"
+        },
+        {
+          "sha256": "ecfae0ad52a0f5fa26d502ec009b293894a91853fd8cb05d6c291bd496642166",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-3/queue-pressure.json"
+        },
+        {
+          "sha256": "fef5146c4f80773d1af83f0f90915db7064584ed55b7f852e3a6e108ff3dc35f",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-3/recovery-ping-a.json"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-3/recovery-ping-a.stderr"
+        },
+        {
+          "sha256": "11fe2f7b671a91123c5f6a651e0ad0bfc18684bd2ab86b3ce9a217bcc5ac10bc",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-3/recovery-ping-a.stdout"
+        },
+        {
+          "sha256": "dce63cbed62bdb861ec1bf1497e262055a2f804ca346486c8bb72264af2a5e93",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-3/recovery-ping-b.json"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-3/recovery-ping-b.stderr"
+        },
+        {
+          "sha256": "8b5bd06233f45c3ee4ec724af00d25df07cace496cbd529a4e00ae9a54ccb30b",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-3/recovery-ping-b.stdout"
+        },
+        {
+          "sha256": "11c5f6e9706ac449964d14ccc8ce04a41c89c45a3e4144fbe4098828d7642003",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-4/pressure-ping.log"
+        },
+        {
+          "sha256": "6e4a8ba9c1e0c61f121cded7e48a7c3e699b20f77be88e3ac266510113aaccb8",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-4/queue-pressure-drain.json"
+        },
+        {
+          "sha256": "e94380b3b3e06ef02ec72eb55d17c0ad450db00b2bb9ffcea93a92d9d4dbab2f",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-4/queue-pressure-partial.json"
+        },
+        {
+          "sha256": "24632338a328a5e35ada910b2b16f81d2d7cc865c7aaa4abf052edefb1d903c1",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-4/queue-pressure.json"
+        },
+        {
+          "sha256": "24001309d3c3469dae0d1f1637ce36ee0ad920e8df63b4c64723d0960352416c",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-4/recovery-ping-a.json"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-4/recovery-ping-a.stderr"
+        },
+        {
+          "sha256": "fcb997512f2fd270127103349a730a18a8eaae01ef6efce550f1d80e7e6b9c77",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-4/recovery-ping-a.stdout"
+        },
+        {
+          "sha256": "7a4015de4cb5b9e6542362ecb5a68b4f9df8ca4f32ff719b5a5c935780200cd9",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-4/recovery-ping-b.json"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-4/recovery-ping-b.stderr"
+        },
+        {
+          "sha256": "1cbfb877ee77a7bcab0d331cb6748146e4156fb02a1e00ed53612c2a08b88759",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-4/recovery-ping-b.stdout"
+        },
+        {
+          "sha256": "8c53cef452937cfe7f00133d278fb676f6b11c14b8976fbcb6b38835f85ccd5a",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-5/pressure-ping.log"
+        },
+        {
+          "sha256": "41fd19c75f10399c6bbff82b1e17a8ea0e90e74e5e283b76dcedbbe6a1371331",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-5/queue-pressure-drain.json"
+        },
+        {
+          "sha256": "c493e9af50a2401273cd949d067c34fd4fd231672263b40f6859d798fce2eadb",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-5/queue-pressure-partial.json"
+        },
+        {
+          "sha256": "1a11c2b586fb9d076120ee1388df7a237d5e98fa63590a4fdbd7f32ee32a030a",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-5/queue-pressure.json"
+        },
+        {
+          "sha256": "9fd5faeaeb76762ab49900abbe0bf57df75f5916e8ca83e6bb682d3c4e823c15",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-5/recovery-ping-a.json"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-5/recovery-ping-a.stderr"
+        },
+        {
+          "sha256": "d4bd51a261dbf72fc32930fed5a24252696b1c618fd17aee003edd479575c80b",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-5/recovery-ping-a.stdout"
+        },
+        {
+          "sha256": "02dd6ee403ab6a5dac99caa1acd49e1e6cd778752d8173f3749b7bb098c43b71",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-5/recovery-ping-b.json"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-5/recovery-ping-b.stderr"
+        },
+        {
+          "sha256": "9fa7bcde2d71337857c473042fbb658b7753ee8cca138ba704fe2ce76ac5f1b4",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.26a255b2e93e345e/round-5/recovery-ping-b.stdout"
+        }
+      ],
+      "outer_log": {
+        "sha256": "68d5255c9b4068ac0740b9b6c36060836cb70baa231b6ac45bee72b63243b9d5",
+        "path": "/tmp/p2p-vpn-graceful-packets-1.log"
+      },
+      "artifact_bytes": {
+        "json": 3479724,
+        "node_logs": 1296655
+      },
+      "recovery_summaries": [
+        "5 packets transmitted, 5 received, 0% packet loss, time 4007ms",
+        "5 packets transmitted, 5 received, 0% packet loss, time 4007ms",
+        "5 packets transmitted, 5 received, 0% packet loss, time 4007ms",
+        "5 packets transmitted, 5 received, 0% packet loss, time 4006ms",
+        "5 packets transmitted, 5 received, 0% packet loss, time 4004ms",
+        "5 packets transmitted, 5 received, 0% packet loss, time 4007ms",
+        "5 packets transmitted, 5 received, 0% packet loss, time 4005ms",
+        "5 packets transmitted, 5 received, 0% packet loss, time 4006ms",
+        "5 packets transmitted, 5 received, 0% packet loss, time 4006ms",
+        "5 packets transmitted, 5 received, 0% packet loss, time 4008ms"
+      ]
+    },
+    {
+      "name": "bytes",
+      "seconds": 160.4,
+      "dir": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc",
+      "series": {
+        "complete": true,
+        "completed_rounds": 5,
+        "requested_rounds": 5,
+        "rounds": [
+          {
+            "round": 1,
+            "transmitted_packets": 1948,
+            "received_packets": 9,
+            "before": {
+              "a": {
+                "process": {
+                  "capture_seconds": 0.004034252,
+                  "cpu_ticks": 11,
+                  "elapsed_seconds": 0.006114378,
+                  "pid": 18,
+                  "process_tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "role": "a",
+                  "rss_kib": 35932,
+                  "socket_fds": 6,
+                  "start_ticks": 90737131,
+                  "tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "threads": 6,
+                  "total_fds": 16,
+                  "vanished_fds": 0
+                }
+              },
+              "b": {
+                "process": {
+                  "capture_seconds": 0.003965419,
+                  "cpu_ticks": 9,
+                  "elapsed_seconds": 0.012413783,
+                  "pid": 19,
+                  "process_tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "role": "b",
+                  "rss_kib": 35904,
+                  "socket_fds": 6,
+                  "start_ticks": 90737131,
+                  "tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "threads": 6,
+                  "total_fds": 16,
+                  "vanished_fds": 0
+                }
+              }
+            },
+            "after": {
+              "a": {
+                "queued_bytes": 0,
+                "queued_packets": 0,
+                "stream_in_flight": 0,
+                "healthy_tcp_paths": 1,
+                "peers_without_supported_path": 0,
+                "dropped_packets": 1341,
+                "expired_packets": 4,
+                "process": {
+                  "capture_seconds": 0.003074508,
+                  "cpu_ticks": 232,
+                  "elapsed_seconds": 29.534882195,
+                  "pid": 18,
+                  "process_tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "role": "a",
+                  "rss_kib": 37488,
+                  "socket_fds": 6,
+                  "start_ticks": 90737131,
+                  "tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "threads": 6,
+                  "total_fds": 16,
+                  "vanished_fds": 0
+                }
+              },
+              "b": {
+                "queued_bytes": 0,
+                "queued_packets": 0,
+                "stream_in_flight": 0,
+                "healthy_tcp_paths": 1,
+                "peers_without_supported_path": 0,
+                "dropped_packets": 11,
+                "expired_packets": 0,
+                "process": {
+                  "capture_seconds": 0.002547703,
+                  "cpu_ticks": 86,
+                  "elapsed_seconds": 29.53866735,
+                  "pid": 19,
+                  "process_tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "role": "b",
+                  "rss_kib": 37428,
+                  "socket_fds": 6,
+                  "start_ticks": 90737131,
+                  "tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "threads": 6,
+                  "total_fds": 16,
+                  "vanished_fds": 0
+                }
+              }
+            }
+          },
+          {
+            "round": 2,
+            "transmitted_packets": 1952,
+            "received_packets": 11,
+            "before": {
+              "a": {
+                "process": {
+                  "capture_seconds": 0.002558926,
+                  "cpu_ticks": 232,
+                  "elapsed_seconds": 0.003638073,
+                  "pid": 18,
+                  "process_tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "role": "a",
+                  "rss_kib": 37488,
+                  "socket_fds": 6,
+                  "start_ticks": 90737131,
+                  "tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "threads": 6,
+                  "total_fds": 16,
+                  "vanished_fds": 0
+                }
+              },
+              "b": {
+                "process": {
+                  "capture_seconds": 0.002531592,
+                  "cpu_ticks": 86,
+                  "elapsed_seconds": 0.007446713,
+                  "pid": 19,
+                  "process_tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "role": "b",
+                  "rss_kib": 37428,
+                  "socket_fds": 6,
+                  "start_ticks": 90737131,
+                  "tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "threads": 6,
+                  "total_fds": 16,
+                  "vanished_fds": 0
+                }
+              }
+            },
+            "after": {
+              "a": {
+                "queued_bytes": 0,
+                "queued_packets": 0,
+                "stream_in_flight": 0,
+                "healthy_tcp_paths": 1,
+                "peers_without_supported_path": 0,
+                "dropped_packets": 2690,
+                "expired_packets": 13,
+                "process": {
+                  "capture_seconds": 0.002550495,
+                  "cpu_ticks": 444,
+                  "elapsed_seconds": 29.996565875,
+                  "pid": 18,
+                  "process_tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "role": "a",
+                  "rss_kib": 37740,
+                  "socket_fds": 6,
+                  "start_ticks": 90737131,
+                  "tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "threads": 6,
+                  "total_fds": 16,
+                  "vanished_fds": 0
+                }
+              },
+              "b": {
+                "queued_bytes": 0,
+                "queued_packets": 0,
+                "stream_in_flight": 0,
+                "healthy_tcp_paths": 1,
+                "peers_without_supported_path": 0,
+                "dropped_packets": 23,
+                "expired_packets": 0,
+                "process": {
+                  "capture_seconds": 0.00254236,
+                  "cpu_ticks": 160,
+                  "elapsed_seconds": 30.000537594,
+                  "pid": 19,
+                  "process_tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "role": "b",
+                  "rss_kib": 37648,
+                  "socket_fds": 6,
+                  "start_ticks": 90737131,
+                  "tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "threads": 6,
+                  "total_fds": 16,
+                  "vanished_fds": 0
+                }
+              }
+            }
+          },
+          {
+            "round": 3,
+            "transmitted_packets": 1943,
+            "received_packets": 9,
+            "before": {
+              "a": {
+                "process": {
+                  "capture_seconds": 0.003300748,
+                  "cpu_ticks": 444,
+                  "elapsed_seconds": 0.004857,
+                  "pid": 18,
+                  "process_tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "role": "a",
+                  "rss_kib": 37740,
+                  "socket_fds": 6,
+                  "start_ticks": 90737131,
+                  "tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "threads": 6,
+                  "total_fds": 16,
+                  "vanished_fds": 0
+                }
+              },
+              "b": {
+                "process": {
+                  "capture_seconds": 0.002544363,
+                  "cpu_ticks": 160,
+                  "elapsed_seconds": 0.008747873,
+                  "pid": 19,
+                  "process_tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "role": "b",
+                  "rss_kib": 37648,
+                  "socket_fds": 6,
+                  "start_ticks": 90737131,
+                  "tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "threads": 6,
+                  "total_fds": 16,
+                  "vanished_fds": 0
+                }
+              }
+            },
+            "after": {
+              "a": {
+                "queued_bytes": 0,
+                "queued_packets": 0,
+                "stream_in_flight": 0,
+                "healthy_tcp_paths": 1,
+                "peers_without_supported_path": 0,
+                "dropped_packets": 4029,
+                "expired_packets": 18,
+                "process": {
+                  "capture_seconds": 0.002502408,
+                  "cpu_ticks": 664,
+                  "elapsed_seconds": 29.750574166,
+                  "pid": 18,
+                  "process_tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "role": "a",
+                  "rss_kib": 37784,
+                  "socket_fds": 6,
+                  "start_ticks": 90737131,
+                  "tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "threads": 6,
+                  "total_fds": 16,
+                  "vanished_fds": 0
+                }
+              },
+              "b": {
+                "queued_bytes": 0,
+                "queued_packets": 0,
+                "stream_in_flight": 0,
+                "healthy_tcp_paths": 1,
+                "peers_without_supported_path": 0,
+                "dropped_packets": 27,
+                "expired_packets": 0,
+                "process": {
+                  "capture_seconds": 0.002505284,
+                  "cpu_ticks": 238,
+                  "elapsed_seconds": 29.754364359,
+                  "pid": 19,
+                  "process_tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "role": "b",
+                  "rss_kib": 37748,
+                  "socket_fds": 6,
+                  "start_ticks": 90737131,
+                  "tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "threads": 6,
+                  "total_fds": 16,
+                  "vanished_fds": 0
+                }
+              }
+            }
+          },
+          {
+            "round": 4,
+            "transmitted_packets": 1944,
+            "received_packets": 8,
+            "before": {
+              "a": {
+                "process": {
+                  "capture_seconds": 0.002631576,
+                  "cpu_ticks": 664,
+                  "elapsed_seconds": 0.00424689,
+                  "pid": 18,
+                  "process_tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "role": "a",
+                  "rss_kib": 37784,
+                  "socket_fds": 6,
+                  "start_ticks": 90737131,
+                  "tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "threads": 6,
+                  "total_fds": 16,
+                  "vanished_fds": 0
+                }
+              },
+              "b": {
+                "process": {
+                  "capture_seconds": 0.002514071,
+                  "cpu_ticks": 238,
+                  "elapsed_seconds": 0.008033056,
+                  "pid": 19,
+                  "process_tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "role": "b",
+                  "rss_kib": 37748,
+                  "socket_fds": 6,
+                  "start_ticks": 90737131,
+                  "tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "threads": 6,
+                  "total_fds": 16,
+                  "vanished_fds": 0
+                }
+              }
+            },
+            "after": {
+              "a": {
+                "queued_bytes": 0,
+                "queued_packets": 0,
+                "stream_in_flight": 0,
+                "healthy_tcp_paths": 1,
+                "peers_without_supported_path": 0,
+                "dropped_packets": 5414,
+                "expired_packets": 53,
+                "process": {
+                  "capture_seconds": 0.002616273,
+                  "cpu_ticks": 866,
+                  "elapsed_seconds": 31.042338038,
+                  "pid": 18,
+                  "process_tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "role": "a",
+                  "rss_kib": 37956,
+                  "socket_fds": 6,
+                  "start_ticks": 90737131,
+                  "tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "threads": 6,
+                  "total_fds": 16,
+                  "vanished_fds": 0
+                }
+              },
+              "b": {
+                "queued_bytes": 0,
+                "queued_packets": 0,
+                "stream_in_flight": 0,
+                "healthy_tcp_paths": 1,
+                "peers_without_supported_path": 0,
+                "dropped_packets": 27,
+                "expired_packets": 0,
+                "process": {
+                  "capture_seconds": 0.002537753,
+                  "cpu_ticks": 309,
+                  "elapsed_seconds": 31.046300557,
+                  "pid": 19,
+                  "process_tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "role": "b",
+                  "rss_kib": 37960,
+                  "socket_fds": 6,
+                  "start_ticks": 90737131,
+                  "tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "threads": 6,
+                  "total_fds": 16,
+                  "vanished_fds": 0
+                }
+              }
+            }
+          },
+          {
+            "round": 5,
+            "transmitted_packets": 1948,
+            "received_packets": 9,
+            "before": {
+              "a": {
+                "process": {
+                  "capture_seconds": 0.002525198,
+                  "cpu_ticks": 866,
+                  "elapsed_seconds": 0.003924595,
+                  "pid": 18,
+                  "process_tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "role": "a",
+                  "rss_kib": 37956,
+                  "socket_fds": 6,
+                  "start_ticks": 90737131,
+                  "tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "threads": 6,
+                  "total_fds": 16,
+                  "vanished_fds": 0
+                }
+              },
+              "b": {
+                "process": {
+                  "capture_seconds": 0.002513747,
+                  "cpu_ticks": 309,
+                  "elapsed_seconds": 0.007742226,
+                  "pid": 19,
+                  "process_tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "role": "b",
+                  "rss_kib": 37960,
+                  "socket_fds": 6,
+                  "start_ticks": 90737131,
+                  "tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "threads": 6,
+                  "total_fds": 16,
+                  "vanished_fds": 0
+                }
+              }
+            },
+            "after": {
+              "a": {
+                "queued_bytes": 0,
+                "queued_packets": 0,
+                "stream_in_flight": 0,
+                "healthy_tcp_paths": 1,
+                "peers_without_supported_path": 0,
+                "dropped_packets": 6758,
+                "expired_packets": 64,
+                "process": {
+                  "capture_seconds": 0.003363384,
+                  "cpu_ticks": 1079,
+                  "elapsed_seconds": 29.75968694,
+                  "pid": 18,
+                  "process_tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "role": "a",
+                  "rss_kib": 38000,
+                  "socket_fds": 6,
+                  "start_ticks": 90737131,
+                  "tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "threads": 6,
+                  "total_fds": 16,
+                  "vanished_fds": 0
+                }
+              },
+              "b": {
+                "queued_bytes": 0,
+                "queued_packets": 0,
+                "stream_in_flight": 0,
+                "healthy_tcp_paths": 1,
+                "peers_without_supported_path": 0,
+                "dropped_packets": 49,
+                "expired_packets": 0,
+                "process": {
+                  "capture_seconds": 0.002509034,
+                  "cpu_ticks": 389,
+                  "elapsed_seconds": 29.763286106,
+                  "pid": 19,
+                  "process_tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "role": "b",
+                  "rss_kib": 38120,
+                  "socket_fds": 6,
+                  "start_ticks": 90737131,
+                  "tcp_states": {
+                    "01": 1,
+                    "0A": 1
+                  },
+                  "threads": 6,
+                  "total_fds": 16,
+                  "vanished_fds": 0
+                }
+              }
+            }
+          }
+        ]
+      },
+      "roles": {
+        "a": {
+          "lifecycle": [
+            {
+              "stage": "before_child",
+              "pid": 18,
+              "unix_millis": 1789034441730,
+              "elapsed_millis": 0,
+              "allocations": 617,
+              "deallocations": 194,
+              "reallocations": 22,
+              "bytes_allocated": 74135,
+              "bytes_deallocated": 52520,
+              "bytes_reallocated": 6366,
+              "live_bytes": 21615,
+              "live_blocks": 423
+            },
+            {
+              "stage": "child_returned",
+              "pid": 18,
+              "unix_millis": 1789034601522,
+              "elapsed_millis": 159792,
+              "allocations": 594698,
+              "deallocations": 594191,
+              "reallocations": 345877,
+              "bytes_allocated": 108700854,
+              "bytes_deallocated": 108619532,
+              "bytes_reallocated": 36578598,
+              "live_bytes": 81322,
+              "live_blocks": 507
+            },
+            {
+              "stage": "child_settled",
+              "pid": 18,
+              "unix_millis": 1789034601622,
+              "elapsed_millis": 159892,
+              "allocations": 594698,
+              "deallocations": 594191,
+              "reallocations": 345877,
+              "bytes_allocated": 108700854,
+              "bytes_deallocated": 108619532,
+              "bytes_reallocated": 36578598,
+              "live_bytes": 81322,
+              "live_blocks": 507
+            }
+          ],
+          "sample_count": 33,
+          "max_gap_ms": 5003,
+          "peak_bytes": 5390546,
+          "last_periodic": {
+            "stage": "periodic",
+            "pid": 18,
+            "unix_millis": 1789034598005,
+            "elapsed_millis": 155002,
+            "allocations": 592280,
+            "deallocations": 590656,
+            "reallocations": 344393,
+            "bytes_allocated": 108370341,
+            "bytes_deallocated": 103815790,
+            "bytes_reallocated": 36411079,
+            "live_bytes": 4554551,
+            "live_blocks": 1624
+          },
+          "runner_returned": {
+            "stage": "returned",
+            "pid": 18,
+            "unix_millis": 1789034601470,
+            "elapsed_millis": 158468,
+            "allocations": 594624,
+            "deallocations": 593986,
+            "reallocations": 345870,
+            "bytes_allocated": 108694700,
+            "bytes_deallocated": 108501848,
+            "bytes_reallocated": 36577558,
+            "live_bytes": 192852,
+            "live_blocks": 638
+          },
+          "residual_bytes": 59707,
+          "residual_blocks": 84
+        },
+        "b": {
+          "lifecycle": [
+            {
+              "stage": "before_child",
+              "pid": 19,
+              "unix_millis": 1789034441730,
+              "elapsed_millis": 0,
+              "allocations": 617,
+              "deallocations": 194,
+              "reallocations": 22,
+              "bytes_allocated": 74135,
+              "bytes_deallocated": 52520,
+              "bytes_reallocated": 6366,
+              "live_bytes": 21615,
+              "live_blocks": 423
+            },
+            {
+              "stage": "child_returned",
+              "pid": 19,
+              "unix_millis": 1789034601724,
+              "elapsed_millis": 159994,
+              "allocations": 579764,
+              "deallocations": 579257,
+              "reallocations": 342425,
+              "bytes_allocated": 97098745,
+              "bytes_deallocated": 97017423,
+              "bytes_reallocated": 35611135,
+              "live_bytes": 81322,
+              "live_blocks": 507
+            },
+            {
+              "stage": "child_settled",
+              "pid": 19,
+              "unix_millis": 1789034601825,
+              "elapsed_millis": 160095,
+              "allocations": 579764,
+              "deallocations": 579257,
+              "reallocations": 342425,
+              "bytes_allocated": 97098745,
+              "bytes_deallocated": 97017423,
+              "bytes_reallocated": 35611135,
+              "live_bytes": 81322,
+              "live_blocks": 507
+            }
+          ],
+          "sample_count": 33,
+          "max_gap_ms": 5002,
+          "peak_bytes": 5014026,
+          "last_periodic": {
+            "stage": "periodic",
+            "pid": 19,
+            "unix_millis": 1789034597748,
+            "elapsed_millis": 155001,
+            "allocations": 577195,
+            "deallocations": 575586,
+            "reallocations": 340886,
+            "bytes_allocated": 96747680,
+            "bytes_deallocated": 92141447,
+            "bytes_reallocated": 35440651,
+            "live_bytes": 4606233,
+            "live_blocks": 1609
+          },
+          "runner_returned": {
+            "stage": "returned",
+            "pid": 19,
+            "unix_millis": 1789034601672,
+            "elapsed_millis": 158925,
+            "allocations": 579719,
+            "deallocations": 579144,
+            "reallocations": 342419,
+            "bytes_allocated": 97095388,
+            "bytes_deallocated": 96951249,
+            "bytes_reallocated": 35610607,
+            "live_bytes": 144139,
+            "live_blocks": 575
+          },
+          "residual_bytes": 59707,
+          "residual_blocks": 84
+        }
+      },
+      "artifacts": [
+        {
+          "sha256": "cea07ac03b68f2b81b4998af8db1f3a2cd7953dbdd8d3fe01d8dbd6feb7112b3",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/node-a.log"
+        },
+        {
+          "sha256": "a52a236b2ba0290788073375da1875f3c96ac738a78cae0eb85feb66158eca47",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/node-b.log"
+        },
+        {
+          "sha256": "d18407b73f81ab7bd9456718b098eb7dec56df2bacbfc816dae979bb00478732",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/queue-pressure-series.json"
+        },
+        {
+          "sha256": "d4f7539f2c00f85bef50908ec25ca935550a2b43a1d4dca1ddc13be0f0af4647",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-1/pressure-ping.log"
+        },
+        {
+          "sha256": "66ca3e3e3e2d2916db20c00958e93dbc96eb56502047057c8d563bbf9a72c8da",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-1/queue-pressure-drain.json"
+        },
+        {
+          "sha256": "97ecb92ad55f447f40c4f2d180f439b01a63af1be5d05065354392f187d8355a",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-1/queue-pressure-partial.json"
+        },
+        {
+          "sha256": "51fe059efaa8de9e74e856d39c90e928724f9a641eda7b2b1376d419da1cd2e7",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-1/queue-pressure.json"
+        },
+        {
+          "sha256": "5e6d1435c194406b234f7deeba8a2a8005c93eecb9423f61c1e020cc5701acca",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-1/recovery-ping-a.json"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-1/recovery-ping-a.stderr"
+        },
+        {
+          "sha256": "ffe00ad285bb46b8be0b0d33a2c6f6262feba690192af35ce744d7e5603972e3",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-1/recovery-ping-a.stdout"
+        },
+        {
+          "sha256": "b6caf854b916e202b4fe18dc06151eb64ff22e1f019d30613b63834f622107fc",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-1/recovery-ping-b.json"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-1/recovery-ping-b.stderr"
+        },
+        {
+          "sha256": "5ae12d7eb5edc6ebf70e0154639cc18f6f122c8ec2b128670cf18360e66546c3",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-1/recovery-ping-b.stdout"
+        },
+        {
+          "sha256": "c7fd50e1c3e698a232543994933af2658edc4414848a7678f6424fb5bab8b9a1",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-2/pressure-ping.log"
+        },
+        {
+          "sha256": "fc6471cb653d0a009011ccc6fe2abeb9c9cbff68f466cfdbc26920c08e7232a3",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-2/queue-pressure-drain.json"
+        },
+        {
+          "sha256": "b7e136320c0e43a52b927c8d1fc0f9fc84a9ec28bc44f6c909d346efe63a9a9d",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-2/queue-pressure-partial.json"
+        },
+        {
+          "sha256": "e0d072cc921708f0c6ee04ee64008d7628017b987e81d7e38a158f99be5a1e28",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-2/queue-pressure.json"
+        },
+        {
+          "sha256": "d8e03ff3fc5a22a4513e7167fb0143bd91f79a1378398f74f17541c685f3eb8e",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-2/recovery-ping-a.json"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-2/recovery-ping-a.stderr"
+        },
+        {
+          "sha256": "d5c10328b1fa902e1f7e31e186224c897344ad8892e6a0ab58f3b946edf1ba95",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-2/recovery-ping-a.stdout"
+        },
+        {
+          "sha256": "72ec26a7e4f624e5137dc124fee9445ea78141b0ed719d1a5cf47f647c03115d",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-2/recovery-ping-b.json"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-2/recovery-ping-b.stderr"
+        },
+        {
+          "sha256": "eb0f35aab920d99b8fb4ca0d9d9878ed11d346a200c9d585014871e28041eede",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-2/recovery-ping-b.stdout"
+        },
+        {
+          "sha256": "fdfb30f6f8fcbb1e291b6e91cd7cf7472742a2d7ee0d2a62686a8adc5b69bf14",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-3/pressure-ping.log"
+        },
+        {
+          "sha256": "6fbdff782ecb8bdea4edbb4872f49a50896c630cbe3443d0bd68df24b8bf7467",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-3/queue-pressure-drain.json"
+        },
+        {
+          "sha256": "3b6e32e110dd10c6bdaa2211832c621ec56b032aaa6fbdd92cdc6359946bab9c",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-3/queue-pressure-partial.json"
+        },
+        {
+          "sha256": "289b1e8c6667373dceb15586dec0dbbe0ed8cd0b4449d194b012614c4d68d12a",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-3/queue-pressure.json"
+        },
+        {
+          "sha256": "a276bcf0cab926f60505c2a1da4556ae4bd68d43e0513b28563c8c0a759d4f7a",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-3/recovery-ping-a.json"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-3/recovery-ping-a.stderr"
+        },
+        {
+          "sha256": "7be0e2ef50192af4a94992c81e448ac35d87f2b5c563b5e7730646bfc9a8a9b5",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-3/recovery-ping-a.stdout"
+        },
+        {
+          "sha256": "37166141b713a3ec648c5d15ceadeb44024f2cef2fc0d2450f6b835c3c16d9a8",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-3/recovery-ping-b.json"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-3/recovery-ping-b.stderr"
+        },
+        {
+          "sha256": "0385c1fc22dfd9797eb73e2c6b55b1a39c8bb8a2c1b0bbe861ed68f6326f7796",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-3/recovery-ping-b.stdout"
+        },
+        {
+          "sha256": "aecc995ee5de3b10708ca08d1fe145d02cf59f2fe3f29051db5c5f362476f9ca",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-4/pressure-ping.log"
+        },
+        {
+          "sha256": "a154db855e74c8164c1f1a212e38ce4f8b001832d5921093e599e2abb35f6b3b",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-4/queue-pressure-drain.json"
+        },
+        {
+          "sha256": "16cae5189a4dd83189c326353cf142ae9acb68f50b58b354d4a4731684de8d75",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-4/queue-pressure-partial.json"
+        },
+        {
+          "sha256": "5e0ead73273ac090b3c00e5edd24f021fbb3b02135c48fdf3408ee57a509fc23",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-4/queue-pressure.json"
+        },
+        {
+          "sha256": "d56b0499464068dfaba882bd2bed225efb3a8ed6e79ad816e728ebed8306205b",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-4/recovery-ping-a.json"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-4/recovery-ping-a.stderr"
+        },
+        {
+          "sha256": "8c2552caf5947022f4c1685c7ffe396a42664615219e8e9b0dcbac228c9b263f",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-4/recovery-ping-a.stdout"
+        },
+        {
+          "sha256": "d01e5a9b0bc4a1c328b96da6badba0d5dd5e9c6e4d59a28038e1a79245d72f77",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-4/recovery-ping-b.json"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-4/recovery-ping-b.stderr"
+        },
+        {
+          "sha256": "1f9e30b3750b8b8ff4b2e4f5433891fbc61db6865db593d4aabdb41e3009f5ea",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-4/recovery-ping-b.stdout"
+        },
+        {
+          "sha256": "3f74f9ae13f29cadc362561133be1d1f33d3222434495b51ea73e2b8c1f6ebe5",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-5/pressure-ping.log"
+        },
+        {
+          "sha256": "c1db3b89ded29131494fe3e6011e85e9961f7d0fcd63d8f05270cf078e073967",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-5/queue-pressure-drain.json"
+        },
+        {
+          "sha256": "398adde06f66190085363cf3e7979ab30b153a5eca6bae414e45190856b09b99",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-5/queue-pressure-partial.json"
+        },
+        {
+          "sha256": "8ede40d091b891717222fd3b77961fe65fd2bbd009fdfde82e12fc6fd7b19f20",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-5/queue-pressure.json"
+        },
+        {
+          "sha256": "d4df224d3f4c9ad71567a88050dadc2cdcd79738ee4706d64a18d1998ebc551e",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-5/recovery-ping-a.json"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-5/recovery-ping-a.stderr"
+        },
+        {
+          "sha256": "a53ae11ab1f6cd2160501900c79ee34303527fecd2e35f65e66b046ca7671db2",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-5/recovery-ping-a.stdout"
+        },
+        {
+          "sha256": "4433bfde4909065081f3d07bf8c4c325b9cc1e194469f8054e13e1a373d3dbea",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-5/recovery-ping-b.json"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-5/recovery-ping-b.stderr"
+        },
+        {
+          "sha256": "750b9c3bcad015bb09d589b95693285c90935bb43134a1ebc1726edbf2db976f",
+          "path": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6adfcbe1758222cc/round-5/recovery-ping-b.stdout"
+        }
+      ],
+      "outer_log": {
+        "sha256": "35293eaa16561c40055fe99a2dc035c3b3c835d9159e123a204349a14fdf12b3",
+        "path": "/tmp/p2p-vpn-graceful-bytes-1.log"
+      },
+      "artifact_bytes": {
+        "json": 3437569,
+        "node_logs": 1223673
+      },
+      "recovery_summaries": [
+        "5 packets transmitted, 5 received, 0% packet loss, time 4007ms",
+        "5 packets transmitted, 5 received, 0% packet loss, time 4007ms",
+        "5 packets transmitted, 5 received, 0% packet loss, time 4006ms",
+        "5 packets transmitted, 5 received, 0% packet loss, time 4006ms",
+        "5 packets transmitted, 5 received, 0% packet loss, time 4005ms",
+        "5 packets transmitted, 5 received, 0% packet loss, time 4006ms",
+        "5 packets transmitted, 5 received, 0% packet loss, time 4004ms",
+        "5 packets transmitted, 5 received, 0% packet loss, time 4005ms",
+        "5 packets transmitted, 5 received, 0% packet loss, time 4004ms",
+        "5 packets transmitted, 5 received, 0% packet loss, time 4005ms"
+      ]
+    }
+  ]
+}

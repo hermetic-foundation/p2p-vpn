@@ -55,8 +55,9 @@ The earlier calibrated integration executable is retained at
 
 ## Status
 
-The corrected direct admission passes. Sustained graceful-release acceptance
-remains open; the earlier process-kill captures retain their limits.
+The corrected direct admission and both five-round
+[graceful pressure captures](graceful-pressure-results.md) pass. Reconnect teardown
+and residual attribution remain open; earlier process-kill captures retain their limits.
 
 ## Reproduced Failure
 
@@ -119,7 +120,8 @@ are absent after exit. No deadline or traffic assertion was changed.
 
 These are requested Rust allocations, not RSS or a zero-leak certification.
 Equal residuals and a flat 100 ms interval do not attribute the remaining owners.
-Pressure/churn captures and final validation still need the corrected runtime.
+The subsequent pressure captures are linked above. Reconnect churn and final
+resource acceptance still need the corrected runtime and residual attribution.
 
 ```sh
 env -u P2P_VPN_TUN_E2E_IDLE_SECONDS \
