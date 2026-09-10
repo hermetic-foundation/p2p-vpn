@@ -1,0 +1,894 @@
+{
+  "schema_version": 1,
+  "baseline": "08ecf113",
+  "raw_directory": "/tmp/p2p-vpn-android-resource-isolation-3",
+  "clocks_hz": 100,
+  "summary": {
+    "before": {
+      "schema_version": 1,
+      "pid": 2204,
+      "start_ticks": 2001,
+      "started_uptime_seconds": 118.34,
+      "finished_uptime_seconds": 118.34,
+      "user_ticks": 363,
+      "system_ticks": 111,
+      "os_threads": 30,
+      "rss_kib": 206128,
+      "fds": 124,
+      "leader_voluntary_context_switches": 1627,
+      "leader_involuntary_context_switches": 535
+    },
+    "after": {
+      "schema_version": 1,
+      "pid": 2204,
+      "start_ticks": 2001,
+      "started_uptime_seconds": 398.38,
+      "finished_uptime_seconds": 398.38,
+      "user_ticks": 1122,
+      "system_ticks": 188,
+      "os_threads": 30,
+      "rss_kib": 206652,
+      "fds": 122,
+      "leader_voluntary_context_switches": 2270,
+      "leader_involuntary_context_switches": 660
+    },
+    "emulator_before": {
+      "schema_version": 1,
+      "pid": 265,
+      "start_ticks": 89650439,
+      "started_uptime_seconds": 896626.52,
+      "finished_uptime_seconds": 896626.52,
+      "user_ticks": 6634,
+      "system_ticks": 1425,
+      "os_threads": 260,
+      "rss_kib": 3768164,
+      "fds": 142,
+      "leader_voluntary_context_switches": 43,
+      "leader_involuntary_context_switches": 5
+    },
+    "emulator_after": {
+      "schema_version": 1,
+      "pid": 265,
+      "start_ticks": 89650439,
+      "started_uptime_seconds": 896906.56,
+      "finished_uptime_seconds": 896906.56,
+      "user_ticks": 9034,
+      "system_ticks": 1914,
+      "os_threads": 236,
+      "rss_kib": 3767872,
+      "fds": 142,
+      "leader_voluntary_context_switches": 43,
+      "leader_involuntary_context_switches": 5
+    },
+    "process_samples": 277,
+    "runtime_samples": 56,
+    "rss_kib": [
+      202924,
+      208812
+    ],
+    "threads": [
+      24,
+      29,
+      30
+    ],
+    "fds": [
+      107,
+      117,
+      118,
+      119,
+      122,
+      124
+    ],
+    "phases": [
+      {
+        "phase": "running",
+        "samples": 54
+      },
+      {
+        "phase": "starting",
+        "samples": 1
+      },
+      {
+        "phase": "stopped",
+        "samples": 1
+      }
+    ],
+    "generations": [
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14
+    ],
+    "pss_kib": [
+      78860,
+      86951
+    ],
+    "queue_packets": [
+      0,
+      0
+    ],
+    "queue_bytes": [
+      0,
+      0
+    ],
+    "last_60_process": {
+      "before": {
+        "schema_version": 1,
+        "pid": 2204,
+        "start_ticks": 2001,
+        "started_uptime_seconds": 338.24,
+        "finished_uptime_seconds": 338.24,
+        "user_ticks": 1006,
+        "system_ticks": 175,
+        "os_threads": 30,
+        "rss_kib": 206820,
+        "fds": 124,
+        "leader_voluntary_context_switches": 2186,
+        "leader_involuntary_context_switches": 634
+      },
+      "after": {
+        "schema_version": 1,
+        "pid": 2204,
+        "start_ticks": 2001,
+        "started_uptime_seconds": 398.02,
+        "finished_uptime_seconds": 398.02,
+        "user_ticks": 1122,
+        "system_ticks": 188,
+        "os_threads": 30,
+        "rss_kib": 206652,
+        "fds": 122,
+        "leader_voluntary_context_switches": 2270,
+        "leader_involuntary_context_switches": 660
+      }
+    },
+    "last_12_runtime": [
+      {
+        "started_millis": 896846540,
+        "finished_millis": 896846640,
+        "resources": {
+          "process_cpu_millis": 11840,
+          "total_pss_kib": 85507,
+          "private_dirty_kib": 36000,
+          "java_heap_used_bytes": 3448784,
+          "java_heap_max_bytes": 201326592,
+          "active_threads": 11
+        },
+        "paths": {
+          "connected_peers": 2,
+          "peers_without_supported_path": 0,
+          "direct_udp_datagram": 0,
+          "direct_quic_datagram": 0,
+          "direct_quic_stream": 0,
+          "direct_tcp_stream": 2,
+          "relay": 0,
+          "public_routing_peers": 2,
+          "packet_plane_quic_sessions": 0,
+          "promotions_to_direct": 0
+        },
+        "queue": {
+          "queued_packets": 0,
+          "queued_bytes": 0,
+          "oldest_packet_age_millis": 0,
+          "blocked_no_supported_path_events": 0,
+          "blocked_packet_window_events": 0
+        }
+      },
+      {
+        "started_millis": 896851540,
+        "finished_millis": 896851650,
+        "resources": {
+          "process_cpu_millis": 11955,
+          "total_pss_kib": 85163,
+          "private_dirty_kib": 35656,
+          "java_heap_used_bytes": 3112912,
+          "java_heap_max_bytes": 201326592,
+          "active_threads": 11
+        },
+        "paths": {
+          "connected_peers": 2,
+          "peers_without_supported_path": 0,
+          "direct_udp_datagram": 0,
+          "direct_quic_datagram": 0,
+          "direct_quic_stream": 0,
+          "direct_tcp_stream": 2,
+          "relay": 0,
+          "public_routing_peers": 2,
+          "packet_plane_quic_sessions": 0,
+          "promotions_to_direct": 0
+        },
+        "queue": {
+          "queued_packets": 0,
+          "queued_bytes": 0,
+          "oldest_packet_age_millis": 0,
+          "blocked_no_supported_path_events": 0,
+          "blocked_packet_window_events": 0
+        }
+      },
+      {
+        "started_millis": 896856540,
+        "finished_millis": 896856650,
+        "resources": {
+          "process_cpu_millis": 12068,
+          "total_pss_kib": 84911,
+          "private_dirty_kib": 35404,
+          "java_heap_used_bytes": 2531280,
+          "java_heap_max_bytes": 201326592,
+          "active_threads": 11
+        },
+        "paths": {
+          "connected_peers": 2,
+          "peers_without_supported_path": 0,
+          "direct_udp_datagram": 0,
+          "direct_quic_datagram": 0,
+          "direct_quic_stream": 0,
+          "direct_tcp_stream": 2,
+          "relay": 0,
+          "public_routing_peers": 2,
+          "packet_plane_quic_sessions": 0,
+          "promotions_to_direct": 0
+        },
+        "queue": {
+          "queued_packets": 0,
+          "queued_bytes": 0,
+          "oldest_packet_age_millis": 0,
+          "blocked_no_supported_path_events": 0,
+          "blocked_packet_window_events": 0
+        }
+      },
+      {
+        "started_millis": 896861540,
+        "finished_millis": 896861640,
+        "resources": {
+          "process_cpu_millis": 12182,
+          "total_pss_kib": 86639,
+          "private_dirty_kib": 37132,
+          "java_heap_used_bytes": 4317184,
+          "java_heap_max_bytes": 201326592,
+          "active_threads": 11
+        },
+        "paths": {
+          "connected_peers": 2,
+          "peers_without_supported_path": 0,
+          "direct_udp_datagram": 0,
+          "direct_quic_datagram": 0,
+          "direct_quic_stream": 0,
+          "direct_tcp_stream": 2,
+          "relay": 0,
+          "public_routing_peers": 2,
+          "packet_plane_quic_sessions": 0,
+          "promotions_to_direct": 0
+        },
+        "queue": {
+          "queued_packets": 0,
+          "queued_bytes": 0,
+          "oldest_packet_age_millis": 0,
+          "blocked_no_supported_path_events": 0,
+          "blocked_packet_window_events": 0
+        }
+      },
+      {
+        "started_millis": 896866540,
+        "finished_millis": 896866650,
+        "resources": {
+          "process_cpu_millis": 12281,
+          "total_pss_kib": 85499,
+          "private_dirty_kib": 35992,
+          "java_heap_used_bytes": 3448784,
+          "java_heap_max_bytes": 201326592,
+          "active_threads": 11
+        },
+        "paths": {
+          "connected_peers": 2,
+          "peers_without_supported_path": 0,
+          "direct_udp_datagram": 0,
+          "direct_quic_datagram": 0,
+          "direct_quic_stream": 0,
+          "direct_tcp_stream": 2,
+          "relay": 0,
+          "public_routing_peers": 2,
+          "packet_plane_quic_sessions": 0,
+          "promotions_to_direct": 0
+        },
+        "queue": {
+          "queued_packets": 0,
+          "queued_bytes": 0,
+          "oldest_packet_age_millis": 0,
+          "blocked_no_supported_path_events": 0,
+          "blocked_packet_window_events": 0
+        }
+      },
+      {
+        "started_millis": 896871540,
+        "finished_millis": 896871650,
+        "resources": {
+          "process_cpu_millis": 12400,
+          "total_pss_kib": 85151,
+          "private_dirty_kib": 35644,
+          "java_heap_used_bytes": 3112912,
+          "java_heap_max_bytes": 201326592,
+          "active_threads": 11
+        },
+        "paths": {
+          "connected_peers": 2,
+          "peers_without_supported_path": 0,
+          "direct_udp_datagram": 0,
+          "direct_quic_datagram": 0,
+          "direct_quic_stream": 0,
+          "direct_tcp_stream": 2,
+          "relay": 0,
+          "public_routing_peers": 2,
+          "packet_plane_quic_sessions": 0,
+          "promotions_to_direct": 0
+        },
+        "queue": {
+          "queued_packets": 0,
+          "queued_bytes": 0,
+          "oldest_packet_age_millis": 0,
+          "blocked_no_supported_path_events": 0,
+          "blocked_packet_window_events": 0
+        }
+      },
+      {
+        "started_millis": 896876540,
+        "finished_millis": 896876640,
+        "resources": {
+          "process_cpu_millis": 12504,
+          "total_pss_kib": 84915,
+          "private_dirty_kib": 35408,
+          "java_heap_used_bytes": 2531280,
+          "java_heap_max_bytes": 201326592,
+          "active_threads": 11
+        },
+        "paths": {
+          "connected_peers": 2,
+          "peers_without_supported_path": 0,
+          "direct_udp_datagram": 0,
+          "direct_quic_datagram": 0,
+          "direct_quic_stream": 0,
+          "direct_tcp_stream": 2,
+          "relay": 0,
+          "public_routing_peers": 2,
+          "packet_plane_quic_sessions": 0,
+          "promotions_to_direct": 0
+        },
+        "queue": {
+          "queued_packets": 0,
+          "queued_bytes": 0,
+          "oldest_packet_age_millis": 0,
+          "blocked_no_supported_path_events": 0,
+          "blocked_packet_window_events": 0
+        }
+      },
+      {
+        "started_millis": 896881540,
+        "finished_millis": 896881650,
+        "resources": {
+          "process_cpu_millis": 12610,
+          "total_pss_kib": 86643,
+          "private_dirty_kib": 37132,
+          "java_heap_used_bytes": 4317184,
+          "java_heap_max_bytes": 201326592,
+          "active_threads": 11
+        },
+        "paths": {
+          "connected_peers": 2,
+          "peers_without_supported_path": 0,
+          "direct_udp_datagram": 0,
+          "direct_quic_datagram": 0,
+          "direct_quic_stream": 0,
+          "direct_tcp_stream": 2,
+          "relay": 0,
+          "public_routing_peers": 2,
+          "packet_plane_quic_sessions": 0,
+          "promotions_to_direct": 0
+        },
+        "queue": {
+          "queued_packets": 0,
+          "queued_bytes": 0,
+          "oldest_packet_age_millis": 0,
+          "blocked_no_supported_path_events": 0,
+          "blocked_packet_window_events": 0
+        }
+      },
+      {
+        "started_millis": 896886540,
+        "finished_millis": 896886630,
+        "resources": {
+          "process_cpu_millis": 12713,
+          "total_pss_kib": 85515,
+          "private_dirty_kib": 36004,
+          "java_heap_used_bytes": 3448784,
+          "java_heap_max_bytes": 201326592,
+          "active_threads": 11
+        },
+        "paths": {
+          "connected_peers": 2,
+          "peers_without_supported_path": 0,
+          "direct_udp_datagram": 0,
+          "direct_quic_datagram": 0,
+          "direct_quic_stream": 0,
+          "direct_tcp_stream": 2,
+          "relay": 0,
+          "public_routing_peers": 2,
+          "packet_plane_quic_sessions": 0,
+          "promotions_to_direct": 0
+        },
+        "queue": {
+          "queued_packets": 0,
+          "queued_bytes": 0,
+          "oldest_packet_age_millis": 0,
+          "blocked_no_supported_path_events": 0,
+          "blocked_packet_window_events": 0
+        }
+      },
+      {
+        "started_millis": 896891540,
+        "finished_millis": 896891640,
+        "resources": {
+          "process_cpu_millis": 12824,
+          "total_pss_kib": 85167,
+          "private_dirty_kib": 35656,
+          "java_heap_used_bytes": 3112912,
+          "java_heap_max_bytes": 201326592,
+          "active_threads": 11
+        },
+        "paths": {
+          "connected_peers": 2,
+          "peers_without_supported_path": 0,
+          "direct_udp_datagram": 0,
+          "direct_quic_datagram": 0,
+          "direct_quic_stream": 0,
+          "direct_tcp_stream": 2,
+          "relay": 0,
+          "public_routing_peers": 2,
+          "packet_plane_quic_sessions": 0,
+          "promotions_to_direct": 0
+        },
+        "queue": {
+          "queued_packets": 0,
+          "queued_bytes": 0,
+          "oldest_packet_age_millis": 0,
+          "blocked_no_supported_path_events": 0,
+          "blocked_packet_window_events": 0
+        }
+      },
+      {
+        "started_millis": 896896540,
+        "finished_millis": 896896640,
+        "resources": {
+          "process_cpu_millis": 12923,
+          "total_pss_kib": 84919,
+          "private_dirty_kib": 35408,
+          "java_heap_used_bytes": 2531280,
+          "java_heap_max_bytes": 201326592,
+          "active_threads": 11
+        },
+        "paths": {
+          "connected_peers": 2,
+          "peers_without_supported_path": 0,
+          "direct_udp_datagram": 0,
+          "direct_quic_datagram": 0,
+          "direct_quic_stream": 0,
+          "direct_tcp_stream": 2,
+          "relay": 0,
+          "public_routing_peers": 2,
+          "packet_plane_quic_sessions": 0,
+          "promotions_to_direct": 0
+        },
+        "queue": {
+          "queued_packets": 0,
+          "queued_bytes": 0,
+          "oldest_packet_age_millis": 0,
+          "blocked_no_supported_path_events": 0,
+          "blocked_packet_window_events": 0
+        }
+      },
+      {
+        "started_millis": 896901530,
+        "finished_millis": 896901630,
+        "resources": {
+          "process_cpu_millis": 13033,
+          "total_pss_kib": 86647,
+          "private_dirty_kib": 37136,
+          "java_heap_used_bytes": 4317184,
+          "java_heap_max_bytes": 201326592,
+          "active_threads": 11
+        },
+        "paths": {
+          "connected_peers": 2,
+          "peers_without_supported_path": 0,
+          "direct_udp_datagram": 0,
+          "direct_quic_datagram": 0,
+          "direct_quic_stream": 0,
+          "direct_tcp_stream": 2,
+          "relay": 0,
+          "public_routing_peers": 2,
+          "packet_plane_quic_sessions": 0,
+          "promotions_to_direct": 0
+        },
+        "queue": {
+          "queued_packets": 0,
+          "queued_bytes": 0,
+          "oldest_packet_age_millis": 0,
+          "blocked_no_supported_path_events": 0,
+          "blocked_packet_window_events": 0
+        }
+      }
+    ],
+    "events": [
+      {
+        "name": "isolation_1",
+        "status": "started",
+        "detail": "Disable alpha, retain beta, reject disabled traffic, restore alpha",
+        "recorded_unix_millis": 1789023696942
+      },
+      {
+        "name": "isolation_1_disable",
+        "status": "started",
+        "detail": "Shared runtime reconfiguration requested",
+        "recorded_unix_millis": 1789023696949
+      },
+      {
+        "name": "isolation_1_disable",
+        "status": "passed",
+        "detail": "Disabled state and surviving beta traffic readiness verified",
+        "recorded_unix_millis": 1789023708520
+      },
+      {
+        "name": "isolation_1_enable",
+        "status": "started",
+        "detail": "Shared runtime reconfiguration requested",
+        "recorded_unix_millis": 1789023724749
+      },
+      {
+        "name": "isolation_1_enable",
+        "status": "passed",
+        "detail": "Enabled state and both networks traffic readiness verified",
+        "recorded_unix_millis": 1789023736429
+      },
+      {
+        "name": "isolation_1",
+        "status": "passed",
+        "detail": "Both families isolated; beta and restored alpha passed measured traffic",
+        "recorded_unix_millis": 1789023740511
+      },
+      {
+        "name": "isolation_2",
+        "status": "started",
+        "detail": "Disable alpha, retain beta, reject disabled traffic, restore alpha",
+        "recorded_unix_millis": 1789023740517
+      },
+      {
+        "name": "isolation_2_disable",
+        "status": "started",
+        "detail": "Shared runtime reconfiguration requested",
+        "recorded_unix_millis": 1789023740522
+      },
+      {
+        "name": "isolation_2_disable",
+        "status": "passed",
+        "detail": "Disabled state and surviving beta traffic readiness verified",
+        "recorded_unix_millis": 1789023752098
+      },
+      {
+        "name": "isolation_2_enable",
+        "status": "started",
+        "detail": "Shared runtime reconfiguration requested",
+        "recorded_unix_millis": 1789023768343
+      },
+      {
+        "name": "isolation_2_enable",
+        "status": "passed",
+        "detail": "Enabled state and both networks traffic readiness verified",
+        "recorded_unix_millis": 1789023780075
+      },
+      {
+        "name": "isolation_2",
+        "status": "passed",
+        "detail": "Both families isolated; beta and restored alpha passed measured traffic",
+        "recorded_unix_millis": 1789023784157
+      },
+      {
+        "name": "isolation_3",
+        "status": "started",
+        "detail": "Disable alpha, retain beta, reject disabled traffic, restore alpha",
+        "recorded_unix_millis": 1789023784162
+      },
+      {
+        "name": "isolation_3_disable",
+        "status": "started",
+        "detail": "Shared runtime reconfiguration requested",
+        "recorded_unix_millis": 1789023784168
+      },
+      {
+        "name": "isolation_3_disable",
+        "status": "passed",
+        "detail": "Disabled state and surviving beta traffic readiness verified",
+        "recorded_unix_millis": 1789023795740
+      },
+      {
+        "name": "isolation_3_enable",
+        "status": "started",
+        "detail": "Shared runtime reconfiguration requested",
+        "recorded_unix_millis": 1789023811977
+      },
+      {
+        "name": "isolation_3_enable",
+        "status": "passed",
+        "detail": "Enabled state and both networks traffic readiness verified",
+        "recorded_unix_millis": 1789023823517
+      },
+      {
+        "name": "isolation_3",
+        "status": "passed",
+        "detail": "Both families isolated; beta and restored alpha passed measured traffic",
+        "recorded_unix_millis": 1789023827601
+      },
+      {
+        "name": "isolation_4",
+        "status": "started",
+        "detail": "Disable alpha, retain beta, reject disabled traffic, restore alpha",
+        "recorded_unix_millis": 1789023827605
+      },
+      {
+        "name": "isolation_4_disable",
+        "status": "started",
+        "detail": "Shared runtime reconfiguration requested",
+        "recorded_unix_millis": 1789023827610
+      },
+      {
+        "name": "isolation_4_disable",
+        "status": "passed",
+        "detail": "Disabled state and surviving beta traffic readiness verified",
+        "recorded_unix_millis": 1789023839196
+      },
+      {
+        "name": "isolation_4_enable",
+        "status": "started",
+        "detail": "Shared runtime reconfiguration requested",
+        "recorded_unix_millis": 1789023855441
+      },
+      {
+        "name": "isolation_4_enable",
+        "status": "passed",
+        "detail": "Enabled state and both networks traffic readiness verified",
+        "recorded_unix_millis": 1789023867168
+      },
+      {
+        "name": "isolation_4",
+        "status": "passed",
+        "detail": "Both families isolated; beta and restored alpha passed measured traffic",
+        "recorded_unix_millis": 1789023871258
+      },
+      {
+        "name": "isolation_5",
+        "status": "started",
+        "detail": "Disable alpha, retain beta, reject disabled traffic, restore alpha",
+        "recorded_unix_millis": 1789023871262
+      },
+      {
+        "name": "isolation_5_disable",
+        "status": "started",
+        "detail": "Shared runtime reconfiguration requested",
+        "recorded_unix_millis": 1789023871267
+      },
+      {
+        "name": "isolation_5_disable",
+        "status": "passed",
+        "detail": "Disabled state and surviving beta traffic readiness verified",
+        "recorded_unix_millis": 1789023882836
+      },
+      {
+        "name": "isolation_5_enable",
+        "status": "started",
+        "detail": "Shared runtime reconfiguration requested",
+        "recorded_unix_millis": 1789023899062
+      },
+      {
+        "name": "isolation_5_enable",
+        "status": "passed",
+        "detail": "Enabled state and both networks traffic readiness verified",
+        "recorded_unix_millis": 1789023910775
+      },
+      {
+        "name": "isolation_5",
+        "status": "passed",
+        "detail": "Both families isolated; beta and restored alpha passed measured traffic",
+        "recorded_unix_millis": 1789023914849
+      },
+      {
+        "name": "isolation_settle",
+        "status": "started",
+        "detail": "60-second settling with existing collectors and no deliberate traffic",
+        "recorded_unix_millis": 1789023914853
+      },
+      {
+        "name": "isolation_settle",
+        "status": "passed",
+        "detail": "Fixed settling interval finished",
+        "recorded_unix_millis": 1789023974873
+      }
+    ],
+    "cleanup": {
+      "emulator_stopped": true,
+      "fixture_stopped": true,
+      "private_state_removed": true,
+      "logs_redacted": true,
+      "diagnostic_report_redacted": true,
+      "always_on_cleared": true
+    },
+    "app_cpu_percent": 2.985287816026282,
+    "emulator_cpu_percent": 10.31638337380237,
+    "last_60_cpu_percent": 2.1579123452659763,
+    "app_elapsed_seconds": 280.03999999999996,
+    "transition_timings": {
+      "disable": [
+        11571,
+        11576,
+        11572,
+        11586,
+        11569
+      ],
+      "enable": [
+        11680,
+        11732,
+        11540,
+        11727,
+        11713
+      ]
+    }
+  },
+  "traffic": {
+    "linux_measured_batches": 30,
+    "android_measured_batches": 30,
+    "packets_per_batch": 5,
+    "total_replies": 300,
+    "inbound_disabled_zero_reply_batches": 10,
+    "outbound_disabled_zero_reply_batches": 10
+  },
+  "sha256": {
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-1-beta-android-ipv4-readiness.txt": "86116e313d81708c93b9a6a07ae2b38bdb482f8b33eabbbfae7f551fa82e01e9",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-1-beta-android-ipv4.txt": "2af757269d677d2ac27ecc40f30320dca0d09b3a90e4c11875c8dbdfaafdcc2e",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-1-beta-android-ipv6-readiness.txt": "a9193cb15c581ae7f4f30933e1f0e4116af5e4be8863f431cffc78dec3a9326e",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-1-beta-android-ipv6.txt": "af4707fccfa7cbc52418d304538208ba4e59404388eb35a41c2d4a3b18742c23",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-1-beta-linux-ipv4-readiness.json": "c7ef8ec19c85ef04570f105970cc6d2b901eea8258b2dbd469550797e3dab98f",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-1-beta-linux-ipv4.json": "1156141a7237fb0098b88511c8b77c161796d9da19974efe1e9ac4318d5bad27",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-1-beta-linux-ipv6-readiness.json": "c3c5b70d612109ca422149a9b8f707ac6c8401f4be6a211250aa22b594e444f3",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-1-beta-linux-ipv6.json": "ee04530cc6c832b073f026c998906b2a8fb47c9f47124c0638ee969d498a2889",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-1-disabled-ipv4-inbound-error.txt": "eb8050b79c0f27705727887972b6e07aa4eae3f1c3e34b091480c215e1491b4d",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-1-disabled-ipv4-inbound.json": "aff112748db47932cd7f9eafc4df2c7061eb2a246f1e7847432c64815beebed8",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-1-disabled-ipv4-outbound.txt": "54bbdd0f49dd97346742ee7fd13affef11be62b2092f51f945dcafb8d7c54925",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-1-disabled-ipv6-inbound-error.txt": "fb055c28d6c46c4c98499371e0de7a575f53aee986a434d761a3ad827d4f1dc5",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-1-disabled-ipv6-inbound.json": "e05c995b3cdd946bd287c638c4f64d2c0c17d26739e11151188cb1282f903d2c",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-1-disabled-ipv6-outbound.txt": "ca569b6d2c6cbd73a2a6bf982a1dd29420f461ba6cdd0f52cf48a5b164165b7f",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-1-disabled-state.json": "3967b332593341a264e4676ddd79c8232d932ed9b4f4c543b5eff59efe4ce452",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-1-enabled-state.json": "8288e584cc3331cbc3b7d30774c7544feeb55fdbb722c2b79dee7ac95c4981fc",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-1-restored-alpha-android-ipv4.txt": "6af37ec06354cac3c6738e908e70e9b6e9c47c7dc8251e024aa4f8de887cfca7",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-1-restored-alpha-android-ipv6.txt": "ba5c98a1a4fbbd7f88e4ea3d907a10c4da9f4d0d4823f1679d182235156c1e33",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-1-restored-alpha-linux-ipv4.json": "1156141a7237fb0098b88511c8b77c161796d9da19974efe1e9ac4318d5bad27",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-1-restored-alpha-linux-ipv6.json": "ee04530cc6c832b073f026c998906b2a8fb47c9f47124c0638ee969d498a2889",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-1-restored-beta-android-ipv4.txt": "a6c232fec86d0b5f0e4feeb7705f70d13a6216633c8982c237969960dacda480",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-1-restored-beta-android-ipv6.txt": "847469b94607a806d9a9b0fa94275e898c19a68b6fdf8ce15c768cff3931e641",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-1-restored-beta-linux-ipv4.json": "1156141a7237fb0098b88511c8b77c161796d9da19974efe1e9ac4318d5bad27",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-1-restored-beta-linux-ipv6.json": "ee04530cc6c832b073f026c998906b2a8fb47c9f47124c0638ee969d498a2889",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-2-beta-android-ipv4-readiness.txt": "f2964068730cd7aed89a60b1e70dece696775d9303af3f2cf46281766b9ed84f",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-2-beta-android-ipv4.txt": "1808d12fddf314bd7d785cb1b35c048285fbe7b7c28b9eff924c5691dd21ead7",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-2-beta-android-ipv6-readiness.txt": "c93d88432f46ec235752451d4b163b8120761148b78e4ff02d57517a021fd0fc",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-2-beta-android-ipv6.txt": "87c652351e1c7fe317ef762654c5605172e3622ddf8d7a822003bc8cde5c23ae",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-2-beta-linux-ipv4-readiness.json": "c7ef8ec19c85ef04570f105970cc6d2b901eea8258b2dbd469550797e3dab98f",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-2-beta-linux-ipv4.json": "1156141a7237fb0098b88511c8b77c161796d9da19974efe1e9ac4318d5bad27",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-2-beta-linux-ipv6-readiness.json": "c3c5b70d612109ca422149a9b8f707ac6c8401f4be6a211250aa22b594e444f3",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-2-beta-linux-ipv6.json": "ee04530cc6c832b073f026c998906b2a8fb47c9f47124c0638ee969d498a2889",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-2-disabled-ipv4-inbound-error.txt": "eb8050b79c0f27705727887972b6e07aa4eae3f1c3e34b091480c215e1491b4d",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-2-disabled-ipv4-inbound.json": "aff112748db47932cd7f9eafc4df2c7061eb2a246f1e7847432c64815beebed8",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-2-disabled-ipv4-outbound.txt": "54bbdd0f49dd97346742ee7fd13affef11be62b2092f51f945dcafb8d7c54925",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-2-disabled-ipv6-inbound-error.txt": "fb055c28d6c46c4c98499371e0de7a575f53aee986a434d761a3ad827d4f1dc5",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-2-disabled-ipv6-inbound.json": "e05c995b3cdd946bd287c638c4f64d2c0c17d26739e11151188cb1282f903d2c",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-2-disabled-ipv6-outbound.txt": "ca569b6d2c6cbd73a2a6bf982a1dd29420f461ba6cdd0f52cf48a5b164165b7f",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-2-disabled-state.json": "e21c15078e550804786fe6bf7c25f04fbb25a9e5f4056f18c811af3c0efabf1c",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-2-enabled-state.json": "575618a7ff14d71e3b647f74232d9f8c80486e94065f1b820295c7e1d7a9b8a7",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-2-restored-alpha-android-ipv4.txt": "10de1c2d2850cdf0c709f6f5c363ed9045fa78f3e539ac81a71e9afeaab9d539",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-2-restored-alpha-android-ipv6.txt": "762f8fcb15d4560f9f6cc6dadb874695fdaa649ab59d489f24f3ff7d8b5418ef",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-2-restored-alpha-linux-ipv4.json": "1156141a7237fb0098b88511c8b77c161796d9da19974efe1e9ac4318d5bad27",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-2-restored-alpha-linux-ipv6.json": "ee04530cc6c832b073f026c998906b2a8fb47c9f47124c0638ee969d498a2889",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-2-restored-beta-android-ipv4.txt": "0d324f4c1394314115f6f6559fa6be43af8cffa0bbaf0902470f41b6d37c11fe",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-2-restored-beta-android-ipv6.txt": "c4117b24f9d9c22fdb146bfae304595321abe2357b6e84ec0504f34578bf1830",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-2-restored-beta-linux-ipv4.json": "1156141a7237fb0098b88511c8b77c161796d9da19974efe1e9ac4318d5bad27",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-2-restored-beta-linux-ipv6.json": "ee04530cc6c832b073f026c998906b2a8fb47c9f47124c0638ee969d498a2889",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-3-beta-android-ipv4-readiness.txt": "7c45214e6e00d194d228e88177e02e255c22745680245a9b803cf06fda7eabfd",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-3-beta-android-ipv4.txt": "93b300c40dcac45ec275d948680696195f52b81078e1188ed20ed22fcf38a90a",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-3-beta-android-ipv6-readiness.txt": "f7d789db8d7bfb48c688f0f867f8a137cd2f3491b67cf5340e760a3ff663192e",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-3-beta-android-ipv6.txt": "79fb4e22e1fac33726fd3bca41b2b37157ce8a115e7f5fdabd0a9667d85c60d7",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-3-beta-linux-ipv4-readiness.json": "c7ef8ec19c85ef04570f105970cc6d2b901eea8258b2dbd469550797e3dab98f",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-3-beta-linux-ipv4.json": "1156141a7237fb0098b88511c8b77c161796d9da19974efe1e9ac4318d5bad27",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-3-beta-linux-ipv6-readiness.json": "c3c5b70d612109ca422149a9b8f707ac6c8401f4be6a211250aa22b594e444f3",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-3-beta-linux-ipv6.json": "ee04530cc6c832b073f026c998906b2a8fb47c9f47124c0638ee969d498a2889",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-3-disabled-ipv4-inbound-error.txt": "eb8050b79c0f27705727887972b6e07aa4eae3f1c3e34b091480c215e1491b4d",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-3-disabled-ipv4-inbound.json": "aff112748db47932cd7f9eafc4df2c7061eb2a246f1e7847432c64815beebed8",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-3-disabled-ipv4-outbound.txt": "54bbdd0f49dd97346742ee7fd13affef11be62b2092f51f945dcafb8d7c54925",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-3-disabled-ipv6-inbound-error.txt": "fb055c28d6c46c4c98499371e0de7a575f53aee986a434d761a3ad827d4f1dc5",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-3-disabled-ipv6-inbound.json": "e05c995b3cdd946bd287c638c4f64d2c0c17d26739e11151188cb1282f903d2c",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-3-disabled-ipv6-outbound.txt": "ca569b6d2c6cbd73a2a6bf982a1dd29420f461ba6cdd0f52cf48a5b164165b7f",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-3-disabled-state.json": "67054ec2e032c2b1e7c7245a5b255f8f7e6a3f1e159fa8b2a29272d674895b2b",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-3-enabled-state.json": "85409fd764953b01df5be70ff5922f8be9d69e6885c52d48d3637b2f06a51ac7",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-3-restored-alpha-android-ipv4.txt": "564646ed376388052ab1e8a9fd3ec0791e12e3eddf4e046d5c56485397c8a860",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-3-restored-alpha-android-ipv6.txt": "40136d7a9b5acd2669f48acd465340b1fe35b203472ce67efe21c07583613625",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-3-restored-alpha-linux-ipv4.json": "1156141a7237fb0098b88511c8b77c161796d9da19974efe1e9ac4318d5bad27",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-3-restored-alpha-linux-ipv6.json": "ee04530cc6c832b073f026c998906b2a8fb47c9f47124c0638ee969d498a2889",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-3-restored-beta-android-ipv4.txt": "67ff79fda0a1fa80e5fec08a5a1e43b1f9d8f7cfb8e321afabd8aa4fdd43658e",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-3-restored-beta-android-ipv6.txt": "6e8220e45f0db674cdd00ce2fde017f9487f862ff967aafecc6525105922d80b",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-3-restored-beta-linux-ipv4.json": "1156141a7237fb0098b88511c8b77c161796d9da19974efe1e9ac4318d5bad27",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-3-restored-beta-linux-ipv6.json": "ee04530cc6c832b073f026c998906b2a8fb47c9f47124c0638ee969d498a2889",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-4-beta-android-ipv4-readiness.txt": "f5efda14b187303ada296f6486ad7f1113cd0c720f6e21414a6969d443322674",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-4-beta-android-ipv4.txt": "b867064cb775cd94e0fb3ebf3b7af215ff2f8bb619bb0e234b45416f4021c112",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-4-beta-android-ipv6-readiness.txt": "376e2381dc297f26b9fed36db2f6d73929ac9cef44c9c15e235e52b6382e6d57",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-4-beta-android-ipv6.txt": "e4a5acacbf98847310421ec310da7cba452e6356c41607f7aca2549923d5620a",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-4-beta-linux-ipv4-readiness.json": "c7ef8ec19c85ef04570f105970cc6d2b901eea8258b2dbd469550797e3dab98f",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-4-beta-linux-ipv4.json": "1156141a7237fb0098b88511c8b77c161796d9da19974efe1e9ac4318d5bad27",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-4-beta-linux-ipv6-readiness.json": "c3c5b70d612109ca422149a9b8f707ac6c8401f4be6a211250aa22b594e444f3",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-4-beta-linux-ipv6.json": "ee04530cc6c832b073f026c998906b2a8fb47c9f47124c0638ee969d498a2889",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-4-disabled-ipv4-inbound-error.txt": "eb8050b79c0f27705727887972b6e07aa4eae3f1c3e34b091480c215e1491b4d",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-4-disabled-ipv4-inbound.json": "aff112748db47932cd7f9eafc4df2c7061eb2a246f1e7847432c64815beebed8",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-4-disabled-ipv4-outbound.txt": "54bbdd0f49dd97346742ee7fd13affef11be62b2092f51f945dcafb8d7c54925",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-4-disabled-ipv6-inbound-error.txt": "fb055c28d6c46c4c98499371e0de7a575f53aee986a434d761a3ad827d4f1dc5",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-4-disabled-ipv6-inbound.json": "e05c995b3cdd946bd287c638c4f64d2c0c17d26739e11151188cb1282f903d2c",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-4-disabled-ipv6-outbound.txt": "ca569b6d2c6cbd73a2a6bf982a1dd29420f461ba6cdd0f52cf48a5b164165b7f",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-4-disabled-state.json": "4934a1fc523127d37ca1920c998c040899cf9e4e1b09d218f20aba7a9fb03aeb",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-4-enabled-state.json": "5c37c38a586f06f77a44aadb4e8c7ab15d712ec8ff22a22dcce9def88a203972",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-4-restored-alpha-android-ipv4.txt": "93f9a67851237ae82e70b26fede0167d9bbd91c5eae6ae875da73458e71fa0bd",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-4-restored-alpha-android-ipv6.txt": "3fe9304bef3bdcf9fd8d3257c271399a65955c3ac14386a9f2361661215264c5",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-4-restored-alpha-linux-ipv4.json": "1156141a7237fb0098b88511c8b77c161796d9da19974efe1e9ac4318d5bad27",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-4-restored-alpha-linux-ipv6.json": "ee04530cc6c832b073f026c998906b2a8fb47c9f47124c0638ee969d498a2889",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-4-restored-beta-android-ipv4.txt": "fe0c583439c2acbd66a932da7ffe43889693c0c696520648360f9542fd67a7fe",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-4-restored-beta-android-ipv6.txt": "a74473d2c32ea389405a13e464345d579fd4d9cf10361724035e2781b60ee613",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-4-restored-beta-linux-ipv4.json": "1156141a7237fb0098b88511c8b77c161796d9da19974efe1e9ac4318d5bad27",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-4-restored-beta-linux-ipv6.json": "ee04530cc6c832b073f026c998906b2a8fb47c9f47124c0638ee969d498a2889",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-5-beta-android-ipv4-readiness.txt": "ce29aeaed1330f8069eb93c149e000410d94c82cc39536764c35462203e6660a",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-5-beta-android-ipv4.txt": "1ddfd924ca7619b3985cb6b482a39ab0b31c67815bb1aa1b864ba19d055d0038",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-5-beta-android-ipv6-readiness.txt": "ffe3c083bc683d1f6af8b9f16a762fa786adf9433fea65cc266aa48c87034c03",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-5-beta-android-ipv6.txt": "3df6ba7f879dd1647d6d1349db5de3d9fc00e8e4f5ae8f73773d3b703762bbda",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-5-beta-linux-ipv4-readiness.json": "c7ef8ec19c85ef04570f105970cc6d2b901eea8258b2dbd469550797e3dab98f",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-5-beta-linux-ipv4.json": "1156141a7237fb0098b88511c8b77c161796d9da19974efe1e9ac4318d5bad27",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-5-beta-linux-ipv6-readiness.json": "c3c5b70d612109ca422149a9b8f707ac6c8401f4be6a211250aa22b594e444f3",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-5-beta-linux-ipv6.json": "ee04530cc6c832b073f026c998906b2a8fb47c9f47124c0638ee969d498a2889",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-5-disabled-ipv4-inbound-error.txt": "eb8050b79c0f27705727887972b6e07aa4eae3f1c3e34b091480c215e1491b4d",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-5-disabled-ipv4-inbound.json": "aff112748db47932cd7f9eafc4df2c7061eb2a246f1e7847432c64815beebed8",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-5-disabled-ipv4-outbound.txt": "54bbdd0f49dd97346742ee7fd13affef11be62b2092f51f945dcafb8d7c54925",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-5-disabled-ipv6-inbound-error.txt": "fb055c28d6c46c4c98499371e0de7a575f53aee986a434d761a3ad827d4f1dc5",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-5-disabled-ipv6-inbound.json": "e05c995b3cdd946bd287c638c4f64d2c0c17d26739e11151188cb1282f903d2c",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-5-disabled-ipv6-outbound.txt": "ca569b6d2c6cbd73a2a6bf982a1dd29420f461ba6cdd0f52cf48a5b164165b7f",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-5-disabled-state.json": "87150324acd222a47e282f43ec5888f2849139842f90948796a497c950ca97ac",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-5-enabled-state.json": "2a62e8c217a40ade0bfbf780110f246e38f02fef4a22096b9858474daa45444a",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-5-restored-alpha-android-ipv4.txt": "36d6d50ce7240ebdbdce52b6fab7841430a2b8878b24968dfb269dba8e900cb9",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-5-restored-alpha-android-ipv6.txt": "c5c9ca999e7f2788ad573a5ad8cf36c00ba9d417aeabf2389e03cdbde1f95192",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-5-restored-alpha-linux-ipv4.json": "1156141a7237fb0098b88511c8b77c161796d9da19974efe1e9ac4318d5bad27",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-5-restored-alpha-linux-ipv6.json": "ee04530cc6c832b073f026c998906b2a8fb47c9f47124c0638ee969d498a2889",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-5-restored-beta-android-ipv4.txt": "a4da67c925a058fd7774cd75f77484ebe28fdb6d12f3e42a9e11ec9772d8f41e",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-5-restored-beta-android-ipv6.txt": "14f52efd68bd5c9983759965fd8968184c56edbff7fc6ca8126a3e0c8dc37c2f",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-5-restored-beta-linux-ipv4.json": "1156141a7237fb0098b88511c8b77c161796d9da19974efe1e9ac4318d5bad27",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-5-restored-beta-linux-ipv6.json": "ee04530cc6c832b073f026c998906b2a8fb47c9f47124c0638ee969d498a2889",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-emulator-after.jsonl": "f0c9f5e26b9f31361c0be416b5c8ae56abce63a08b562c7af614fed4949c6441",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-emulator-before.jsonl": "f4171047e4285a17cc70329a647c9f1204a978379789d1e5c828d424bb7ed654",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-process-after.jsonl": "1cbecd507622e85315ce649ae883f0d2f06e5862bd8aa596f1cfbb0924209d98",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-process-before.jsonl": "6d60777b7ffb19e02a42f2df081c5cf6ba671cc261844b9b8daa76ca084a9fa6",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-process.jsonl": "bdea02ba15d68825c0f441ff74aea4e73d1249890db32ed2162e56983c75aaf0",
+    "/tmp/p2p-vpn-android-resource-isolation-3/isolation-runtime.jsonl": "47e65b86cb9286899034851387fe67032b5875cdb48feefc7cfb596073db6888",
+    "/tmp/p2p-vpn-android-resource-isolation-3/evidence.json": "789b39ca87c9788d049ea069a2dad7f8529ccc78151089ea55c7e0a9c281eef5",
+    "scripts/android-resource-controls.sh": "d3bfb2f38cf11321cbd3a80e0ce1ec6ba7b1e6d098b8b13969a8561ad1bc470e",
+    "scripts/android-e2e.sh": "5f19a7f1e4a7158ea099ce345e1b110dad16ab5c789244282e50671e8cda2635",
+    "scripts/android-process-sample.sh": "bdebe1c834a5f21cad746eb33c679625082755152b2fc50a566906ac2359b011"
+  },
+  "limitations": [
+    "Debug emulator only; no physical battery or public routing evidence.",
+    "Shared native runtime restarts; no uninterrupted sibling traffic claim.",
+    "Sampled queues and RSS do not prove allocation release.",
+    "Readiness timings include polling and traffic checks, not exact outage."
+  ]
+}

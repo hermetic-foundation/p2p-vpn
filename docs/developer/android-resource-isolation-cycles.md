@@ -30,8 +30,8 @@ manual runtime recovery participate.
 6. Preserve both networks' IDs, hostnames, peer IDs and addresses; retain failed batch output.
 
 Traffic checks occur after state transitions. They do not prove zero packet loss
-during every instant of transition. Native/control samples independently check
-that beta remains active throughout observed states.
+during every instant of transition. The initial continuous-running assumption
+was corrected below: beta remains configured enabled while the shared runtime restarts.
 
 ## Resource Collection
 
@@ -139,4 +139,44 @@ snapshots and RSS/PSS do not prove absence of transient backlog or retained allo
 - Resource-window and single-attempt traffic tests passed; ShellCheck and focused formatting passed.
 - Nix structure evaluated offline; the full structure matrix was not rerun. No Java/native rebuild was needed.
 - All 129 recorded raw/source hashes were rechecked after capture.
-- Repetition, sustained-load/thread attribution and final review audit remain outstanding.
+- At attempt 2, repetition, sustained-load/thread attribution and final review audit remained outstanding.
+
+## Attempt 3 Repeat Manifest
+
+- Baseline `08ecf113`; APK, fixture and capture code unchanged from successful attempt 2.
+- Same five cycles, readiness/measurement separation, 60-second settling and 850/890-second watchdogs.
+- Output: `/tmp/p2p-vpn-android-resource-isolation-3`.
+- Pre-run storage: 9,158,984 KiB; no other emulator, fixture or build process running.
+- Use a fresh owned emulator and fixture identities; record actual selected transports.
+- No measurement retries, manual runtime rescue, public route or physical-device access.
+
+## Attempt 3 Repeat Results
+
+All five cycles and settling passed with unchanged capture code.
+[Portable repeat results](android-resource-isolation-repeat-results.json) retain
+endpoints, events and 130 raw/source hashes, including the evidence file.
+
+| Measurement | Attempt 2 | Attempt 3 |
+| --- | --- | --- |
+| Duration | 280.03 s | 280.04 s |
+| Process / runtime rows | 277 / 56 | 277 / 56 |
+| App CPU, one core | 2.985% | 2.985% |
+| Emulator CPU, one core | 10.370% | 10.316% |
+| Final 60 samples app CPU | 2.141% | 2.158% |
+| RSS endpoints, KiB | 205752 / 206144 | 206128 / 206652 |
+| RSS range, KiB | 199616-208396 | 202924-208812 |
+| PSS range, KiB | 78794-86375 | 78860-86951 |
+| Descriptor range | 106-124 | 107-124 |
+| Native running / starting / stopped rows | 54 / 1 / 1 | 54 / 1 / 1 |
+| Disable readiness range | 11.446-11.605 s | 11.569-11.586 s |
+| Enable readiness range | 11.568-11.754 s | 11.540-11.732 s |
+
+- Repeat: all 60 measured batches passed 5/5; all 20 disabled-network probes received zero replies.
+- Process identity stayed fixed; shared native generations advanced from 4 to 14.
+- Final twelve runtime samples show two connected TCP-stream overlay paths and two private infrastructure peers.
+- Sampled diagnostic queues remained empty; all six cleanup flags passed.
+- Both runs settle near measured idle CPU. Neither proves leak freedom or uninterrupted sibling traffic.
+
+This closes the repeated bounded Android network-instance cycle measurement.
+Sustained-load CPU attribution, transport/runtime allocation attribution and the
+full requirement audit remain open. No production behavior changed for this repeat.

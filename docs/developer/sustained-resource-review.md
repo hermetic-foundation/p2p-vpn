@@ -20,7 +20,7 @@ No physical device or deployed host is authorized for this work.
 - [x] Attribute packet-queue payload/container ownership across 40 cycles; transport/runtime allocations remain open.
 - [x] Measure paired runtime teardown baselines; first-use allocation owners and connected transport attribution remain open.
 - [x] Measure paired ten-cycle lifecycle churn; all recoveries pass without rescue.
-- [ ] Measure multi-network resource isolation.
+- [x] Measure repeated bounded Android multi-network resource isolation; allocation attribution remains open.
 - [ ] Measure Android background CPU/wakeup proxies on a cached emulator.
 - [ ] Reproduce and correct defects; validate before/after behavior.
 - [ ] Publish results, cleanup evidence and a requirement-by-requirement audit.
@@ -108,9 +108,9 @@ The saved sustained-load attempt 1, thread-controls attempt 2 and corrected
 notification-admission attempt 1 report first-attempt initial traffic success.
 Their recorded results are unchanged by this stricter rule.
 
-One [five-cycle Android isolation run](android-resource-isolation-cycles.md) passed
+Two [five-cycle Android isolation runs](android-resource-isolation-cycles.md) passed
 with disabled-route rejection, surviving-network traffic and post-enable recovery.
-It captures shared-runtime restarts; repetition and allocation attribution remain open.
+Both capture shared-runtime restarts and settling; allocation attribution remains open.
 
 S6's allocator instrumentation, calibration, modes and capture order are
 specified in [Allocation Review](allocation-review.md). All twelve captures
