@@ -2,8 +2,8 @@
 
 ## Status
 
-S3 fixture implementation and validation are in progress. No sustained capture
-is claimed yet. This workload reuses the S1/S2 direct-UDP namespace topology and
+One of two full S3 captures passed; the repeated measurement remains open.
+This workload reuses the S1/S2 direct-UDP namespace topology and
 collectors; it does not alter the older Kademlia resource workload definitions.
 
 ## Frozen Workload
@@ -140,4 +140,49 @@ test, native compilation and live compatibility checks.
 - Namespace binary SHA-256: `60deab7bb283ba183b2b34658de358e27372e1cf5bd5bee828fbb94ae5174d6e`.
 
 The live follow-ups did not trigger the new retry branch; deterministic tests
-cover that branch. The two full S3 captures are the next measurement step.
+cover that branch.
+
+## First Full Capture
+
+Fixture `af5951cc`, runtime `11416a8d`, using the corrected-runtime executable
+hash above. No overlapping builds or manual recovery. The 480-second internal
+and 510-second external watchdogs were unchanged.
+
+| Result | Observation |
+| --- | --- |
+| Total elapsed | 441.49 seconds, including startup and checks |
+| Traffic | 15000 sent / 15000 received over 300.001 seconds |
+| Pacing | Zero skipped slots; maximum lateness 2.866 ms |
+| Packet validity | Zero duplicate or invalid replies |
+| Transport / identity | Fixed-transport gate passed; same daemon identities across both phases |
+| Final connectivity | Strict 5/5 replies in both directions |
+| Artifacts | 4228 KiB, suffix `1.11261118cb7d5688` |
+
+### Resource Observations
+
+| Phase / Node | CPU, % One Core | RSS First / Last, KiB | Total / Socket FDs | Threads |
+| --- | ---: | --- | --- | ---: |
+| Load A | 6.7967 | 35844 / 35856 | 21 / 14 | 6 |
+| Load B | 6.5367 | 35620 / 35648 | 19 / 12 | 6 |
+| Drain A | 0.1833 | 35856 / 35856 | 21 / 14 | 6 |
+| Drain B | 0.1667 | 35648 / 35648 | 19 / 12 | 6 |
+
+Each node has 300 load OS samples and 61 drain samples. Maximum sample gap is
+below 1.009 seconds. Both 60-snapshot load and 12-snapshot drain runtime series
+are complete, with no query errors. CPU uses observed intervals and 100 Hz ticks.
+
+- Sampled queues, expiry/drop counters, retiring connections and pending connection attempts stayed zero.
+- Outgoing connection-error counts did not increase during either phase.
+- Redial attempts stayed zero; connected-skip counters increased as maintenance ran.
+- Kademlia pending RPC/query storage stayed zero in these five-second observations.
+- RSS increased slightly during load and stayed flat through drain; no allocation cause is established.
+
+Five-second runtime samples do not bound between-sample peaks. The final load
+snapshot precedes the traffic deadline, so its payload deltas do not equal the
+generator total; drain snapshots contain the final 15010 packet counters,
+including the ten initial fixture packets. Do not treat this as lost traffic.
+
+[Counter summaries, outcome and hashes](sustained-traffic-samples.json) preserve
+the observations. Full logs remain under the printed artifact directory and
+`/tmp/p2p-vpn-sustained-traffic-full-1.log`. The second full capture remains open;
+this single moderate-load debug run does not prove sustained behavior generally.
