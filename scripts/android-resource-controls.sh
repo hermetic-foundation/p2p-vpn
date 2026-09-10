@@ -42,11 +42,48 @@ resource_native_sample() {
   ' "$response" >>"$destination"
 }
 
+resource_ping_summary() {
+  jq -Rsec '
+    [split("\n")[] | select(test("packets transmitted"))] |
+    if length != 1 then error("Missing or ambiguous ping summary") else .[0] end |
+    [
+      capture("^(?<sent>[0-9]+) packets transmitted, (?<received>[0-9]+)( packets)? received, (?<loss>[0-9.]+)% packet loss") |
+      {sent:(.sent|tonumber),received:(.received|tonumber),loss_percent:(.loss|tonumber)}] |
+    if length == 1 then .[0] else error("Missing or ambiguous ping summary") end
+  ' "$1"
+}
+
+resource_ping_leg() (
+  local prefix="$1" command="$2" destination="$3" duration="$4" started finished status=0 child=""
+  trap 'if [[ -n "$child" ]]; then kill "$child" 2>/dev/null || true; wait "$child" 2>/dev/null || true; fi' EXIT
+  started="$(monotonic_millis)"
+  timeout --signal=TERM --kill-after=2s "$((duration + 15))" "${adb[@]}" shell -T \
+    "$command" -n -q -i 0.02 -s 512 -c "$((duration * 50))" -W 1 "$destination" \
+    >"$prefix.txt" 2>&1 &
+  child=$!
+  wait "$child" || status=$?
+  child=""
+  finished="$(monotonic_millis)"
+  resource_ping_summary "$prefix.txt" >"$prefix-counts.json" || return 1
+  jq -n --argjson started "$started" --argjson finished "$finished" --argjson status "$status" \
+    --argjson duration "$duration" --slurpfile counts "$prefix-counts.json" \
+    '{started_millis:$started,finished_millis:$finished,status:$status,
+      requested_packets:($duration*50),interval_seconds:0.02,payload_bytes:512,counts:$counts[0]}' \
+    >"$prefix.json"
+  jq -e --argjson duration "$duration" '.status == 0 and
+    .counts.sent == ($duration*50) and .counts.received == .counts.sent and .counts.loss_percent == 0 and
+    (.finished_millis-.started_millis) >= (($duration-1)*1000) and
+    (.finished_millis-.started_millis) <= (($duration+10)*1000)' "$prefix.json" >/dev/null
+)
+
 resource_control_window() (
   local mode="$1" prefix="$2" duration="${3:-60}" started deadline sampler="" status=0
+  local traffic="${4:-idle}" worker
+  local -a traffic_workers=()
   [[ "$duration" == 60 || "$duration" == 300 ]] || exit 2
   [[ "$mode" == on || "$mode" == off ]] || exit 2
-  trap 'if [[ -n "$sampler" ]]; then kill "$sampler" 2>/dev/null || true; wait "$sampler" 2>/dev/null || true; fi' EXIT
+  [[ "$traffic" == idle || ("$traffic" == load && "$mode" == on) ]] || exit 2
+  trap 'for worker in "${traffic_workers[@]}" "$sampler"; do [[ -z "$worker" ]] || { kill "$worker" 2>/dev/null || true; wait "$worker" 2>/dev/null || true; }; done' EXIT
   resource_native_sample "$prefix-boundary-before.jsonl" || exit 1
   adb_run shell -T sh -s -- "$resource_app_pid" 1 <"$resource_collector" \
     >"$prefix-process-before.jsonl" || exit 1
@@ -54,6 +91,16 @@ resource_control_window() (
   cat /proc/loadavg >"$prefix-host-load-before.txt"
   started="$(monotonic_millis)"
   deadline=$((started + duration * 1000))
+  if [[ "$traffic" == load ]]; then
+    resource_ping_leg "$prefix-alpha-ipv4" ping "$fixture_ipv4" "$duration" &
+    traffic_workers+=("$!")
+    resource_ping_leg "$prefix-alpha-ipv6" ping6 "$fixture_ipv6" "$duration" &
+    traffic_workers+=("$!")
+    resource_ping_leg "$prefix-beta-ipv4" ping "$fixture_secondary_ipv4" "$duration" &
+    traffic_workers+=("$!")
+    resource_ping_leg "$prefix-beta-ipv6" ping6 "$fixture_secondary_ipv6" "$duration" &
+    traffic_workers+=("$!")
+  fi
   if [[ "$mode" == on ]]; then
     timeout --signal=TERM --kill-after=2s "$((duration + 15))" "${adb[@]}" shell -T sh -s \
       -- "$resource_app_pid" "$duration" <"$resource_collector" >"$prefix-process.jsonl" &
@@ -69,6 +116,11 @@ resource_control_window() (
     sampler=""
     [[ "$status" == 0 ]] || exit 1
   fi
+  for worker in "${traffic_workers[@]}"; do
+    wait "$worker" || status=$?
+  done
+  traffic_workers=()
+  [[ "$status" == 0 ]] || exit 1
   adb_run shell -T sh -s -- "$resource_app_pid" 1 <"$resource_collector" \
     >"$prefix-process-after.jsonl" || exit 1
   sh "$resource_collector" "$resource_emulator_pid" 1 >"$prefix-emulator-after.jsonl" || exit 1
@@ -102,7 +154,7 @@ resource_control_window() (
 
 run_android_resource_controls() {
   local resource_collector="${P2P_VPN_ANDROID_PROCESS_COLLECTOR:-$(dirname "$0")/android-process-sample.sh}"
-  local resource_app_pid resource_emulator_pid index=0 mode
+  local resource_app_pid resource_emulator_pid index=0 mode phase duration traffic
   adb_run root >"$output_dir/resource-root.txt" || return 1
   adb_run wait-for-device || return 1
   [[ "$(adb_run shell id -u | tr -d '\r')" == 0 ]] || return 1
@@ -120,6 +172,23 @@ run_android_resource_controls() {
     record_step sustained_idle started "Two background networks; fixed 300-second idle window"
     resource_control_window on "$output_dir/sustained-idle" 300 || return 1
     record_step sustained_idle passed "300 process and 60 runtime observations verified"
+    return 0
+  fi
+  if [[ "${scenario:-}" == multi-network-resource-load-smoke ]]; then
+    record_step load_smoke started "Four paced streams; 60-second compatibility window"
+    resource_control_window on "$output_dir/load-smoke" 60 load || return 1
+    record_step load_smoke passed "Paced traffic and resource collection verified; not S7 acceptance"
+    return 0
+  fi
+  if [[ "${scenario:-}" == multi-network-resource-load ]]; then
+    for phase in idle load drain; do
+      duration=300 traffic=idle
+      [[ "$phase" != load ]] || traffic=load
+      [[ "$phase" != drain ]] || duration=60
+      record_step "sustained_$phase" started "Fixed $duration-second phase with $traffic traffic"
+      resource_control_window on "$output_dir/sustained-$phase" "$duration" "$traffic" || return 1
+      record_step "sustained_$phase" passed "Phase observations and traffic checks passed"
+    done
     return 0
   fi
   for mode in off on on off; do

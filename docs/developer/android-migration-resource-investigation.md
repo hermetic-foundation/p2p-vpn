@@ -41,3 +41,19 @@ but the underlying exception remains unknown. A later successful run is not a fi
 Use the instrumented APK and include `P2pVpnAutomation:E` in the bounded migration
 failure log capture. Preserve the original watchdog and workload limits. This is
 diagnostic preparation, not migration or sustained-load acceptance.
+
+## Instrumented Follow-up
+
+- Attempt `/tmp/p2p-vpn-android-load-smoke-2` reproduced the failure.
+- Fifteen retained log entries identify `android.app.BackgroundServiceStartNotAllowedException`.
+- The error originates in `ContextImpl.startServiceCommon`; status has no service snapshot.
+- The debug status path calls `enqueueService("ensure")` when the snapshot is absent.
+- Emulator and fixture cleanup passed; diagnostic-report redaction remained false.
+
+The harness checks activity presence, not resumed visibility. The cached launcher
+does not explicitly dismiss keyguard. Activity/background state needs direct
+evidence before changing startup behavior; keyguard is only a hypothesis.
+
+Attempt 3 added bounded activity/power capture on failure but passed setup without
+a startup fix. It therefore did not capture the failing activity state. See
+[load results](android-sustained-load.md); the intermittent setup issue remains open.

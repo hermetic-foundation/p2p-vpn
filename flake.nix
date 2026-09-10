@@ -461,6 +461,9 @@
                 shellcheck ${./tests/android-resource-power.sh}
                 shellcheck ${./tests/android-resource-sample.sh}
                 shellcheck ${./tests/android-resource-window.sh}
+                shellcheck ${./tests/android-resource-ping.sh}
+                P2P_VPN_ANDROID_RESOURCE_CONTROLS=${./scripts/android-resource-controls.sh} \
+                  bash ${./tests/android-resource-ping.sh}
                 P2P_VPN_ANDROID_RESOURCE_CONTROLS=${./scripts/android-resource-controls.sh} \
                   bash ${./tests/android-resource-power.sh}
                 P2P_VPN_ANDROID_RESOURCE_CONTROLS=${./scripts/android-resource-controls.sh} \

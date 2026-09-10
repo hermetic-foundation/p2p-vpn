@@ -63,6 +63,7 @@ Options:
                          pairing-traffic, underlay-recovery, network-workflow,
                          multi-network, multi-network-resource-admission, multi-network-resource-controls,
                          multi-network-resource-idle,
+                         multi-network-resource-load, multi-network-resource-load-smoke,
                          or process-sample-smoke.
   --path-mode MODE       Select automatic, quic-stream, tcp-stream, owned-quic, relay-only,
                          or relay-to-direct.
@@ -141,7 +142,7 @@ done
 pairing_scenario=0
 case "$scenario" in
   boot-smoke|profile-persistence|always-on|process-sample-smoke) ;;
-  pairing-traffic|underlay-recovery|network-workflow|multi-network|multi-network-resource-admission|multi-network-resource-controls|multi-network-resource-idle) pairing_scenario=1 ;;
+  pairing-traffic|underlay-recovery|network-workflow|multi-network|multi-network-resource-admission|multi-network-resource-controls|multi-network-resource-idle|multi-network-resource-load|multi-network-resource-load-smoke) pairing_scenario=1 ;;
   *)
     echo "unsupported Android E2E scenario: $scenario" >&2
     exit 2
@@ -1987,7 +1988,13 @@ run_multi_network_scenario() {
          networks:[.networks[]? | {id,name,hostname,peer_id,addresses,selected,enabled,phase}]} end)})' \
       "$alpha_created" "$alpha_migrated" > "$output_dir/legacy-migration-failure.json" || true
     timeout --signal=TERM --kill-after=2s 10 "${adb[@]}" logcat -d -t 200 \
-      -s AndroidRuntime:E ActivityManager:E > "$output_dir/legacy-migration-errors.txt" 2>&1 || true
+      -s AndroidRuntime:E ActivityManager:E P2pVpnAutomation:E > "$output_dir/legacy-migration-errors.txt" 2>&1 || true
+    timeout --signal=TERM --kill-after=2s 10 "${adb[@]}" shell dumpsys activity activities \
+      | grep -E 'topResumedActivity|mResumedActivity|mState=|state=|mVisibleRequested|mKeyguardShowing|mKeyguardOccluded' \
+      | head -100 > "$output_dir/legacy-migration-activity.txt" || true
+    timeout --signal=TERM --kill-after=2s 10 "${adb[@]}" shell dumpsys power \
+      | grep -E 'mWakefulness=|mWakefulnessChanging=|mHalInteractiveModeEnabled=' \
+      > "$output_dir/legacy-migration-power.txt" || true
     outcome=failed
     outcome_detail="Legacy profile migration did not preserve the alpha identity"
     record_step legacy_collection_migration failed "$outcome_detail"
@@ -2224,7 +2231,7 @@ run_multi_network_scenario() {
     outcome=passed
     outcome_detail="Two isolated networks admitted; sustained measurements have not run"
     record_step resource_admission passed "$outcome_detail"
-    if [[ "$scenario" == multi-network-resource-controls || "$scenario" == multi-network-resource-idle ]]; then
+    if [[ "$scenario" != multi-network-resource-admission ]]; then
       # shellcheck disable=SC1090
       source "${P2P_VPN_ANDROID_RESOURCE_CONTROLS:-$(dirname "$0")/android-resource-controls.sh}"
       if ! run_android_resource_controls; then
@@ -2236,6 +2243,9 @@ run_multi_network_scenario() {
       outcome_detail="Collector overhead controls captured; sustained S7 remains open"
       if [[ "$scenario" == multi-network-resource-idle ]]; then
         outcome_detail="300-second Android idle captured; sustained load and isolation remain open"
+      fi
+      if [[ "$scenario" == multi-network-resource-load* ]]; then
+        outcome_detail="$scenario captured; audit workload evidence before accepting S7"
       fi
     fi
     return 0

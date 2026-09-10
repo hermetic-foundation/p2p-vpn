@@ -79,6 +79,10 @@ Repeat each capture twice; retain failed attempts separately from successful dat
 | S6 | Ledger retention | 8/128/256 records; ten construct/refresh/drop cycles; unchanged and forced evaluations separated |
 | S7 | Android two-network background | 30-second warmup; 300-second idle and load phases; five independent disable/enable cycles |
 
+Android [load compatibility](android-sustained-load.md) passed four 3000-packet
+streams with resource sampling. Sustained phases remain open, as do high debug
+CPU attribution and the [intermittent setup failure](android-migration-resource-investigation.md).
+
 Freeze packet size/rate, transition schedules and transport settings in each
 fixture manifest before its first capture. Select supported controls from source
 and configured limits, not observed results. Record actual delivered work.
