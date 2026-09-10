@@ -392,8 +392,38 @@ not new-record validation, hostname handling, throughput or end-to-end network l
 - Offline Nix evaluation produced `/nix/store/wmw28ms4m8pxxabcvfmylzz0yil083lp-source`;
   its Rust `src` tree matches the tested worktree. This is not full Nix package realization.
 
-APK packaging and physical remeasurement remain pending for this implementation.
+Controlled physical QUIC remeasurement remains pending for this implementation.
 This does not claim to resolve the earlier physical packet loss.
+
+### Fast-Path APK Deployment
+
+Deployed source `fb47a4cc` to the authorized OnePlus over USB. Updated in place and
+reconnected its existing network; peer ID and `oneplus-9-pro` hostname were preserved.
+Wi-Fi remained selected with zero reported underlay changes, losses or recoveries.
+
+| Artifact | SHA-256 |
+| --- | --- |
+| Installed debug APK | `54181ee01fd13df9b8b7d61f726e2199ee3479e8314437e45c50c7b4c7e530e9` |
+| ARM64 native library | `63d305306b330bda584ce386d599de7b58391b652eb0970bdd09e6b746e6b5b2` |
+| Prepared Linux binary, not deployed this round | `cc35fbbd3916fb49280409569b47f561b616649be7dc97d61ebea85bc7d8d048` |
+
+- Cached APK assembly passed in seven seconds; JVM tests were up-to-date, not freshly rerun.
+  Native ELF segments retain 16 KiB alignment; APK `zipalign -c -P 16 4` passed.
+- The Nix-managed Linux service remained process `2465207`, with no runtime drop-ins.
+  No Linux configuration, pairing, firewall rule or underlay was changed.
+
+| Upgrade smoke test, 1,280-byte IPv4, DF | Replies | Mean RTT |
+| --- | --- | --- |
+| Laptop to updated phone | 10/10 | 127.494 ms |
+| Updated phone to laptop | 10/10 | 71.334 ms |
+
+Android owned-UDP payloads increased from zero to 20; owned-QUIC remained zero.
+An established QUIC session is not proof it carried these packets. This verifies the
+upgrade's basic connectivity against the unchanged Linux service, not QUIC preference or recovery.
+
+All build/install/ping commands finished; temporary storage measured 9,783,716 KiB.
+Next: temporarily deploy the prepared Linux binary and repeat the captured QUIC block/recovery
+scenario without changing endpoints or manually rescuing either runtime during measurement.
 
 ## Failed Datagram Fallback Review
 
