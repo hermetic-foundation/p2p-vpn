@@ -2,10 +2,15 @@
 
 ## Status
 
-Test-only connected allocation instrumentation passes calibration and a connected
-one-cycle recovery smoke. Both full ten-cycle allocation captures remain pending.
+Test-only connected allocation instrumentation passes calibration, a connected
+one-cycle recovery smoke and the first full ten-cycle capture. The independent
+repeat and retained-allocation attribution remain pending.
+
 It extends the existing namespace workload rather than substituting constructors
 or synthetic packet devices for connected peers.
+
+See [full capture results](connected-allocation-results.md) for the measured
+growth and remaining evidence gaps. Passing recovery does not prove bounded memory.
 
 ## Instrumentation
 
