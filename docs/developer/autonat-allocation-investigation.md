@@ -77,6 +77,10 @@ The original sampler's concurrent counter-load limitations still apply.
 - Distinguish behaviour storage from handler/transport storage before proposing a capacity or cleanup change.
 - Freeze event counts, budgets and teardown assertions before the diagnostic capture; preserve normal security defaults in production.
 
-The [isolated ownership matrix](autonat-ownership-review.md) now shows a plateau
-after first use on one connection. Exact daemon owners and a 224-byte diagnostic
-teardown residual remain open, along with pressure and broader platform coverage.
+The [isolated ownership matrix](autonat-ownership-review.md) shows a plateau
+after first use on one connection. The [global timer study](global-timer-allocation-review.md)
+attributes its 224-byte teardown differential to retained timer capacity.
+
+[Debugger lifetime captures](autonat-allocation-sites.md) identify isolated
+52-byte address and request-ID tables, all released during teardown.
+Exact daemon owners, reconnect retention and packet-pressure attribution remain open.

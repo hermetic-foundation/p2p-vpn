@@ -1,0 +1,119 @@
+{
+  "schema_version": 1,
+  "baseline_revision": "3e3d0c4e",
+  "platform": "x86_64 Linux",
+  "gdb_version": "17.2",
+  "gdb_sha256": "14ae77aa8ba582c60c780eae47a99e4539725bc5f3d8973e09b7faed761c2a79",
+  "test_binary_sha256": "bd3d2833b20278de61c7d446af5afdf062cd9ccafd2edee42afcd59b20e5a07a",
+  "preflight_tmp_kib": 8258012,
+  "command": "env P2P_VPN_REVIEW_AUTONAT_MODE=probe timeout --signal=TERM --kill-after=2s 15 prlimit --fsize=131072:131072 -- unshare --user --map-root-user --net sh -c 'ip link set lo up && exec \"$@\"' sh '/nix/store/bg2bp1zmii5spb2hkgv5xn6mzva7nx9r-gdb-17.2/bin/gdb' '-q' '-nx' '-batch' '-ex' 'set pagination off' '-ex' 'set confirm off' '-ex' 'set debuginfod enabled off' '-ex' 'set auto-load off' '-ex' 'set print frame-arguments none' '-ex' 'tbreak p2p_vpn::allocation_review::runtime::autonat::measure_autonat_refusal_ownership' '-ex' 'run' '-ex' 'python exec(\"import gdb\\nlive = {}\\nallocated = 0\\nreleased = 0\\nclass Returned(gdb.FinishBreakpoint):\\n    def __init__(self, serial):\\n        super().__init__(gdb.newest_frame(), internal=True)\\n        self.serial = serial\\n    def stop(self):\\n        address = int(gdb.parse_and_eval(\\\"$rax\\\"))\\n        if address:\\n            live[address] = self.serial\\n        return False\\nclass Alloc(gdb.Breakpoint):\\n    def stop(self):\\n        global allocated\\n        if int(gdb.parse_and_eval(\\\"$rdi\\\")) != 52:\\n            return False\\n        allocated += 1\\n        if allocated > 16:\\n            raise gdb.GdbError(\\\"allocation quota exceeded\\\")\\n        print(\\\"ALLOC\\\", allocated, \\\"SIZE\\\", 52)\\n        frame = gdb.newest_frame()\\n        for index in range(24):\\n            if frame is None:\\n                break\\n            print((frame.name() or \\\"?\\\")[:240])\\n            frame = frame.older()\\n        Returned(allocated)\\n        return False\\nclass Free(gdb.Breakpoint):\\n    def stop(self):\\n        global released\\n        address = int(gdb.parse_and_eval(\\\"$rdi\\\"))\\n        if address in live:\\n            released += 1\\n            print(\\\"FREE\\\", live.pop(address), \\\"SIZE\\\", int(gdb.parse_and_eval(\\\"$rsi\\\")))\\n        return False\\nAlloc(\\\"__rustc::__rust_alloc\\\", internal=True)\\nFree(\\\"__rustc::__rust_dealloc\\\", internal=True)\\ndef ended(event):\\n    print(\\\"LIFETIME_SUMMARY\\\", allocated, released, sorted(live.values()))\\ngdb.events.exited.connect(ended)\\n\")' '-ex' 'continue' '-ex' 'quit' '--args' '/tmp/p2p-vpn-review-target/debug/deps/p2p_vpn-6f23156eeddc81b5' 'allocation_review::runtime::autonat::measure_autonat_refusal_ownership' '--ignored' '--exact' '--nocapture' '--test-threads=1'",
+  "limits": {
+    "timeout_seconds": 15,
+    "kill_grace_seconds": 2,
+    "output_bytes": 131072,
+    "frames_per_site": 24,
+    "function_name_characters": 240
+  },
+  "preliminary": [
+    {
+      "path": "/tmp/p2p-vpn-gdb-allocation-sites-1.log",
+      "sha256": "76ac8c454d001446e74ba8585aef2d7d8bcafc76a6bd6256bc7fef987b630dec",
+      "result": "Test passed, malloc breakpoint unresolved; no allocation evidence."
+    },
+    {
+      "path": "/tmp/p2p-vpn-gdb-allocation-sites-2.log",
+      "sha256": "404e0322128a9f9550a3c552f6e30cf2d82b47330be6048ac6f233f24b427dd6",
+      "result": "Stopped at 16 sites; Python stop callback did not apply the intended GDB condition. Invalid size-filter evidence; inferior killed by batch quit."
+    },
+    {
+      "path": "/tmp/p2p-vpn-gdb-allocation-sites-3.log",
+      "sha256": "5e95c0296ef47fc3763b738ba5a97173f08dab3c4d7905d3c769764d1a70d553",
+      "result": "Explicit register filter captured seven 52-byte sites; test passed; no lifetime tracking."
+    }
+  ],
+  "captures": [
+    {
+      "path": "/tmp/p2p-vpn-gdb-allocation-lifetime-1.log",
+      "sha256": "67d0f304dfd37934df70b154c30b0b7e2536464af5494623011272c1c1fec71c",
+      "test_seconds": 10.41,
+      "allocations": 7,
+      "deallocations": 7,
+      "unfreed_ids": [],
+      "counts": [
+        10,
+        10,
+        10
+      ],
+      "exit_code": 0
+    },
+    {
+      "path": "/tmp/p2p-vpn-gdb-allocation-lifetime-2.log",
+      "sha256": "6557b56edbbf32f01f77b9b94ac27f407c733c2d8e3168d9ace99083e3be04dc",
+      "test_seconds": 10.41,
+      "allocations": 7,
+      "deallocations": 7,
+      "unfreed_ids": [],
+      "counts": [
+        10,
+        10,
+        10
+      ],
+      "exit_code": 0
+    }
+  ],
+  "owners": [
+    {
+      "ids": [
+        1,
+        5
+      ],
+      "owner": "libp2p_swarm::behaviour::listen_addresses::ListenAddresses, HashSet<Multiaddr>"
+    },
+    {
+      "ids": [
+        2
+      ],
+      "owner": "libp2p_swarm::behaviour::peer_addresses::PeerAddresses::add, inner LruCache<Multiaddr, ()> table"
+    },
+    {
+      "ids": [
+        3
+      ],
+      "owner": "PeerAddresses::add, outer LruCache<PeerId, LruCache<Multiaddr, ()>> table"
+    },
+    {
+      "ids": [
+        4
+      ],
+      "owner": "Swarm::dial address deduplication HashSet<Multiaddr>"
+    },
+    {
+      "ids": [
+        6
+      ],
+      "owner": "libp2p_request_response::Behaviour::try_send_request, HashSet<OutboundRequestId>"
+    },
+    {
+      "ids": [
+        7
+      ],
+      "owner": "libp2p_request_response::Behaviour::on_connection_handler_event, HashSet<InboundRequestId>"
+    }
+  ],
+  "release_order": [
+    4,
+    6,
+    7,
+    2,
+    3,
+    5,
+    1
+  ],
+  "limitations": [
+    "Diagnostic breakpoint overhead is not a performance measurement.",
+    "Only __rust_alloc requests of 52 bytes after entry into this test are tracked; realloc and alloc_zeroed are not tracked.",
+    "The exploratory quota raises an error rather than providing a reliable stop; fixed external timeout and file-size limit are the hard bounds. Neither validated capture hit the quota.",
+    "A nonzero debugger exit, Python error, missing normal inferior exit, unexpected count or incomplete lifetime summary invalidates a reproduction.",
+    "Full-daemon allocation owners during reconnect and pressure remain open."
+  ]
+}
