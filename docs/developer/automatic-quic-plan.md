@@ -425,6 +425,59 @@ All build/install/ping commands finished; temporary storage measured 9,783,716 K
 Next: temporarily deploy the prepared Linux binary and repeat the captured QUIC block/recovery
 scenario without changing endpoints or manually rescuing either runtime during measurement.
 
+### Fast-Path Physical Recovery Repeat
+
+Both sides ran `fb47a4cc` artifacts listed above. The laptop temporarily used the new
+binary with its existing minimal config; the phone retained its identity, profile and Wi-Fi.
+No runtime restart or manual route/endpoint change occurred during measurement.
+
+| Full-MTU IPv4 stage, DF | Replies | Mean RTT |
+| --- | --- | --- |
+| Baseline laptop to phone | 10/10 | 99.306 ms |
+| QUIC block transition | 30/45 | 142.042 ms |
+| Phone to laptop while blocked | 5/5 | 64.557 ms |
+| After unblock | 41/45 | 93.558 ms |
+| Settled laptop to phone | 60/60 | 121.002 ms |
+| Settled phone to laptop | 30/30 | 66.302 ms |
+
+- Blocked phone QUIC endpoint `192.168.0.229:48766` from 14:43:43.110 to 14:44:32.757 CDT
+  on September 10. The dedicated chain counted 42 drops; UDP endpoint `48146` remained available.
+- Baseline Linux owned-QUIC payloads grew from zero to ten, while Android still used UDP.
+  During settled checks, Linux QUIC/UDP counters changed `44/60` to `134/60`.
+- Android settled snapshots changed QUIC/UDP `14/89` to `102/89`. These asynchronous
+  snapshots show 88 additional QUIC payloads, not an exact count of all 90 settled exchanges.
+- Linux process `2491626` stayed unchanged. Android native logs retained process `10311`;
+  final status reported generation one and zero underlay selection changes/losses/recoveries.
+
+#### Remaining Loss Evidence
+
+Post-unblock sequences `7`, `17`, `22` and `41` lacked replies. Their candidate outgoing
+datagrams were captured within 3 ms of TUN ingress: UDP for the first three, QUIC for the last.
+This does not support attributing these four losses to a long laptop dispatch stall.
+
+- No matching-size return datagram appeared within the following 500 ms for those requests.
+  Encrypted outer packets remain temporal candidates, not decrypted packet attribution.
+- All 60 settled request-to-outgoing candidates were below 3 ms: median 1.319 ms,
+  nearest-rank 95th percentile 1.973 ms and maximum 2.802 ms.
+- Neither isolated timing improvements nor settled success explain the four lost replies.
+  Next: distinguish phone receive/TUN handling from ordinary underlay loss before changing routing.
+
+#### Evidence And Cleanup
+
+- `/tmp/p2p-vpn-fastpath-physical.45xpVo/` contains the capture, scoped Android logs,
+  precise Linux journal, stage pings, timestamps, endpoint snapshots and payload counters.
+- Capture: 969 underlay packets and 371 TUN packets, zero reported capture drops.
+  It covers all test stages; capture/logcat processes exited after measurement.
+- The initial attempt, `.h2nklI`, stopped before traffic because its harness waited for QUIC
+  but not UDP readiness. Retained evidence; corrected the harness within the same 60-second bound.
+- Original Nix service restored as process `2495372`, with no drop-ins. Dedicated firewall
+  chain absent; timer inactive/unloaded. Five post-restoration pings succeeded.
+- Temporary storage: 9,784,796 KiB. The optimized APK remains installed on the OnePlus.
+  The bounded host-specific script is `/tmp/p2p-vpn-fastpath-physical.sh`.
+
+This verifies another autonomous fallback/re-promotion cycle and bounded settling, with
+documented recovery-window loss. Physical movement and the earlier loss investigation remain open.
+
 ## Failed Datagram Fallback Review
 
 - Inspection found that a failed QUIC send could try UDP, then immediately drop on UDP failure
