@@ -197,6 +197,10 @@ pub(super) fn capture_phase(
     let transition_seconds = transition_started.elapsed().as_secs_f64();
     let load_before = fs::read_to_string("/proc/loadavg").expect("host load before sample");
     let started = Instant::now();
+    let capture_started_unix_millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
     let collector_before = process_sample::capture(std::process::id(), started)
         .expect("collector initial observation");
     let mut samples = Vec::new();
@@ -218,6 +222,10 @@ pub(super) fn capture_phase(
     });
     let collector_after =
         process_sample::capture(std::process::id(), started).expect("collector final observation");
+    let capture_finished_unix_millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
     for (role, _) in roles {
         let first = samples.iter().find(|row| row.role == *role).unwrap();
         let last = samples.iter().rfind(|row| row.role == *role).unwrap();
@@ -234,6 +242,8 @@ pub(super) fn capture_phase(
         .then(|| super::idle_counters::complete(&counters, roles.len(), duration));
     let report = serde_json::json!({
         "schema_version": 1, "binary_sha256": hash, "binary": env::current_exe().unwrap(),
+        "capture_started_unix_millis": capture_started_unix_millis,
+        "capture_finished_unix_millis": capture_finished_unix_millis,
         "workload": workload, "transition_seconds": transition_seconds,
         "build_profile": "cargo integration test", "topology": "two isolated namespaces; direct UDP; no Internet route",
         "fixture_metrics_interval_seconds": diagnostics_interval.as_secs(),

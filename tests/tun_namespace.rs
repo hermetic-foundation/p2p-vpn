@@ -33,6 +33,9 @@ use p2p_vpn::{
 };
 
 const CHILD_ENV: &str = "P2P_VPN_TUN_E2E_MODE";
+#[cfg(feature = "allocation-review")]
+#[path = "support/allocation_sample.rs"]
+mod allocation_sample;
 #[path = "support/idle_counters.rs"]
 mod idle_counters;
 #[path = "support/idle_sample.rs"]
@@ -3540,7 +3543,7 @@ async fn run_ready_node(
     let membership = runner::OverlayMembership::from_config(&config)?;
     let pairing_state_path =
         is_code_pairing_test_child().then(|| control_socket.with_extension("pairing-state.json"));
-    Box::pin(runner::run_node_until(
+    let run = Box::pin(runner::run_node_until(
         node,
         forwarder,
         membership,
@@ -3573,8 +3576,15 @@ async fn run_ready_node(
         false,
         None,
         std::future::pending::<runner::ShutdownReason>(),
-    ))
-    .await
+    ));
+    #[cfg(feature = "allocation-review")]
+    {
+        allocation_sample::observe(run).await
+    }
+    #[cfg(not(feature = "allocation-review"))]
+    {
+        run.await
+    }
 }
 
 async fn run_relay_child(
