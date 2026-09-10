@@ -1,0 +1,1208 @@
+{
+  "schema_version": 1,
+  "baseline": "a71106db",
+  "raw_directory": "/tmp/p2p-vpn-android-sustained-load-threads-2",
+  "clocks_hz": 100,
+  "phases": {
+    "idle": {
+      "before": {
+        "schema_version": 1,
+        "pid": 2204,
+        "start_ticks": 1918,
+        "started_uptime_seconds": 117.48,
+        "finished_uptime_seconds": 117.48,
+        "user_ticks": 383,
+        "system_ticks": 115,
+        "os_threads": 30,
+        "rss_kib": 207204,
+        "fds": 122,
+        "leader_voluntary_context_switches": 1645,
+        "leader_involuntary_context_switches": 560
+      },
+      "after": {
+        "schema_version": 1,
+        "pid": 2204,
+        "start_ticks": 1918,
+        "started_uptime_seconds": 419.07,
+        "finished_uptime_seconds": 419.07,
+        "user_ticks": 940,
+        "system_ticks": 196,
+        "os_threads": 30,
+        "rss_kib": 209296,
+        "fds": 120,
+        "leader_voluntary_context_switches": 2076,
+        "leader_involuntary_context_switches": 634
+      },
+      "emulator_before": {
+        "schema_version": 1,
+        "pid": 264,
+        "start_ticks": 89860782,
+        "started_uptime_seconds": 898729.1,
+        "finished_uptime_seconds": 898729.1,
+        "user_ticks": 6718,
+        "system_ticks": 1442,
+        "os_threads": 260,
+        "rss_kib": 3855208,
+        "fds": 146,
+        "leader_voluntary_context_switches": 36,
+        "leader_involuntary_context_switches": 9
+      },
+      "emulator_after": {
+        "schema_version": 1,
+        "pid": 264,
+        "start_ticks": 89860782,
+        "started_uptime_seconds": 899030.69,
+        "finished_uptime_seconds": 899030.69,
+        "user_ticks": 9473,
+        "system_ticks": 1787,
+        "os_threads": 250,
+        "rss_kib": 3855060,
+        "fds": 146,
+        "leader_voluntary_context_switches": 36,
+        "leader_involuntary_context_switches": 9
+      },
+      "process_rows": 300,
+      "runtime_rows": 60,
+      "rss_kib": [
+        207032,
+        210056
+      ],
+      "pss_kib": [
+        84820,
+        86876
+      ],
+      "threads": [
+        30
+      ],
+      "fds": [
+        120,
+        122
+      ],
+      "paths": [
+        {
+          "connected_peers": 2,
+          "peers_without_supported_path": 0,
+          "direct_udp_datagram": 0,
+          "direct_quic_datagram": 0,
+          "direct_quic_stream": 2,
+          "direct_tcp_stream": 0,
+          "relay": 0,
+          "public_routing_peers": 0,
+          "packet_plane_quic_sessions": 0,
+          "promotions_to_direct": 0
+        },
+        {
+          "connected_peers": 2,
+          "peers_without_supported_path": 0,
+          "direct_udp_datagram": 0,
+          "direct_quic_datagram": 0,
+          "direct_quic_stream": 2,
+          "direct_tcp_stream": 0,
+          "relay": 0,
+          "public_routing_peers": 2,
+          "packet_plane_quic_sessions": 0,
+          "promotions_to_direct": 0
+        }
+      ],
+      "queue": [
+        {
+          "queued_packets": 0,
+          "queued_bytes": 0,
+          "oldest_packet_age_millis": 0,
+          "blocked_no_supported_path_events": 0,
+          "blocked_packet_window_events": 0
+        }
+      ],
+      "first_sample": {
+        "schema_version": 1,
+        "pid": 2204,
+        "start_ticks": 1918,
+        "started_uptime_seconds": 117.51,
+        "finished_uptime_seconds": 117.54,
+        "user_ticks": 383,
+        "system_ticks": 115,
+        "os_threads": 30,
+        "rss_kib": 207204,
+        "fds": 122,
+        "leader_voluntary_context_switches": 1645,
+        "leader_involuntary_context_switches": 560
+      },
+      "last_sample": {
+        "schema_version": 1,
+        "pid": 2204,
+        "start_ticks": 1918,
+        "started_uptime_seconds": 419.02,
+        "finished_uptime_seconds": 419.05,
+        "user_ticks": 940,
+        "system_ticks": 196,
+        "os_threads": 30,
+        "rss_kib": 209296,
+        "fds": 120,
+        "leader_voluntary_context_switches": 2076,
+        "leader_involuntary_context_switches": 634
+      },
+      "all_thread_inventories_same": true,
+      "scan_seconds": {
+        "min": 0.01999999999998181,
+        "max": 0.040000000000020464,
+        "total": 9.03999999999995
+      },
+      "elapsed_seconds": 301.59,
+      "app_cpu_percent": 2.115454756457442,
+      "emulator_cpu_percent": 10.278855399715956,
+      "thread_span_seconds": 301.51,
+      "thread_deltas": [
+        {
+          "tid": 2557,
+          "start_ticks": 6494,
+          "cpu_ticks": 169,
+          "voluntary_context_switches": 3882,
+          "involuntary_context_switches": 66
+        },
+        {
+          "tid": 2556,
+          "start_ticks": 6494,
+          "cpu_ticks": 157,
+          "voluntary_context_switches": 3455,
+          "involuntary_context_switches": 56
+        },
+        {
+          "tid": 2204,
+          "start_ticks": 1918,
+          "cpu_ticks": 131,
+          "voluntary_context_switches": 431,
+          "involuntary_context_switches": 74
+        },
+        {
+          "tid": 2227,
+          "start_ticks": 1928,
+          "cpu_ticks": 128,
+          "voluntary_context_switches": 1406,
+          "involuntary_context_switches": 87
+        },
+        {
+          "tid": 2215,
+          "start_ticks": 1920,
+          "cpu_ticks": 25,
+          "voluntary_context_switches": 87,
+          "involuntary_context_switches": 18
+        },
+        {
+          "tid": 2554,
+          "start_ticks": 6494,
+          "cpu_ticks": 10,
+          "voluntary_context_switches": 1205,
+          "involuntary_context_switches": 1
+        },
+        {
+          "tid": 2265,
+          "start_ticks": 2040,
+          "cpu_ticks": 5,
+          "voluntary_context_switches": 1053,
+          "involuntary_context_switches": 1
+        },
+        {
+          "tid": 2553,
+          "start_ticks": 6494,
+          "cpu_ticks": 5,
+          "voluntary_context_switches": 1206,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2216,
+          "start_ticks": 1920,
+          "cpu_ticks": 4,
+          "voluntary_context_switches": 40,
+          "involuntary_context_switches": 3
+        },
+        {
+          "tid": 2214,
+          "start_ticks": 1920,
+          "cpu_ticks": 3,
+          "voluntary_context_switches": 37,
+          "involuntary_context_switches": 3
+        },
+        {
+          "tid": 2222,
+          "start_ticks": 1923,
+          "cpu_ticks": 2,
+          "voluntary_context_switches": 5,
+          "involuntary_context_switches": 1
+        },
+        {
+          "tid": 2221,
+          "start_ticks": 1920,
+          "cpu_ticks": 1,
+          "voluntary_context_switches": 63,
+          "involuntary_context_switches": 13
+        },
+        {
+          "tid": 2223,
+          "start_ticks": 1924,
+          "cpu_ticks": 1,
+          "voluntary_context_switches": 58,
+          "involuntary_context_switches": 22
+        },
+        {
+          "tid": 2267,
+          "start_ticks": 2041,
+          "cpu_ticks": 1,
+          "voluntary_context_switches": 113,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2210,
+          "start_ticks": 1920,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2212,
+          "start_ticks": 1920,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2213,
+          "start_ticks": 1920,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2217,
+          "start_ticks": 1920,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 40,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2218,
+          "start_ticks": 1920,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 61,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2219,
+          "start_ticks": 1920,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2220,
+          "start_ticks": 1920,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2224,
+          "start_ticks": 1924,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2228,
+          "start_ticks": 1929,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2230,
+          "start_ticks": 1932,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2231,
+          "start_ticks": 1932,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2236,
+          "start_ticks": 1973,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2253,
+          "start_ticks": 2038,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2555,
+          "start_ticks": 6494,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2558,
+          "start_ticks": 6495,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2559,
+          "start_ticks": 6495,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        }
+      ],
+      "sample_process_cpu_ticks": 638,
+      "sum_thread_cpu_ticks": 642
+    },
+    "load": {
+      "before": {
+        "schema_version": 1,
+        "pid": 2204,
+        "start_ticks": 1918,
+        "started_uptime_seconds": 419.36,
+        "finished_uptime_seconds": 419.36,
+        "user_ticks": 943,
+        "system_ticks": 198,
+        "os_threads": 30,
+        "rss_kib": 208048,
+        "fds": 120,
+        "leader_voluntary_context_switches": 2085,
+        "leader_involuntary_context_switches": 639
+      },
+      "after": {
+        "schema_version": 1,
+        "pid": 2204,
+        "start_ticks": 1918,
+        "started_uptime_seconds": 727.82,
+        "finished_uptime_seconds": 727.82,
+        "user_ticks": 28760,
+        "system_ticks": 2062,
+        "os_threads": 30,
+        "rss_kib": 208364,
+        "fds": 122,
+        "leader_voluntary_context_switches": 2489,
+        "leader_involuntary_context_switches": 1535
+      },
+      "emulator_before": {
+        "schema_version": 1,
+        "pid": 264,
+        "start_ticks": 89860782,
+        "started_uptime_seconds": 899030.98,
+        "finished_uptime_seconds": 899030.98,
+        "user_ticks": 9487,
+        "system_ticks": 1788,
+        "os_threads": 250,
+        "rss_kib": 3855060,
+        "fds": 146,
+        "leader_voluntary_context_switches": 36,
+        "leader_involuntary_context_switches": 9
+      },
+      "emulator_after": {
+        "schema_version": 1,
+        "pid": 264,
+        "start_ticks": 89860782,
+        "started_uptime_seconds": 899339.44,
+        "finished_uptime_seconds": 899339.45,
+        "user_ticks": 51317,
+        "system_ticks": 19683,
+        "os_threads": 250,
+        "rss_kib": 3855084,
+        "fds": 146,
+        "leader_voluntary_context_switches": 36,
+        "leader_involuntary_context_switches": 9
+      },
+      "process_rows": 300,
+      "runtime_rows": 60,
+      "rss_kib": [
+        207140,
+        210124
+      ],
+      "pss_kib": [
+        84963,
+        87940
+      ],
+      "threads": [
+        30
+      ],
+      "fds": [
+        120,
+        122,
+        123
+      ],
+      "paths": [
+        {
+          "connected_peers": 2,
+          "peers_without_supported_path": 0,
+          "direct_udp_datagram": 0,
+          "direct_quic_datagram": 0,
+          "direct_quic_stream": 2,
+          "direct_tcp_stream": 0,
+          "relay": 0,
+          "public_routing_peers": 0,
+          "packet_plane_quic_sessions": 0,
+          "promotions_to_direct": 0
+        },
+        {
+          "connected_peers": 2,
+          "peers_without_supported_path": 0,
+          "direct_udp_datagram": 0,
+          "direct_quic_datagram": 0,
+          "direct_quic_stream": 2,
+          "direct_tcp_stream": 0,
+          "relay": 0,
+          "public_routing_peers": 2,
+          "packet_plane_quic_sessions": 0,
+          "promotions_to_direct": 0
+        }
+      ],
+      "queue": [
+        {
+          "queued_packets": 0,
+          "queued_bytes": 0,
+          "oldest_packet_age_millis": 0,
+          "blocked_no_supported_path_events": 0,
+          "blocked_packet_window_events": 0
+        }
+      ],
+      "first_sample": {
+        "schema_version": 1,
+        "pid": 2204,
+        "start_ticks": 1918,
+        "started_uptime_seconds": 419.38,
+        "finished_uptime_seconds": 419.42,
+        "user_ticks": 943,
+        "system_ticks": 198,
+        "os_threads": 30,
+        "rss_kib": 208048,
+        "fds": 120,
+        "leader_voluntary_context_switches": 2085,
+        "leader_involuntary_context_switches": 639
+      },
+      "last_sample": {
+        "schema_version": 1,
+        "pid": 2204,
+        "start_ticks": 1918,
+        "started_uptime_seconds": 721.16,
+        "finished_uptime_seconds": 721.19,
+        "user_ticks": 28207,
+        "system_ticks": 2024,
+        "os_threads": 30,
+        "rss_kib": 207468,
+        "fds": 122,
+        "leader_voluntary_context_switches": 2486,
+        "leader_involuntary_context_switches": 1535
+      },
+      "all_thread_inventories_same": true,
+      "scan_seconds": {
+        "min": 0.029999999999972715,
+        "max": 0.04000000000007731,
+        "total": 9.819999999999993
+      },
+      "elapsed_seconds": 308.46000000000004,
+      "app_cpu_percent": 96.22317318290864,
+      "emulator_cpu_percent": 193.6231602152863,
+      "thread_span_seconds": 301.78,
+      "thread_deltas": [
+        {
+          "tid": 2557,
+          "start_ticks": 6494,
+          "cpu_ticks": 13606,
+          "voluntary_context_switches": 418614,
+          "involuntary_context_switches": 3418
+        },
+        {
+          "tid": 2556,
+          "start_ticks": 6494,
+          "cpu_ticks": 13586,
+          "voluntary_context_switches": 420353,
+          "involuntary_context_switches": 3434
+        },
+        {
+          "tid": 2265,
+          "start_ticks": 2040,
+          "cpu_ticks": 510,
+          "voluntary_context_switches": 310307,
+          "involuntary_context_switches": 681
+        },
+        {
+          "tid": 2553,
+          "start_ticks": 6494,
+          "cpu_ticks": 404,
+          "voluntary_context_switches": 55884,
+          "involuntary_context_switches": 190
+        },
+        {
+          "tid": 2554,
+          "start_ticks": 6494,
+          "cpu_ticks": 351,
+          "voluntary_context_switches": 54758,
+          "involuntary_context_switches": 5900
+        },
+        {
+          "tid": 2204,
+          "start_ticks": 1918,
+          "cpu_ticks": 166,
+          "voluntary_context_switches": 401,
+          "involuntary_context_switches": 896
+        },
+        {
+          "tid": 2558,
+          "start_ticks": 6495,
+          "cpu_ticks": 164,
+          "voluntary_context_switches": 28868,
+          "involuntary_context_switches": 117
+        },
+        {
+          "tid": 2559,
+          "start_ticks": 6495,
+          "cpu_ticks": 161,
+          "voluntary_context_switches": 28129,
+          "involuntary_context_switches": 101
+        },
+        {
+          "tid": 2227,
+          "start_ticks": 1928,
+          "cpu_ticks": 103,
+          "voluntary_context_switches": 1353,
+          "involuntary_context_switches": 482
+        },
+        {
+          "tid": 2215,
+          "start_ticks": 1920,
+          "cpu_ticks": 27,
+          "voluntary_context_switches": 107,
+          "involuntary_context_switches": 148
+        },
+        {
+          "tid": 2216,
+          "start_ticks": 1920,
+          "cpu_ticks": 4,
+          "voluntary_context_switches": 41,
+          "involuntary_context_switches": 30
+        },
+        {
+          "tid": 2221,
+          "start_ticks": 1920,
+          "cpu_ticks": 2,
+          "voluntary_context_switches": 119,
+          "involuntary_context_switches": 40
+        },
+        {
+          "tid": 2267,
+          "start_ticks": 2041,
+          "cpu_ticks": 1,
+          "voluntary_context_switches": 147,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2210,
+          "start_ticks": 1920,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2212,
+          "start_ticks": 1920,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2213,
+          "start_ticks": 1920,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2214,
+          "start_ticks": 1920,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 10,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2217,
+          "start_ticks": 1920,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 41,
+          "involuntary_context_switches": 4
+        },
+        {
+          "tid": 2218,
+          "start_ticks": 1920,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 66,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2219,
+          "start_ticks": 1920,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2220,
+          "start_ticks": 1920,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2222,
+          "start_ticks": 1923,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 1,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2223,
+          "start_ticks": 1924,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2224,
+          "start_ticks": 1924,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2228,
+          "start_ticks": 1929,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2230,
+          "start_ticks": 1932,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2231,
+          "start_ticks": 1932,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2236,
+          "start_ticks": 1973,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2253,
+          "start_ticks": 2038,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2555,
+          "start_ticks": 6494,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        }
+      ],
+      "sample_process_cpu_ticks": 29090,
+      "sum_thread_cpu_ticks": 29085
+    },
+    "drain": {
+      "before": {
+        "schema_version": 1,
+        "pid": 2204,
+        "start_ticks": 1918,
+        "started_uptime_seconds": 728.11,
+        "finished_uptime_seconds": 728.11,
+        "user_ticks": 28765,
+        "system_ticks": 2063,
+        "os_threads": 30,
+        "rss_kib": 208608,
+        "fds": 122,
+        "leader_voluntary_context_switches": 2497,
+        "leader_involuntary_context_switches": 1538
+      },
+      "after": {
+        "schema_version": 1,
+        "pid": 2204,
+        "start_ticks": 1918,
+        "started_uptime_seconds": 788.14,
+        "finished_uptime_seconds": 788.15,
+        "user_ticks": 28878,
+        "system_ticks": 2077,
+        "os_threads": 30,
+        "rss_kib": 209304,
+        "fds": 120,
+        "leader_voluntary_context_switches": 2595,
+        "leader_involuntary_context_switches": 1559
+      },
+      "emulator_before": {
+        "schema_version": 1,
+        "pid": 264,
+        "start_ticks": 89860782,
+        "started_uptime_seconds": 899339.74,
+        "finished_uptime_seconds": 899339.74,
+        "user_ticks": 51332,
+        "system_ticks": 19684,
+        "os_threads": 250,
+        "rss_kib": 3855084,
+        "fds": 146,
+        "leader_voluntary_context_switches": 36,
+        "leader_involuntary_context_switches": 9
+      },
+      "emulator_after": {
+        "schema_version": 1,
+        "pid": 264,
+        "start_ticks": 89860782,
+        "started_uptime_seconds": 899399.77,
+        "finished_uptime_seconds": 899399.78,
+        "user_ticks": 51873,
+        "system_ticks": 19754,
+        "os_threads": 250,
+        "rss_kib": 3855084,
+        "fds": 146,
+        "leader_voluntary_context_switches": 36,
+        "leader_involuntary_context_switches": 9
+      },
+      "process_rows": 60,
+      "runtime_rows": 12,
+      "rss_kib": [
+        207572,
+        210212
+      ],
+      "pss_kib": [
+        86224,
+        88108
+      ],
+      "threads": [
+        30
+      ],
+      "fds": [
+        120,
+        122
+      ],
+      "paths": [
+        {
+          "connected_peers": 2,
+          "peers_without_supported_path": 0,
+          "direct_udp_datagram": 0,
+          "direct_quic_datagram": 0,
+          "direct_quic_stream": 2,
+          "direct_tcp_stream": 0,
+          "relay": 0,
+          "public_routing_peers": 0,
+          "packet_plane_quic_sessions": 0,
+          "promotions_to_direct": 0
+        },
+        {
+          "connected_peers": 2,
+          "peers_without_supported_path": 0,
+          "direct_udp_datagram": 0,
+          "direct_quic_datagram": 0,
+          "direct_quic_stream": 2,
+          "direct_tcp_stream": 0,
+          "relay": 0,
+          "public_routing_peers": 2,
+          "packet_plane_quic_sessions": 0,
+          "promotions_to_direct": 0
+        }
+      ],
+      "queue": [
+        {
+          "queued_packets": 0,
+          "queued_bytes": 0,
+          "oldest_packet_age_millis": 0,
+          "blocked_no_supported_path_events": 0,
+          "blocked_packet_window_events": 0
+        }
+      ],
+      "first_sample": {
+        "schema_version": 1,
+        "pid": 2204,
+        "start_ticks": 1918,
+        "started_uptime_seconds": 728.14,
+        "finished_uptime_seconds": 728.17,
+        "user_ticks": 28765,
+        "system_ticks": 2063,
+        "os_threads": 30,
+        "rss_kib": 208608,
+        "fds": 122,
+        "leader_voluntary_context_switches": 2497,
+        "leader_involuntary_context_switches": 1538
+      },
+      "last_sample": {
+        "schema_version": 1,
+        "pid": 2204,
+        "start_ticks": 1918,
+        "started_uptime_seconds": 787.68,
+        "finished_uptime_seconds": 787.71,
+        "user_ticks": 28877,
+        "system_ticks": 2077,
+        "os_threads": 30,
+        "rss_kib": 209048,
+        "fds": 120,
+        "leader_voluntary_context_switches": 2595,
+        "leader_involuntary_context_switches": 1559
+      },
+      "all_thread_inventories_same": true,
+      "scan_seconds": {
+        "min": 0.01999999999998181,
+        "max": 0.04000000000007731,
+        "total": 1.8100000000005139
+      },
+      "elapsed_seconds": 60.02999999999997,
+      "app_cpu_percent": 2.11560886223555,
+      "emulator_cpu_percent": 10.178244211222982,
+      "thread_span_seconds": 59.539999999999964,
+      "thread_deltas": [
+        {
+          "tid": 2557,
+          "start_ticks": 6494,
+          "cpu_ticks": 33,
+          "voluntary_context_switches": 785,
+          "involuntary_context_switches": 15
+        },
+        {
+          "tid": 2556,
+          "start_ticks": 6494,
+          "cpu_ticks": 28,
+          "voluntary_context_switches": 660,
+          "involuntary_context_switches": 4
+        },
+        {
+          "tid": 2204,
+          "start_ticks": 1918,
+          "cpu_ticks": 27,
+          "voluntary_context_switches": 98,
+          "involuntary_context_switches": 21
+        },
+        {
+          "tid": 2227,
+          "start_ticks": 1928,
+          "cpu_ticks": 25,
+          "voluntary_context_switches": 267,
+          "involuntary_context_switches": 15
+        },
+        {
+          "tid": 2215,
+          "start_ticks": 1920,
+          "cpu_ticks": 4,
+          "voluntary_context_switches": 20,
+          "involuntary_context_switches": 4
+        },
+        {
+          "tid": 2553,
+          "start_ticks": 6494,
+          "cpu_ticks": 1,
+          "voluntary_context_switches": 238,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2554,
+          "start_ticks": 6494,
+          "cpu_ticks": 1,
+          "voluntary_context_switches": 238,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2210,
+          "start_ticks": 1920,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2212,
+          "start_ticks": 1920,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2213,
+          "start_ticks": 1920,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2214,
+          "start_ticks": 1920,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 2,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2216,
+          "start_ticks": 1920,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 8,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2217,
+          "start_ticks": 1920,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 8,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2218,
+          "start_ticks": 1920,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 13,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2219,
+          "start_ticks": 1920,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2220,
+          "start_ticks": 1920,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2221,
+          "start_ticks": 1920,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 23,
+          "involuntary_context_switches": 8
+        },
+        {
+          "tid": 2222,
+          "start_ticks": 1923,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2223,
+          "start_ticks": 1924,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2224,
+          "start_ticks": 1924,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2228,
+          "start_ticks": 1929,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2230,
+          "start_ticks": 1932,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2231,
+          "start_ticks": 1932,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2236,
+          "start_ticks": 1973,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2253,
+          "start_ticks": 2038,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2265,
+          "start_ticks": 2040,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 163,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2267,
+          "start_ticks": 2041,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 24,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2555,
+          "start_ticks": 6494,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2558,
+          "start_ticks": 6495,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        },
+        {
+          "tid": 2559,
+          "start_ticks": 6495,
+          "cpu_ticks": 0,
+          "voluntary_context_switches": 0,
+          "involuntary_context_switches": 0
+        }
+      ],
+      "sample_process_cpu_ticks": 126,
+      "sum_thread_cpu_ticks": 119
+    }
+  },
+  "traffic": [
+    {
+      "started_millis": 899030990,
+      "finished_millis": 899339340,
+      "status": 0,
+      "requested_packets": 15000,
+      "interval_seconds": 0.02,
+      "payload_bytes": 512,
+      "counts": {
+        "sent": 15000,
+        "received": 15000,
+        "loss_percent": 0
+      }
+    },
+    {
+      "started_millis": 899030990,
+      "finished_millis": 899339320,
+      "status": 0,
+      "requested_packets": 15000,
+      "interval_seconds": 0.02,
+      "payload_bytes": 512,
+      "counts": {
+        "sent": 15000,
+        "received": 15000,
+        "loss_percent": 0
+      }
+    },
+    {
+      "started_millis": 899030990,
+      "finished_millis": 899339420,
+      "status": 0,
+      "requested_packets": 15000,
+      "interval_seconds": 0.02,
+      "payload_bytes": 512,
+      "counts": {
+        "sent": 15000,
+        "received": 15000,
+        "loss_percent": 0
+      }
+    },
+    {
+      "started_millis": 899030990,
+      "finished_millis": 899339340,
+      "status": 0,
+      "requested_packets": 15000,
+      "interval_seconds": 0.02,
+      "payload_bytes": 512,
+      "counts": {
+        "sent": 15000,
+        "received": 15000,
+        "loss_percent": 0
+      }
+    }
+  ],
+  "sha256": {
+    "/tmp/p2p-vpn-android-sustained-load-threads-2/sustained-drain-boundary-after.jsonl": "5a5832e04c777d71b0c465a3eb77f4086e3450aaa91cf3f7671d14a4f3f22b36",
+    "/tmp/p2p-vpn-android-sustained-load-threads-2/sustained-drain-boundary-before.jsonl": "18d1f6e495f00c167fec6f36e7540037b53e7c87271f7755a91bad40637b6ccd",
+    "/tmp/p2p-vpn-android-sustained-load-threads-2/sustained-drain-emulator-after.jsonl": "3138a9418b1e50de4f01e115f8e51ea164d6d12360c37e80e049e1b7ff8cab22",
+    "/tmp/p2p-vpn-android-sustained-load-threads-2/sustained-drain-emulator-before.jsonl": "8c5a85a647d5b75baae0e256e5705566af5884ee96a62bee86525a51911a7474",
+    "/tmp/p2p-vpn-android-sustained-load-threads-2/sustained-drain-host-load-after.txt": "6be873c822c07b22fc734ad466ceeea0e2703d5c7c18b65d1812b77957640905",
+    "/tmp/p2p-vpn-android-sustained-load-threads-2/sustained-drain-host-load-before.txt": "498e885717683c8be7fb210183f063be5f45ee772e82a4b838470eb08319d12e",
+    "/tmp/p2p-vpn-android-sustained-load-threads-2/sustained-drain-process-after.jsonl": "676ad5ecef5d93f5703718185a1463b6836c7df1e9cd6db8fba0692b3ef2a25d",
+    "/tmp/p2p-vpn-android-sustained-load-threads-2/sustained-drain-process-before.jsonl": "a784b1e25e0a77d244b06fdd7c68e00199e33da552d138c63c47d14f9b288318",
+    "/tmp/p2p-vpn-android-sustained-load-threads-2/sustained-drain-process.jsonl": "7d1a3d7d6856afc158119a30f44159031b66ca2968ec84f271207dbeb3bddcf4",
+    "/tmp/p2p-vpn-android-sustained-load-threads-2/sustained-drain-runtime.jsonl": "03095d07a35af969b8f05c448e59b893a17c488e68011bbdcfba2f0b925a4809",
+    "/tmp/p2p-vpn-android-sustained-load-threads-2/sustained-drain-window.json": "f1be7d3b8e878f8ebc320032a76129c8d82d70f111b33e131007201a2533f96e",
+    "/tmp/p2p-vpn-android-sustained-load-threads-2/sustained-idle-boundary-after.jsonl": "56350d6779f258a97f9bb9d3f4b362991f93f47ca98990ef88d3489bfbd49211",
+    "/tmp/p2p-vpn-android-sustained-load-threads-2/sustained-idle-boundary-before.jsonl": "d8558066c1cb2173db4298512d6e9700dfa23ea5abb253bb0027edd50b42c94a",
+    "/tmp/p2p-vpn-android-sustained-load-threads-2/sustained-idle-emulator-after.jsonl": "dc49b98884522e9a4b4ecccb45be16798a218ce64c6ab889b4bbf41c2870f257",
+    "/tmp/p2p-vpn-android-sustained-load-threads-2/sustained-idle-emulator-before.jsonl": "a740b2f2f6074a4b6f332524addc11bd491e4b98b3b902391e7f407d886b1e2b",
+    "/tmp/p2p-vpn-android-sustained-load-threads-2/sustained-idle-host-load-after.txt": "553fbfa9ba066449eedde5bd7099456125596eb058a5623f1602cd141301e001",
+    "/tmp/p2p-vpn-android-sustained-load-threads-2/sustained-idle-host-load-before.txt": "6a9bcfb05bd0d4f95ec8c84388201e926221be3eea538e6b971a7b709045d399",
+    "/tmp/p2p-vpn-android-sustained-load-threads-2/sustained-idle-process-after.jsonl": "2b84776e48a4fb9994212d87f224059382b4f03a452b70ac3d07c63e8821fb97",
+    "/tmp/p2p-vpn-android-sustained-load-threads-2/sustained-idle-process-before.jsonl": "f7f5bb2ba493ec5879faa64b5411990108cc3744dcdad3568e7b0c0c93f68d2c",
+    "/tmp/p2p-vpn-android-sustained-load-threads-2/sustained-idle-process.jsonl": "c221dbc9ae237523802bb514847073ba3143dbfc1ee4cbc48f8aba9028ce91fb",
+    "/tmp/p2p-vpn-android-sustained-load-threads-2/sustained-idle-runtime.jsonl": "4adc3d7391903564372fce9d90d1fd1f45728b139a9dc10ee3e1db1cb57bfb43",
+    "/tmp/p2p-vpn-android-sustained-load-threads-2/sustained-idle-window.json": "33019e7e6c53faeefe009edbd4b8318425699db8162eba5dc5c81c9185fc5c63",
+    "/tmp/p2p-vpn-android-sustained-load-threads-2/sustained-load-alpha-ipv4-counts.json": "b8977db3f99aaabe762d859f5f3ab515120767401446d2db3c9d15c9dd1d2671",
+    "/tmp/p2p-vpn-android-sustained-load-threads-2/sustained-load-alpha-ipv4.json": "85344345a08445d252b8843b8f1ee27149c3e59638a06cca1e6353703f08b35a",
+    "/tmp/p2p-vpn-android-sustained-load-threads-2/sustained-load-alpha-ipv4.txt": "478f3faac0bd7b110689dd9a7d8bfc47672d8e28f81e4053a517c30a020c7f61",
+    "/tmp/p2p-vpn-android-sustained-load-threads-2/sustained-load-alpha-ipv6-counts.json": "b8977db3f99aaabe762d859f5f3ab515120767401446d2db3c9d15c9dd1d2671",
+    "/tmp/p2p-vpn-android-sustained-load-threads-2/sustained-load-alpha-ipv6.json": "c7a487c6c88b9a1500cace8c26f4a4940e94859e2b885a417b0c2ffe61cf0090",
+    "/tmp/p2p-vpn-android-sustained-load-threads-2/sustained-load-alpha-ipv6.txt": "2c7fc321e7f5ffaa9164a1a62d2f9f4bb2fe83c5f334bb166168d2734f34a2b0",
+    "/tmp/p2p-vpn-android-sustained-load-threads-2/sustained-load-beta-ipv4-counts.json": "b8977db3f99aaabe762d859f5f3ab515120767401446d2db3c9d15c9dd1d2671",
+    "/tmp/p2p-vpn-android-sustained-load-threads-2/sustained-load-beta-ipv4.json": "367bfe5d6dfcd39da9db9adda06bf3056e293d84a2605a92881573bd612fcb67",
+    "/tmp/p2p-vpn-android-sustained-load-threads-2/sustained-load-beta-ipv4.txt": "723a9a597e76c9fd749e142889b60d4dc082cbfe5dcae3187cff44cb745c26df",
+    "/tmp/p2p-vpn-android-sustained-load-threads-2/sustained-load-beta-ipv6-counts.json": "b8977db3f99aaabe762d859f5f3ab515120767401446d2db3c9d15c9dd1d2671",
+    "/tmp/p2p-vpn-android-sustained-load-threads-2/sustained-load-beta-ipv6.json": "85344345a08445d252b8843b8f1ee27149c3e59638a06cca1e6353703f08b35a",
+    "/tmp/p2p-vpn-android-sustained-load-threads-2/sustained-load-beta-ipv6.txt": "e45410ae7b14f34a9aafde92e55f64aa58b45f45207faf08937ec6fc02eac3e7",
+    "/tmp/p2p-vpn-android-sustained-load-threads-2/sustained-load-boundary-after.jsonl": "18269840c091d6e5cf5d4b2a5deb144ea50a66b38e4b23184a77db116b04f6cb",
+    "/tmp/p2p-vpn-android-sustained-load-threads-2/sustained-load-boundary-before.jsonl": "4e5ed5c9d7338ddc3312d73b713296625dfcbebba93c313e7900bee85cdaad12",
+    "/tmp/p2p-vpn-android-sustained-load-threads-2/sustained-load-emulator-after.jsonl": "afea59e6dbf601459ce19a1b4f9be82c468c2a39ad9882dec17d82f482366a4f",
+    "/tmp/p2p-vpn-android-sustained-load-threads-2/sustained-load-emulator-before.jsonl": "9b939ca5ae3d3742ee4e64f26cdcafd91bdd8da7b2ba2b0745f39254868901a5",
+    "/tmp/p2p-vpn-android-sustained-load-threads-2/sustained-load-host-load-after.txt": "01da8924b80c003f7075344a6a5c6a98e60b558de4a9855eea52528cb1a5dc92",
+    "/tmp/p2p-vpn-android-sustained-load-threads-2/sustained-load-host-load-before.txt": "c909525330d12d4991c4107e71f49db5d050c9c9acc4a8eacb9c4672137c85b3",
+    "/tmp/p2p-vpn-android-sustained-load-threads-2/sustained-load-process-after.jsonl": "87b72b68d70db9fe584e09a54faa41e3d84e8c8ac954070898a4b0c7f6391cef",
+    "/tmp/p2p-vpn-android-sustained-load-threads-2/sustained-load-process-before.jsonl": "553ea8cea16303ced06553729f5ecdfc0b44707b14f38900b62d117232acfad3",
+    "/tmp/p2p-vpn-android-sustained-load-threads-2/sustained-load-process.jsonl": "e9dc79f782d11aa637d710eddc7ce6a7e9adb9847c98690ca45a90bae5d4979f",
+    "/tmp/p2p-vpn-android-sustained-load-threads-2/sustained-load-runtime.jsonl": "9e452422929da5b2cd047c9cfec556ee710f7ffdb517a1ee170942a4c1f833f3",
+    "/tmp/p2p-vpn-android-sustained-load-threads-2/sustained-load-window.json": "a787f3a74a247d5b7e98e55c6c5879234bc41e80b8750e2c3ba1cbf25d84d879",
+    "/tmp/p2p-vpn-android-sustained-load-threads-2/evidence.json": "94b97cd3af835dcd5b4d359b23ec5e68baed212ded5869d6f16e997070c34a83",
+    "scripts/android-process-sample.sh": "f27f0f681ad234af45b0d1b28a240b3905c42529a240b327dc15351e891baa2d",
+    "scripts/android-resource-controls.sh": "bb52a474a399bf4f9e72bc6d7d4540778ae235493ce092f762f5243ddb4d1261",
+    "scripts/android-e2e.sh": "5f19a7f1e4a7158ea099ce345e1b110dad16ab5c789244282e50671e8cda2635"
+  },
+  "limitations": [
+    "Debug emulator, not release or physical battery evidence.",
+    "Two QUIC streams; earlier sustained capture used mixed QUIC/TCP.",
+    "Anonymous stable thread IDs do not identify functions or establish root cause.",
+    "Thread scans are non-atomic; quantization and boundary skew affect summed ticks.",
+    "Load thread observations end before ping completion; endpoint CPU spans full load.",
+    "RSS/PSS and sampled queue values do not prove allocation release."
+  ]
+}

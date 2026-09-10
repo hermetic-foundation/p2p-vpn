@@ -215,3 +215,64 @@ The shorter thread-control windows did not exceed their endpoint allowance.
 - Tests cover scan-cost subtraction, second-boundary rollover, default live sampling and invalid clocks.
 - Existing timing/count/traffic limits remain unchanged; a fresh sustained capture is still required.
 - Do not relabel the retained failed capture as a successful idle or load result.
+
+### Thread Attempt 2 Manifest
+
+- Baseline `a71106db`; only thread sampling cadence changed from attempt 1.
+- Sampler SHA-256: `f27f0f681ad234af45b0d1b28a240b3905c42529a240b327dc15351e891baa2d`.
+- Output: `/tmp/p2p-vpn-android-sustained-load-threads-2`.
+- Pre-run storage: 8,241,740 KiB; no emulator, fixture or build process running.
+- Same APK, fixture, permission setup, 300/300/60 phases, traffic and 1000/1040-second watchdogs.
+- All count, loss, cadence and endpoint bounds unchanged; retain failures without rescue.
+
+### Thread Attempt 2 Results
+
+All phases passed with all six cleanup flags true.
+[Portable thread results](android-sustained-thread-results.json) retain process
+endpoints, thread deltas, traffic summaries and 49 raw/source hashes.
+
+| Measurement | Idle | Load | Drain |
+| --- | --- | --- | --- |
+| Endpoint elapsed, seconds | 301.59 | 308.46 | 60.03 |
+| App CPU, percent of one core | 2.115 | 96.223 | 2.116 |
+| Emulator CPU, percent of one core | 10.279 | 193.623 | 10.178 |
+| Process / runtime rows | 300 / 60 | 300 / 60 | 60 / 12 |
+| RSS range, KiB | 207032-210056 | 207140-210124 | 207572-210212 |
+| PSS range, KiB | 84820-86876 | 84963-87940 | 86224-88108 |
+| Descriptor range | 120-122 | 120-123 | 120-122 |
+| Process CPU ticks between sampled endpoints | 638 | 29090 | 126 |
+| Sum of stable-thread CPU tick deltas | 642 | 29085 | 119 |
+
+- All four traffic legs sent and received 15000 packets; durations were 308.33-308.43 seconds.
+- The app PID/start identity remained 2204/1918; all samples retained the same 30 thread identities.
+- Every runtime sample showed two QUIC-stream overlay paths; private infrastructure count was zero or two.
+- Sampled queues were empty. These snapshots do not exclude between-sample backlog.
+- Thread scans took 20-40 ms idle/drain and 30-40 ms under load; corrected cadence passed unchanged limits.
+
+#### Thread Attribution
+
+| Thread ID / Start Tick | Idle CPU Ticks | Load CPU Ticks | Drain CPU Ticks |
+| --- | --- | --- | --- |
+| 2556 / 6494 | 157 | 13586 | 28 |
+| 2557 / 6494 | 169 | 13606 | 33 |
+
+These two threads account for 27192 of 29090 sampled load process ticks, about
+93.5%. Their load voluntary context-switch deltas are 420353 and 418614.
+This identifies where scheduling cost concentrates, not which functions cause it.
+
+- Thread spans: 301.51 seconds idle, 301.78 load and 59.54 drain.
+- Load thread sampling ends before the final ping replies; process endpoints span the complete traffic interval.
+- Tick rounding and non-atomic scans explain why thread totals need not equal process totals exactly.
+- Stable sampled inventories cannot exclude short-lived threads between observations.
+- Context switches are scheduling proxies, not hardware wakeups or measured battery consumption.
+
+#### Interpretation
+
+CPU returned to the same idle level after load. The two complete sustained
+captures both deliver all 60000 replies, but differ in transport mix, notification
+setup and thread-collector mode. They are not a controlled QUIC-versus-TCP comparison.
+
+- High debug-load CPU is reproducible; function-level attribution remains open.
+- RSS/PSS overlap is not evidence of complete allocation release.
+- Collector timing correction is verified on the sustained emulator workload.
+- This closes neither the whole resource review nor release/platform acceptance.
