@@ -118,6 +118,25 @@ Acceptance remains incomplete. Local evidence does not certify physical Android 
 - Previously prepared APK/Linux artifacts do not contain this provider-key correction.
   No configuration, deployment or on-device pairing changes were made for this fix.
 
+### Provider Server Fixture
+
+- Added a three-node TCP/Noise/Yamux loopback fixture under a fixed 20-second deadline.
+  The server applies the public provider-key length restriction before accepting incoming records.
+- Negative control: the legacy 90-byte key reaches the server but is not stored.
+  Positive control: the 34-byte replacement is stored and returned to an independent lookup client.
+- The test checks provider identity and the advertised endpoint, not just query completion.
+  No public bootstrap peers, physical devices or background server processes are used.
+- This fixture mirrors provider storage admission, not every Go handler or IPNS validation rule.
+  Public-server behavior, custom value publication and physical cellular acceptance remain unproven.
+- First run failed the endpoint assertion: Kad decoding appends the provider's peer ID.
+  Corrected the expected endpoint to include that identity; retained `/tmp/p2p-vpn-provider-server-fixture.log`.
+- Corrected run passed in 0.06s, followed by three successful repetitions.
+  Evidence: `/tmp/p2p-vpn-provider-server-fixture-retry.log` and `/tmp/p2p-vpn-provider-server-repeat-{1,2,3}.log`.
+- Formatting and required Clippy groups passed with existing warnings.
+  Evidence: `/tmp/p2p-vpn-provider-server-clippy.log` (17.39s).
+- This addition is test-only; existing prepared native artifacts still predate the provider-key fix.
+  No runtime, configuration, pairing or phone changes were made.
+
 ### Requirement Status
 
 | Requirement | Verified evidence | Remaining work |

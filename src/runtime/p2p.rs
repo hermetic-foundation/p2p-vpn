@@ -34,6 +34,9 @@ use crate::{
     },
 };
 
+#[cfg(test)]
+mod public_provider_tests;
+
 const PROTOCOL_VERSION: &str = "/p2p-vpn/0.1.0";
 const CONNECTION_PING_INTERVAL: Duration = Duration::from_secs(15);
 const CONNECTION_PING_TIMEOUT: Duration = Duration::from_secs(20);
