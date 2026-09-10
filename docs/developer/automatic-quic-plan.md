@@ -562,6 +562,54 @@ The host-specific physical test script now checks the new Linux artifact hash.
 Next: test with both updated runtimes and verify restart/session behavior without changing
 identities or using manual endpoint configuration. The earlier physical loss remains unresolved.
 
+### Updated Pair And Linux Restart
+
+Both test runtimes used `8b4e8d55`. Evidence is retained under
+`/tmp/p2p-vpn-fastpath-physical.UPgz0j/`, including separate captures before and after
+the planned Linux restart. The phone stayed on Wi-Fi with its existing identity/profile.
+
+| Full-MTU IPv4/DF stage | Replies |
+| --- | --- |
+| Initial baseline | 10/10 |
+| QUIC block transition | 26/45 |
+| Phone to laptop while blocked | 5/5 |
+| After unblock | 45/45 |
+| Settled laptop to phone | 60/60 |
+| Settled phone to laptop | 27/30; sequences 25, 26 and 29 lost |
+| After planned Linux restart | 42/45; only initial sequences 1-3 lost |
+| Phone to restarted Linux | 10/10 |
+| Simultaneous direct LAN control | 250/253; sequences 188, 189 and 197 lost |
+
+- Blocked phone QUIC port `40249` from 15:06:49.068 to 15:07:39.010 CDT on September 10;
+  UDP port `42493` stayed available. The dedicated chain counted 41 dropped packets.
+- Linux process `2515327` remained unchanged through recovery/settling. The separately
+  scheduled restart created process `2518947`; it was not a rescue of the earlier failed check.
+- After restart, Linux sent 52 owned-QUIC payloads and zero owned-UDP payloads.
+  Android restart snapshots grew by 25 QUIC and 26 UDP payloads, so return traffic was mixed.
+- Android inbound replay/drop counters and packet-plane rejection counters stayed zero.
+  Its retained native logs contain no packet rejection events during this measurement.
+
+#### Underlay Correlation
+
+Direct LAN requests 188 and 189, at epoch `1789070986.644` and `1789070987.706`,
+lacked replies during the same interval as missing overlay requests 25 and 26.
+Neither overlay request appeared at the laptop TUN interface.
+
+This supports an underlay contribution to those two losses, rather than establishing a
+VPN rejection. Overlay request 29 also never appeared at the laptop TUN, but nearby LAN
+pings passed. That request remains unclassified; do not equate all loss with a protocol defect or Wi-Fi.
+
+#### Cleanup And Limits
+
+- Restart-phase capture: 413 underlay packets and 107 TUN packets, zero reported drops.
+  A new capture attached to the recreated TUN; the original capture was retained separately.
+- Original Nix service restored as process `2520685`, with no runtime drop-ins. Test chain
+  absent and timer inactive; all owned capture/ping/logcat processes exited. Follow-up pings: 5/5.
+- This demonstrates autonomous recovery after blocking and a planned process restart,
+  not loss-free service. The random-ID regression remains the direct proof of the entropy fix.
+- Physical network movement remains untested with these artifacts. Prepare that test before
+  requesting a user-coordinated Wi-Fi/hotspot change; USB remains management only.
+
 ## Failed Datagram Fallback Review
 
 - Inspection found that a failed QUIC send could try UDP, then immediately drop on UDP failure
