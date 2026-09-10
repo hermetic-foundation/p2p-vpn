@@ -34,6 +34,7 @@ No physical device or deployed host is authorized for this work.
 | [Queue allocations](queue-allocation-review.md) | Four captures, 40 cycles; exact payload release, stable container storage, full owner release | Transport buffers and full-process pressure retention |
 | [Sustained traffic fixture](sustained-traffic-review.md) | Two full captures: 30000/30000, stable descriptors, CPU settles below 0.2% per node after load | Broader allocation attribution, churn and multi-network workloads remain open |
 | [Capability retirement](capability-retirement-review.md) | Retry gap reproduced; guarded correction and dispatch regressions pass | Live follow-ups pass but did not exercise the retry branch |
+| [Lifecycle churn fixture](lifecycle-churn-review.md) | Fixed manifest; one-cycle demotion/recovery/settling smoke passes | Both sustained ten-cycle captures and multi-network isolation pending |
 | [Kademlia acceptance](kademlia-workstream-acceptance.md) | Enforcement and scoped recovery fixes | RM-2 sampling, RM-3 unequal work, RM-4 backend confounding, RM-5 allocation attribution |
 | [Android lifecycle](android-lifecycle-audit.md) | Ownership regressions and multi-network restoration | Sustained CPU/memory and physical battery behavior |
 

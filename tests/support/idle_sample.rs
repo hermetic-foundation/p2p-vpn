@@ -144,6 +144,7 @@ pub(super) fn capture_with_transition(
             duration,
             warmup: WARMUP,
             report_name: "idle-sample.json",
+            diagnostics_interval: METRICS_INTERVAL,
         },
         transition,
     );
@@ -154,6 +155,7 @@ pub(super) struct Phase<'a> {
     pub duration: Duration,
     pub warmup: Duration,
     pub report_name: &'a str,
+    pub diagnostics_interval: Duration,
 }
 
 pub(super) fn capture_phase(
@@ -167,6 +169,7 @@ pub(super) fn capture_phase(
         duration,
         warmup,
         report_name,
+        diagnostics_interval,
     } = phase;
     let runtime_sampling = match env::var(RUNTIME_SAMPLING_ENV) {
         Ok(value) => Some(value),
@@ -233,7 +236,7 @@ pub(super) fn capture_phase(
         "schema_version": 1, "binary_sha256": hash, "binary": env::current_exe().unwrap(),
         "workload": workload, "transition_seconds": transition_seconds,
         "build_profile": "cargo integration test", "topology": "two isolated namespaces; direct UDP; no Internet route",
-        "fixture_metrics_interval_seconds": METRICS_INTERVAL.as_secs(),
+        "fixture_metrics_interval_seconds": diagnostics_interval.as_secs(),
         "available_parallelism": thread::available_parallelism().unwrap().get(),
         "kernel_release": fs::read_to_string("/proc/sys/kernel/osrelease").unwrap().trim(),
         "host_load_before": load_before.trim(),

@@ -25,6 +25,25 @@ pub fn capture(temp: &Path, pid_a: u32, pid_b: u32, address_b: Ipv4Addr) {
         );
     });
 
+    recover(
+        temp,
+        pid_a,
+        pid_b,
+        address_b,
+        "idle-sample.json",
+        "unavailable-recovery.json",
+    );
+}
+
+pub(super) fn recover(
+    temp: &Path,
+    pid_a: u32,
+    pid_b: u32,
+    address_b: Ipv4Addr,
+    outage_report: &str,
+    recovery_report: &str,
+) {
+    let roles = [("a", pid_a), ("b", pid_b)];
     // The outage report is already durable if recovery subsequently fails.
     let started = Instant::now();
     super::ns_command(pid_b, "ip", &["link", "set", "veth-b", "up"]);
@@ -99,14 +118,12 @@ pub fn capture(temp: &Path, pid_a: u32, pid_b: u32, address_b: Ipv4Addr) {
             idle_sample::process_observation(role, *pid, started)).collect::<Vec<_>>(),
     });
     let bytes = serde_json::to_vec_pretty(&report).unwrap();
-    let outage_bytes = std::fs::metadata(temp.join("idle-sample.json"))
-        .unwrap()
-        .len();
+    let outage_bytes = std::fs::metadata(temp.join(outage_report)).unwrap().len();
     assert!(
         outage_bytes + u64::try_from(bytes.len()).unwrap() <= 8 * 1024 * 1024,
         "combined outage/recovery reports exceed budget"
     );
-    std::fs::write(temp.join("unavailable-recovery.json"), bytes).unwrap();
+    std::fs::write(temp.join(recovery_report), bytes).unwrap();
     assert!(
         success,
         "peer did not recover within the fixed deadline; report retained"

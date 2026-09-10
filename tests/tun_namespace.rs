@@ -39,6 +39,8 @@ mod idle_counters;
 mod idle_sample;
 #[path = "support/kademlia_resources.rs"]
 mod kademlia_resources;
+#[path = "support/lifecycle_churn.rs"]
+mod lifecycle_churn;
 #[path = "support/paced_ping.rs"]
 mod paced_ping;
 #[path = "support/process_sample.rs"]
@@ -73,6 +75,16 @@ const NETWORK_MOVE_TEST_NAME: &str = "tun_namespace_recovers_relay_and_direct_af
 const DHT_TEST_NAME: &str = "tun_namespace_ping_crosses_dht_discovered_overlay";
 const NETWORK_NAME: &str = "tun-e2e";
 const NODE_A_LOCAL_ROUTE_ADDRESS: Ipv4Addr = Ipv4Addr::new(10, 41, 0, 9);
+
+#[test]
+#[ignore = "bounded lifecycle churn resource capture; requires isolated namespaces"]
+fn tun_namespace_measures_lifecycle_churn_resources() {
+    match env::var(CHILD_ENV).as_deref() {
+        Ok("orchestrator") => run_direct_orchestrator(lifecycle_churn::TEST_NAME),
+        Ok("node") => run_node_child(),
+        _ => reexec_orchestrator(lifecycle_churn::TEST_NAME),
+    }
+}
 
 #[test]
 #[ignore = "bounded sustained traffic resource capture; requires isolated namespaces"]
@@ -465,7 +477,7 @@ outbound_quic_datagram_packets 1\n";
 
 fn reexec_orchestrator(test_name: &str) {
     let current_exe = env::current_exe().expect("current test binary");
-    if test_name == sustained_traffic::TEST_NAME {
+    if [sustained_traffic::TEST_NAME, lifecycle_churn::TEST_NAME].contains(&test_name) {
         assert!(
             keep_temp_artifacts(),
             "sustained traffic requires retained evidence"
@@ -480,6 +492,15 @@ fn reexec_orchestrator(test_name: &str) {
             _ => panic!("sustained traffic requires runtime counter sampling"),
         }
         sustained_traffic::settings();
+    }
+    if test_name == lifecycle_churn::TEST_NAME {
+        lifecycle_churn::requested_cycles();
+        for name in [ORCHESTRATOR_TIMEOUT_ENV, WAIT_TIMEOUT_SCALE_ENV] {
+            assert!(
+                env::var_os(name).is_none(),
+                "churn capture forbids deadline overrides"
+            );
+        }
     }
     if test_name == QUEUE_PRESSURE_TEST_NAME {
         queue_pressure::requested_limits();
@@ -502,7 +523,9 @@ fn reexec_orchestrator(test_name: &str) {
         );
         idle_sample::WARMUP + duration
     });
-    let default_timeout = if test_name == sustained_traffic::TEST_NAME {
+    let default_timeout = if test_name == lifecycle_churn::TEST_NAME {
+        lifecycle_churn::watchdog()
+    } else if test_name == sustained_traffic::TEST_NAME {
         Duration::from_secs(90) + sustained_traffic::duration_budget()
     } else if test_name == unavailable_peer::TEST_NAME {
         Duration::from_secs(90) + unavailable_peer::WATCHDOG_EXTRA
@@ -537,6 +560,7 @@ fn reexec_orchestrator(test_name: &str) {
         || test_name == recovery_soak::TEST_NAME
         || test_name == tcp_collision::TEST_NAME
         || test_name == sustained_traffic::TEST_NAME
+        || test_name == lifecycle_churn::TEST_NAME
     {
         eprint!("{}", String::from_utf8_lossy(&output.stderr));
     }
@@ -632,6 +656,8 @@ fn run_direct_orchestrator(test_name: &str) {
         unavailable_peer::capture(&temp_dir, node_a.id(), node_b.id(), address_b);
     } else if test_name == sustained_traffic::TEST_NAME {
         sustained_traffic::capture(&temp_dir, node_a.id(), node_b.id(), address_b);
+    } else if test_name == lifecycle_churn::TEST_NAME {
+        lifecycle_churn::capture(&temp_dir, node_a.id(), node_b.id(), address_b);
     } else {
         idle_sample::capture(&temp_dir, &[("a", node_a.id()), ("b", node_b.id())]);
     }
@@ -2112,6 +2138,7 @@ fn namespace_replay_env_exports() -> String {
             idle_sample::SAMPLE_ENV,
             idle_sample::RUNTIME_SAMPLING_ENV,
             sustained_traffic::SMOKE_ENV,
+            lifecycle_churn::SMOKE_ENV,
             queue_pressure::ROUNDS_ENV,
             queue_pressure::LIMIT_ENV,
             queue_pressure::INITIATOR_ENV,
@@ -3523,7 +3550,9 @@ async fn run_ready_node(
         config.queue,
         config.resources,
         Some(
-            if idle_sample::requested_duration().is_some()
+            if env::args().any(|argument| argument == lifecycle_churn::TEST_NAME) {
+                lifecycle_churn::DIAGNOSTICS_INTERVAL
+            } else if idle_sample::requested_duration().is_some()
                 || env::args().any(|argument| argument == sustained_traffic::TEST_NAME)
             {
                 idle_sample::METRICS_INTERVAL

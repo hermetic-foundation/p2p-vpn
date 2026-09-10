@@ -125,6 +125,7 @@ pub fn capture(temp: &Path, pid_a: u32, pid_b: u32, destination: Ipv4Addr) {
             duration: Duration::from_secs(u64::from(traffic.seconds)),
             warmup: idle_sample::WARMUP,
             report_name: "traffic-sample.json",
+            diagnostics_interval: idle_sample::METRICS_INTERVAL,
         },
         || {
             let log = File::create(temp.join("traffic-worker.log")).unwrap();
@@ -183,6 +184,7 @@ pub fn capture(temp: &Path, pid_a: u32, pid_b: u32, destination: Ipv4Addr) {
             duration: drain,
             warmup: Duration::ZERO,
             report_name: "traffic-drain-sample.json",
+            diagnostics_interval: idle_sample::METRICS_INTERVAL,
         },
         || {},
     );
