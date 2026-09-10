@@ -335,9 +335,25 @@ resource_control_window() (
   fi
 )
 
+run_android_sustained_load() {
+  local detail="${1:-process}" phase duration traffic
+  [[ "$detail" == process || "$detail" == threads ]] || return 2
+  for phase in idle load drain; do
+    duration=300 traffic=idle
+    [[ "$phase" != load ]] || traffic=load
+    [[ "$phase" != drain ]] || duration=60
+    record_step "sustained_$phase" started "Fixed $duration-second phase with $traffic traffic; $detail sampling"
+    resource_control_window on "$output_dir/sustained-$phase" "$duration" "$traffic" "$detail" || return 1
+    record_step "sustained_$phase" passed "Phase observations and traffic checks passed"
+  done
+}
+
 run_android_resource_controls() {
   local resource_collector="${P2P_VPN_ANDROID_PROCESS_COLLECTOR:-$(dirname "$0")/android-process-sample.sh}"
-  local resource_app_pid resource_emulator_pid index=0 mode phase duration traffic detail
+  local resource_app_pid resource_emulator_pid index=0 mode detail
+  local load_detail="${P2P_VPN_ANDROID_RESOURCE_LOAD_DETAIL:-process}"
+  [[ "$load_detail" == process || "$load_detail" == threads ]] || return 2
+  [[ "$load_detail" == process || "${scenario:-}" == multi-network-resource-load ]] || return 2
   adb_run root >"$output_dir/resource-root.txt" || return 1
   adb_run wait-for-device || return 1
   [[ "$(adb_run shell id -u | tr -d '\r')" == 0 ]] || return 1
@@ -377,15 +393,8 @@ run_android_resource_controls() {
     return 0
   fi
   if [[ "${scenario:-}" == multi-network-resource-load ]]; then
-    for phase in idle load drain; do
-      duration=300 traffic=idle
-      [[ "$phase" != load ]] || traffic=load
-      [[ "$phase" != drain ]] || duration=60
-      record_step "sustained_$phase" started "Fixed $duration-second phase with $traffic traffic"
-      resource_control_window on "$output_dir/sustained-$phase" "$duration" "$traffic" || return 1
-      record_step "sustained_$phase" passed "Phase observations and traffic checks passed"
-    done
-    return 0
+    run_android_sustained_load "$load_detail"
+    return $?
   fi
   for mode in off on on off; do
     index=$((index + 1))

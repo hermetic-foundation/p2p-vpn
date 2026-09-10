@@ -146,3 +146,38 @@ short-lived between-sample backlog. High debug load CPU remains unattributed.
 This is the first complete idle/load/drain sequence, not completed S7 acceptance.
 Repeat capture, five independent network transitions, scheduling attribution and
 the intermittent migration setup investigation remain outstanding.
+
+## Thread-Attributed Repeat Manifest
+
+This next capture retains the workload and deadlines above. Set
+`P2P_VPN_ANDROID_RESOURCE_LOAD_DETAIL=threads` with `multi-network-resource-load`.
+The default remains `process`; invalid values or other scenarios with `threads` fail.
+
+| Setting | Value |
+| --- | --- |
+| Source | `fd380235` plus explicit sustained thread-sampling dispatch |
+| Output | `/tmp/p2p-vpn-android-sustained-load-threads-1` |
+| Phases | 300-second idle, 300-second load, 60-second drain |
+| Thread collection | Existing bounded no-fork sampler; same mode in all three phases |
+| Traffic | Four 15000-request legs; every reply required, no measured retries |
+| Watchdogs | Inner 1000 + 15 seconds; outer 1040 + 20 seconds |
+| APK / fixture | Same hashes as sustained attempt 1 |
+| Setup correction | Explicit notification permission before initial activity launch |
+
+- Record final source hashes and pre-run storage before provisioning; no builds during capture.
+- Retain unchanged process cadence and endpoint limits, including duration plus ten seconds.
+- Match thread identity by TID and start ticks; do not subtract inventories across reused IDs.
+- Report CPU/context-switch deltas per stable thread and unaccounted thread churn explicitly.
+- Use process counters for total CPU; thread scans are non-atomic and may omit short-lived work.
+- Compare with [thread observer controls](android-thread-controls.md), without subtracting a fixed correction.
+
+The permission fix changes setup relative to attempt 1. Selected transports must
+also be compared before treating results as matched. Thread counts and context
+switches are scheduling proxies, not physical wakeups or battery measurements.
+
+### Review Status
+
+- Notification setup cause and correction: [investigation](android-migration-resource-investigation.md).
+- Independent instance transitions: [two five-cycle captures](android-resource-isolation-cycles.md) passed.
+- Sustained load repetition and CPU/thread attribution: pending the capture above.
+- This harness change modifies neither production runtime behavior nor the APK.

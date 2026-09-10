@@ -54,3 +54,45 @@ for filter in '.thread_scan.skipped=1' '.thread_scan.listed=257' \
   fi
 done
 echo 'Synthetic 60/300-second window scaling and duration rejection checks passed.'
+
+# Exercise phase dispatch without ADB, wall-clock waits or traffic.
+# shellcheck disable=SC2034
+output_dir="$root"
+calls=()
+record_step() { :; }
+# Invoked by the sourced phase runner.
+# shellcheck disable=SC2329
+resource_control_window() { calls+=("$*"); }
+for detail in process threads; do
+  calls=()
+  run_android_sustained_load "$detail"
+  [[ "${#calls[@]}" == 3 ]]
+  [[ "${calls[0]}" == "on $root/sustained-idle 300 idle $detail" ]]
+  [[ "${calls[1]}" == "on $root/sustained-load 300 load $detail" ]]
+  [[ "${calls[2]}" == "on $root/sustained-drain 60 idle $detail" ]]
+done
+calls=()
+run_android_sustained_load
+[[ "${calls[0]}" == "on $root/sustained-idle 300 idle process" ]]
+calls=()
+result=0
+run_android_sustained_load invalid || result=$?
+[[ "$result" == 2 && "${#calls[@]}" == 0 ]]
+resource_control_window() {
+  calls+=("$*")
+  [[ "$4" != load ]]
+}
+result=0
+run_android_sustained_load threads || result=$?
+[[ "$result" == 1 && "${#calls[@]}" == 2 ]]
+# Read by the sourced controls entry point.
+# shellcheck disable=SC2034
+for scenario in multi-network-resource-load multi-network-resource-idle; do
+  result=0
+  P2P_VPN_ANDROID_RESOURCE_LOAD_DETAIL=invalid run_android_resource_controls || result=$?
+  [[ "$result" == 2 ]]
+done
+result=0
+P2P_VPN_ANDROID_RESOURCE_LOAD_DETAIL=threads run_android_resource_controls || result=$?
+[[ "$result" == 2 ]]
+echo 'Sustained phase defaults, thread dispatch and fail-fast behavior passed.'
