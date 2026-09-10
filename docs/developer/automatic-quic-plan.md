@@ -56,6 +56,29 @@ This establishes physical QUIC payload capability, not stable QUIC preference or
 Next: correlate probe deadlines, receive scheduling and backend selection around the observed loss.
 Do not classify these failures as successful fallback or public-network recovery.
 
+### Follow-Up Isolation
+
+- With the original Linux binary restored, the updated phone delivered 30/30 full-size pings.
+- Each packet was 1,280 bytes including IPv4/ICMP headers; the run lasted 29.057 seconds.
+- Android reported Wi-Fi, unchanged runtime generation and zero underlay selection changes.
+- During this comparison, Android reported awake, externally powered and neither idle mode active.
+
+The earlier Android logs show six datagram path demotions across five peers at 12:41:36.
+Public control events continued during the loss window, which argues against a completely stalled runtime.
+The comparison is sequential, not a controlled proof that QUIC alone caused the loss.
+
+| Observation | Interpretation and next check |
+| --- | --- |
+| Stream probe rejected at 12:41:20, sequence 131 | Packet-plane probes bypass that forwarder replay check; do not attribute QUIC loss to this event alone |
+| UDP and QUIC probes demoted together | Correlate socket delivery and probe deadlines, not only QUIC negotiation |
+| Full-size original-binary comparison passed | Retain as baseline; repeat new-binary traffic with bounded packet timing evidence |
+| Android summary combines datagram payload counters | Add backend-specific Android observation before claiming both-direction QUIC-only delivery |
+
+Next physical run requires fresh deployment authorization for the temporary Linux binary.
+Keep profiles, endpoints, firewall and underlay unchanged; restore the Nix-managed service afterward.
+Collect bounded outer-packet metadata and timed path/counter snapshots alongside full-size pings.
+Do not change probe deadlines, replay checks or MTU until the failure is isolated.
+
 ## Historical Implementation Progress
 
 The chronological notes below preserve earlier results and failures. Their pending-work statements
