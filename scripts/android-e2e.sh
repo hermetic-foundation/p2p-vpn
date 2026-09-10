@@ -2194,6 +2194,20 @@ run_multi_network_scenario() {
   fi
 
   if [[ "$scenario" == multi-network-resource-admission ]]; then
+    if ! android_automation resource-status > "$output_dir/resource-counters.json" \
+      || ! jq -e --arg alpha "$alpha_id" --arg beta "$beta_id" '
+        .schema_version == 1 and .ok and
+        ([.value.networks[].id] | sort) == ([$alpha, $beta] | sort) and
+        all(.value.networks[];
+          .phase == "running" and
+          any(.counters[]; startswith("queue_queued_packets ")) and
+          any(.counters[]; startswith("path_peers_with_supported_path ")))
+      ' "$output_dir/resource-counters.json" >/dev/null; then
+      outcome=failed
+      outcome_detail="Per-network resource counters are missing or mismatched"
+      record_step resource_counters failed "$outcome_detail"
+      return 1
+    fi
     jq '.value.snapshot | {runtime_generation, connected, paths,
       networks: [.networks[] | {id, name, peer_id, addresses, enabled, phase}]}' \
       "$both_running" > "$output_dir/resource-admission.json"

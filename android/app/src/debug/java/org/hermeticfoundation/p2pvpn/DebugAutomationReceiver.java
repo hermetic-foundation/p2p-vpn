@@ -34,6 +34,9 @@ public final class DebugAutomationReceiver extends BroadcastReceiver {
                 case "diagnostics":
                     diagnostics(context);
                     return;
+                case "resource-status":
+                    resourceStatus();
+                    return;
                 case "create-profile":
                     createProfile(context, intent);
                     return;
@@ -100,6 +103,22 @@ public final class DebugAutomationReceiver extends BroadcastReceiver {
             value.put("snapshot", snapshotJson(snapshot));
         }
         respond(true, value, null);
+    }
+
+    private void resourceStatus() throws JSONException {
+        if (P2pVpnService.debugSnapshot() == null) {
+            respond(false, null, "service_not_ready");
+            return;
+        }
+        try {
+            respond(
+                    true,
+                    DebugResourceSnapshot.from(
+                            NativeResponse.objectValue(NativeBridge.nativeStatus())),
+                    null);
+        } catch (P2pVpnException error) {
+            respond(false, null, "resource_status_unavailable");
+        }
     }
 
     private void diagnostics(Context context) throws JSONException {

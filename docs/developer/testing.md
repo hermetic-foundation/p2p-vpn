@@ -217,6 +217,10 @@ Coverage:
 | APK | Both JNI ABIs, signature, debug ID, and SDK levels match. |
 | Manifest | Protected VPN lifecycle events, always-on, and debug automation match policy. |
 
+The debug-only automation command `resource-status` reads cached native counters.
+It uses the existing `android.permission.DUMP` receiver boundary and is absent
+from release builds. See [resource collection](sustained-android-review.md) for limits.
+
 Run the physical-device audit preflight without changing the device:
 
 ```sh

@@ -342,3 +342,53 @@ still needs actual paced packet counts, observer controls and per-network sampli
 ShellCheck, the socket boundary regression and new-test formatting pass. The Nix
 structure derivation evaluates offline; its full existing shell matrix was not
 rerun. No production Rust/Android source changed or required rebuilding.
+
+## Per-Network Counter Collection
+
+The debug-only `resource-status` automation command reads cached native status.
+It retains numeric counter lines, runtime phases and local network IDs. It does
+not dial peers, request recovery or change production runtime collection intervals.
+
+| Contract | Boundary |
+| --- | --- |
+| Authorization | Existing `android.permission.DUMP` debug receiver; not in release builds |
+| Network attribution | UUID-shaped network ID plus phase and counter lines |
+| Privacy | Peer snapshots, details, addresses and nonnumeric lines excluded |
+| Metric names | Fixed resource-related prefix filter; not every native status field |
+| Size | At most 16 networks, 4096 input lines per scope and 64 KiB serialized output |
+| Missing data | Missing counters remain absent; never synthesized as zero |
+| Value precision | Decimal counters remain strings in metric lines; no Java numeric conversion |
+| Error behavior | Malformed input or exceeded budgets fails the response |
+
+### Emulator Evidence
+
+The two-network admission fixture now requires counters for the correct two
+network IDs, running phases, queue occupancy and supported paths. This passes
+with 279 counters per network; the encoded response is 21,785 bytes.
+
+- [Portable counter sample](android-resource-counter-sample.json).
+- Raw capture: `/tmp/p2p-vpn-android-resource-counters-1`.
+- Evidence SHA-256: `3535705c027c924893a37c7dc4168160d6a43bf64df5e0497ee9594df14da763`.
+- Counter response SHA-256: `bc924e0110663b3cf09670cc12239a9ed31f5b03d322df1d471819584e97b0b0`.
+- Tested APK SHA-256: `8468849b6712183cf661d0159f3549886c3c19309fdb56f883ced4f0dc73e197`.
+
+The same private fixture, 440/480-second watchdogs and runtime storage cap were
+retained. Pre-build storage was 9,121,572 KiB; pre-emulator storage was 9,121,580 KiB.
+All cleanup gates pass; no physical host or device was accessed.
+
+### Build and Test Scope
+
+Cached offline Gradle runs unit tests, lint, app assembly and instrumentation
+assembly with two workers. Native Rust/JNI is unchanged. The new tests live in
+`src/testDebug` so release tests do not depend on debug-only classes.
+
+Tests cover filtering, missing counters, malformed identities/collections,
+line count, network count and output byte limits. The final parser additionally
+rejects a malformed `networks` field instead of treating it as an empty collection.
+
+Final APK SHA-256: `ea03c922be28faf3043c540c69dd898ce1b5f7206528ffbafc55c6f5b8527f46`.
+This last malformed-input correction is unit-tested; the recorded emulator run
+used the preceding APK with valid native input. Recheck the final hash before S7.
+
+Build logs: `/tmp/p2p-vpn-android-resource-status-{build,final-build,test-debug}.log`.
+Observer overhead, scheduling/wakeup proxies and sustained phases remain open.
