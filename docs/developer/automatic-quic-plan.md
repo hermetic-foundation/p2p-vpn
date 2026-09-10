@@ -231,6 +231,23 @@ No redeployment, firewall mutation or underlay change was performed during this 
 - Rustfmt and whitespace checks passed. Workspace integration, Android rebuild and physical
   testing have not been rerun for these diagnostic fields; previous artifacts lack them.
 
+### Prepared Correlation Artifacts
+
+- Source `ff4d9884`: offline ARM64 build passed in 39.26 seconds; Linux binary build
+  passed in 40.84 seconds. Both reused existing caches with two Cargo jobs.
+- APK assembly passed in seven seconds and 16 KiB alignment passed. JVM tests remained
+  up-to-date. The four existing Android platform dead-code warnings remain.
+- Nix-evaluated ARM64 source `/nix/store/qmn93djd7sbndh7snvlq90w2cjnzb50f-source/src`
+  matched working-tree `src`. This is source parity, not full Nix realization.
+- Temporary storage: 9,782,304 KiB. Neither artifact was deployed; the requested repeat
+  physical capture still awaits authorization.
+
+| Prepared artifact | SHA-256 |
+| --- | --- |
+| Debug APK | `5da7036df4c30f7b24e08a30368ce44a100c33b396c5a992fa0dc8407b61d87f` |
+| ARM64 library | `ac716abb317630ed7705f0e62647ae890ad0de0722fb282dcd0ad1dcc98f76d6` |
+| Linux binary | `21da5503ffc19f9b25963154056c633a3af9d4242950d1865106178b409f473c` |
+
 ## Failed Datagram Fallback Review
 
 - Inspection found that a failed QUIC send could try UDP, then immediately drop on UDP failure
