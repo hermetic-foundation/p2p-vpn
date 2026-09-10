@@ -5,6 +5,23 @@
 Core implementation published as `8690bce2`; NixOS wiring published as `43345ef1`.
 Acceptance remains incomplete. Local evidence does not certify physical Android or public-network recovery.
 
+### Active Cellular Recovery Fix
+
+- Physical cellular logs show `control_capabilities_rejected` with `unsupported_preferred_path`:
+  Android advertised owned QUIC after network reset removed every advertised QUIC endpoint.
+- Reset must withdraw endpoint-dependent advertisements without disabling listeners or changing config.
+  Preserve configured endpoints and let authenticated discovery restore preferred datagram support.
+- Add regressions for empty reset, explicit endpoint retention and later QUIC re-advertisement.
+  Keep certificate/endpoint validation strict; verify locally before rebuilding and deploying artifacts.
+- Implemented the reset reconciliation without changing listener state, configuration or validation.
+  The focused regression and core suite passed: 1,169 passed, eight ignored, zero failures.
+- Evidence: `/tmp/p2p-vpn-network-reset-capabilities-retry.log` and
+  `/tmp/p2p-vpn-network-reset-core.log`; the initial test compilation error is retained separately.
+- Physical rejection excerpts: `/tmp/p2p-vpn-cellular-capability-rejection.log`.
+  Fresh native builds, deployment and physical recovery verification remain outstanding.
+- Formatting and required Clippy groups passed; existing non-fatal warnings remain.
+  Clippy evidence: `/tmp/p2p-vpn-network-reset-clippy.log` (17.27 seconds).
+
 ## Acceptance Audit
 
 | Requirement | Verified evidence | Remaining work |

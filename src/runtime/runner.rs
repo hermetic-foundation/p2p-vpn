@@ -5003,6 +5003,27 @@ struct RuntimeNetworkChangeContext<'a> {
     connection_epochs: &'a mut ConnectionEpochs,
 }
 
+fn reset_network_capability_endpoints(
+    capabilities: &mut ControlCapabilities,
+    persistent_udp_candidates: &[String],
+    persistent_quic_candidates: &[String],
+) {
+    capabilities.packet_endpoint_candidates = persistent_udp_candidates.to_vec();
+    capabilities.owned_quic_packet_endpoint_candidates = persistent_quic_candidates.to_vec();
+    capabilities.direct_address_candidates.clear();
+    // Listeners remain active; discovery can advertise them again on the new underlay.
+    let udp_supported = capabilities.supports_owned_udp_packet_plane
+        && !capabilities.packet_endpoint_candidates.is_empty();
+    let quic_supported = capabilities.supports_owned_quic_packet_plane
+        && !capabilities
+            .owned_quic_packet_endpoint_candidates
+            .is_empty();
+    *capabilities = capabilities
+        .clone()
+        .with_owned_udp_packet_plane(udp_supported)
+        .with_owned_quic_packet_plane(quic_supported);
+}
+
 fn handle_runtime_network_change(
     mut context: RuntimeNetworkChangeContext<'_>,
 ) -> RuntimeNetworkChange {
@@ -5086,14 +5107,11 @@ fn handle_runtime_network_change(
         context.node.swarm.remove_external_address(address);
     }
 
-    context.local_capabilities.packet_endpoint_candidates =
-        context.persistent_packet_endpoint_candidates.to_vec();
-    context
-        .local_capabilities
-        .owned_quic_packet_endpoint_candidates = context
-        .persistent_packet_plane_quic_endpoint_candidates
-        .to_vec();
-    context.local_capabilities.direct_address_candidates.clear();
+    reset_network_capability_endpoints(
+        context.local_capabilities,
+        context.persistent_packet_endpoint_candidates,
+        context.persistent_packet_plane_quic_endpoint_candidates,
+    );
 
     let mut disconnected_peers = 0;
     for peer in disconnect_peers {
@@ -28043,6 +28061,49 @@ mod tests {
         assert!(mtu_lines.contains(&format!(
             "peer mtu: {remote_overlay} validated true effective_mtu 1200 selected_path direct_udp_datagram selected_path_mtu 1200"
         )));
+    }
+
+    #[tokio::test]
+    async fn network_reset_withdraws_unreachable_datagram_advertisements() {
+        let quic = PacketPlaneQuicRuntime::bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let certificate = quic.server_certificate().to_vec();
+        let endpoints = vec![quic.local_addr().to_string()];
+        let original = ControlCapabilities::local("lab", None, 1280)
+            .with_owned_udp_packet_plane(true)
+            .with_packet_endpoint_candidates(vec!["127.0.0.1:51821".to_owned()])
+            .with_owned_quic_packet_plane_certificate(certificate.clone())
+            .with_owned_quic_packet_endpoint_candidates(endpoints.clone());
+        assert_eq!(validate_capabilities(&original, "lab", None, &[]), None);
+
+        let mut withdrawn = original.clone();
+        reset_network_capability_endpoints(&mut withdrawn, &[], &[]);
+        assert_eq!(validate_capabilities(&withdrawn, "lab", None, &[]), None);
+        assert!(!withdrawn.supports_owned_udp_packet_plane);
+        assert!(!withdrawn.supports_owned_quic_packet_plane);
+        assert!(withdrawn.owned_quic_packet_plane_certificate_der.is_none());
+        assert_eq!(
+            withdrawn.preferred_path,
+            PathKind::DirectQuicStream.wire_name()
+        );
+
+        let readvertised = withdrawn
+            .with_owned_quic_packet_endpoint_candidates(endpoints.clone())
+            .with_owned_quic_packet_plane_certificate(certificate);
+        assert_eq!(validate_capabilities(&readvertised, "lab", None, &[]), None);
+        assert_eq!(
+            readvertised.preferred_path,
+            PathKind::DirectQuicDatagram.wire_name()
+        );
+        assert!(readvertised.supports_owned_quic_packet_plane);
+
+        let mut persistent = original.clone();
+        reset_network_capability_endpoints(
+            &mut persistent,
+            &original.packet_endpoint_candidates,
+            &endpoints,
+        );
+        assert_eq!(persistent, original);
+        assert_eq!(quic.local_addr().to_string(), endpoints[0]);
     }
 
     #[test]
