@@ -534,8 +534,33 @@ does not establish that the four observed datagram losses were caused by session
 - Prepared native SHA-256: `7d1bcc739ed998cd71ef5b6fffd27b26721c095fa87e65982457174c8621458b`.
   The dedicated physical-test firewall chain is absent; five post-restoration pings passed.
 
-Packaging and deployment of the entropy fix remain pending. The preceding physical
-measurements used the old session-ID derivation and are not verification of this fix.
+Packaging and deployment were still pending at implementation verification. The preceding
+physical measurements used the old session-ID derivation and are not verification of this fix.
+
+### Session Entropy APK Update
+
+The `8b4e8d55` APK was installed in place on the authorized OnePlus and its existing
+network reconnected. Hostname and peer ID remained unchanged; Wi-Fi selection reported
+zero changes, losses or recoveries. The laptop service was not replaced during this update.
+
+| Artifact | SHA-256 |
+| --- | --- |
+| Installed APK | `f489206e9d91aeed066082436cd43720130c8d8f3ed2bfaf5293b5609bab5b86` |
+| Prepared Linux binary | `4228b88abfe4f149a947f4246fe4973ffd9a8471e8df64ff90441007633eacae` |
+
+- Linux compilation passed in 40.87 seconds; cached APK assembly passed in seven seconds.
+  APK 16 KiB alignment check passed. JVM tests were up-to-date, not freshly executed.
+- Full-MTU IPv4/DF upgrade smoke checks passed 10/10 each direction. Mean RTT was
+  90.555 ms laptop-to-phone and 79.996 ms phone-to-laptop.
+- Android owned-UDP payload count increased from zero to 20; owned-QUIC stayed zero.
+  This is compatibility/upgrade evidence, not two-sided QUIC or restart-recovery certification.
+- Evidence: `/tmp/p2p-vpn-session-entropy-phone-upgrade-{linux,phone}.ping`.
+  Original Linux process `2503709` remained active with no runtime drop-ins.
+- All build/install/ping commands finished. Temporary storage measured 9,786,060 KiB.
+
+The host-specific physical test script now checks the new Linux artifact hash.
+Next: test with both updated runtimes and verify restart/session behavior without changing
+identities or using manual endpoint configuration. The earlier physical loss remains unresolved.
 
 ## Failed Datagram Fallback Review
 
