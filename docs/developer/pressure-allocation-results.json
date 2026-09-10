@@ -1,0 +1,4431 @@
+{
+  "schema_version": 1,
+  "baseline_revision": "5cf4eff5",
+  "binary_sha256": "7bd693606049cc7df7de8d5294ab91fe2bab8dca81fdbfdd4b3c77c747a5ad04",
+  "manifest": "pressure-allocation-review.md",
+  "profile": "cached debug integration executable with allocation-review; two Tokio workers",
+  "preflight_tmp_kib": [
+    8263704,
+    8264704,
+    8265712,
+    8270424,
+    8275116,
+    8279856
+  ],
+  "campaign": {
+    "order": [
+      "packets-1",
+      "bytes-1",
+      "bytes-2",
+      "packets-2"
+    ],
+    "completed_rounds": 20,
+    "strict_recovery_batches": 40,
+    "strict_recovery_replies": 200,
+    "transmitted_during_pressure": 38924,
+    "received_during_pressure": 164
+  },
+  "cleanup": "All six exec sessions terminal; no matching namespace test process remained. Raw evidence retained.",
+  "limitations": [
+    "Periodic snapshots are not exact round-boundary measurements and can miss brief peaks.",
+    "Final sampled heap is not a graceful-teardown measurement.",
+    "Completed queue/traffic gates do not alone attribute retained whole-daemon allocations.",
+    "No new builds or production changes."
+  ],
+  "captures": [
+    {
+      "name": "packets-smoke",
+      "directory": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.6868352d4f4bbc7c",
+      "profile": "packets",
+      "completed_rounds": 1,
+      "roles": {
+        "a": {
+          "rows": [
+            {
+              "elapsed_millis": 0,
+              "unix_millis": 1789031205205,
+              "live_bytes": 4169206,
+              "live_blocks": 1361
+            },
+            {
+              "elapsed_millis": 5001,
+              "unix_millis": 1789031210206,
+              "live_bytes": 4341145,
+              "live_blocks": 1611
+            },
+            {
+              "elapsed_millis": 10001,
+              "unix_millis": 1789031215206,
+              "live_bytes": 4818651,
+              "live_blocks": 3697
+            },
+            {
+              "elapsed_millis": 15001,
+              "unix_millis": 1789031220207,
+              "live_bytes": 5258862,
+              "live_blocks": 5153
+            },
+            {
+              "elapsed_millis": 20000,
+              "unix_millis": 1789031225206,
+              "live_bytes": 4732288,
+              "live_blocks": 1550
+            },
+            {
+              "elapsed_millis": 25001,
+              "unix_millis": 1789031230207,
+              "live_bytes": 4482596,
+              "live_blocks": 1714
+            },
+            {
+              "elapsed_millis": 30001,
+              "unix_millis": 1789031235207,
+              "live_bytes": 5193332,
+              "live_blocks": 5197
+            },
+            {
+              "elapsed_millis": 35001,
+              "unix_millis": 1789031240206,
+              "live_bytes": 4505218,
+              "live_blocks": 1621
+            }
+          ],
+          "max_gap_millis": 5001,
+          "max_clock_disagreement_millis": 1,
+          "min_bytes": 4169206,
+          "max_bytes": 5258862,
+          "final_bytes": 4505218,
+          "final_blocks": 1621
+        },
+        "b": {
+          "rows": [
+            {
+              "elapsed_millis": 0,
+              "unix_millis": 1789031204956,
+              "live_bytes": 4157628,
+              "live_blocks": 1311
+            },
+            {
+              "elapsed_millis": 5002,
+              "unix_millis": 1789031209958,
+              "live_bytes": 4340016,
+              "live_blocks": 1595
+            },
+            {
+              "elapsed_millis": 10003,
+              "unix_millis": 1789031214959,
+              "live_bytes": 4374449,
+              "live_blocks": 1842
+            },
+            {
+              "elapsed_millis": 15003,
+              "unix_millis": 1789031219959,
+              "live_bytes": 4750100,
+              "live_blocks": 5186
+            },
+            {
+              "elapsed_millis": 20001,
+              "unix_millis": 1789031224957,
+              "live_bytes": 4320868,
+              "live_blocks": 1447
+            },
+            {
+              "elapsed_millis": 25001,
+              "unix_millis": 1789031229957,
+              "live_bytes": 4415672,
+              "live_blocks": 1648
+            },
+            {
+              "elapsed_millis": 30000,
+              "unix_millis": 1789031234956,
+              "live_bytes": 4531023,
+              "live_blocks": 2934
+            },
+            {
+              "elapsed_millis": 35004,
+              "unix_millis": 1789031239960,
+              "live_bytes": 4548460,
+              "live_blocks": 1620
+            }
+          ],
+          "max_gap_millis": 5004,
+          "max_clock_disagreement_millis": 0,
+          "min_bytes": 4157628,
+          "max_bytes": 4750100,
+          "final_bytes": 4548460,
+          "final_blocks": 1620
+        }
+      },
+      "rounds": [
+        {
+          "round": 1,
+          "transmitted": 1942,
+          "received": 8,
+          "after": {
+            "a": {
+              "blocked_no_path_events": 888,
+              "dropped_packets": 1386,
+              "expired_packets": 51,
+              "healthy_tcp_paths": 1,
+              "inbound_dropped_packets": 0,
+              "outbound_failures": 257,
+              "path_states": [
+                "peer state: ba3ea7667c96e2033846552e36557ce59a77c0c445be7ef5fdb1023378ad7b30 transport 12D3KooWDf1imSiXZv6KRCKa7CRU5goTuRnFzJxssH2NcEv5iKvL validated true effective_mtu 1280 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 40 selected_path_mtu 1280 selected_path_rtt_ms 3 selected_path_relay_peer none selected_path_connection_id 3 selected_path_origin identify selected_path_connection_role listener selected_path_established_as_relayed false selected_path_first_seen_unix_seconds 1789031205 selected_path_last_established_unix_seconds 1789031229 healthy_paths 1 direct_paths 1 relay_paths 0"
+              ],
+              "peers_without_supported_path": 0,
+              "process": {
+                "capture_seconds": 0.002481301,
+                "cpu_ticks": 217,
+                "elapsed_seconds": 30.024877724,
+                "pid": 18,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "a",
+                "rss_kib": 37188,
+                "socket_fds": 6,
+                "start_ticks": 90413352,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 13,
+                "vanished_fds": 0
+              },
+              "queued_bytes": 0,
+              "queued_packets": 0,
+              "stream_in_flight": 0,
+              "work": {
+                "inbound_accepted_packets": 289,
+                "outbound_direct_tcp_stream_fallback_packets": 576,
+                "outbound_sent_packets": 576,
+                "tun_read_bytes": 1998248,
+                "tun_read_packets": 1966,
+                "tun_write_bytes": 278212,
+                "tun_write_packets": 289
+              }
+            },
+            "b": {
+              "blocked_no_path_events": 0,
+              "dropped_packets": 5,
+              "expired_packets": 0,
+              "healthy_tcp_paths": 1,
+              "inbound_dropped_packets": 0,
+              "outbound_failures": 53,
+              "path_states": [
+                "peer state: 08a41575054ed3305e770e4a6eea8fc73a1590976ccb4770ac06deff56be3a7c transport 12D3KooWE1XPYrUwodRJ7iUq14ghdpoKjxdmAoBh6kF2Mby3sSDw validated true effective_mtu 1280 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 40 selected_path_mtu 1280 selected_path_rtt_ms 4 selected_path_relay_peer none selected_path_connection_id 2 selected_path_origin identify selected_path_connection_role dialer selected_path_established_as_relayed false selected_path_first_seen_unix_seconds 1789031205 selected_path_last_established_unix_seconds 1789031229 healthy_paths 1 direct_paths 1 relay_paths 0"
+              ],
+              "peers_without_supported_path": 0,
+              "process": {
+                "capture_seconds": 0.003146451,
+                "cpu_ticks": 78,
+                "elapsed_seconds": 30.029560861,
+                "pid": 19,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "b",
+                "rss_kib": 37676,
+                "socket_fds": 6,
+                "start_ticks": 90413352,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 13,
+                "vanished_fds": 0
+              },
+              "queued_bytes": 0,
+              "queued_packets": 0,
+              "stream_in_flight": 0,
+              "work": {
+                "inbound_accepted_packets": 339,
+                "outbound_direct_tcp_stream_fallback_packets": 334,
+                "outbound_sent_packets": 334,
+                "tun_read_bytes": 329804,
+                "tun_read_packets": 343,
+                "tun_write_bytes": 329612,
+                "tun_write_packets": 339
+              }
+            }
+          }
+        }
+      ],
+      "artifact_sha256": {
+        "queue-pressure.json": "2914763e5bdf3976fa5cf485c30122e5f84ef2ace45de5bc4480c18b40aa566a",
+        "recovery-ping-a.stdout": "075b31e0058e2f5bb0589bd3e0cb79a69fb686a47efd6df87d7516ee4933c38c",
+        "recovery-ping-b.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "pressure-ping.log": "bdc97552c4cd01124ae07b868c262b14925263577783a31df75113e98f422d66",
+        "recovery-ping-b.stdout": "a8c2de2825ea81cf33e7b22c55e6b60841a075a096e9fa72d234bd1079e52c02",
+        "node-a.log": "84311c05628cc9f39058b9f3d23fb583ec401b3787535abf8c61b6a8fcea7e5f",
+        "ready-b": "b24d6d33736ecd5604a4b17bc9c6481039fac362bb7df044ef1c10a2bfd21db6",
+        "repro-metadata.txt": "8fd1294935359cc1d1ff51812fe5e46b35e6c585686fe3f136474f21597d879d",
+        "queue-pressure-partial.json": "ccdea5feb30f05b9137cec8acd6787613a5cf7bb3c9414153e5fe3c6a01dabfd",
+        "start-a": "cced28c6dc3f99c2396a5eaad732bf6b28142335892b1cd0e6af6cdb53f5ccfa",
+        "ready-a": "b24d6d33736ecd5604a4b17bc9c6481039fac362bb7df044ef1c10a2bfd21db6",
+        "queue-pressure-drain.json": "bc96c6910d903598492bcdc36f53f831e1cd8b1d827533b3109dc449ff94537b",
+        "start-b": "cced28c6dc3f99c2396a5eaad732bf6b28142335892b1cd0e6af6cdb53f5ccfa",
+        "recovery-ping-a.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "recovery-ping-a.json": "f8421af7b8928fc437361b3ad9afbe87b965c46ed344d8c86d9cab5bf0e17fe8",
+        "node-b.log": "0a358ffa035e1e7e64715c7bdafe546c78cbbb82b4ef210b6a07e763506bb108",
+        "recovery-ping-b.json": "f58ff3f93c3f4b6358bb02bf3d1ef81f0a613ae33600d1cbfdbef9eaf8ba5fd5",
+        "repro-commands.sh": "8c07114479be4d3e35f5d71e3797266bd8ecf1ff2d4f48cb064b4924fa919633",
+        "queue-pressure-series.json": "13a01664f85cdb7ea43e53f26c9c63ecc1bcad1c723a3587517af36dd71a0434"
+      },
+      "json_bytes": 684952,
+      "node_log_bytes": 276147,
+      "strict_recovery_batches": 2,
+      "elapsed_seconds": 39.97,
+      "outer_log": {
+        "path": "/tmp/p2p-vpn-pressure-allocation-packets-smoke.log",
+        "sha256": "d437277664771765de9611a6be8bded5f9ceb74b0356fda58fc64aac7a899f3c",
+        "exit_code": 0
+      }
+    },
+    {
+      "name": "bytes-smoke",
+      "directory": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.9e9236a7c5883e01",
+      "profile": "bytes",
+      "completed_rounds": 1,
+      "roles": {
+        "a": {
+          "rows": [
+            {
+              "elapsed_millis": 0,
+              "unix_millis": 1789031274893,
+              "live_bytes": 4186946,
+              "live_blocks": 1368
+            },
+            {
+              "elapsed_millis": 5000,
+              "unix_millis": 1789031279894,
+              "live_bytes": 4341144,
+              "live_blocks": 1611
+            },
+            {
+              "elapsed_millis": 10000,
+              "unix_millis": 1789031284894,
+              "live_bytes": 4826498,
+              "live_blocks": 3736
+            },
+            {
+              "elapsed_millis": 15000,
+              "unix_millis": 1789031289894,
+              "live_bytes": 5258819,
+              "live_blocks": 5165
+            },
+            {
+              "elapsed_millis": 20000,
+              "unix_millis": 1789031294894,
+              "live_bytes": 4754379,
+              "live_blocks": 1551
+            },
+            {
+              "elapsed_millis": 25000,
+              "unix_millis": 1789031299894,
+              "live_bytes": 4522002,
+              "live_blocks": 1897
+            },
+            {
+              "elapsed_millis": 30000,
+              "unix_millis": 1789031304894,
+              "live_bytes": 5242750,
+              "live_blocks": 5183
+            },
+            {
+              "elapsed_millis": 35000,
+              "unix_millis": 1789031309894,
+              "live_bytes": 4522033,
+              "live_blocks": 1622
+            }
+          ],
+          "max_gap_millis": 5000,
+          "max_clock_disagreement_millis": 1,
+          "min_bytes": 4186946,
+          "max_bytes": 5258819,
+          "final_bytes": 4522033,
+          "final_blocks": 1622
+        },
+        "b": {
+          "rows": [
+            {
+              "elapsed_millis": 0,
+              "unix_millis": 1789031274644,
+              "live_bytes": 4157628,
+              "live_blocks": 1311
+            },
+            {
+              "elapsed_millis": 5003,
+              "unix_millis": 1789031279647,
+              "live_bytes": 4340848,
+              "live_blocks": 1598
+            },
+            {
+              "elapsed_millis": 10002,
+              "unix_millis": 1789031284647,
+              "live_bytes": 4375136,
+              "live_blocks": 1856
+            },
+            {
+              "elapsed_millis": 15002,
+              "unix_millis": 1789031289646,
+              "live_bytes": 4790419,
+              "live_blocks": 5452
+            },
+            {
+              "elapsed_millis": 20004,
+              "unix_millis": 1789031294648,
+              "live_bytes": 4321236,
+              "live_blocks": 1448
+            },
+            {
+              "elapsed_millis": 25003,
+              "unix_millis": 1789031299647,
+              "live_bytes": 4393534,
+              "live_blocks": 1642
+            },
+            {
+              "elapsed_millis": 30003,
+              "unix_millis": 1789031304647,
+              "live_bytes": 4540167,
+              "live_blocks": 2966
+            },
+            {
+              "elapsed_millis": 35004,
+              "unix_millis": 1789031309648,
+              "live_bytes": 4610522,
+              "live_blocks": 1621
+            }
+          ],
+          "max_gap_millis": 5003,
+          "max_clock_disagreement_millis": 1,
+          "min_bytes": 4157628,
+          "max_bytes": 4790419,
+          "final_bytes": 4610522,
+          "final_blocks": 1621
+        }
+      },
+      "rounds": [
+        {
+          "round": 1,
+          "transmitted": 1951,
+          "received": 8,
+          "after": {
+            "a": {
+              "blocked_no_path_events": 858,
+              "dropped_packets": 1390,
+              "expired_packets": 34,
+              "healthy_tcp_paths": 1,
+              "inbound_dropped_packets": 0,
+              "outbound_failures": 258,
+              "path_states": [
+                "peer state: b531d4ebbbd71535229d911062886451ab115125f95a3364446be7b39ef06410 transport 12D3KooWFRohtzv7gp17P6MDG9bnT8Vifz6tAwhHH4bUupa2eAUk validated true effective_mtu 1280 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 40 selected_path_mtu 1280 selected_path_rtt_ms 1 selected_path_relay_peer none selected_path_connection_id 3 selected_path_origin identify selected_path_connection_role listener selected_path_established_as_relayed false selected_path_first_seen_unix_seconds 1789031274 selected_path_last_established_unix_seconds 1789031299 healthy_paths 1 direct_paths 1 relay_paths 0"
+              ],
+              "peers_without_supported_path": 0,
+              "process": {
+                "capture_seconds": 0.002517799,
+                "cpu_ticks": 205,
+                "elapsed_seconds": 30.782836557,
+                "pid": 18,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "a",
+                "rss_kib": 37708,
+                "socket_fds": 6,
+                "start_ticks": 90420321,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 13,
+                "vanished_fds": 0
+              },
+              "queued_bytes": 0,
+              "queued_packets": 0,
+              "stream_in_flight": 0,
+              "work": {
+                "inbound_accepted_packets": 290,
+                "outbound_direct_tcp_stream_fallback_packets": 581,
+                "outbound_sent_packets": 581,
+                "tun_read_bytes": 2007500,
+                "tun_read_packets": 1975,
+                "tun_write_bytes": 279240,
+                "tun_write_packets": 290
+              }
+            },
+            "b": {
+              "blocked_no_path_events": 0,
+              "dropped_packets": 5,
+              "expired_packets": 0,
+              "healthy_tcp_paths": 1,
+              "inbound_dropped_packets": 0,
+              "outbound_failures": 53,
+              "path_states": [
+                "peer state: ca9c02e95a2708ed072472c207b44637f63800a2d194b1a8bb5d949c5b56c48d transport 12D3KooWJoN2R4RG3YgEEzBCGM3mVH3Xwf7pwSNU4P7ozbchKahT validated true effective_mtu 1280 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 40 selected_path_mtu 1280 selected_path_rtt_ms 3 selected_path_relay_peer none selected_path_connection_id 2 selected_path_origin identify selected_path_connection_role dialer selected_path_established_as_relayed false selected_path_first_seen_unix_seconds 1789031274 selected_path_last_established_unix_seconds 1789031299 healthy_paths 1 direct_paths 1 relay_paths 0"
+              ],
+              "peers_without_supported_path": 0,
+              "process": {
+                "capture_seconds": 0.002619621,
+                "cpu_ticks": 78,
+                "elapsed_seconds": 30.786983938,
+                "pid": 19,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "b",
+                "rss_kib": 38192,
+                "socket_fds": 6,
+                "start_ticks": 90420321,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 13,
+                "vanished_fds": 0
+              },
+              "queued_bytes": 0,
+              "queued_packets": 0,
+              "stream_in_flight": 0,
+              "work": {
+                "inbound_accepted_packets": 339,
+                "outbound_direct_tcp_stream_fallback_packets": 334,
+                "outbound_sent_packets": 334,
+                "tun_read_bytes": 329804,
+                "tun_read_packets": 343,
+                "tun_write_bytes": 329612,
+                "tun_write_packets": 339
+              }
+            }
+          }
+        }
+      ],
+      "artifact_sha256": {
+        "queue-pressure.json": "c324496aa7f9d8758ffe76af5695da887282add49aa86fd03aa3315510db1eb4",
+        "recovery-ping-a.stdout": "e16050c0ccf2371b02e823226e9a7e99ccc6bb5ae9e5389abc8e96cd3e1092c8",
+        "recovery-ping-b.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "pressure-ping.log": "52f21212ddc3b9ecfc688cdccfe3509ac6fcbab18dc4d625711df3d147c62720",
+        "recovery-ping-b.stdout": "d4051d1a90a96ba8c4bbefb735f1d8541e35fcbd3fe5e1c9ddc52afdb1142f31",
+        "node-a.log": "5885e5c060f2838c5fcd9f942f5d376dbe3f562945a8d22c7cb3e4ff546ccb47",
+        "ready-b": "b24d6d33736ecd5604a4b17bc9c6481039fac362bb7df044ef1c10a2bfd21db6",
+        "repro-metadata.txt": "a97a857b6d849482fb031f9ff10e502dcf7e0c5542301ca9d4e319300f256287",
+        "queue-pressure-partial.json": "b67b331951fea04244aff4c91762625cfe8523173de20267886a2e745ea3c439",
+        "start-a": "cced28c6dc3f99c2396a5eaad732bf6b28142335892b1cd0e6af6cdb53f5ccfa",
+        "ready-a": "b24d6d33736ecd5604a4b17bc9c6481039fac362bb7df044ef1c10a2bfd21db6",
+        "queue-pressure-drain.json": "7f95f03775cbc5cdc69a3bcc0d25955fd753b7948791e656a45ad1c0d8b0952b",
+        "start-b": "cced28c6dc3f99c2396a5eaad732bf6b28142335892b1cd0e6af6cdb53f5ccfa",
+        "recovery-ping-a.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "recovery-ping-a.json": "293802b8c8f5843aee38f5135cfb590459ee4f02460a022c8db009cf23ca0e31",
+        "node-b.log": "ca1dbcf4b0c7bf4cf054f76a021a696dc4914c9d13965d5990c474435eaf0697",
+        "recovery-ping-b.json": "e7bd8bbe33871f17b3aa9a0aefd19d9cec2303898b42f49931e9088233525b4b",
+        "repro-commands.sh": "f67a2b938073f830166b8a1b7b3275adb3406054787ca4e0a433d3e3f71d8d27",
+        "queue-pressure-series.json": "aceed52ffd999080e1abe0311cff4517f0522b537babb5ca236d6a6dcccad975"
+      },
+      "json_bytes": 696332,
+      "node_log_bytes": 274060,
+      "strict_recovery_batches": 2,
+      "elapsed_seconds": 40.7,
+      "outer_log": {
+        "path": "/tmp/p2p-vpn-pressure-allocation-bytes-smoke.log",
+        "sha256": "857a9bcff2ca1655922521d3611ad17d0811a293b6f29133a45bbd86c35b306f",
+        "exit_code": 0
+      }
+    },
+    {
+      "name": "packets-1",
+      "directory": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.0134420bb664a470",
+      "profile": "packets",
+      "completed_rounds": 5,
+      "roles": {
+        "a": {
+          "rows": [
+            {
+              "elapsed_millis": 0,
+              "unix_millis": 1789031349029,
+              "live_bytes": 4169206,
+              "live_blocks": 1361
+            },
+            {
+              "elapsed_millis": 5001,
+              "unix_millis": 1789031354030,
+              "live_bytes": 4340775,
+              "live_blocks": 1610
+            },
+            {
+              "elapsed_millis": 10001,
+              "unix_millis": 1789031359030,
+              "live_bytes": 4824923,
+              "live_blocks": 3739
+            },
+            {
+              "elapsed_millis": 15003,
+              "unix_millis": 1789031364032,
+              "live_bytes": 5320612,
+              "live_blocks": 5136
+            },
+            {
+              "elapsed_millis": 20001,
+              "unix_millis": 1789031369030,
+              "live_bytes": 4838100,
+              "live_blocks": 1551
+            },
+            {
+              "elapsed_millis": 25000,
+              "unix_millis": 1789031374029,
+              "live_bytes": 4576700,
+              "live_blocks": 2145
+            },
+            {
+              "elapsed_millis": 30001,
+              "unix_millis": 1789031379030,
+              "live_bytes": 5283957,
+              "live_blocks": 5214
+            },
+            {
+              "elapsed_millis": 35003,
+              "unix_millis": 1789031384032,
+              "live_bytes": 4556639,
+              "live_blocks": 1636
+            },
+            {
+              "elapsed_millis": 40000,
+              "unix_millis": 1789031389029,
+              "live_bytes": 4643658,
+              "live_blocks": 2058
+            },
+            {
+              "elapsed_millis": 45000,
+              "unix_millis": 1789031394029,
+              "live_bytes": 5378659,
+              "live_blocks": 5236
+            },
+            {
+              "elapsed_millis": 50000,
+              "unix_millis": 1789031399029,
+              "live_bytes": 5421336,
+              "live_blocks": 5671
+            },
+            {
+              "elapsed_millis": 55000,
+              "unix_millis": 1789031404029,
+              "live_bytes": 5249222,
+              "live_blocks": 5205
+            },
+            {
+              "elapsed_millis": 60003,
+              "unix_millis": 1789031409032,
+              "live_bytes": 5330008,
+              "live_blocks": 5669
+            },
+            {
+              "elapsed_millis": 65003,
+              "unix_millis": 1789031414032,
+              "live_bytes": 4555877,
+              "live_blocks": 1625
+            },
+            {
+              "elapsed_millis": 70000,
+              "unix_millis": 1789031419029,
+              "live_bytes": 4700512,
+              "live_blocks": 2351
+            },
+            {
+              "elapsed_millis": 75000,
+              "unix_millis": 1789031424029,
+              "live_bytes": 5311403,
+              "live_blocks": 5265
+            },
+            {
+              "elapsed_millis": 80003,
+              "unix_millis": 1789031429032,
+              "live_bytes": 4635200,
+              "live_blocks": 1557
+            },
+            {
+              "elapsed_millis": 85000,
+              "unix_millis": 1789031434029,
+              "live_bytes": 5210258,
+              "live_blocks": 5207
+            },
+            {
+              "elapsed_millis": 90000,
+              "unix_millis": 1789031439029,
+              "live_bytes": 5299542,
+              "live_blocks": 6066
+            },
+            {
+              "elapsed_millis": 95000,
+              "unix_millis": 1789031444029,
+              "live_bytes": 4521226,
+              "live_blocks": 1627
+            },
+            {
+              "elapsed_millis": 100000,
+              "unix_millis": 1789031449029,
+              "live_bytes": 4660218,
+              "live_blocks": 2315
+            },
+            {
+              "elapsed_millis": 105000,
+              "unix_millis": 1789031454029,
+              "live_bytes": 5312175,
+              "live_blocks": 5285
+            },
+            {
+              "elapsed_millis": 110000,
+              "unix_millis": 1789031459029,
+              "live_bytes": 5425692,
+              "live_blocks": 5706
+            },
+            {
+              "elapsed_millis": 115000,
+              "unix_millis": 1789031464029,
+              "live_bytes": 4737767,
+              "live_blocks": 2929
+            },
+            {
+              "elapsed_millis": 120004,
+              "unix_millis": 1789031469033,
+              "live_bytes": 5586876,
+              "live_blocks": 5202
+            },
+            {
+              "elapsed_millis": 125001,
+              "unix_millis": 1789031474030,
+              "live_bytes": 4871659,
+              "live_blocks": 1622
+            },
+            {
+              "elapsed_millis": 130000,
+              "unix_millis": 1789031479030,
+              "live_bytes": 4932517,
+              "live_blocks": 1912
+            },
+            {
+              "elapsed_millis": 135000,
+              "unix_millis": 1789031484029,
+              "live_bytes": 5626637,
+              "live_blocks": 5251
+            },
+            {
+              "elapsed_millis": 140000,
+              "unix_millis": 1789031489029,
+              "live_bytes": 5672929,
+              "live_blocks": 5642
+            },
+            {
+              "elapsed_millis": 145001,
+              "unix_millis": 1789031494030,
+              "live_bytes": 5245616,
+              "live_blocks": 5174
+            },
+            {
+              "elapsed_millis": 150001,
+              "unix_millis": 1789031499030,
+              "live_bytes": 5324882,
+              "live_blocks": 5624
+            },
+            {
+              "elapsed_millis": 155001,
+              "unix_millis": 1789031504030,
+              "live_bytes": 4555044,
+              "live_blocks": 1622
+            }
+          ],
+          "max_gap_millis": 5004,
+          "max_clock_disagreement_millis": 1,
+          "min_bytes": 4169206,
+          "max_bytes": 5672929,
+          "final_bytes": 4555044,
+          "final_blocks": 1622
+        },
+        "b": {
+          "rows": [
+            {
+              "elapsed_millis": 0,
+              "unix_millis": 1789031348774,
+              "live_bytes": 4157628,
+              "live_blocks": 1311
+            },
+            {
+              "elapsed_millis": 5000,
+              "unix_millis": 1789031353775,
+              "live_bytes": 4339662,
+              "live_blocks": 1594
+            },
+            {
+              "elapsed_millis": 10001,
+              "unix_millis": 1789031358776,
+              "live_bytes": 4374034,
+              "live_blocks": 1853
+            },
+            {
+              "elapsed_millis": 15004,
+              "unix_millis": 1789031363779,
+              "live_bytes": 4787218,
+              "live_blocks": 5426
+            },
+            {
+              "elapsed_millis": 20001,
+              "unix_millis": 1789031368776,
+              "live_bytes": 4321236,
+              "live_blocks": 1448
+            },
+            {
+              "elapsed_millis": 25001,
+              "unix_millis": 1789031373776,
+              "live_bytes": 4402142,
+              "live_blocks": 1679
+            },
+            {
+              "elapsed_millis": 30001,
+              "unix_millis": 1789031378776,
+              "live_bytes": 4568559,
+              "live_blocks": 3229
+            },
+            {
+              "elapsed_millis": 35001,
+              "unix_millis": 1789031383776,
+              "live_bytes": 4612889,
+              "live_blocks": 1607
+            },
+            {
+              "elapsed_millis": 40001,
+              "unix_millis": 1789031388776,
+              "live_bytes": 4614313,
+              "live_blocks": 1622
+            },
+            {
+              "elapsed_millis": 45003,
+              "unix_millis": 1789031393777,
+              "live_bytes": 4889180,
+              "live_blocks": 4177
+            },
+            {
+              "elapsed_millis": 50000,
+              "unix_millis": 1789031398775,
+              "live_bytes": 4968416,
+              "live_blocks": 4573
+            },
+            {
+              "elapsed_millis": 55001,
+              "unix_millis": 1789031403776,
+              "live_bytes": 4580019,
+              "live_blocks": 2905
+            },
+            {
+              "elapsed_millis": 60004,
+              "unix_millis": 1789031408779,
+              "live_bytes": 4688829,
+              "live_blocks": 3571
+            },
+            {
+              "elapsed_millis": 65000,
+              "unix_millis": 1789031413775,
+              "live_bytes": 4533785,
+              "live_blocks": 1607
+            },
+            {
+              "elapsed_millis": 70002,
+              "unix_millis": 1789031418777,
+              "live_bytes": 4543753,
+              "live_blocks": 1712
+            },
+            {
+              "elapsed_millis": 75000,
+              "unix_millis": 1789031423775,
+              "live_bytes": 4798208,
+              "live_blocks": 4025
+            },
+            {
+              "elapsed_millis": 80005,
+              "unix_millis": 1789031428780,
+              "live_bytes": 4888315,
+              "live_blocks": 4543
+            },
+            {
+              "elapsed_millis": 85001,
+              "unix_millis": 1789031433776,
+              "live_bytes": 4519680,
+              "live_blocks": 2256
+            },
+            {
+              "elapsed_millis": 90000,
+              "unix_millis": 1789031438775,
+              "live_bytes": 4626715,
+              "live_blocks": 2891
+            },
+            {
+              "elapsed_millis": 95001,
+              "unix_millis": 1789031443776,
+              "live_bytes": 4540901,
+              "live_blocks": 1606
+            },
+            {
+              "elapsed_millis": 100001,
+              "unix_millis": 1789031448775,
+              "live_bytes": 4550869,
+              "live_blocks": 1711
+            },
+            {
+              "elapsed_millis": 105000,
+              "unix_millis": 1789031453775,
+              "live_bytes": 4805192,
+              "live_blocks": 4044
+            },
+            {
+              "elapsed_millis": 110003,
+              "unix_millis": 1789031458778,
+              "live_bytes": 4890125,
+              "live_blocks": 4495
+            },
+            {
+              "elapsed_millis": 115001,
+              "unix_millis": 1789031463776,
+              "live_bytes": 4583671,
+              "live_blocks": 2681
+            },
+            {
+              "elapsed_millis": 120001,
+              "unix_millis": 1789031468776,
+              "live_bytes": 4819386,
+              "live_blocks": 5362
+            },
+            {
+              "elapsed_millis": 125001,
+              "unix_millis": 1789031473775,
+              "live_bytes": 4549017,
+              "live_blocks": 1607
+            },
+            {
+              "elapsed_millis": 130001,
+              "unix_millis": 1789031478776,
+              "live_bytes": 4549017,
+              "live_blocks": 1607
+            },
+            {
+              "elapsed_millis": 135001,
+              "unix_millis": 1789031483776,
+              "live_bytes": 4799319,
+              "live_blocks": 3909
+            },
+            {
+              "elapsed_millis": 140001,
+              "unix_millis": 1789031488776,
+              "live_bytes": 4915804,
+              "live_blocks": 4713
+            },
+            {
+              "elapsed_millis": 145001,
+              "unix_millis": 1789031493776,
+              "live_bytes": 4568777,
+              "live_blocks": 2849
+            },
+            {
+              "elapsed_millis": 150001,
+              "unix_millis": 1789031498776,
+              "live_bytes": 4677332,
+              "live_blocks": 3483
+            },
+            {
+              "elapsed_millis": 155001,
+              "unix_millis": 1789031503776,
+              "live_bytes": 4599577,
+              "live_blocks": 1607
+            }
+          ],
+          "max_gap_millis": 5005,
+          "max_clock_disagreement_millis": 1,
+          "min_bytes": 4157628,
+          "max_bytes": 4968416,
+          "final_bytes": 4599577,
+          "final_blocks": 1607
+        }
+      },
+      "rounds": [
+        {
+          "round": 1,
+          "transmitted": 1944,
+          "received": 7,
+          "after": {
+            "a": {
+              "blocked_no_path_events": 838,
+              "dropped_packets": 1385,
+              "expired_packets": 46,
+              "healthy_tcp_paths": 1,
+              "inbound_dropped_packets": 0,
+              "outbound_failures": 258,
+              "path_states": [
+                "peer state: 25febcb3c44dba3ee43eacbbec921305e00b2ec0f51b5e7899ef09a6c48827a0 transport 12D3KooWSaHYcCN4qXZUnBzJ7Unop2t8SxjFCQSc1hBQSFJiaJYn validated true effective_mtu 1280 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 40 selected_path_mtu 1280 selected_path_rtt_ms 3 selected_path_relay_peer none selected_path_connection_id 2 selected_path_origin identify selected_path_connection_role dialer selected_path_established_as_relayed false selected_path_first_seen_unix_seconds 1789031349 selected_path_last_established_unix_seconds 1789031373 healthy_paths 1 direct_paths 1 relay_paths 0"
+              ],
+              "peers_without_supported_path": 0,
+              "process": {
+                "capture_seconds": 0.002468748,
+                "cpu_ticks": 216,
+                "elapsed_seconds": 31.310305367,
+                "pid": 18,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "a",
+                "rss_kib": 37516,
+                "socket_fds": 6,
+                "start_ticks": 90427734,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 13,
+                "vanished_fds": 0
+              },
+              "queued_bytes": 0,
+              "queued_packets": 0,
+              "stream_in_flight": 0,
+              "work": {
+                "inbound_accepted_packets": 290,
+                "outbound_direct_tcp_stream_fallback_packets": 579,
+                "outbound_sent_packets": 579,
+                "tun_read_bytes": 2000304,
+                "tun_read_packets": 1968,
+                "tun_write_bytes": 279240,
+                "tun_write_packets": 290
+              }
+            },
+            "b": {
+              "blocked_no_path_events": 0,
+              "dropped_packets": 6,
+              "expired_packets": 0,
+              "healthy_tcp_paths": 1,
+              "inbound_dropped_packets": 0,
+              "outbound_failures": 52,
+              "path_states": [
+                "peer state: ef6bff12de4045890ddf51beb2ec42d77608f72af5a38cc97af38eb9cc53cd98 transport 12D3KooWDyDwysLedz7Fng7p9QzXcND6xDQjSBRQ4PhZ5d6nFhMg validated true effective_mtu 1280 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 40 selected_path_mtu 1280 selected_path_rtt_ms 4 selected_path_relay_peer none selected_path_connection_id 3 selected_path_origin identify selected_path_connection_role listener selected_path_established_as_relayed false selected_path_first_seen_unix_seconds 1789031349 selected_path_last_established_unix_seconds 1789031373 healthy_paths 1 direct_paths 1 relay_paths 0"
+              ],
+              "peers_without_supported_path": 0,
+              "process": {
+                "capture_seconds": 0.00248043,
+                "cpu_ticks": 80,
+                "elapsed_seconds": 31.314174545,
+                "pid": 19,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "b",
+                "rss_kib": 37652,
+                "socket_fds": 6,
+                "start_ticks": 90427734,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 13,
+                "vanished_fds": 0
+              },
+              "queued_bytes": 0,
+              "queued_packets": 0,
+              "stream_in_flight": 0,
+              "work": {
+                "inbound_accepted_packets": 340,
+                "outbound_direct_tcp_stream_fallback_packets": 334,
+                "outbound_sent_packets": 334,
+                "tun_read_bytes": 330832,
+                "tun_read_packets": 344,
+                "tun_write_bytes": 330640,
+                "tun_write_packets": 340
+              }
+            }
+          }
+        },
+        {
+          "round": 2,
+          "transmitted": 1950,
+          "received": 9,
+          "after": {
+            "a": {
+              "blocked_no_path_events": 1210,
+              "dropped_packets": 2727,
+              "expired_packets": 58,
+              "healthy_tcp_paths": 1,
+              "inbound_dropped_packets": 0,
+              "outbound_failures": 518,
+              "path_states": [
+                "peer state: 25febcb3c44dba3ee43eacbbec921305e00b2ec0f51b5e7899ef09a6c48827a0 transport 12D3KooWSaHYcCN4qXZUnBzJ7Unop2t8SxjFCQSc1hBQSFJiaJYn validated true effective_mtu 1280 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 40 selected_path_mtu 1280 selected_path_rtt_ms 2 selected_path_relay_peer none selected_path_connection_id 4 selected_path_origin identify selected_path_connection_role dialer selected_path_established_as_relayed false selected_path_first_seen_unix_seconds 1789031349 selected_path_last_established_unix_seconds 1789031399 healthy_paths 1 direct_paths 1 relay_paths 0"
+              ],
+              "peers_without_supported_path": 0,
+              "process": {
+                "capture_seconds": 0.002512279,
+                "cpu_ticks": 430,
+                "elapsed_seconds": 29.769982985,
+                "pid": 18,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "a",
+                "rss_kib": 37892,
+                "socket_fds": 6,
+                "start_ticks": 90427734,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 13,
+                "vanished_fds": 0
+              },
+              "queued_bytes": 0,
+              "queued_packets": 0,
+              "stream_in_flight": 0,
+              "work": {
+                "inbound_accepted_packets": 602,
+                "outbound_direct_tcp_stream_fallback_packets": 1197,
+                "outbound_sent_packets": 1197,
+                "tun_read_bytes": 4005792,
+                "tun_read_packets": 3929,
+                "tun_write_bytes": 590536,
+                "tun_write_packets": 602
+              }
+            },
+            "b": {
+              "blocked_no_path_events": 0,
+              "dropped_packets": 12,
+              "expired_packets": 0,
+              "healthy_tcp_paths": 1,
+              "inbound_dropped_packets": 0,
+              "outbound_failures": 106,
+              "path_states": [
+                "peer state: ef6bff12de4045890ddf51beb2ec42d77608f72af5a38cc97af38eb9cc53cd98 transport 12D3KooWDyDwysLedz7Fng7p9QzXcND6xDQjSBRQ4PhZ5d6nFhMg validated true effective_mtu 1280 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 40 selected_path_mtu 1280 selected_path_rtt_ms 3 selected_path_relay_peer none selected_path_connection_id 5 selected_path_origin identify selected_path_connection_role listener selected_path_established_as_relayed false selected_path_first_seen_unix_seconds 1789031349 selected_path_last_established_unix_seconds 1789031400 healthy_paths 1 direct_paths 1 relay_paths 0"
+              ],
+              "peers_without_supported_path": 0,
+              "process": {
+                "capture_seconds": 0.002496108,
+                "cpu_ticks": 162,
+                "elapsed_seconds": 29.773875096,
+                "pid": 19,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "b",
+                "rss_kib": 37568,
+                "socket_fds": 6,
+                "start_ticks": 90427734,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 13,
+                "vanished_fds": 0
+              },
+              "queued_bytes": 0,
+              "queued_packets": 0,
+              "stream_in_flight": 0,
+              "work": {
+                "inbound_accepted_packets": 702,
+                "outbound_direct_tcp_stream_fallback_packets": 690,
+                "outbound_sent_packets": 690,
+                "tun_read_bytes": 693576,
+                "tun_read_packets": 707,
+                "tun_write_bytes": 693336,
+                "tun_write_packets": 702
+              }
+            }
+          }
+        },
+        {
+          "round": 3,
+          "transmitted": 1952,
+          "received": 9,
+          "after": {
+            "a": {
+              "blocked_no_path_events": 1297,
+              "dropped_packets": 4071,
+              "expired_packets": 68,
+              "healthy_tcp_paths": 1,
+              "inbound_dropped_packets": 0,
+              "outbound_failures": 778,
+              "path_states": [
+                "peer state: 25febcb3c44dba3ee43eacbbec921305e00b2ec0f51b5e7899ef09a6c48827a0 transport 12D3KooWSaHYcCN4qXZUnBzJ7Unop2t8SxjFCQSc1hBQSFJiaJYn validated true effective_mtu 1280 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 40 selected_path_mtu 1280 selected_path_rtt_ms 1 selected_path_relay_peer none selected_path_connection_id 6 selected_path_origin identify selected_path_connection_role dialer selected_path_established_as_relayed false selected_path_first_seen_unix_seconds 1789031349 selected_path_last_established_unix_seconds 1789031430 healthy_paths 1 direct_paths 1 relay_paths 0"
+              ],
+              "peers_without_supported_path": 0,
+              "process": {
+                "capture_seconds": 0.003308134,
+                "cpu_ticks": 646,
+                "elapsed_seconds": 30.015922727,
+                "pid": 18,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "a",
+                "rss_kib": 38032,
+                "socket_fds": 6,
+                "start_ticks": 90427734,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 13,
+                "vanished_fds": 0
+              },
+              "queued_bytes": 0,
+              "queued_packets": 0,
+              "stream_in_flight": 0,
+              "work": {
+                "inbound_accepted_packets": 907,
+                "outbound_direct_tcp_stream_fallback_packets": 1815,
+                "outbound_sent_packets": 1815,
+                "tun_read_bytes": 6013288,
+                "tun_read_packets": 5891,
+                "tun_write_bytes": 894636,
+                "tun_write_packets": 907
+              }
+            },
+            "b": {
+              "blocked_no_path_events": 2,
+              "dropped_packets": 24,
+              "expired_packets": 0,
+              "healthy_tcp_paths": 1,
+              "inbound_dropped_packets": 0,
+              "outbound_failures": 160,
+              "path_states": [
+                "peer state: ef6bff12de4045890ddf51beb2ec42d77608f72af5a38cc97af38eb9cc53cd98 transport 12D3KooWDyDwysLedz7Fng7p9QzXcND6xDQjSBRQ4PhZ5d6nFhMg validated true effective_mtu 1280 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 40 selected_path_mtu 1280 selected_path_rtt_ms 2 selected_path_relay_peer none selected_path_connection_id 7 selected_path_origin identify selected_path_connection_role listener selected_path_established_as_relayed false selected_path_first_seen_unix_seconds 1789031349 selected_path_last_established_unix_seconds 1789031431 healthy_paths 1 direct_paths 1 relay_paths 0"
+              ],
+              "peers_without_supported_path": 0,
+              "process": {
+                "capture_seconds": 0.002590366,
+                "cpu_ticks": 241,
+                "elapsed_seconds": 30.019660648,
+                "pid": 19,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "b",
+                "rss_kib": 37668,
+                "socket_fds": 6,
+                "start_ticks": 90427734,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 13,
+                "vanished_fds": 0
+              },
+              "queued_bytes": 0,
+              "queued_packets": 0,
+              "stream_in_flight": 0,
+              "work": {
+                "inbound_accepted_packets": 1064,
+                "outbound_direct_tcp_stream_fallback_packets": 1040,
+                "outbound_sent_packets": 1040,
+                "tun_read_bytes": 1056272,
+                "tun_read_packets": 1069,
+                "tun_write_bytes": 1056032,
+                "tun_write_packets": 1064
+              }
+            }
+          }
+        },
+        {
+          "round": 4,
+          "transmitted": 1947,
+          "received": 9,
+          "after": {
+            "a": {
+              "blocked_no_path_events": 1667,
+              "dropped_packets": 5176,
+              "expired_packets": 84,
+              "healthy_tcp_paths": 1,
+              "inbound_dropped_packets": 0,
+              "outbound_failures": 1293,
+              "path_states": [
+                "peer state: 25febcb3c44dba3ee43eacbbec921305e00b2ec0f51b5e7899ef09a6c48827a0 transport 12D3KooWSaHYcCN4qXZUnBzJ7Unop2t8SxjFCQSc1hBQSFJiaJYn validated true effective_mtu 1280 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 40 selected_path_mtu 1280 selected_path_rtt_ms 2 selected_path_relay_peer none selected_path_connection_id 8 selected_path_origin identify selected_path_connection_role dialer selected_path_established_as_relayed false selected_path_first_seen_unix_seconds 1789031349 selected_path_last_established_unix_seconds 1789031463 healthy_paths 1 direct_paths 1 relay_paths 0"
+              ],
+              "peers_without_supported_path": 0,
+              "process": {
+                "capture_seconds": 0.002523651,
+                "cpu_ticks": 885,
+                "elapsed_seconds": 30.280308812,
+                "pid": 18,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "a",
+                "rss_kib": 38036,
+                "socket_fds": 6,
+                "start_ticks": 90427734,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 13,
+                "vanished_fds": 0
+              },
+              "queued_bytes": 0,
+              "queued_packets": 0,
+              "stream_in_flight": 0,
+              "work": {
+                "inbound_accepted_packets": 1192,
+                "outbound_direct_tcp_stream_fallback_packets": 2667,
+                "outbound_sent_packets": 2667,
+                "tun_read_bytes": 8015692,
+                "tun_read_packets": 7849,
+                "tun_write_bytes": 1178176,
+                "tun_write_packets": 1192
+              }
+            },
+            "b": {
+              "blocked_no_path_events": 2,
+              "dropped_packets": 24,
+              "expired_packets": 0,
+              "healthy_tcp_paths": 1,
+              "inbound_dropped_packets": 0,
+              "outbound_failures": 233,
+              "path_states": [
+                "peer state: ef6bff12de4045890ddf51beb2ec42d77608f72af5a38cc97af38eb9cc53cd98 transport 12D3KooWDyDwysLedz7Fng7p9QzXcND6xDQjSBRQ4PhZ5d6nFhMg validated true effective_mtu 1280 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 40 selected_path_mtu 1280 selected_path_rtt_ms 4 selected_path_relay_peer none selected_path_connection_id 9 selected_path_origin identify selected_path_connection_role listener selected_path_established_as_relayed false selected_path_first_seen_unix_seconds 1789031349 selected_path_last_established_unix_seconds 1789031464 healthy_paths 1 direct_paths 1 relay_paths 0"
+              ],
+              "peers_without_supported_path": 0,
+              "process": {
+                "capture_seconds": 0.002473036,
+                "cpu_ticks": 319,
+                "elapsed_seconds": 30.284094433,
+                "pid": 19,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "b",
+                "rss_kib": 37888,
+                "socket_fds": 6,
+                "start_ticks": 90427734,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 13,
+                "vanished_fds": 0
+              },
+              "queued_bytes": 0,
+              "queued_packets": 0,
+              "stream_in_flight": 0,
+              "work": {
+                "inbound_accepted_packets": 1411,
+                "outbound_direct_tcp_stream_fallback_packets": 1387,
+                "outbound_sent_packets": 1387,
+                "tun_read_bytes": 1403596,
+                "tun_read_packets": 1417,
+                "tun_write_bytes": 1403308,
+                "tun_write_packets": 1411
+              }
+            }
+          }
+        },
+        {
+          "round": 5,
+          "transmitted": 1948,
+          "received": 9,
+          "after": {
+            "a": {
+              "blocked_no_path_events": 2062,
+              "dropped_packets": 6519,
+              "expired_packets": 94,
+              "healthy_tcp_paths": 1,
+              "inbound_dropped_packets": 0,
+              "outbound_failures": 1553,
+              "path_states": [
+                "peer state: 25febcb3c44dba3ee43eacbbec921305e00b2ec0f51b5e7899ef09a6c48827a0 transport 12D3KooWSaHYcCN4qXZUnBzJ7Unop2t8SxjFCQSc1hBQSFJiaJYn validated true effective_mtu 1280 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 40 selected_path_mtu 1280 selected_path_rtt_ms 2 selected_path_relay_peer none selected_path_connection_id 10 selected_path_origin identify selected_path_connection_role dialer selected_path_established_as_relayed false selected_path_first_seen_unix_seconds 1789031349 selected_path_last_established_unix_seconds 1789031490 healthy_paths 1 direct_paths 1 relay_paths 0"
+              ],
+              "peers_without_supported_path": 0,
+              "process": {
+                "capture_seconds": 0.002702537,
+                "cpu_ticks": 1101,
+                "elapsed_seconds": 29.716433768999998,
+                "pid": 18,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "a",
+                "rss_kib": 38044,
+                "socket_fds": 6,
+                "start_ticks": 90427734,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 13,
+                "vanished_fds": 0
+              },
+              "queued_bytes": 0,
+              "queued_packets": 0,
+              "stream_in_flight": 0,
+              "work": {
+                "inbound_accepted_packets": 1500,
+                "outbound_direct_tcp_stream_fallback_packets": 3282,
+                "outbound_sent_packets": 3282,
+                "tun_read_bytes": 10019076,
+                "tun_read_packets": 9807,
+                "tun_write_bytes": 1485360,
+                "tun_write_packets": 1500
+              }
+            },
+            "b": {
+              "blocked_no_path_events": 2,
+              "dropped_packets": 31,
+              "expired_packets": 0,
+              "healthy_tcp_paths": 1,
+              "inbound_dropped_packets": 0,
+              "outbound_failures": 287,
+              "path_states": [
+                "peer state: ef6bff12de4045890ddf51beb2ec42d77608f72af5a38cc97af38eb9cc53cd98 transport 12D3KooWDyDwysLedz7Fng7p9QzXcND6xDQjSBRQ4PhZ5d6nFhMg validated true effective_mtu 1280 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 40 selected_path_mtu 1280 selected_path_rtt_ms 3 selected_path_relay_peer none selected_path_connection_id 11 selected_path_origin identify selected_path_connection_role listener selected_path_established_as_relayed false selected_path_first_seen_unix_seconds 1789031349 selected_path_last_established_unix_seconds 1789031490 healthy_paths 1 direct_paths 1 relay_paths 0"
+              ],
+              "peers_without_supported_path": 0,
+              "process": {
+                "capture_seconds": 0.002481622,
+                "cpu_ticks": 398,
+                "elapsed_seconds": 29.720053579,
+                "pid": 19,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "b",
+                "rss_kib": 37892,
+                "socket_fds": 6,
+                "start_ticks": 90427734,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 13,
+                "vanished_fds": 0
+              },
+              "queued_bytes": 0,
+              "queued_packets": 0,
+              "stream_in_flight": 0,
+              "work": {
+                "inbound_accepted_packets": 1770,
+                "outbound_direct_tcp_stream_fallback_packets": 1739,
+                "outbound_sent_packets": 1739,
+                "tun_read_bytes": 1763208,
+                "tun_read_packets": 1776,
+                "tun_write_bytes": 1762920,
+                "tun_write_packets": 1770
+              }
+            }
+          }
+        }
+      ],
+      "artifact_sha256": {
+        "node-a.log": "8089158dc2317818ce7055b83640fa4cbaf666ad2fd1db1efd8034c3d991bcfc",
+        "ready-b": "b24d6d33736ecd5604a4b17bc9c6481039fac362bb7df044ef1c10a2bfd21db6",
+        "round-5/queue-pressure.json": "ac1092f0c8c80c0589a609c4c18126c35163072975faec881809ff25591016a9",
+        "round-5/recovery-ping-a.stdout": "6c6b98ed1ed0b96f1efa0b025e621f663d3f0ff6fb26f30401286a44aba75b88",
+        "round-5/recovery-ping-b.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "round-5/pressure-ping.log": "d25a680827e408397b69e4f7322927ce823a03ec41da145467e9df1c6bb8c1ca",
+        "round-5/recovery-ping-b.stdout": "c6fc092794bdddc7870c9a0b369709bae92b6c1141873bb18bb9946679456ca9",
+        "round-5/queue-pressure-partial.json": "16ccd3ba993e2650ffcca9e168e17076f8633e0c5f5670645677a7b1c36d9a3f",
+        "round-5/queue-pressure-drain.json": "8807bd2291d2a88d67d1e71502c3483fd34300020b6b6c169f0b37ac18b2ea78",
+        "round-5/recovery-ping-a.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "round-5/recovery-ping-a.json": "097093dc048896f6faaf4e667276f3e2b51593aa117ce7c66790c9e9419edf32",
+        "round-5/recovery-ping-b.json": "464d36b80df30eb205af093ce91e6dc489d35c5e818db51c2b99e1ede959972a",
+        "repro-metadata.txt": "88e1da1c39bc5e14dc1a729992259cdee31c7ef397aaa93ddda95052039a54cd",
+        "start-a": "cced28c6dc3f99c2396a5eaad732bf6b28142335892b1cd0e6af6cdb53f5ccfa",
+        "ready-a": "b24d6d33736ecd5604a4b17bc9c6481039fac362bb7df044ef1c10a2bfd21db6",
+        "round-3/queue-pressure.json": "bc251926cef0fe6c49927c79919ce9198f808d38c1f2c2036d7a5e0bc57ff995",
+        "round-3/recovery-ping-a.stdout": "c430359cbc14558a01dd3cfacc5977cc5cf780270b6fa0e18e86c79213c2af84",
+        "round-3/recovery-ping-b.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "round-3/pressure-ping.log": "fc6e27b5b8326bd2fe3a1bda26b468dc83f2da04588ba0b35af8b396c75e79da",
+        "round-3/recovery-ping-b.stdout": "1a92df59c17e8f0361e9e19309c0da54242555809547922e0dc9ea6c1f955e5b",
+        "round-3/queue-pressure-partial.json": "750b9f3f4d5c5afc436cdf96c3cc813d1eeef8bef273a848ea129fec4320ecc3",
+        "round-3/queue-pressure-drain.json": "a5cf1e147fee579b1a8eaf0e3e6e7ed147df07eb4a71bd4317629166ce884430",
+        "round-3/recovery-ping-a.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "round-3/recovery-ping-a.json": "2473b69841fa9d1dc36173bd98ce405cab8df2e163540f933ca0bc70b348e05b",
+        "round-3/recovery-ping-b.json": "cef0eb77826a1fa7297b4ca14cde360f8c867b834ea690400094a564846f8f20",
+        "start-b": "cced28c6dc3f99c2396a5eaad732bf6b28142335892b1cd0e6af6cdb53f5ccfa",
+        "round-2/queue-pressure.json": "21ab68900b760b80858fb909e127bdfb27e5f38a86e4d94896f0a65df8cbd0d6",
+        "round-2/recovery-ping-a.stdout": "f38b45a22f1ea41f92bb5b882e9bdcf66ea496166114a6dbb99e6ac7f7515250",
+        "round-2/recovery-ping-b.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "round-2/pressure-ping.log": "51dabeabd5f670a36f47b09cc339c1b99258d1578d7538a98ad1a0fd502f2680",
+        "round-2/recovery-ping-b.stdout": "e3bacc104acb1c4952ffe985cc1b25ff128f011d498d8b2f1c63631a6eaee9ef",
+        "round-2/queue-pressure-partial.json": "68f39260cd0634c7327fd66ff6e059523c0fb1b12ea5119d0971516af20c8ef4",
+        "round-2/queue-pressure-drain.json": "3486bef58988464f8b8caab65fbfbd111afe267481a9eb0c8dadc6b0e8d837b4",
+        "round-2/recovery-ping-a.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "round-2/recovery-ping-a.json": "38b997a5e31284efa445fd9821f8d1bb2c05ecd2717fd4e0dda07782184e846c",
+        "round-2/recovery-ping-b.json": "5a8f3aeb49fa6cffe4c08d5b23084f05df536ff66113e4effd2777f960d5dd55",
+        "node-b.log": "7a9e9647d45f111e20f518523afba3fab15b18596bb18c43b8474406d1196226",
+        "round-1/queue-pressure.json": "339d0b41cbd09606ece0c48957249dab2b4d72a9d03205250ff28f8b7173d427",
+        "round-1/recovery-ping-a.stdout": "beb75d97fa1951322d45292ba861e4e61d5d899e17ad7ca7a6e743150d26f935",
+        "round-1/recovery-ping-b.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "round-1/pressure-ping.log": "f2ccf98470c74f513e1856f6f5d33a63ed0f280b2834ceb697a9e60740660b2d",
+        "round-1/recovery-ping-b.stdout": "05f8f95b8b42d283970ca590ea9ebcbfc8907cd53387ce37e587568a729ec600",
+        "round-1/queue-pressure-partial.json": "048cfcd4805323d3a46cd5bd54934fa9dfa84b21d2a8f4e879ebbc1243209f6c",
+        "round-1/queue-pressure-drain.json": "09c29999ca18aa3184bc093650b6fa4b8ae02b10d87dc7bdbee6de4729fe8431",
+        "round-1/recovery-ping-a.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "round-1/recovery-ping-a.json": "0d29234adeadda05837be05e2274a709505b31bc7e825782f07926027de068c5",
+        "round-1/recovery-ping-b.json": "da027529e81d08eb7515c9fadefeae4c8b5af06812a9f8e5a419f3cbf1ea1d6b",
+        "repro-commands.sh": "0ca305becd1d6c836542d2bf6793e05bbe5b63dafe0755623adc6ad9ec2e2885",
+        "round-4/queue-pressure.json": "224b9cbd519032d939d961c0fa7f1f0aae910874806fede0b10217c97a2d23f3",
+        "round-4/recovery-ping-a.stdout": "07cd17750bc46a95bca34ce46497c4401b93c615c8e6b2086836be7512ba5441",
+        "round-4/recovery-ping-b.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "round-4/pressure-ping.log": "67e15daa5ca9e7c9717f27792a8667374c55e0371a326a91fe8a9e4e4f57d8cf",
+        "round-4/recovery-ping-b.stdout": "83b76030c6d54fbcfd36f91480364751025f7ca3e6e9e8417966abe1b6dece17",
+        "round-4/queue-pressure-partial.json": "d7fb3c0385d6a17e7f16f73e36bc292215e47b9d028941f671c725afafcaaba0",
+        "round-4/queue-pressure-drain.json": "97a781fccd9996b809f2eb62eeeb6d2499b5509bb8f6d2253f9f5b2953b985eb",
+        "round-4/recovery-ping-a.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "round-4/recovery-ping-a.json": "015c94033ba4c2bf64e729d0f640834401c0835605abda9cca76b68843633080",
+        "round-4/recovery-ping-b.json": "a9ccfa086c32da67e2cb054f1c27776068cdc0d914420859fb95f446d73de1c2",
+        "queue-pressure-series.json": "a3715a15f9127b3744e95027f88f2a773da8fcd0bdbbdc48327b0a40ac2d3bcf"
+      },
+      "json_bytes": 3453756,
+      "node_log_bytes": 1227706,
+      "strict_recovery_batches": 10,
+      "elapsed_seconds": 161.06,
+      "outer_log": {
+        "path": "/tmp/p2p-vpn-pressure-allocation-packets-1.log",
+        "sha256": "40ab9e2c94bef5b3ffec555a811d004b22ddfb62c666970fc1260ae3d1eb9926",
+        "exit_code": 0
+      }
+    },
+    {
+      "name": "bytes-1",
+      "directory": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.405643cf69c81973",
+      "profile": "bytes",
+      "completed_rounds": 5,
+      "roles": {
+        "a": {
+          "rows": [
+            {
+              "elapsed_millis": 0,
+              "unix_millis": 1789031545833,
+              "live_bytes": 4169206,
+              "live_blocks": 1361
+            },
+            {
+              "elapsed_millis": 5001,
+              "unix_millis": 1789031550835,
+              "live_bytes": 4341146,
+              "live_blocks": 1611
+            },
+            {
+              "elapsed_millis": 10000,
+              "unix_millis": 1789031555834,
+              "live_bytes": 4817186,
+              "live_blocks": 3700
+            },
+            {
+              "elapsed_millis": 15001,
+              "unix_millis": 1789031560835,
+              "live_bytes": 5180483,
+              "live_blocks": 5137
+            },
+            {
+              "elapsed_millis": 20001,
+              "unix_millis": 1789031565835,
+              "live_bytes": 4400784,
+              "live_blocks": 1465
+            },
+            {
+              "elapsed_millis": 25000,
+              "unix_millis": 1789031570834,
+              "live_bytes": 4531740,
+              "live_blocks": 1948
+            },
+            {
+              "elapsed_millis": 30002,
+              "unix_millis": 1789031575836,
+              "live_bytes": 5279030,
+              "live_blocks": 5199
+            },
+            {
+              "elapsed_millis": 35003,
+              "unix_millis": 1789031580836,
+              "live_bytes": 4555332,
+              "live_blocks": 1623
+            },
+            {
+              "elapsed_millis": 40000,
+              "unix_millis": 1789031585834,
+              "live_bytes": 4770807,
+              "live_blocks": 2696
+            },
+            {
+              "elapsed_millis": 45002,
+              "unix_millis": 1789031590836,
+              "live_bytes": 5312506,
+              "live_blocks": 5293
+            },
+            {
+              "elapsed_millis": 50001,
+              "unix_millis": 1789031595834,
+              "live_bytes": 4401372,
+              "live_blocks": 1470
+            },
+            {
+              "elapsed_millis": 55001,
+              "unix_millis": 1789031600835,
+              "live_bytes": 5226049,
+              "live_blocks": 5247
+            },
+            {
+              "elapsed_millis": 60000,
+              "unix_millis": 1789031605834,
+              "live_bytes": 5397839,
+              "live_blocks": 5622
+            },
+            {
+              "elapsed_millis": 65001,
+              "unix_millis": 1789031610834,
+              "live_bytes": 4620723,
+              "live_blocks": 1622
+            },
+            {
+              "elapsed_millis": 70001,
+              "unix_millis": 1789031615834,
+              "live_bytes": 4898141,
+              "live_blocks": 3001
+            },
+            {
+              "elapsed_millis": 75000,
+              "unix_millis": 1789031620834,
+              "live_bytes": 5365524,
+              "live_blocks": 5163
+            },
+            {
+              "elapsed_millis": 80001,
+              "unix_millis": 1789031625835,
+              "live_bytes": 4634148,
+              "live_blocks": 1558
+            },
+            {
+              "elapsed_millis": 85003,
+              "unix_millis": 1789031630837,
+              "live_bytes": 4528657,
+              "live_blocks": 1935
+            },
+            {
+              "elapsed_millis": 90001,
+              "unix_millis": 1789031635835,
+              "live_bytes": 5248550,
+              "live_blocks": 5259
+            },
+            {
+              "elapsed_millis": 95000,
+              "unix_millis": 1789031640834,
+              "live_bytes": 4553855,
+              "live_blocks": 1619
+            },
+            {
+              "elapsed_millis": 100000,
+              "unix_millis": 1789031645834,
+              "live_bytes": 4634115,
+              "live_blocks": 2002
+            },
+            {
+              "elapsed_millis": 105000,
+              "unix_millis": 1789031650834,
+              "live_bytes": 5310994,
+              "live_blocks": 5247
+            },
+            {
+              "elapsed_millis": 110001,
+              "unix_millis": 1789031655835,
+              "live_bytes": 5353253,
+              "live_blocks": 5652
+            },
+            {
+              "elapsed_millis": 115000,
+              "unix_millis": 1789031660834,
+              "live_bytes": 5278725,
+              "live_blocks": 5170
+            },
+            {
+              "elapsed_millis": 120000,
+              "unix_millis": 1789031665834,
+              "live_bytes": 5321781,
+              "live_blocks": 5605
+            },
+            {
+              "elapsed_millis": 125000,
+              "unix_millis": 1789031670834,
+              "live_bytes": 4553855,
+              "live_blocks": 1619
+            },
+            {
+              "elapsed_millis": 130000,
+              "unix_millis": 1789031675834,
+              "live_bytes": 4695623,
+              "live_blocks": 2336
+            },
+            {
+              "elapsed_millis": 135001,
+              "unix_millis": 1789031680835,
+              "live_bytes": 5309726,
+              "live_blocks": 5261
+            },
+            {
+              "elapsed_millis": 140000,
+              "unix_millis": 1789031685834,
+              "live_bytes": 5419258,
+              "live_blocks": 5682
+            },
+            {
+              "elapsed_millis": 145001,
+              "unix_millis": 1789031690835,
+              "live_bytes": 5244897,
+              "live_blocks": 5200
+            },
+            {
+              "elapsed_millis": 150003,
+              "unix_millis": 1789031695837,
+              "live_bytes": 5286795,
+              "live_blocks": 5665
+            },
+            {
+              "elapsed_millis": 155001,
+              "unix_millis": 1789031700835,
+              "live_bytes": 4553855,
+              "live_blocks": 1619
+            }
+          ],
+          "max_gap_millis": 5002,
+          "max_clock_disagreement_millis": 1,
+          "min_bytes": 4169206,
+          "max_bytes": 5419258,
+          "final_bytes": 4553855,
+          "final_blocks": 1619
+        },
+        "b": {
+          "rows": [
+            {
+              "elapsed_millis": 0,
+              "unix_millis": 1789031545581,
+              "live_bytes": 4157628,
+              "live_blocks": 1311
+            },
+            {
+              "elapsed_millis": 5000,
+              "unix_millis": 1789031550582,
+              "live_bytes": 4339681,
+              "live_blocks": 1594
+            },
+            {
+              "elapsed_millis": 10000,
+              "unix_millis": 1789031555582,
+              "live_bytes": 4374053,
+              "live_blocks": 1853
+            },
+            {
+              "elapsed_millis": 15003,
+              "unix_millis": 1789031560584,
+              "live_bytes": 4792612,
+              "live_blocks": 5469
+            },
+            {
+              "elapsed_millis": 20001,
+              "unix_millis": 1789031565582,
+              "live_bytes": 4320884,
+              "live_blocks": 1447
+            },
+            {
+              "elapsed_millis": 25001,
+              "unix_millis": 1789031570583,
+              "live_bytes": 4393214,
+              "live_blocks": 1641
+            },
+            {
+              "elapsed_millis": 30001,
+              "unix_millis": 1789031575582,
+              "live_bytes": 4542282,
+              "live_blocks": 2990
+            },
+            {
+              "elapsed_millis": 35001,
+              "unix_millis": 1789031580583,
+              "live_bytes": 4608515,
+              "live_blocks": 1605
+            },
+            {
+              "elapsed_millis": 40000,
+              "unix_millis": 1789031585582,
+              "live_bytes": 4625043,
+              "live_blocks": 1752
+            },
+            {
+              "elapsed_millis": 45001,
+              "unix_millis": 1789031590583,
+              "live_bytes": 4876684,
+              "live_blocks": 4019
+            },
+            {
+              "elapsed_millis": 50000,
+              "unix_millis": 1789031595582,
+              "live_bytes": 4368460,
+              "live_blocks": 1451
+            },
+            {
+              "elapsed_millis": 55000,
+              "unix_millis": 1789031600582,
+              "live_bytes": 4585238,
+              "live_blocks": 2913
+            },
+            {
+              "elapsed_millis": 60001,
+              "unix_millis": 1789031605583,
+              "live_bytes": 4722667,
+              "live_blocks": 3945
+            },
+            {
+              "elapsed_millis": 65000,
+              "unix_millis": 1789031610582,
+              "live_bytes": 4601779,
+              "live_blocks": 1607
+            },
+            {
+              "elapsed_millis": 70000,
+              "unix_millis": 1789031615582,
+              "live_bytes": 4622257,
+              "live_blocks": 1782
+            },
+            {
+              "elapsed_millis": 75000,
+              "unix_millis": 1789031620582,
+              "live_bytes": 5001616,
+              "live_blocks": 5503
+            },
+            {
+              "elapsed_millis": 80000,
+              "unix_millis": 1789031625582,
+              "live_bytes": 4368524,
+              "live_blocks": 1452
+            },
+            {
+              "elapsed_millis": 85001,
+              "unix_millis": 1789031630583,
+              "live_bytes": 4440750,
+              "live_blocks": 1644
+            },
+            {
+              "elapsed_millis": 90001,
+              "unix_millis": 1789031635583,
+              "live_bytes": 4586030,
+              "live_blocks": 2894
+            },
+            {
+              "elapsed_millis": 95003,
+              "unix_millis": 1789031640584,
+              "live_bytes": 4609728,
+              "live_blocks": 1609
+            },
+            {
+              "elapsed_millis": 100001,
+              "unix_millis": 1789031645582,
+              "live_bytes": 4608895,
+              "live_blocks": 1606
+            },
+            {
+              "elapsed_millis": 105000,
+              "unix_millis": 1789031650582,
+              "live_bytes": 4859197,
+              "live_blocks": 3908
+            },
+            {
+              "elapsed_millis": 110001,
+              "unix_millis": 1789031655583,
+              "live_bytes": 4967490,
+              "live_blocks": 4621
+            },
+            {
+              "elapsed_millis": 115002,
+              "unix_millis": 1789031660583,
+              "live_bytes": 4570302,
+              "live_blocks": 2863
+            },
+            {
+              "elapsed_millis": 120001,
+              "unix_millis": 1789031665582,
+              "live_bytes": 4678857,
+              "live_blocks": 3497
+            },
+            {
+              "elapsed_millis": 125000,
+              "unix_millis": 1789031670582,
+              "live_bytes": 4601727,
+              "live_blocks": 1606
+            },
+            {
+              "elapsed_millis": 130001,
+              "unix_millis": 1789031675582,
+              "live_bytes": 4611695,
+              "live_blocks": 1711
+            },
+            {
+              "elapsed_millis": 135003,
+              "unix_millis": 1789031680584,
+              "live_bytes": 4867221,
+              "live_blocks": 4043
+            },
+            {
+              "elapsed_millis": 140001,
+              "unix_millis": 1789031685583,
+              "live_bytes": 4956182,
+              "live_blocks": 4571
+            },
+            {
+              "elapsed_millis": 145000,
+              "unix_millis": 1789031690582,
+              "live_bytes": 4574424,
+              "live_blocks": 2844
+            },
+            {
+              "elapsed_millis": 150001,
+              "unix_millis": 1789031695582,
+              "live_bytes": 4647665,
+              "live_blocks": 3114
+            },
+            {
+              "elapsed_millis": 155000,
+              "unix_millis": 1789031700582,
+              "live_bytes": 4606847,
+              "live_blocks": 1606
+            }
+          ],
+          "max_gap_millis": 5003,
+          "max_clock_disagreement_millis": 1,
+          "min_bytes": 4157628,
+          "max_bytes": 5001616,
+          "final_bytes": 4606847,
+          "final_blocks": 1606
+        }
+      },
+      "rounds": [
+        {
+          "round": 1,
+          "transmitted": 1945,
+          "received": 4,
+          "after": {
+            "a": {
+              "blocked_no_path_events": 877,
+              "dropped_packets": 1407,
+              "expired_packets": 40,
+              "healthy_tcp_paths": 1,
+              "inbound_dropped_packets": 0,
+              "outbound_failures": 258,
+              "path_states": [
+                "peer state: 4206a9de28aa0cdec812aba43aa46c314e7789c0f19055790b4b76f5b1e2fe75 transport 12D3KooWKaWvVYubhJA4TrD8TqdFZMvJm9GjomLT4JYV68Map5cj validated true effective_mtu 1280 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 40 selected_path_mtu 1280 selected_path_rtt_ms 3 selected_path_relay_peer none selected_path_connection_id 3 selected_path_origin identify selected_path_connection_role listener selected_path_established_as_relayed false selected_path_first_seen_unix_seconds 1789031545 selected_path_last_established_unix_seconds 1789031570 healthy_paths 1 direct_paths 1 relay_paths 0"
+              ],
+              "peers_without_supported_path": 0,
+              "process": {
+                "capture_seconds": 0.002493374,
+                "cpu_ticks": 209,
+                "elapsed_seconds": 30.800826041,
+                "pid": 18,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "a",
+                "rss_kib": 37196,
+                "socket_fds": 6,
+                "start_ticks": 90447415,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 13,
+                "vanished_fds": 0
+              },
+              "queued_bytes": 0,
+              "queued_packets": 0,
+              "stream_in_flight": 0,
+              "work": {
+                "inbound_accepted_packets": 285,
+                "outbound_direct_tcp_stream_fallback_packets": 558,
+                "outbound_sent_packets": 558,
+                "tun_read_bytes": 2001332,
+                "tun_read_packets": 1969,
+                "tun_write_bytes": 274100,
+                "tun_write_packets": 285
+              }
+            },
+            "b": {
+              "blocked_no_path_events": 0,
+              "dropped_packets": 7,
+              "expired_packets": 0,
+              "healthy_tcp_paths": 1,
+              "inbound_dropped_packets": 0,
+              "outbound_failures": 55,
+              "path_states": [
+                "peer state: 76180cda9309f4d6839013b10f3d17c3fce29b0ac365190aee447a8c0976227f transport 12D3KooWLGg2WbzuoAjtZx4eyuGB5kAcV3qvKbfgFfQ6aoGVUcNT validated true effective_mtu 1280 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 40 selected_path_mtu 1280 selected_path_rtt_ms 4 selected_path_relay_peer none selected_path_connection_id 2 selected_path_origin identify selected_path_connection_role dialer selected_path_established_as_relayed false selected_path_first_seen_unix_seconds 1789031545 selected_path_last_established_unix_seconds 1789031570 healthy_paths 1 direct_paths 1 relay_paths 0"
+              ],
+              "peers_without_supported_path": 0,
+              "process": {
+                "capture_seconds": 0.004937114,
+                "cpu_ticks": 80,
+                "elapsed_seconds": 30.80731495,
+                "pid": 19,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "b",
+                "rss_kib": 37200,
+                "socket_fds": 6,
+                "start_ticks": 90447415,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 13,
+                "vanished_fds": 0
+              },
+              "queued_bytes": 0,
+              "queued_packets": 0,
+              "stream_in_flight": 0,
+              "work": {
+                "inbound_accepted_packets": 342,
+                "outbound_direct_tcp_stream_fallback_packets": 335,
+                "outbound_sent_packets": 335,
+                "tun_read_bytes": 332888,
+                "tun_read_packets": 346,
+                "tun_write_bytes": 332696,
+                "tun_write_packets": 342
+              }
+            }
+          }
+        },
+        {
+          "round": 2,
+          "transmitted": 1948,
+          "received": 9,
+          "after": {
+            "a": {
+              "blocked_no_path_events": 1239,
+              "dropped_packets": 2752,
+              "expired_packets": 48,
+              "healthy_tcp_paths": 1,
+              "inbound_dropped_packets": 0,
+              "outbound_failures": 517,
+              "path_states": [
+                "peer state: 4206a9de28aa0cdec812aba43aa46c314e7789c0f19055790b4b76f5b1e2fe75 transport 12D3KooWKaWvVYubhJA4TrD8TqdFZMvJm9GjomLT4JYV68Map5cj validated true effective_mtu 1280 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 40 selected_path_mtu 1280 selected_path_rtt_ms 2 selected_path_relay_peer none selected_path_connection_id 5 selected_path_origin identify selected_path_connection_role listener selected_path_established_as_relayed false selected_path_first_seen_unix_seconds 1789031545 selected_path_last_established_unix_seconds 1789031596 healthy_paths 1 direct_paths 1 relay_paths 0"
+              ],
+              "peers_without_supported_path": 0,
+              "process": {
+                "capture_seconds": 0.002498093,
+                "cpu_ticks": 422,
+                "elapsed_seconds": 29.753656652,
+                "pid": 18,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "a",
+                "rss_kib": 37372,
+                "socket_fds": 6,
+                "start_ticks": 90447415,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 13,
+                "vanished_fds": 0
+              },
+              "queued_bytes": 0,
+              "queued_packets": 0,
+              "stream_in_flight": 0,
+              "work": {
+                "inbound_accepted_packets": 591,
+                "outbound_direct_tcp_stream_fallback_packets": 1171,
+                "outbound_sent_packets": 1171,
+                "tun_read_bytes": 4004764,
+                "tun_read_packets": 3928,
+                "tun_write_bytes": 579228,
+                "tun_write_packets": 591
+              }
+            },
+            "b": {
+              "blocked_no_path_events": 0,
+              "dropped_packets": 16,
+              "expired_packets": 0,
+              "healthy_tcp_paths": 1,
+              "inbound_dropped_packets": 0,
+              "outbound_failures": 108,
+              "path_states": [
+                "peer state: 76180cda9309f4d6839013b10f3d17c3fce29b0ac365190aee447a8c0976227f transport 12D3KooWLGg2WbzuoAjtZx4eyuGB5kAcV3qvKbfgFfQ6aoGVUcNT validated true effective_mtu 1280 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 40 selected_path_mtu 1280 selected_path_rtt_ms 4 selected_path_relay_peer none selected_path_connection_id 4 selected_path_origin identify selected_path_connection_role dialer selected_path_established_as_relayed false selected_path_first_seen_unix_seconds 1789031545 selected_path_last_established_unix_seconds 1789031596 healthy_paths 1 direct_paths 1 relay_paths 0"
+              ],
+              "peers_without_supported_path": 0,
+              "process": {
+                "capture_seconds": 0.002468236,
+                "cpu_ticks": 160,
+                "elapsed_seconds": 29.757355039,
+                "pid": 19,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "b",
+                "rss_kib": 37328,
+                "socket_fds": 6,
+                "start_ticks": 90447415,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 13,
+                "vanished_fds": 0
+              },
+              "queued_bytes": 0,
+              "queued_packets": 0,
+              "stream_in_flight": 0,
+              "work": {
+                "inbound_accepted_packets": 700,
+                "outbound_direct_tcp_stream_fallback_packets": 684,
+                "outbound_sent_packets": 684,
+                "tun_read_bytes": 691520,
+                "tun_read_packets": 705,
+                "tun_write_bytes": 691280,
+                "tun_write_packets": 700
+              }
+            }
+          }
+        },
+        {
+          "round": 3,
+          "transmitted": 1947,
+          "received": 8,
+          "after": {
+            "a": {
+              "blocked_no_path_events": 2040,
+              "dropped_packets": 4134,
+              "expired_packets": 82,
+              "healthy_tcp_paths": 1,
+              "inbound_dropped_packets": 0,
+              "outbound_failures": 775,
+              "path_states": [
+                "peer state: 4206a9de28aa0cdec812aba43aa46c314e7789c0f19055790b4b76f5b1e2fe75 transport 12D3KooWKaWvVYubhJA4TrD8TqdFZMvJm9GjomLT4JYV68Map5cj validated true effective_mtu 1280 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 40 selected_path_mtu 1280 selected_path_rtt_ms 2 selected_path_relay_peer none selected_path_connection_id 7 selected_path_origin identify selected_path_connection_role listener selected_path_established_as_relayed false selected_path_first_seen_unix_seconds 1789031545 selected_path_last_established_unix_seconds 1789031630 healthy_paths 1 direct_paths 1 relay_paths 0"
+              ],
+              "peers_without_supported_path": 0,
+              "process": {
+                "capture_seconds": 0.00248597,
+                "cpu_ticks": 626,
+                "elapsed_seconds": 30.751401841,
+                "pid": 18,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "a",
+                "rss_kib": 37444,
+                "socket_fds": 6,
+                "start_ticks": 90447415,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 13,
+                "vanished_fds": 0
+              },
+              "queued_bytes": 0,
+              "queued_packets": 0,
+              "stream_in_flight": 0,
+              "work": {
+                "inbound_accepted_packets": 872,
+                "outbound_direct_tcp_stream_fallback_packets": 1746,
+                "outbound_sent_packets": 1746,
+                "tun_read_bytes": 6007120,
+                "tun_read_packets": 5885,
+                "tun_write_bytes": 858656,
+                "tun_write_packets": 872
+              }
+            },
+            "b": {
+              "blocked_no_path_events": 0,
+              "dropped_packets": 25,
+              "expired_packets": 0,
+              "healthy_tcp_paths": 1,
+              "inbound_dropped_packets": 0,
+              "outbound_failures": 159,
+              "path_states": [
+                "peer state: 76180cda9309f4d6839013b10f3d17c3fce29b0ac365190aee447a8c0976227f transport 12D3KooWLGg2WbzuoAjtZx4eyuGB5kAcV3qvKbfgFfQ6aoGVUcNT validated true effective_mtu 1280 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 40 selected_path_mtu 1280 selected_path_rtt_ms 3 selected_path_relay_peer none selected_path_connection_id 6 selected_path_origin identify selected_path_connection_role dialer selected_path_established_as_relayed false selected_path_first_seen_unix_seconds 1789031545 selected_path_last_established_unix_seconds 1789031630 healthy_paths 1 direct_paths 1 relay_paths 0"
+              ],
+              "peers_without_supported_path": 0,
+              "process": {
+                "capture_seconds": 0.003133847,
+                "cpu_ticks": 227,
+                "elapsed_seconds": 30.756107179,
+                "pid": 19,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "b",
+                "rss_kib": 37376,
+                "socket_fds": 6,
+                "start_ticks": 90447415,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 13,
+                "vanished_fds": 0
+              },
+              "queued_bytes": 0,
+              "queued_packets": 0,
+              "stream_in_flight": 0,
+              "work": {
+                "inbound_accepted_packets": 1032,
+                "outbound_direct_tcp_stream_fallback_packets": 1007,
+                "outbound_sent_packets": 1007,
+                "tun_read_bytes": 1023376,
+                "tun_read_packets": 1037,
+                "tun_write_bytes": 1023136,
+                "tun_write_packets": 1032
+              }
+            }
+          }
+        },
+        {
+          "round": 4,
+          "transmitted": 1946,
+          "received": 8,
+          "after": {
+            "a": {
+              "blocked_no_path_events": 2443,
+              "dropped_packets": 5476,
+              "expired_packets": 87,
+              "healthy_tcp_paths": 1,
+              "inbound_dropped_packets": 0,
+              "outbound_failures": 1035,
+              "path_states": [
+                "peer state: 4206a9de28aa0cdec812aba43aa46c314e7789c0f19055790b4b76f5b1e2fe75 transport 12D3KooWKaWvVYubhJA4TrD8TqdFZMvJm9GjomLT4JYV68Map5cj validated true effective_mtu 1280 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 40 selected_path_mtu 1280 selected_path_rtt_ms 2 selected_path_relay_peer none selected_path_connection_id 9 selected_path_origin identify selected_path_connection_role listener selected_path_established_as_relayed false selected_path_first_seen_unix_seconds 1789031545 selected_path_last_established_unix_seconds 1789031657 healthy_paths 1 direct_paths 1 relay_paths 0"
+              ],
+              "peers_without_supported_path": 0,
+              "process": {
+                "capture_seconds": 0.002489326,
+                "cpu_ticks": 842,
+                "elapsed_seconds": 29.735124261,
+                "pid": 18,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "a",
+                "rss_kib": 37472,
+                "socket_fds": 6,
+                "start_ticks": 90447415,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 13,
+                "vanished_fds": 0
+              },
+              "queued_bytes": 0,
+              "queued_packets": 0,
+              "stream_in_flight": 0,
+              "work": {
+                "inbound_accepted_packets": 1174,
+                "outbound_direct_tcp_stream_fallback_packets": 2360,
+                "outbound_sent_packets": 2360,
+                "tun_read_bytes": 8008496,
+                "tun_read_packets": 7842,
+                "tun_write_bytes": 1159672,
+                "tun_write_packets": 1174
+              }
+            },
+            "b": {
+              "blocked_no_path_events": 0,
+              "dropped_packets": 36,
+              "expired_packets": 0,
+              "healthy_tcp_paths": 1,
+              "inbound_dropped_packets": 0,
+              "outbound_failures": 213,
+              "path_states": [
+                "peer state: 76180cda9309f4d6839013b10f3d17c3fce29b0ac365190aee447a8c0976227f transport 12D3KooWLGg2WbzuoAjtZx4eyuGB5kAcV3qvKbfgFfQ6aoGVUcNT validated true effective_mtu 1280 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 40 selected_path_mtu 1280 selected_path_rtt_ms 3 selected_path_relay_peer none selected_path_connection_id 8 selected_path_origin identify selected_path_connection_role dialer selected_path_established_as_relayed false selected_path_first_seen_unix_seconds 1789031545 selected_path_last_established_unix_seconds 1789031657 healthy_paths 1 direct_paths 1 relay_paths 0"
+              ],
+              "peers_without_supported_path": 0,
+              "process": {
+                "capture_seconds": 0.002485348,
+                "cpu_ticks": 306,
+                "elapsed_seconds": 29.73860532,
+                "pid": 19,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "b",
+                "rss_kib": 37172,
+                "socket_fds": 6,
+                "start_ticks": 90447415,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 13,
+                "vanished_fds": 0
+              },
+              "queued_bytes": 0,
+              "queued_packets": 0,
+              "stream_in_flight": 0,
+              "work": {
+                "inbound_accepted_packets": 1390,
+                "outbound_direct_tcp_stream_fallback_packets": 1354,
+                "outbound_sent_packets": 1354,
+                "tun_read_bytes": 1382008,
+                "tun_read_packets": 1396,
+                "tun_write_bytes": 1381720,
+                "tun_write_packets": 1390
+              }
+            }
+          }
+        },
+        {
+          "round": 5,
+          "transmitted": 1952,
+          "received": 9,
+          "after": {
+            "a": {
+              "blocked_no_path_events": 2848,
+              "dropped_packets": 6821,
+              "expired_packets": 92,
+              "healthy_tcp_paths": 1,
+              "inbound_dropped_packets": 0,
+              "outbound_failures": 1295,
+              "path_states": [
+                "peer state: 4206a9de28aa0cdec812aba43aa46c314e7789c0f19055790b4b76f5b1e2fe75 transport 12D3KooWKaWvVYubhJA4TrD8TqdFZMvJm9GjomLT4JYV68Map5cj validated true effective_mtu 1280 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 40 selected_path_mtu 1280 selected_path_rtt_ms 3 selected_path_relay_peer none selected_path_connection_id 11 selected_path_origin identify selected_path_connection_role listener selected_path_established_as_relayed false selected_path_first_seen_unix_seconds 1789031545 selected_path_last_established_unix_seconds 1789031686 healthy_paths 1 direct_paths 1 relay_paths 0"
+              ],
+              "peers_without_supported_path": 0,
+              "process": {
+                "capture_seconds": 0.0024807,
+                "cpu_ticks": 1051,
+                "elapsed_seconds": 29.475518846,
+                "pid": 18,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "a",
+                "rss_kib": 37484,
+                "socket_fds": 6,
+                "start_ticks": 90447415,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 13,
+                "vanished_fds": 0
+              },
+              "queued_bytes": 0,
+              "queued_packets": 0,
+              "stream_in_flight": 0,
+              "work": {
+                "inbound_accepted_packets": 1482,
+                "outbound_direct_tcp_stream_fallback_packets": 2977,
+                "outbound_sent_packets": 2977,
+                "tun_read_bytes": 10015992,
+                "tun_read_packets": 9804,
+                "tun_write_bytes": 1466856,
+                "tun_write_packets": 1482
+              }
+            },
+            "b": {
+              "blocked_no_path_events": 0,
+              "dropped_packets": 46,
+              "expired_packets": 0,
+              "healthy_tcp_paths": 1,
+              "inbound_dropped_packets": 0,
+              "outbound_failures": 266,
+              "path_states": [
+                "peer state: 76180cda9309f4d6839013b10f3d17c3fce29b0ac365190aee447a8c0976227f transport 12D3KooWLGg2WbzuoAjtZx4eyuGB5kAcV3qvKbfgFfQ6aoGVUcNT validated true effective_mtu 1280 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 40 selected_path_mtu 1280 selected_path_rtt_ms 4 selected_path_relay_peer none selected_path_connection_id 10 selected_path_origin identify selected_path_connection_role dialer selected_path_established_as_relayed false selected_path_first_seen_unix_seconds 1789031545 selected_path_last_established_unix_seconds 1789031686 healthy_paths 1 direct_paths 1 relay_paths 0"
+              ],
+              "peers_without_supported_path": 0,
+              "process": {
+                "capture_seconds": 0.002478095,
+                "cpu_ticks": 383,
+                "elapsed_seconds": 29.479197646,
+                "pid": 19,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "b",
+                "rss_kib": 37328,
+                "socket_fds": 6,
+                "start_ticks": 90447415,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 13,
+                "vanished_fds": 0
+              },
+              "queued_bytes": 0,
+              "queued_packets": 0,
+              "stream_in_flight": 0,
+              "work": {
+                "inbound_accepted_packets": 1752,
+                "outbound_direct_tcp_stream_fallback_packets": 1706,
+                "outbound_sent_packets": 1706,
+                "tun_read_bytes": 1744704,
+                "tun_read_packets": 1758,
+                "tun_write_bytes": 1744416,
+                "tun_write_packets": 1752
+              }
+            }
+          }
+        }
+      ],
+      "artifact_sha256": {
+        "node-a.log": "ff6525f92b0d8a8b36549a41b3b70877b6a6221e186aa8838213b1f34c8f88fa",
+        "ready-b": "b24d6d33736ecd5604a4b17bc9c6481039fac362bb7df044ef1c10a2bfd21db6",
+        "round-5/queue-pressure.json": "4c3bdd854ad1a8960a9e50617e97a9cc7d588ef9f5a43d8b67b7a6a9e14b58bc",
+        "round-5/recovery-ping-a.stdout": "4479647ea80a015a2d1087f5272a0a96bc257929e3179a5551180f36142acede",
+        "round-5/recovery-ping-b.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "round-5/pressure-ping.log": "a5bbe3953b604d0fffb56ddaee77551107a7147dec263d8b0d576fce70acecfe",
+        "round-5/recovery-ping-b.stdout": "9c8b69c05894c205a838577ffc43793d84b6386b8af5d2fa769be39db7182575",
+        "round-5/queue-pressure-partial.json": "1e0b1bfce5a71632ba2ad6ee849f95bf183d8334b478d2e68d66cdc532ab9146",
+        "round-5/queue-pressure-drain.json": "0e46bf474778a183e98ec612aa451d04f59fe9ff56e2b71213c08a76304f2c4a",
+        "round-5/recovery-ping-a.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "round-5/recovery-ping-a.json": "d3588828d3b3f7ace969e4740da7da2ed1d0acb7e23a6f863185d7bc10246cef",
+        "round-5/recovery-ping-b.json": "7f048f5f48697f1a70ca85a6c09915a217ffcd4a152872af5220944b549f0eeb",
+        "repro-metadata.txt": "52e5fe456bc1ff726a208cafb2f7ce5bf2b7ddbe8e5919095edbb4dd50f66ac5",
+        "start-a": "cced28c6dc3f99c2396a5eaad732bf6b28142335892b1cd0e6af6cdb53f5ccfa",
+        "ready-a": "b24d6d33736ecd5604a4b17bc9c6481039fac362bb7df044ef1c10a2bfd21db6",
+        "round-3/queue-pressure.json": "ea4754df6040e122ade6093ae403fcd9e08de05f51ba5bdb5c0859285d4858ee",
+        "round-3/recovery-ping-a.stdout": "e70f36451fb17153bfef708d125ae4803af82fb9e632d9c40d3f44f2b825b660",
+        "round-3/recovery-ping-b.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "round-3/pressure-ping.log": "b0fd6a32cca3b93c2bf6ff39d2a78b2d5c682d87dc1e73fc362b08a5465b7f26",
+        "round-3/recovery-ping-b.stdout": "55b555214b228f47bcbbab52b1ff13d752fd1dcb02548756fc51f738c52711ff",
+        "round-3/queue-pressure-partial.json": "ad478f618e65116a1ad2933b054c3429462daf92f86a7e59bacf794a08c23bac",
+        "round-3/queue-pressure-drain.json": "4acacc5d8d3ae0e90bd4ea7d4de8a5e6bf8bb97a483d9b4bafd27ecdabebc98c",
+        "round-3/recovery-ping-a.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "round-3/recovery-ping-a.json": "3c1d40e5d97c83169afb7a4daff59f492bf16b2b92b38f6d3596ed1743d9e26d",
+        "round-3/recovery-ping-b.json": "936454f0d4ddf45b0507e6c2f1695444cdd9a190b62d32a1ea9b6101729d1402",
+        "start-b": "cced28c6dc3f99c2396a5eaad732bf6b28142335892b1cd0e6af6cdb53f5ccfa",
+        "round-2/queue-pressure.json": "f7aaa62eb08d280e07e2252e72cb112a383185a9ac060bd1d7d975167352434b",
+        "round-2/recovery-ping-a.stdout": "97f40e756c8d023a83aadd78de5c7a046f6eab58fe7f3508afaadc06c0bbd632",
+        "round-2/recovery-ping-b.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "round-2/pressure-ping.log": "3aeb9e85ea7511256f0a86ba545087a31e904a070ec390765abadd0caeecfd71",
+        "round-2/recovery-ping-b.stdout": "2bcd5dc2bacb44976e60954bbf3df9390696430ed5239b1bb84a703e6088a174",
+        "round-2/queue-pressure-partial.json": "176cbc45e380bef61ccd38e890bbcaa56c77994fee7e6c5ee4e884887a3ce5b8",
+        "round-2/queue-pressure-drain.json": "2f4f7c6358f5c703462b6e477dacbb4705dc1d886ef79a3d6e868b0cb1f5ff0d",
+        "round-2/recovery-ping-a.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "round-2/recovery-ping-a.json": "0866e1093ccd1af983c1e0205e07bf6b1141e99a84e9c2530d4d49fb000b647d",
+        "round-2/recovery-ping-b.json": "01ca5b34848bc06871df9daa58f4edd7b2afd3caa26e453979a8d975f000f7ce",
+        "node-b.log": "66ff11dd40c13d16217e5a6dc95e966189a648d74b739b93fbbd92f6b6a7db07",
+        "round-1/queue-pressure.json": "45d773e53f6c5e997c91774eab08f861146ce0a1532a2094c96c52593fc5f020",
+        "round-1/recovery-ping-a.stdout": "56bc933536bffb5cfcf0fb1ccbf0f9f5008c73d7ead7570c2a4eaa31b20e643e",
+        "round-1/recovery-ping-b.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "round-1/pressure-ping.log": "1701278016cbe2d9562569da9af9c87fc54f9b61c859bf329116c06d0213239e",
+        "round-1/recovery-ping-b.stdout": "e1cb1b146a77ef29748159daa84ba0630aa3e5331c07f9427d3d26b8f69a0bcc",
+        "round-1/queue-pressure-partial.json": "8cc2e4948e7a70b65902e135c2d4584ada2bade6bd06550ecce59f3b4ec1a1fa",
+        "round-1/queue-pressure-drain.json": "945c03f212a860a235c138ab53309523d38fbe6f80a50f7e188b696ff285c997",
+        "round-1/recovery-ping-a.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "round-1/recovery-ping-a.json": "238eb3b33a0645e3f82e6c712c467d08ca030da3fb6275e762e504a5c0fb5516",
+        "round-1/recovery-ping-b.json": "204d899917eb1b4eb4bf3ca57df9eb3e8b6876ebdffb2803f4c2556ae10fc7d8",
+        "repro-commands.sh": "7b886879aa31e2564c4d7b7696eb4bd52f342358d20242e21b93823d7f1cbc31",
+        "round-4/queue-pressure.json": "46e78bff6805f5f2b0b6b98540f2604e73cf207f8b0dd8ee9762f159cb1e52ac",
+        "round-4/recovery-ping-a.stdout": "93e8ab3b097cec96b202d14d2f339cf28d644213e9a561e6f896f85fca86f9e4",
+        "round-4/recovery-ping-b.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "round-4/pressure-ping.log": "dc483a9d63b87d7299d0dba7977d6d8288aafd14a2d78512d3e3cbbb098b54ec",
+        "round-4/recovery-ping-b.stdout": "91fd36c470cdb5cdc46abc7eb4dc1b592b461d8f97bbea6e1304941f15a67b87",
+        "round-4/queue-pressure-partial.json": "4bc38c9c7c7eda1a073d88420156c5e159ff7c37a34820189495d16a5ee14e4b",
+        "round-4/queue-pressure-drain.json": "7f2046dcb0ea29587d6b9090d50d5cce9b99cbaddbebc60ebd54e72e27fb514a",
+        "round-4/recovery-ping-a.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "round-4/recovery-ping-a.json": "91f44aaec3610c918da82ea9d26cd5449f430c4f6d24dca2db9634b9f830d252",
+        "round-4/recovery-ping-b.json": "01a536583bb6f641dae40e20e73626d772b5ee6b3c7f869063b41b16353b0bfe",
+        "queue-pressure-series.json": "0e210f95dcbea018d9dd20f563fdd7e557ffb6a5679cdb21f91c1f837267936d"
+      },
+      "json_bytes": 3445244,
+      "node_log_bytes": 1212098,
+      "strict_recovery_batches": 10,
+      "elapsed_seconds": 160.51,
+      "outer_log": {
+        "path": "/tmp/p2p-vpn-pressure-allocation-bytes-1.log",
+        "sha256": "d5ddeaede8f0b53e0471c9f93a3ce3b3c69464e255ba6323e512ee86387504f6",
+        "exit_code": 0
+      }
+    },
+    {
+      "name": "bytes-2",
+      "directory": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.9021b7d7fecc4743",
+      "profile": "bytes",
+      "completed_rounds": 5,
+      "roles": {
+        "a": {
+          "rows": [
+            {
+              "elapsed_millis": 0,
+              "unix_millis": 1789031730552,
+              "live_bytes": 4184398,
+              "live_blocks": 1357
+            },
+            {
+              "elapsed_millis": 5000,
+              "unix_millis": 1789031735553,
+              "live_bytes": 4341145,
+              "live_blocks": 1611
+            },
+            {
+              "elapsed_millis": 10001,
+              "unix_millis": 1789031740553,
+              "live_bytes": 4823973,
+              "live_blocks": 3723
+            },
+            {
+              "elapsed_millis": 15003,
+              "unix_millis": 1789031745556,
+              "live_bytes": 5257522,
+              "live_blocks": 5164
+            },
+            {
+              "elapsed_millis": 20000,
+              "unix_millis": 1789031750553,
+              "live_bytes": 4754636,
+              "live_blocks": 1551
+            },
+            {
+              "elapsed_millis": 25001,
+              "unix_millis": 1789031755554,
+              "live_bytes": 4534633,
+              "live_blocks": 1962
+            },
+            {
+              "elapsed_millis": 30001,
+              "unix_millis": 1789031760554,
+              "live_bytes": 5245961,
+              "live_blocks": 5200
+            },
+            {
+              "elapsed_millis": 35003,
+              "unix_millis": 1789031765556,
+              "live_bytes": 4522803,
+              "live_blocks": 1624
+            },
+            {
+              "elapsed_millis": 40000,
+              "unix_millis": 1789031770553,
+              "live_bytes": 4727070,
+              "live_blocks": 2643
+            },
+            {
+              "elapsed_millis": 45000,
+              "unix_millis": 1789031775553,
+              "live_bytes": 5279879,
+              "live_blocks": 5293
+            },
+            {
+              "elapsed_millis": 50003,
+              "unix_millis": 1789031780556,
+              "live_bytes": 4401372,
+              "live_blocks": 1470
+            },
+            {
+              "elapsed_millis": 55001,
+              "unix_millis": 1789031785554,
+              "live_bytes": 5247772,
+              "live_blocks": 5142
+            },
+            {
+              "elapsed_millis": 60000,
+              "unix_millis": 1789031790553,
+              "live_bytes": 5324452,
+              "live_blocks": 5563
+            },
+            {
+              "elapsed_millis": 65001,
+              "unix_millis": 1789031795553,
+              "live_bytes": 4620722,
+              "live_blocks": 1622
+            },
+            {
+              "elapsed_millis": 70001,
+              "unix_millis": 1789031800553,
+              "live_bytes": 4752136,
+              "live_blocks": 2271
+            },
+            {
+              "elapsed_millis": 75000,
+              "unix_millis": 1789031805553,
+              "live_bytes": 5363297,
+              "live_blocks": 5147
+            },
+            {
+              "elapsed_millis": 80000,
+              "unix_millis": 1789031810553,
+              "live_bytes": 4872782,
+              "live_blocks": 1557
+            },
+            {
+              "elapsed_millis": 85000,
+              "unix_millis": 1789031815553,
+              "live_bytes": 4480158,
+              "live_blocks": 1708
+            },
+            {
+              "elapsed_millis": 90000,
+              "unix_millis": 1789031820553,
+              "live_bytes": 5289010,
+              "live_blocks": 5277
+            },
+            {
+              "elapsed_millis": 95001,
+              "unix_millis": 1789031825554,
+              "live_bytes": 4554930,
+              "live_blocks": 1622
+            },
+            {
+              "elapsed_millis": 100000,
+              "unix_millis": 1789031830553,
+              "live_bytes": 4554930,
+              "live_blocks": 1622
+            },
+            {
+              "elapsed_millis": 105000,
+              "unix_millis": 1789031835553,
+              "live_bytes": 5294740,
+              "live_blocks": 5147
+            },
+            {
+              "elapsed_millis": 110003,
+              "unix_millis": 1789031840556,
+              "live_bytes": 5348964,
+              "live_blocks": 5446
+            },
+            {
+              "elapsed_millis": 115001,
+              "unix_millis": 1789031845553,
+              "live_bytes": 4401436,
+              "live_blocks": 1471
+            },
+            {
+              "elapsed_millis": 120000,
+              "unix_millis": 1789031850553,
+              "live_bytes": 5225326,
+              "live_blocks": 5173
+            },
+            {
+              "elapsed_millis": 125003,
+              "unix_millis": 1789031855556,
+              "live_bytes": 4522867,
+              "live_blocks": 1625
+            },
+            {
+              "elapsed_millis": 130002,
+              "unix_millis": 1789031860555,
+              "live_bytes": 4522034,
+              "live_blocks": 1622
+            },
+            {
+              "elapsed_millis": 135001,
+              "unix_millis": 1789031865553,
+              "live_bytes": 5268566,
+              "live_blocks": 5176
+            },
+            {
+              "elapsed_millis": 140001,
+              "unix_millis": 1789031870554,
+              "live_bytes": 5318132,
+              "live_blocks": 5536
+            },
+            {
+              "elapsed_millis": 145000,
+              "unix_millis": 1789031875553,
+              "live_bytes": 5149204,
+              "live_blocks": 4792
+            },
+            {
+              "elapsed_millis": 150000,
+              "unix_millis": 1789031880553,
+              "live_bytes": 5386131,
+              "live_blocks": 5534
+            },
+            {
+              "elapsed_millis": 155000,
+              "unix_millis": 1789031885553,
+              "live_bytes": 4620722,
+              "live_blocks": 1622
+            },
+            {
+              "elapsed_millis": 160001,
+              "unix_millis": 1789031890554,
+              "live_bytes": 4620722,
+              "live_blocks": 1622
+            }
+          ],
+          "max_gap_millis": 5003,
+          "max_clock_disagreement_millis": 1,
+          "min_bytes": 4184398,
+          "max_bytes": 5386131,
+          "final_bytes": 4620722,
+          "final_blocks": 1622
+        },
+        "b": {
+          "rows": [
+            {
+              "elapsed_millis": 0,
+              "unix_millis": 1789031730294,
+              "live_bytes": 4157628,
+              "live_blocks": 1311
+            },
+            {
+              "elapsed_millis": 5003,
+              "unix_millis": 1789031735297,
+              "live_bytes": 4340849,
+              "live_blocks": 1598
+            },
+            {
+              "elapsed_millis": 10004,
+              "unix_millis": 1789031740298,
+              "live_bytes": 4375137,
+              "live_blocks": 1856
+            },
+            {
+              "elapsed_millis": 15003,
+              "unix_millis": 1789031745297,
+              "live_bytes": 4785036,
+              "live_blocks": 5392
+            },
+            {
+              "elapsed_millis": 20001,
+              "unix_millis": 1789031750295,
+              "live_bytes": 4320868,
+              "live_blocks": 1447
+            },
+            {
+              "elapsed_millis": 25003,
+              "unix_millis": 1789031755297,
+              "live_bytes": 4393166,
+              "live_blocks": 1641
+            },
+            {
+              "elapsed_millis": 30003,
+              "unix_millis": 1789031760297,
+              "live_bytes": 4540534,
+              "live_blocks": 2963
+            },
+            {
+              "elapsed_millis": 35001,
+              "unix_millis": 1789031765295,
+              "live_bytes": 4612961,
+              "live_blocks": 1606
+            },
+            {
+              "elapsed_millis": 40003,
+              "unix_millis": 1789031770297,
+              "live_bytes": 4629576,
+              "live_blocks": 1751
+            },
+            {
+              "elapsed_millis": 45001,
+              "unix_millis": 1789031775295,
+              "live_bytes": 4878486,
+              "live_blocks": 4022
+            },
+            {
+              "elapsed_millis": 50001,
+              "unix_millis": 1789031780295,
+              "live_bytes": 4986443,
+              "live_blocks": 4731
+            },
+            {
+              "elapsed_millis": 55001,
+              "unix_millis": 1789031785295,
+              "live_bytes": 4601695,
+              "live_blocks": 3214
+            },
+            {
+              "elapsed_millis": 60004,
+              "unix_millis": 1789031790298,
+              "live_bytes": 4697295,
+              "live_blocks": 3730
+            },
+            {
+              "elapsed_millis": 65002,
+              "unix_millis": 1789031795296,
+              "live_bytes": 4601697,
+              "live_blocks": 1606
+            },
+            {
+              "elapsed_millis": 70004,
+              "unix_millis": 1789031800298,
+              "live_bytes": 4612498,
+              "live_blocks": 1714
+            },
+            {
+              "elapsed_millis": 75002,
+              "unix_millis": 1789031805296,
+              "live_bytes": 4991126,
+              "live_blocks": 5479
+            },
+            {
+              "elapsed_millis": 80001,
+              "unix_millis": 1789031810295,
+              "live_bytes": 5033422,
+              "live_blocks": 5415
+            },
+            {
+              "elapsed_millis": 85001,
+              "unix_millis": 1789031815295,
+              "live_bytes": 4439548,
+              "live_blocks": 1636
+            },
+            {
+              "elapsed_millis": 90003,
+              "unix_millis": 1789031820297,
+              "live_bytes": 4612444,
+              "live_blocks": 3136
+            },
+            {
+              "elapsed_millis": 95001,
+              "unix_millis": 1789031825295,
+              "live_bytes": 4613025,
+              "live_blocks": 1607
+            },
+            {
+              "elapsed_millis": 100004,
+              "unix_millis": 1789031830298,
+              "live_bytes": 4613858,
+              "live_blocks": 1610
+            },
+            {
+              "elapsed_millis": 105002,
+              "unix_millis": 1789031835296,
+              "live_bytes": 4955854,
+              "live_blocks": 4989
+            },
+            {
+              "elapsed_millis": 110004,
+              "unix_millis": 1789031840298,
+              "live_bytes": 5019057,
+              "live_blocks": 5170
+            },
+            {
+              "elapsed_millis": 115002,
+              "unix_millis": 1789031845296,
+              "live_bytes": 4368508,
+              "live_blocks": 1452
+            },
+            {
+              "elapsed_millis": 120001,
+              "unix_millis": 1789031850295,
+              "live_bytes": 4554673,
+              "live_blocks": 2699
+            },
+            {
+              "elapsed_millis": 125003,
+              "unix_millis": 1789031855297,
+              "live_bytes": 4609762,
+              "live_blocks": 1610
+            },
+            {
+              "elapsed_millis": 130003,
+              "unix_millis": 1789031860297,
+              "live_bytes": 4609762,
+              "live_blocks": 1610
+            },
+            {
+              "elapsed_millis": 135004,
+              "unix_millis": 1789031865298,
+              "live_bytes": 4789100,
+              "live_blocks": 3262
+            },
+            {
+              "elapsed_millis": 140001,
+              "unix_millis": 1789031870295,
+              "live_bytes": 4982590,
+              "live_blocks": 4924
+            },
+            {
+              "elapsed_millis": 145002,
+              "unix_millis": 1789031875297,
+              "live_bytes": 4550326,
+              "live_blocks": 2728
+            },
+            {
+              "elapsed_millis": 150003,
+              "unix_millis": 1789031880297,
+              "live_bytes": 4688239,
+              "live_blocks": 3695
+            },
+            {
+              "elapsed_millis": 155001,
+              "unix_millis": 1789031885295,
+              "live_bytes": 4601761,
+              "live_blocks": 1607
+            },
+            {
+              "elapsed_millis": 160003,
+              "unix_millis": 1789031890297,
+              "live_bytes": 4601761,
+              "live_blocks": 1607
+            }
+          ],
+          "max_gap_millis": 5003,
+          "max_clock_disagreement_millis": 1,
+          "min_bytes": 4157628,
+          "max_bytes": 5033422,
+          "final_bytes": 4601761,
+          "final_blocks": 1607
+        }
+      },
+      "rounds": [
+        {
+          "round": 1,
+          "transmitted": 1944,
+          "received": 7,
+          "after": {
+            "a": {
+              "blocked_no_path_events": 855,
+              "dropped_packets": 1384,
+              "expired_packets": 35,
+              "healthy_tcp_paths": 1,
+              "inbound_dropped_packets": 0,
+              "outbound_failures": 258,
+              "path_states": [
+                "peer state: 58bf22041423143e120457f9706ab95c6a9a8307647e1b8a72750cf81ba148c6 transport 12D3KooWCQJNArjgYEbYC9dxAYrH7rmgD7uwswxE8auuCtTy9Jc8 validated true effective_mtu 1280 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 40 selected_path_mtu 1280 selected_path_rtt_ms 4 selected_path_relay_peer none selected_path_connection_id 3 selected_path_origin identify selected_path_connection_role listener selected_path_established_as_relayed false selected_path_first_seen_unix_seconds 1789031730 selected_path_last_established_unix_seconds 1789031754 healthy_paths 1 direct_paths 1 relay_paths 0"
+              ],
+              "peers_without_supported_path": 0,
+              "process": {
+                "capture_seconds": 0.002530924,
+                "cpu_ticks": 214,
+                "elapsed_seconds": 30.858002792,
+                "pid": 18,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "a",
+                "rss_kib": 37816,
+                "socket_fds": 6,
+                "start_ticks": 90465885,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 13,
+                "vanished_fds": 0
+              },
+              "queued_bytes": 0,
+              "queued_packets": 0,
+              "stream_in_flight": 0,
+              "work": {
+                "inbound_accepted_packets": 291,
+                "outbound_direct_tcp_stream_fallback_packets": 580,
+                "outbound_sent_packets": 580,
+                "tun_read_bytes": 2000304,
+                "tun_read_packets": 1968,
+                "tun_write_bytes": 280268,
+                "tun_write_packets": 291
+              }
+            },
+            "b": {
+              "blocked_no_path_events": 0,
+              "dropped_packets": 4,
+              "expired_packets": 0,
+              "healthy_tcp_paths": 1,
+              "inbound_dropped_packets": 0,
+              "outbound_failures": 53,
+              "path_states": [
+                "peer state: 11245f149abe29b5bf421393b5e568fa5abce6ca1a8759df1759968f67cdedbf transport 12D3KooWDW3nCwmVP2j3U1NPmvKoyERsdwsW7VgrANxS4HKshjE5 validated true effective_mtu 1280 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 40 selected_path_mtu 1280 selected_path_rtt_ms 4 selected_path_relay_peer none selected_path_connection_id 2 selected_path_origin identify selected_path_connection_role dialer selected_path_established_as_relayed false selected_path_first_seen_unix_seconds 1789031730 selected_path_last_established_unix_seconds 1789031754 healthy_paths 1 direct_paths 1 relay_paths 0"
+              ],
+              "peers_without_supported_path": 0,
+              "process": {
+                "capture_seconds": 0.002489176,
+                "cpu_ticks": 79,
+                "elapsed_seconds": 30.861636788,
+                "pid": 19,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "b",
+                "rss_kib": 37432,
+                "socket_fds": 6,
+                "start_ticks": 90465885,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 13,
+                "vanished_fds": 0
+              },
+              "queued_bytes": 0,
+              "queued_packets": 0,
+              "stream_in_flight": 0,
+              "work": {
+                "inbound_accepted_packets": 340,
+                "outbound_direct_tcp_stream_fallback_packets": 336,
+                "outbound_sent_packets": 336,
+                "tun_read_bytes": 330832,
+                "tun_read_packets": 344,
+                "tun_write_bytes": 330640,
+                "tun_write_packets": 340
+              }
+            }
+          }
+        },
+        {
+          "round": 2,
+          "transmitted": 1948,
+          "received": 9,
+          "after": {
+            "a": {
+              "blocked_no_path_events": 1290,
+              "dropped_packets": 2731,
+              "expired_packets": 40,
+              "healthy_tcp_paths": 1,
+              "inbound_dropped_packets": 0,
+              "outbound_failures": 517,
+              "path_states": [
+                "peer state: 58bf22041423143e120457f9706ab95c6a9a8307647e1b8a72750cf81ba148c6 transport 12D3KooWCQJNArjgYEbYC9dxAYrH7rmgD7uwswxE8auuCtTy9Jc8 validated true effective_mtu 1280 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 40 selected_path_mtu 1280 selected_path_rtt_ms 2 selected_path_relay_peer none selected_path_connection_id 5 selected_path_origin identify selected_path_connection_role listener selected_path_established_as_relayed false selected_path_first_seen_unix_seconds 1789031730 selected_path_last_established_unix_seconds 1789031781 healthy_paths 1 direct_paths 1 relay_paths 0"
+              ],
+              "peers_without_supported_path": 0,
+              "process": {
+                "capture_seconds": 0.002498424,
+                "cpu_ticks": 424,
+                "elapsed_seconds": 30.270860469,
+                "pid": 18,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "a",
+                "rss_kib": 37916,
+                "socket_fds": 6,
+                "start_ticks": 90465885,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 13,
+                "vanished_fds": 0
+              },
+              "queued_bytes": 0,
+              "queued_packets": 0,
+              "stream_in_flight": 0,
+              "work": {
+                "inbound_accepted_packets": 602,
+                "outbound_direct_tcp_stream_fallback_packets": 1191,
+                "outbound_sent_packets": 1191,
+                "tun_read_bytes": 4003736,
+                "tun_read_packets": 3927,
+                "tun_write_bytes": 590536,
+                "tun_write_packets": 602
+              }
+            },
+            "b": {
+              "blocked_no_path_events": 0,
+              "dropped_packets": 4,
+              "expired_packets": 0,
+              "healthy_tcp_paths": 1,
+              "inbound_dropped_packets": 0,
+              "outbound_failures": 108,
+              "path_states": [
+                "peer state: 11245f149abe29b5bf421393b5e568fa5abce6ca1a8759df1759968f67cdedbf transport 12D3KooWDW3nCwmVP2j3U1NPmvKoyERsdwsW7VgrANxS4HKshjE5 validated true effective_mtu 1280 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 40 selected_path_mtu 1280 selected_path_rtt_ms 3 selected_path_relay_peer none selected_path_connection_id 4 selected_path_origin identify selected_path_connection_role dialer selected_path_established_as_relayed false selected_path_first_seen_unix_seconds 1789031730 selected_path_last_established_unix_seconds 1789031781 healthy_paths 1 direct_paths 1 relay_paths 0"
+              ],
+              "peers_without_supported_path": 0,
+              "process": {
+                "capture_seconds": 0.002495718,
+                "cpu_ticks": 151,
+                "elapsed_seconds": 30.274837691,
+                "pid": 19,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "b",
+                "rss_kib": 37404,
+                "socket_fds": 6,
+                "start_ticks": 90465885,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 13,
+                "vanished_fds": 0
+              },
+              "queued_bytes": 0,
+              "queued_packets": 0,
+              "stream_in_flight": 0,
+              "work": {
+                "inbound_accepted_packets": 696,
+                "outbound_direct_tcp_stream_fallback_packets": 692,
+                "outbound_sent_packets": 692,
+                "tun_read_bytes": 687408,
+                "tun_read_packets": 701,
+                "tun_write_bytes": 687168,
+                "tun_write_packets": 696
+              }
+            }
+          }
+        },
+        {
+          "round": 3,
+          "transmitted": 1949,
+          "received": 7,
+          "after": {
+            "a": {
+              "blocked_no_path_events": 2066,
+              "dropped_packets": 4121,
+              "expired_packets": 72,
+              "healthy_tcp_paths": 1,
+              "inbound_dropped_packets": 0,
+              "outbound_failures": 775,
+              "path_states": [
+                "peer state: 58bf22041423143e120457f9706ab95c6a9a8307647e1b8a72750cf81ba148c6 transport 12D3KooWCQJNArjgYEbYC9dxAYrH7rmgD7uwswxE8auuCtTy9Jc8 validated true effective_mtu 1280 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 40 selected_path_mtu 1280 selected_path_rtt_ms 1 selected_path_relay_peer none selected_path_connection_id 7 selected_path_origin identify selected_path_connection_role listener selected_path_established_as_relayed false selected_path_first_seen_unix_seconds 1789031730 selected_path_last_established_unix_seconds 1789031815 healthy_paths 1 direct_paths 1 relay_paths 0"
+              ],
+              "peers_without_supported_path": 0,
+              "process": {
+                "capture_seconds": 0.003211532,
+                "cpu_ticks": 621,
+                "elapsed_seconds": 30.812088465,
+                "pid": 18,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "a",
+                "rss_kib": 37928,
+                "socket_fds": 6,
+                "start_ticks": 90465885,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 13,
+                "vanished_fds": 0
+              },
+              "queued_bytes": 0,
+              "queued_packets": 0,
+              "stream_in_flight": 0,
+              "work": {
+                "inbound_accepted_packets": 881,
+                "outbound_direct_tcp_stream_fallback_packets": 1760,
+                "outbound_sent_packets": 1760,
+                "tun_read_bytes": 6008148,
+                "tun_read_packets": 5886,
+                "tun_write_bytes": 867908,
+                "tun_write_packets": 881
+              }
+            },
+            "b": {
+              "blocked_no_path_events": 0,
+              "dropped_packets": 16,
+              "expired_packets": 0,
+              "healthy_tcp_paths": 1,
+              "inbound_dropped_packets": 0,
+              "outbound_failures": 158,
+              "path_states": [
+                "peer state: 11245f149abe29b5bf421393b5e568fa5abce6ca1a8759df1759968f67cdedbf transport 12D3KooWDW3nCwmVP2j3U1NPmvKoyERsdwsW7VgrANxS4HKshjE5 validated true effective_mtu 1280 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 40 selected_path_mtu 1280 selected_path_rtt_ms 2 selected_path_relay_peer none selected_path_connection_id 6 selected_path_origin identify selected_path_connection_role dialer selected_path_established_as_relayed false selected_path_first_seen_unix_seconds 1789031730 selected_path_last_established_unix_seconds 1789031815 healthy_paths 1 direct_paths 1 relay_paths 0"
+              ],
+              "peers_without_supported_path": 0,
+              "process": {
+                "capture_seconds": 0.00251272,
+                "cpu_ticks": 220,
+                "elapsed_seconds": 30.815666306,
+                "pid": 19,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "b",
+                "rss_kib": 37704,
+                "socket_fds": 6,
+                "start_ticks": 90465885,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 13,
+                "vanished_fds": 0
+              },
+              "queued_bytes": 0,
+              "queued_packets": 0,
+              "stream_in_flight": 0,
+              "work": {
+                "inbound_accepted_packets": 1029,
+                "outbound_direct_tcp_stream_fallback_packets": 1013,
+                "outbound_sent_packets": 1013,
+                "tun_read_bytes": 1020292,
+                "tun_read_packets": 1034,
+                "tun_write_bytes": 1020052,
+                "tun_write_packets": 1029
+              }
+            }
+          }
+        },
+        {
+          "round": 4,
+          "transmitted": 1943,
+          "received": 7,
+          "after": {
+            "a": {
+              "blocked_no_path_events": 2928,
+              "dropped_packets": 5502,
+              "expired_packets": 106,
+              "healthy_tcp_paths": 1,
+              "inbound_dropped_packets": 0,
+              "outbound_failures": 1034,
+              "path_states": [
+                "peer state: 58bf22041423143e120457f9706ab95c6a9a8307647e1b8a72750cf81ba148c6 transport 12D3KooWCQJNArjgYEbYC9dxAYrH7rmgD7uwswxE8auuCtTy9Jc8 validated true effective_mtu 1280 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 40 selected_path_mtu 1280 selected_path_rtt_ms 3 selected_path_relay_peer none selected_path_connection_id 9 selected_path_origin identify selected_path_connection_role listener selected_path_established_as_relayed false selected_path_first_seen_unix_seconds 1789031730 selected_path_last_established_unix_seconds 1789031847 healthy_paths 1 direct_paths 1 relay_paths 0"
+              ],
+              "peers_without_supported_path": 0,
+              "process": {
+                "capture_seconds": 0.002481963,
+                "cpu_ticks": 828,
+                "elapsed_seconds": 30.767179642,
+                "pid": 18,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "a",
+                "rss_kib": 37932,
+                "socket_fds": 6,
+                "start_ticks": 90465885,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 13,
+                "vanished_fds": 0
+              },
+              "queued_bytes": 0,
+              "queued_packets": 0,
+              "stream_in_flight": 0,
+              "work": {
+                "inbound_accepted_packets": 1163,
+                "outbound_direct_tcp_stream_fallback_packets": 2332,
+                "outbound_sent_packets": 2332,
+                "tun_read_bytes": 8006440,
+                "tun_read_packets": 7840,
+                "tun_write_bytes": 1148364,
+                "tun_write_packets": 1163
+              }
+            },
+            "b": {
+              "blocked_no_path_events": 0,
+              "dropped_packets": 21,
+              "expired_packets": 0,
+              "healthy_tcp_paths": 1,
+              "inbound_dropped_packets": 0,
+              "outbound_failures": 212,
+              "path_states": [
+                "peer state: 11245f149abe29b5bf421393b5e568fa5abce6ca1a8759df1759968f67cdedbf transport 12D3KooWDW3nCwmVP2j3U1NPmvKoyERsdwsW7VgrANxS4HKshjE5 validated true effective_mtu 1280 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 40 selected_path_mtu 1280 selected_path_rtt_ms 4 selected_path_relay_peer none selected_path_connection_id 8 selected_path_origin identify selected_path_connection_role dialer selected_path_established_as_relayed false selected_path_first_seen_unix_seconds 1789031730 selected_path_last_established_unix_seconds 1789031846 healthy_paths 1 direct_paths 1 relay_paths 0"
+              ],
+              "peers_without_supported_path": 0,
+              "process": {
+                "capture_seconds": 0.002500097,
+                "cpu_ticks": 289,
+                "elapsed_seconds": 30.770817726,
+                "pid": 19,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "b",
+                "rss_kib": 37824,
+                "socket_fds": 6,
+                "start_ticks": 90465885,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 13,
+                "vanished_fds": 0
+              },
+              "queued_bytes": 0,
+              "queued_packets": 0,
+              "stream_in_flight": 0,
+              "work": {
+                "inbound_accepted_packets": 1362,
+                "outbound_direct_tcp_stream_fallback_packets": 1341,
+                "outbound_sent_packets": 1341,
+                "tun_read_bytes": 1353176,
+                "tun_read_packets": 1367,
+                "tun_write_bytes": 1352936,
+                "tun_write_packets": 1362
+              }
+            }
+          }
+        },
+        {
+          "round": 5,
+          "transmitted": 1942,
+          "received": 9,
+          "after": {
+            "a": {
+              "blocked_no_path_events": 3282,
+              "dropped_packets": 6839,
+              "expired_packets": 113,
+              "healthy_tcp_paths": 1,
+              "inbound_dropped_packets": 0,
+              "outbound_failures": 1293,
+              "path_states": [
+                "peer state: 58bf22041423143e120457f9706ab95c6a9a8307647e1b8a72750cf81ba148c6 transport 12D3KooWCQJNArjgYEbYC9dxAYrH7rmgD7uwswxE8auuCtTy9Jc8 validated true effective_mtu 1280 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 40 selected_path_mtu 1280 selected_path_rtt_ms 3 selected_path_relay_peer none selected_path_connection_id 11 selected_path_origin identify selected_path_connection_role listener selected_path_established_as_relayed false selected_path_first_seen_unix_seconds 1789031730 selected_path_last_established_unix_seconds 1789031872 healthy_paths 1 direct_paths 1 relay_paths 0"
+              ],
+              "peers_without_supported_path": 0,
+              "process": {
+                "capture_seconds": 0.00249173,
+                "cpu_ticks": 1044,
+                "elapsed_seconds": 30.000846384,
+                "pid": 18,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "a",
+                "rss_kib": 37940,
+                "socket_fds": 6,
+                "start_ticks": 90465885,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 13,
+                "vanished_fds": 0
+              },
+              "queued_bytes": 0,
+              "queued_packets": 0,
+              "stream_in_flight": 0,
+              "work": {
+                "inbound_accepted_packets": 1470,
+                "outbound_direct_tcp_stream_fallback_packets": 2947,
+                "outbound_sent_packets": 2947,
+                "tun_read_bytes": 10003656,
+                "tun_read_packets": 9792,
+                "tun_write_bytes": 1454520,
+                "tun_write_packets": 1470
+              }
+            },
+            "b": {
+              "blocked_no_path_events": 0,
+              "dropped_packets": 30,
+              "expired_packets": 0,
+              "healthy_tcp_paths": 1,
+              "inbound_dropped_packets": 0,
+              "outbound_failures": 265,
+              "path_states": [
+                "peer state: 11245f149abe29b5bf421393b5e568fa5abce6ca1a8759df1759968f67cdedbf transport 12D3KooWDW3nCwmVP2j3U1NPmvKoyERsdwsW7VgrANxS4HKshjE5 validated true effective_mtu 1280 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 40 selected_path_mtu 1280 selected_path_rtt_ms 4 selected_path_relay_peer none selected_path_connection_id 10 selected_path_origin identify selected_path_connection_role dialer selected_path_established_as_relayed false selected_path_first_seen_unix_seconds 1789031730 selected_path_last_established_unix_seconds 1789031872 healthy_paths 1 direct_paths 1 relay_paths 0"
+              ],
+              "peers_without_supported_path": 0,
+              "process": {
+                "capture_seconds": 0.002483084,
+                "cpu_ticks": 369,
+                "elapsed_seconds": 30.004525766,
+                "pid": 19,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "b",
+                "rss_kib": 37596,
+                "socket_fds": 6,
+                "start_ticks": 90465885,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 13,
+                "vanished_fds": 0
+              },
+              "queued_bytes": 0,
+              "queued_packets": 0,
+              "stream_in_flight": 0,
+              "work": {
+                "inbound_accepted_packets": 1721,
+                "outbound_direct_tcp_stream_fallback_packets": 1691,
+                "outbound_sent_packets": 1691,
+                "tun_read_bytes": 1712836,
+                "tun_read_packets": 1727,
+                "tun_write_bytes": 1712548,
+                "tun_write_packets": 1721
+              }
+            }
+          }
+        }
+      ],
+      "artifact_sha256": {
+        "node-a.log": "2bda640893e5245a69c21cca6c375da75168634d91468c3378bac115f2f9d5b4",
+        "ready-b": "b24d6d33736ecd5604a4b17bc9c6481039fac362bb7df044ef1c10a2bfd21db6",
+        "round-5/queue-pressure.json": "98cf44b3d3c371f11a01f549186661639b8ea351724f3de1a3d1a61fb658434e",
+        "round-5/recovery-ping-a.stdout": "38d8dbf4592a3cb61f12597616718fd22b7cb3b02b18cbc5499ea7045732fc8c",
+        "round-5/recovery-ping-b.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "round-5/pressure-ping.log": "c22f70c08ce5f0aecd7351d112baab5e60494920a87c288819046bbbfaf90919",
+        "round-5/recovery-ping-b.stdout": "956988563f68c4c44222894bc4d55ec338975463b0a08399df618e2d9c2ba360",
+        "round-5/queue-pressure-partial.json": "df42d36474b25a264ebee0e4d472e7eb997225251da78aee54736dce3d2cd889",
+        "round-5/queue-pressure-drain.json": "876a0ebbce762a5c82cab9407ddadab226779f603655837fb6f4281f21156012",
+        "round-5/recovery-ping-a.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "round-5/recovery-ping-a.json": "39fe63ce4fa21662deba813512dc24a95a4ec9b879cf49a7409b5078213160f9",
+        "round-5/recovery-ping-b.json": "c652ae9a5c8cadd099ad70f8e7b126a698f9aeddf7d57f1d7100c7f8f9e17b58",
+        "repro-metadata.txt": "cc7cac1fc51a703d6d004ce76b97d2bad3d8e2a6d95517ec21f72f7d31a1e722",
+        "start-a": "cced28c6dc3f99c2396a5eaad732bf6b28142335892b1cd0e6af6cdb53f5ccfa",
+        "ready-a": "b24d6d33736ecd5604a4b17bc9c6481039fac362bb7df044ef1c10a2bfd21db6",
+        "round-3/queue-pressure.json": "45db832b1a9c8bbf7979f41b61dd8f76fe7ea9069d85c8249caca31bf53c87bd",
+        "round-3/recovery-ping-a.stdout": "b62e1845ccbc9978259c458194f2355308f5b64cd97631cde1a972fcbc35d703",
+        "round-3/recovery-ping-b.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "round-3/pressure-ping.log": "14ea127ef089a688ea8fa47945e559d8ef0e5e21324ed590a9c0e34c5ae94e77",
+        "round-3/recovery-ping-b.stdout": "c376d624998cc6aecd85b11c21ee0d6555058741386215efe2b21054dc0860de",
+        "round-3/queue-pressure-partial.json": "247c97ea2d6205ec46380f55c8a4d35efb34226feeb887247247948e60832298",
+        "round-3/queue-pressure-drain.json": "d31a033683b6bb4bdea06c8fc818fc73b1c2a7aba212e6b2e736af64063dd85e",
+        "round-3/recovery-ping-a.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "round-3/recovery-ping-a.json": "c70b9c6fafc1a3968681cef3ab4f58eec2ceb2b0bdb4d0cbe641ccf10db07372",
+        "round-3/recovery-ping-b.json": "c1d2045af3d7617a44d15909f31b990b65fd7966a8a7e874e4ec55e748f2ba79",
+        "start-b": "cced28c6dc3f99c2396a5eaad732bf6b28142335892b1cd0e6af6cdb53f5ccfa",
+        "round-2/queue-pressure.json": "264780737cb212300480fe3532468a74154a9a94159480e228a6f2a18e1c3ece",
+        "round-2/recovery-ping-a.stdout": "3a66fd936062b7950c6d5c379d9d46243ed40e01191d32e8230524eee154ca51",
+        "round-2/recovery-ping-b.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "round-2/pressure-ping.log": "c8fdc8262520835b6493f09950b613ee92800356b826c981c0bd2f6efd445594",
+        "round-2/recovery-ping-b.stdout": "cfb22d960215fa9715dfd1eebaa5db5139ce823876767aff2e8abbaaf0970d82",
+        "round-2/queue-pressure-partial.json": "a90c72ab66727591288b083b3e1383f22bb17e9ebf01de47e7d144252c836e55",
+        "round-2/queue-pressure-drain.json": "b9f6ca3131a920a880d6c66724223ab9ba8f9c13c61d3aca5dff89795029ca76",
+        "round-2/recovery-ping-a.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "round-2/recovery-ping-a.json": "65eb1c1ec9fd93f592cb2df49cf1e8a675e56650f0f745ecd0364d2614e935e8",
+        "round-2/recovery-ping-b.json": "7ff57fde7f460d55027628cbc16d3622b9b798481541a687d90d45ec57f8264a",
+        "node-b.log": "de3bc0b67c4fcf31abc3c0b1db14eafd090461c9d38f050f6882574b68502feb",
+        "round-1/queue-pressure.json": "1b98a9e51501ae1102e0aa0b758f4f3fb2f383078e355790f7dd2dc024f6dd55",
+        "round-1/recovery-ping-a.stdout": "7f9332a8603d94fd4ecf84c5e06c1c7f00bc5b97ccf052adfdbdf04e20d79bce",
+        "round-1/recovery-ping-b.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "round-1/pressure-ping.log": "0a275e04090f27b462517fbc22c00621ac29cc8d76ae6bef2c39ce8eb1e67f9a",
+        "round-1/recovery-ping-b.stdout": "8112864e9da35d5787b62ca88f5b13daa8f0680ffe417200fa90ff45b25acaec",
+        "round-1/queue-pressure-partial.json": "5068bf7b45811dff03e60c182edb589a9f3bd9f4d5822842f1b4f00122fed464",
+        "round-1/queue-pressure-drain.json": "314615be034107ba28609901c9f6a1ae8b3579593553a7290a8bc34784cf4493",
+        "round-1/recovery-ping-a.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "round-1/recovery-ping-a.json": "fe960242b6630daa596c0677cf6e43145d3a11c3bf7261497e3d9f3ba4ba7b9d",
+        "round-1/recovery-ping-b.json": "03b63c91b6eee26476e1c655be14fd317537740ca1f28acfcce18c83fa820d72",
+        "repro-commands.sh": "f91348521380413040a83f893e11dd6f7d0bd8e5233834d8b7a2e4b6b30b4524",
+        "round-4/queue-pressure.json": "651916736ed267799322ca56ba64cf3a2b1518ae70cb3059048db98e0dbcd93c",
+        "round-4/recovery-ping-a.stdout": "6e4ac19022ccadffab6b0f4c9a0bbe1c2d35fbdbfca45c8c094d88c62794ecb5",
+        "round-4/recovery-ping-b.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "round-4/pressure-ping.log": "9fec998f234bf0e354317bd75a30c8d1f50366933929fba7fb8a5ebeaaa3d9ad",
+        "round-4/recovery-ping-b.stdout": "5278f89e1dd89ccded0f88c19e3b23096436d360a0f7238ddcd4adbe089fec75",
+        "round-4/queue-pressure-partial.json": "ff32950183ccd40b3a5210b404ce3ec4049c45f6ea1c8959e3d920d9fe1eacb1",
+        "round-4/queue-pressure-drain.json": "671f2535bc69c8e7bdf3b30e11c02fe13b8e125897f07e70b6a426d0ef6cd109",
+        "round-4/recovery-ping-a.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "round-4/recovery-ping-a.json": "78e6d0b0d7ec378c34831f61f934c2ad877a5200a6577318d58b3476c110f2fd",
+        "round-4/recovery-ping-b.json": "f96e2a9fdab2aec0d4d2eac9c98040d1852f5c3e1e57a37a7fae0867960f79b6",
+        "queue-pressure-series.json": "9438eadebd9ea7453e99b5403348250ecc006b3879e334a10a85f97bf390e844"
+      },
+      "json_bytes": 3477364,
+      "node_log_bytes": 1228835,
+      "strict_recovery_batches": 10,
+      "elapsed_seconds": 162.7,
+      "outer_log": {
+        "path": "/tmp/p2p-vpn-pressure-allocation-bytes-2.log",
+        "sha256": "6cc595e2e864d9021e89aefdcbc179e52f8a9621e6dfb09976f17a0756c6b449",
+        "exit_code": 0
+      }
+    },
+    {
+      "name": "packets-2",
+      "directory": "/tmp/p2p-vpn-tun_namespace_recovers_after_tcp_queue_pressure-1.5363b67b9d82fcde",
+      "profile": "packets",
+      "completed_rounds": 5,
+      "roles": {
+        "a": {
+          "rows": [
+            {
+              "elapsed_millis": 0,
+              "unix_millis": 1789031914803,
+              "live_bytes": 4169206,
+              "live_blocks": 1361
+            },
+            {
+              "elapsed_millis": 5000,
+              "unix_millis": 1789031919804,
+              "live_bytes": 4341145,
+              "live_blocks": 1611
+            },
+            {
+              "elapsed_millis": 10000,
+              "unix_millis": 1789031924804,
+              "live_bytes": 4820273,
+              "live_blocks": 3733
+            },
+            {
+              "elapsed_millis": 15001,
+              "unix_millis": 1789031929804,
+              "live_bytes": 5337314,
+              "live_blocks": 5360
+            },
+            {
+              "elapsed_millis": 20001,
+              "unix_millis": 1789031934805,
+              "live_bytes": 4487520,
+              "live_blocks": 1724
+            },
+            {
+              "elapsed_millis": 25000,
+              "unix_millis": 1789031939804,
+              "live_bytes": 5239822,
+              "live_blocks": 5084
+            },
+            {
+              "elapsed_millis": 30001,
+              "unix_millis": 1789031944804,
+              "live_bytes": 5281722,
+              "live_blocks": 5339
+            },
+            {
+              "elapsed_millis": 35001,
+              "unix_millis": 1789031949804,
+              "live_bytes": 4469646,
+              "live_blocks": 1626
+            },
+            {
+              "elapsed_millis": 40001,
+              "unix_millis": 1789031954804,
+              "live_bytes": 4758046,
+              "live_blocks": 3030
+            },
+            {
+              "elapsed_millis": 45001,
+              "unix_millis": 1789031959804,
+              "live_bytes": 5377193,
+              "live_blocks": 5343
+            },
+            {
+              "elapsed_millis": 50002,
+              "unix_millis": 1789031964806,
+              "live_bytes": 4759984,
+              "live_blocks": 1559
+            },
+            {
+              "elapsed_millis": 55000,
+              "unix_millis": 1789031969804,
+              "live_bytes": 5252576,
+              "live_blocks": 5246
+            },
+            {
+              "elapsed_millis": 60002,
+              "unix_millis": 1789031974805,
+              "live_bytes": 5323050,
+              "live_blocks": 5622
+            },
+            {
+              "elapsed_millis": 65002,
+              "unix_millis": 1789031979806,
+              "live_bytes": 4555845,
+              "live_blocks": 1624
+            },
+            {
+              "elapsed_millis": 70000,
+              "unix_millis": 1789031984804,
+              "live_bytes": 4841284,
+              "live_blocks": 3041
+            },
+            {
+              "elapsed_millis": 75001,
+              "unix_millis": 1789031989804,
+              "live_bytes": 5316257,
+              "live_blocks": 5324
+            },
+            {
+              "elapsed_millis": 80000,
+              "unix_millis": 1789031994804,
+              "live_bytes": 4635168,
+              "live_blocks": 1556
+            },
+            {
+              "elapsed_millis": 85000,
+              "unix_millis": 1789031999803,
+              "live_bytes": 5210646,
+              "live_blocks": 5173
+            },
+            {
+              "elapsed_millis": 90000,
+              "unix_millis": 1789032004803,
+              "live_bytes": 5544763,
+              "live_blocks": 5400
+            },
+            {
+              "elapsed_millis": 95000,
+              "unix_millis": 1789032009804,
+              "live_bytes": 4774481,
+              "live_blocks": 1621
+            },
+            {
+              "elapsed_millis": 100000,
+              "unix_millis": 1789032014804,
+              "live_bytes": 5045675,
+              "live_blocks": 2961
+            },
+            {
+              "elapsed_millis": 105000,
+              "unix_millis": 1789032019804,
+              "live_bytes": 5522040,
+              "live_blocks": 5160
+            },
+            {
+              "elapsed_millis": 110000,
+              "unix_millis": 1789032024803,
+              "live_bytes": 4791949,
+              "live_blocks": 1558
+            },
+            {
+              "elapsed_millis": 115001,
+              "unix_millis": 1789032029804,
+              "live_bytes": 4473632,
+              "live_blocks": 1659
+            },
+            {
+              "elapsed_millis": 120001,
+              "unix_millis": 1789032034804,
+              "live_bytes": 5224748,
+              "live_blocks": 5218
+            },
+            {
+              "elapsed_millis": 125000,
+              "unix_millis": 1789032039804,
+              "live_bytes": 4522168,
+              "live_blocks": 1622
+            },
+            {
+              "elapsed_millis": 130001,
+              "unix_millis": 1789032044804,
+              "live_bytes": 4644932,
+              "live_blocks": 2231
+            },
+            {
+              "elapsed_millis": 135003,
+              "unix_millis": 1789032049807,
+              "live_bytes": 5312847,
+              "live_blocks": 5280
+            },
+            {
+              "elapsed_millis": 140003,
+              "unix_millis": 1789032054806,
+              "live_bytes": 5559150,
+              "live_blocks": 5671
+            },
+            {
+              "elapsed_millis": 145001,
+              "unix_millis": 1789032059805,
+              "live_bytes": 5283196,
+              "live_blocks": 5189
+            },
+            {
+              "elapsed_millis": 150000,
+              "unix_millis": 1789032064804,
+              "live_bytes": 5330106,
+              "live_blocks": 5639
+            },
+            {
+              "elapsed_millis": 155000,
+              "unix_millis": 1789032069804,
+              "live_bytes": 4555064,
+              "live_blocks": 1622
+            }
+          ],
+          "max_gap_millis": 5002,
+          "max_clock_disagreement_millis": 1,
+          "min_bytes": 4169206,
+          "max_bytes": 5559150,
+          "final_bytes": 4555064,
+          "final_blocks": 1622
+        },
+        "b": {
+          "rows": [
+            {
+              "elapsed_millis": 0,
+              "unix_millis": 1789031914548,
+              "live_bytes": 4157628,
+              "live_blocks": 1311
+            },
+            {
+              "elapsed_millis": 5003,
+              "unix_millis": 1789031919551,
+              "live_bytes": 4340865,
+              "live_blocks": 1598
+            },
+            {
+              "elapsed_millis": 10001,
+              "unix_millis": 1789031924549,
+              "live_bytes": 4374404,
+              "live_blocks": 1854
+            },
+            {
+              "elapsed_millis": 15001,
+              "unix_millis": 1789031929549,
+              "live_bytes": 4643613,
+              "live_blocks": 4004
+            },
+            {
+              "elapsed_millis": 20004,
+              "unix_millis": 1789031934552,
+              "live_bytes": 4355136,
+              "live_blocks": 1497
+            },
+            {
+              "elapsed_millis": 25004,
+              "unix_millis": 1789031939552,
+              "live_bytes": 4515551,
+              "live_blocks": 2990
+            },
+            {
+              "elapsed_millis": 30003,
+              "unix_millis": 1789031944551,
+              "live_bytes": 4705869,
+              "live_blocks": 4696
+            },
+            {
+              "elapsed_millis": 35004,
+              "unix_millis": 1789031949552,
+              "live_bytes": 4375066,
+              "live_blocks": 1605
+            },
+            {
+              "elapsed_millis": 40004,
+              "unix_millis": 1789031954552,
+              "live_bytes": 4395476,
+              "live_blocks": 1778
+            },
+            {
+              "elapsed_millis": 45003,
+              "unix_millis": 1789031959551,
+              "live_bytes": 4646923,
+              "live_blocks": 4003
+            },
+            {
+              "elapsed_millis": 50002,
+              "unix_millis": 1789031964550,
+              "live_bytes": 4313740,
+              "live_blocks": 1450
+            },
+            {
+              "elapsed_millis": 55002,
+              "unix_millis": 1789031969550,
+              "live_bytes": 4535090,
+              "live_blocks": 2967
+            },
+            {
+              "elapsed_millis": 60003,
+              "unix_millis": 1789031974551,
+              "live_bytes": 4609101,
+              "live_blocks": 3328
+            },
+            {
+              "elapsed_millis": 65001,
+              "unix_millis": 1789031979549,
+              "live_bytes": 4605687,
+              "live_blocks": 1604
+            },
+            {
+              "elapsed_millis": 70004,
+              "unix_millis": 1789031984552,
+              "live_bytes": 4626914,
+              "live_blocks": 1781
+            },
+            {
+              "elapsed_millis": 75003,
+              "unix_millis": 1789031989551,
+              "live_bytes": 4875237,
+              "live_blocks": 4019
+            },
+            {
+              "elapsed_millis": 80004,
+              "unix_millis": 1789031994552,
+              "live_bytes": 4368524,
+              "live_blocks": 1452
+            },
+            {
+              "elapsed_millis": 85001,
+              "unix_millis": 1789031999549,
+              "live_bytes": 4532559,
+              "live_blocks": 2481
+            },
+            {
+              "elapsed_millis": 90004,
+              "unix_millis": 1789032004552,
+              "live_bytes": 4808603,
+              "live_blocks": 5037
+            },
+            {
+              "elapsed_millis": 95002,
+              "unix_millis": 1789032009550,
+              "live_bytes": 4480823,
+              "live_blocks": 1606
+            },
+            {
+              "elapsed_millis": 100003,
+              "unix_millis": 1789032014551,
+              "live_bytes": 4502050,
+              "live_blocks": 1783
+            },
+            {
+              "elapsed_millis": 105002,
+              "unix_millis": 1789032019550,
+              "live_bytes": 4872948,
+              "live_blocks": 5410
+            },
+            {
+              "elapsed_millis": 110003,
+              "unix_millis": 1789032024551,
+              "live_bytes": 4368524,
+              "live_blocks": 1452
+            },
+            {
+              "elapsed_millis": 115001,
+              "unix_millis": 1789032029549,
+              "live_bytes": 4391726,
+              "live_blocks": 1470
+            },
+            {
+              "elapsed_millis": 120002,
+              "unix_millis": 1789032034550,
+              "live_bytes": 4587937,
+              "live_blocks": 2961
+            },
+            {
+              "elapsed_millis": 125001,
+              "unix_millis": 1789032039549,
+              "live_bytes": 4608811,
+              "live_blocks": 1607
+            },
+            {
+              "elapsed_millis": 130002,
+              "unix_millis": 1789032044550,
+              "live_bytes": 4618779,
+              "live_blocks": 1712
+            },
+            {
+              "elapsed_millis": 135001,
+              "unix_millis": 1789032049550,
+              "live_bytes": 4872132,
+              "live_blocks": 4027
+            },
+            {
+              "elapsed_millis": 140001,
+              "unix_millis": 1789032054549,
+              "live_bytes": 4975460,
+              "live_blocks": 4693
+            },
+            {
+              "elapsed_millis": 145001,
+              "unix_millis": 1789032059549,
+              "live_bytes": 4593783,
+              "live_blocks": 3085
+            },
+            {
+              "elapsed_millis": 150001,
+              "unix_millis": 1789032064549,
+              "live_bytes": 4700914,
+              "live_blocks": 3704
+            },
+            {
+              "elapsed_millis": 155004,
+              "unix_millis": 1789032069553,
+              "live_bytes": 4602036,
+              "live_blocks": 1611
+            }
+          ],
+          "max_gap_millis": 5003,
+          "max_clock_disagreement_millis": 1,
+          "min_bytes": 4157628,
+          "max_bytes": 4975460,
+          "final_bytes": 4602036,
+          "final_blocks": 1611
+        }
+      },
+      "rounds": [
+        {
+          "round": 1,
+          "transmitted": 1940,
+          "received": 9,
+          "after": {
+            "a": {
+              "blocked_no_path_events": 80,
+              "dropped_packets": 1338,
+              "expired_packets": 19,
+              "healthy_tcp_paths": 1,
+              "inbound_dropped_packets": 0,
+              "outbound_failures": 515,
+              "path_states": [
+                "peer state: edf5fcdd2a62bf8584c2e0d71f2a564bd66f380d6e6696d223175fbf1f524520 transport 12D3KooWEt3YABWyTZSXW29GZhUzUzEKyVKKvKbNdZTrtfHgkAzc validated true effective_mtu 1280 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 40 selected_path_mtu 1280 selected_path_rtt_ms 2 selected_path_relay_peer none selected_path_connection_id 4 selected_path_origin identify selected_path_connection_role dialer selected_path_established_as_relayed false selected_path_first_seen_unix_seconds 1789031914 selected_path_last_established_unix_seconds 1789031945 healthy_paths 1 direct_paths 1 relay_paths 0"
+              ],
+              "peers_without_supported_path": 0,
+              "process": {
+                "capture_seconds": 0.002489376,
+                "cpu_ticks": 223,
+                "elapsed_seconds": 30.558615964,
+                "pid": 18,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "a",
+                "rss_kib": 37908,
+                "socket_fds": 6,
+                "start_ticks": 90484311,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 13,
+                "vanished_fds": 0
+              },
+              "queued_bytes": 0,
+              "queued_packets": 0,
+              "stream_in_flight": 0,
+              "work": {
+                "inbound_accepted_packets": 29,
+                "outbound_direct_tcp_stream_fallback_packets": 622,
+                "outbound_sent_packets": 622,
+                "tun_read_bytes": 1996192,
+                "tun_read_packets": 1964,
+                "tun_write_bytes": 10932,
+                "tun_write_packets": 29
+              }
+            },
+            "b": {
+              "blocked_no_path_events": 61,
+              "dropped_packets": 17,
+              "expired_packets": 8,
+              "healthy_tcp_paths": 1,
+              "inbound_dropped_packets": 0,
+              "outbound_failures": 76,
+              "path_states": [
+                "peer state: aee87f178830fc2802a85a9053cb7dcae7906a3c4fe64ddd127ed596f9e009e0 transport 12D3KooWDX5oPWWqKnPJjdioWmtfcSQzEGuFRXxVijLwGvUqwi8L validated true effective_mtu 1280 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 40 selected_path_mtu 1280 selected_path_rtt_ms 3 selected_path_relay_peer none selected_path_connection_id 4 selected_path_origin identify selected_path_connection_role listener selected_path_established_as_relayed false selected_path_first_seen_unix_seconds 1789031914 selected_path_last_established_unix_seconds 1789031945 healthy_paths 1 direct_paths 1 relay_paths 0"
+              ],
+              "peers_without_supported_path": 0,
+              "process": {
+                "capture_seconds": 0.002498964,
+                "cpu_ticks": 78,
+                "elapsed_seconds": 30.561875587,
+                "pid": 19,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "b",
+                "rss_kib": 36776,
+                "socket_fds": 6,
+                "start_ticks": 90484311,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 13,
+                "vanished_fds": 0
+              },
+              "queued_bytes": 0,
+              "queued_packets": 0,
+              "stream_in_flight": 0,
+              "work": {
+                "inbound_accepted_packets": 111,
+                "outbound_direct_tcp_stream_fallback_packets": 94,
+                "outbound_sent_packets": 94,
+                "tun_read_bytes": 95420,
+                "tun_read_packets": 115,
+                "tun_write_bytes": 95228,
+                "tun_write_packets": 111
+              }
+            }
+          }
+        },
+        {
+          "round": 2,
+          "transmitted": 1948,
+          "received": 9,
+          "after": {
+            "a": {
+              "blocked_no_path_events": 492,
+              "dropped_packets": 2681,
+              "expired_packets": 30,
+              "healthy_tcp_paths": 1,
+              "inbound_dropped_packets": 0,
+              "outbound_failures": 774,
+              "path_states": [
+                "peer state: edf5fcdd2a62bf8584c2e0d71f2a564bd66f380d6e6696d223175fbf1f524520 transport 12D3KooWEt3YABWyTZSXW29GZhUzUzEKyVKKvKbNdZTrtfHgkAzc validated true effective_mtu 1280 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 40 selected_path_mtu 1280 selected_path_rtt_ms 2 selected_path_relay_peer none selected_path_connection_id 5 selected_path_origin identify selected_path_connection_role dialer selected_path_established_as_relayed false selected_path_first_seen_unix_seconds 1789031914 selected_path_last_established_unix_seconds 1789031965 healthy_paths 1 direct_paths 1 relay_paths 0"
+              ],
+              "peers_without_supported_path": 0,
+              "process": {
+                "capture_seconds": 0.002493003,
+                "cpu_ticks": 437,
+                "elapsed_seconds": 29.967609179,
+                "pid": 18,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "a",
+                "rss_kib": 38316,
+                "socket_fds": 6,
+                "start_ticks": 90484311,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 13,
+                "vanished_fds": 0
+              },
+              "queued_bytes": 0,
+              "queued_packets": 0,
+              "stream_in_flight": 0,
+              "work": {
+                "inbound_accepted_packets": 338,
+                "outbound_direct_tcp_stream_fallback_packets": 1237,
+                "outbound_sent_packets": 1237,
+                "tun_read_bytes": 3999624,
+                "tun_read_packets": 3923,
+                "tun_write_bytes": 319144,
+                "tun_write_packets": 338
+              }
+            },
+            "b": {
+              "blocked_no_path_events": 61,
+              "dropped_packets": 23,
+              "expired_packets": 8,
+              "healthy_tcp_paths": 1,
+              "inbound_dropped_packets": 0,
+              "outbound_failures": 131,
+              "path_states": [
+                "peer state: aee87f178830fc2802a85a9053cb7dcae7906a3c4fe64ddd127ed596f9e009e0 transport 12D3KooWDX5oPWWqKnPJjdioWmtfcSQzEGuFRXxVijLwGvUqwi8L validated true effective_mtu 1280 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 40 selected_path_mtu 1280 selected_path_rtt_ms 4 selected_path_relay_peer none selected_path_connection_id 6 selected_path_origin identify selected_path_connection_role listener selected_path_established_as_relayed false selected_path_first_seen_unix_seconds 1789031914 selected_path_last_established_unix_seconds 1789031965 healthy_paths 1 direct_paths 1 relay_paths 0"
+              ],
+              "peers_without_supported_path": 0,
+              "process": {
+                "capture_seconds": 0.002487542,
+                "cpu_ticks": 155,
+                "elapsed_seconds": 29.971483136,
+                "pid": 19,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "b",
+                "rss_kib": 37708,
+                "socket_fds": 6,
+                "start_ticks": 90484311,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 13,
+                "vanished_fds": 0
+              },
+              "queued_bytes": 0,
+              "queued_packets": 0,
+              "stream_in_flight": 0,
+              "work": {
+                "inbound_accepted_packets": 472,
+                "outbound_direct_tcp_stream_fallback_packets": 449,
+                "outbound_sent_packets": 449,
+                "tun_read_bytes": 457136,
+                "tun_read_packets": 477,
+                "tun_write_bytes": 456896,
+                "tun_write_packets": 472
+              }
+            }
+          }
+        },
+        {
+          "round": 3,
+          "transmitted": 1946,
+          "received": 9,
+          "after": {
+            "a": {
+              "blocked_no_path_events": 598,
+              "dropped_packets": 4029,
+              "expired_packets": 47,
+              "healthy_tcp_paths": 1,
+              "inbound_dropped_packets": 0,
+              "outbound_failures": 1033,
+              "path_states": [
+                "peer state: edf5fcdd2a62bf8584c2e0d71f2a564bd66f380d6e6696d223175fbf1f524520 transport 12D3KooWEt3YABWyTZSXW29GZhUzUzEKyVKKvKbNdZTrtfHgkAzc validated true effective_mtu 1280 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 40 selected_path_mtu 1280 selected_path_rtt_ms 3 selected_path_relay_peer none selected_path_connection_id 7 selected_path_origin identify selected_path_connection_role dialer selected_path_established_as_relayed false selected_path_first_seen_unix_seconds 1789031914 selected_path_last_established_unix_seconds 1789031995 healthy_paths 1 direct_paths 1 relay_paths 0"
+              ],
+              "peers_without_supported_path": 0,
+              "process": {
+                "capture_seconds": 0.002538549,
+                "cpu_ticks": 649,
+                "elapsed_seconds": 30.040705317,
+                "pid": 18,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "a",
+                "rss_kib": 38480,
+                "socket_fds": 6,
+                "start_ticks": 90484311,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 13,
+                "vanished_fds": 0
+              },
+              "queued_bytes": 0,
+              "queued_packets": 0,
+              "stream_in_flight": 0,
+              "work": {
+                "inbound_accepted_packets": 638,
+                "outbound_direct_tcp_stream_fallback_packets": 1845,
+                "outbound_sent_packets": 1845,
+                "tun_read_bytes": 6000952,
+                "tun_read_packets": 5879,
+                "tun_write_bytes": 618104,
+                "tun_write_packets": 638
+              }
+            },
+            "b": {
+              "blocked_no_path_events": 101,
+              "dropped_packets": 32,
+              "expired_packets": 13,
+              "healthy_tcp_paths": 1,
+              "inbound_dropped_packets": 0,
+              "outbound_failures": 184,
+              "path_states": [
+                "peer state: aee87f178830fc2802a85a9053cb7dcae7906a3c4fe64ddd127ed596f9e009e0 transport 12D3KooWDX5oPWWqKnPJjdioWmtfcSQzEGuFRXxVijLwGvUqwi8L validated true effective_mtu 1280 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 40 selected_path_mtu 1280 selected_path_rtt_ms 4 selected_path_relay_peer none selected_path_connection_id 8 selected_path_origin identify selected_path_connection_role listener selected_path_established_as_relayed false selected_path_first_seen_unix_seconds 1789031914 selected_path_last_established_unix_seconds 1789031995 healthy_paths 1 direct_paths 1 relay_paths 0"
+              ],
+              "peers_without_supported_path": 0,
+              "process": {
+                "capture_seconds": 0.00250189,
+                "cpu_ticks": 231,
+                "elapsed_seconds": 30.04464647,
+                "pid": 19,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "b",
+                "rss_kib": 37500,
+                "socket_fds": 6,
+                "start_ticks": 90484311,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 13,
+                "vanished_fds": 0
+              },
+              "queued_bytes": 0,
+              "queued_packets": 0,
+              "stream_in_flight": 0,
+              "work": {
+                "inbound_accepted_packets": 825,
+                "outbound_direct_tcp_stream_fallback_packets": 793,
+                "outbound_sent_packets": 793,
+                "tun_read_bytes": 810580,
+                "tun_read_packets": 830,
+                "tun_write_bytes": 810340,
+                "tun_write_packets": 825
+              }
+            }
+          }
+        },
+        {
+          "round": 4,
+          "transmitted": 1942,
+          "received": 8,
+          "after": {
+            "a": {
+              "blocked_no_path_events": 1447,
+              "dropped_packets": 5409,
+              "expired_packets": 94,
+              "healthy_tcp_paths": 1,
+              "inbound_dropped_packets": 0,
+              "outbound_failures": 1291,
+              "path_states": [
+                "peer state: edf5fcdd2a62bf8584c2e0d71f2a564bd66f380d6e6696d223175fbf1f524520 transport 12D3KooWEt3YABWyTZSXW29GZhUzUzEKyVKKvKbNdZTrtfHgkAzc validated true effective_mtu 1280 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 40 selected_path_mtu 1280 selected_path_rtt_ms 2 selected_path_relay_peer none selected_path_connection_id 9 selected_path_origin identify selected_path_connection_role dialer selected_path_established_as_relayed false selected_path_first_seen_unix_seconds 1789031914 selected_path_last_established_unix_seconds 1789032029 healthy_paths 1 direct_paths 1 relay_paths 0"
+              ],
+              "peers_without_supported_path": 0,
+              "process": {
+                "capture_seconds": 0.002533119,
+                "cpu_ticks": 852,
+                "elapsed_seconds": 30.556786578,
+                "pid": 18,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "a",
+                "rss_kib": 38548,
+                "socket_fds": 6,
+                "start_ticks": 90484311,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 13,
+                "vanished_fds": 0
+              },
+              "queued_bytes": 0,
+              "queued_packets": 0,
+              "stream_in_flight": 0,
+              "work": {
+                "inbound_accepted_packets": 917,
+                "outbound_direct_tcp_stream_fallback_packets": 2417,
+                "outbound_sent_packets": 2417,
+                "tun_read_bytes": 7998216,
+                "tun_read_packets": 7832,
+                "tun_write_bytes": 895476,
+                "tun_write_packets": 917
+              }
+            },
+            "b": {
+              "blocked_no_path_events": 101,
+              "dropped_packets": 41,
+              "expired_packets": 13,
+              "healthy_tcp_paths": 1,
+              "inbound_dropped_packets": 0,
+              "outbound_failures": 237,
+              "path_states": [
+                "peer state: aee87f178830fc2802a85a9053cb7dcae7906a3c4fe64ddd127ed596f9e009e0 transport 12D3KooWDX5oPWWqKnPJjdioWmtfcSQzEGuFRXxVijLwGvUqwi8L validated true effective_mtu 1280 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 40 selected_path_mtu 1280 selected_path_rtt_ms 3 selected_path_relay_peer none selected_path_connection_id 10 selected_path_origin identify selected_path_connection_role listener selected_path_established_as_relayed false selected_path_first_seen_unix_seconds 1789031914 selected_path_last_established_unix_seconds 1789032029 healthy_paths 1 direct_paths 1 relay_paths 0"
+              ],
+              "peers_without_supported_path": 0,
+              "process": {
+                "capture_seconds": 0.002505597,
+                "cpu_ticks": 299,
+                "elapsed_seconds": 30.560602797,
+                "pid": 19,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "b",
+                "rss_kib": 37708,
+                "socket_fds": 6,
+                "start_ticks": 90484311,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 13,
+                "vanished_fds": 0
+              },
+              "queued_bytes": 0,
+              "queued_packets": 0,
+              "stream_in_flight": 0,
+              "work": {
+                "inbound_accepted_packets": 1157,
+                "outbound_direct_tcp_stream_fallback_packets": 1116,
+                "outbound_sent_packets": 1116,
+                "tun_read_bytes": 1142436,
+                "tun_read_packets": 1162,
+                "tun_write_bytes": 1142196,
+                "tun_write_packets": 1157
+              }
+            }
+          }
+        },
+        {
+          "round": 5,
+          "transmitted": 1943,
+          "received": 9,
+          "after": {
+            "a": {
+              "blocked_no_path_events": 1826,
+              "dropped_packets": 6747,
+              "expired_packets": 104,
+              "healthy_tcp_paths": 1,
+              "inbound_dropped_packets": 0,
+              "outbound_failures": 1551,
+              "path_states": [
+                "peer state: edf5fcdd2a62bf8584c2e0d71f2a564bd66f380d6e6696d223175fbf1f524520 transport 12D3KooWEt3YABWyTZSXW29GZhUzUzEKyVKKvKbNdZTrtfHgkAzc validated true effective_mtu 1280 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 40 selected_path_mtu 1280 selected_path_rtt_ms 4 selected_path_relay_peer none selected_path_connection_id 11 selected_path_origin identify selected_path_connection_role dialer selected_path_established_as_relayed false selected_path_first_seen_unix_seconds 1789031914 selected_path_last_established_unix_seconds 1789032055 healthy_paths 1 direct_paths 1 relay_paths 0"
+              ],
+              "peers_without_supported_path": 0,
+              "process": {
+                "capture_seconds": 0.002472655,
+                "cpu_ticks": 1073,
+                "elapsed_seconds": 29.491010457,
+                "pid": 18,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "a",
+                "rss_kib": 38556,
+                "socket_fds": 6,
+                "start_ticks": 90484311,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 13,
+                "vanished_fds": 0
+              },
+              "queued_bytes": 0,
+              "queued_packets": 0,
+              "stream_in_flight": 0,
+              "work": {
+                "inbound_accepted_packets": 1225,
+                "outbound_direct_tcp_stream_fallback_packets": 3032,
+                "outbound_sent_packets": 3032,
+                "tun_read_bytes": 9996460,
+                "tun_read_packets": 9785,
+                "tun_write_bytes": 1202660,
+                "tun_write_packets": 1225
+              }
+            },
+            "b": {
+              "blocked_no_path_events": 101,
+              "dropped_packets": 49,
+              "expired_packets": 13,
+              "healthy_tcp_paths": 1,
+              "inbound_dropped_packets": 0,
+              "outbound_failures": 290,
+              "path_states": [
+                "peer state: aee87f178830fc2802a85a9053cb7dcae7906a3c4fe64ddd127ed596f9e009e0 transport 12D3KooWDX5oPWWqKnPJjdioWmtfcSQzEGuFRXxVijLwGvUqwi8L validated true effective_mtu 1280 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 40 selected_path_mtu 1280 selected_path_rtt_ms 3 selected_path_relay_peer none selected_path_connection_id 12 selected_path_origin identify selected_path_connection_role listener selected_path_established_as_relayed false selected_path_first_seen_unix_seconds 1789031914 selected_path_last_established_unix_seconds 1789032055 healthy_paths 1 direct_paths 1 relay_paths 0"
+              ],
+              "peers_without_supported_path": 0,
+              "process": {
+                "capture_seconds": 0.002484367,
+                "cpu_ticks": 377,
+                "elapsed_seconds": 29.494889453,
+                "pid": 19,
+                "process_tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "role": "b",
+                "rss_kib": 37840,
+                "socket_fds": 6,
+                "start_ticks": 90484311,
+                "tcp_states": {
+                  "01": 1,
+                  "0A": 1
+                },
+                "threads": 6,
+                "total_fds": 13,
+                "vanished_fds": 0
+              },
+              "queued_bytes": 0,
+              "queued_packets": 0,
+              "stream_in_flight": 0,
+              "work": {
+                "inbound_accepted_packets": 1517,
+                "outbound_direct_tcp_stream_fallback_packets": 1468,
+                "outbound_sent_packets": 1468,
+                "tun_read_bytes": 1503124,
+                "tun_read_packets": 1523,
+                "tun_write_bytes": 1502836,
+                "tun_write_packets": 1517
+              }
+            }
+          }
+        }
+      ],
+      "artifact_sha256": {
+        "node-a.log": "862aa4efa001dc251ae08e2a53361dce8e26b69f9f9f7a5a57933801840df6cc",
+        "ready-b": "b24d6d33736ecd5604a4b17bc9c6481039fac362bb7df044ef1c10a2bfd21db6",
+        "round-5/queue-pressure.json": "e575aa3a86eeaa1d3a662e7a78b787703e470765b6a3f0f9230fcdf5225785d4",
+        "round-5/recovery-ping-a.stdout": "88d2ff619591cc4c2b9bff315b365ccc353c7c471c78bbc11948fbb64d3f20a5",
+        "round-5/recovery-ping-b.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "round-5/pressure-ping.log": "83e3791328939bfabff999e3e6218fd963cc8d88562dd9924c52ddf95c223ed7",
+        "round-5/recovery-ping-b.stdout": "fb1e029e94c30038c33cc9a25a1cb3d2aa9ea5b2d0ad40200677bcfc19969a40",
+        "round-5/queue-pressure-partial.json": "a368f2cc85427d14ba81e6f0ea6b5485818597bc5898cc8648b4928fab03d01f",
+        "round-5/queue-pressure-drain.json": "d21cfbf98d33bea5ce7d0adcc107cd09b390d6230791aec5eb4a9d1f4e4f5e9e",
+        "round-5/recovery-ping-a.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "round-5/recovery-ping-a.json": "761018d7edd2c1d397d308ab4ceb97740fa25d364e4e9e4539fc1bcf676dc7c0",
+        "round-5/recovery-ping-b.json": "5258aefc05ae3f80d7f2254e2630ea026ee04a8cd700b316f20919645de74eec",
+        "repro-metadata.txt": "36cc4805fe1b4d2d69f6f4c9089d603b88579008f0c2fecf1fb89807e5b9bc69",
+        "start-a": "cced28c6dc3f99c2396a5eaad732bf6b28142335892b1cd0e6af6cdb53f5ccfa",
+        "ready-a": "b24d6d33736ecd5604a4b17bc9c6481039fac362bb7df044ef1c10a2bfd21db6",
+        "round-3/queue-pressure.json": "edeb99c044aa7f9b640a37234da0f5fedf96e5600fe779abf959b75588423d48",
+        "round-3/recovery-ping-a.stdout": "9e150980a7446deb0809e94fe17fc531755212aa8a9aad6c7a86b4180786f9de",
+        "round-3/recovery-ping-b.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "round-3/pressure-ping.log": "51b5e08fae5aa323d82da348a6457bc8ff06fa9ea361f33eb77b07d0e74d5f97",
+        "round-3/recovery-ping-b.stdout": "e907e48a82047a1dda1a3accb5fe95a7556ccd6c90fa6530510f56cbff979b74",
+        "round-3/queue-pressure-partial.json": "0e8c6634ce441bca8ec95791bf178e2ec51dbe26cfb01cf627216896dab098b6",
+        "round-3/queue-pressure-drain.json": "714e0498913e4ec61d5634193a0654ae73e5fc8c71fe8ffcae8166c7d9662338",
+        "round-3/recovery-ping-a.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "round-3/recovery-ping-a.json": "76821583133610628475368c14994d80ca513c04ccc2c96b9965ed9415eba83e",
+        "round-3/recovery-ping-b.json": "fb85febf62984f55ab483ea07a60a7ad9012207f4e3fc18ac5f2a6b93eb0b205",
+        "start-b": "cced28c6dc3f99c2396a5eaad732bf6b28142335892b1cd0e6af6cdb53f5ccfa",
+        "round-2/queue-pressure.json": "2e3f97e51845cf6f2f8e9b39965503cc5bec76789ed7bc43f3fb52f8771aa5cd",
+        "round-2/recovery-ping-a.stdout": "364f3046153e52c47b7eb1ae01391d619f4f8c62ddd7d2223d499ec2caa6ba90",
+        "round-2/recovery-ping-b.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "round-2/pressure-ping.log": "0ae021997e804b8a2a1da13a594c1ade286aaaeadd7c70fad35625b47cafc395",
+        "round-2/recovery-ping-b.stdout": "2f86c224a9284e92de3b7c48e212e45927f85336fd4919b1d214a6109bc0053a",
+        "round-2/queue-pressure-partial.json": "992be2a8bd75f3368310289ff040926fb26f795e5b25255aa9ac445a913c181d",
+        "round-2/queue-pressure-drain.json": "4afdf58f99713c8aa383846c23cfd4b41f2f88ebf4ca750798f053f659d5cf2b",
+        "round-2/recovery-ping-a.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "round-2/recovery-ping-a.json": "51cc60ac8ac53d85e5f9a41285c0f2ebaf65eec55fe9802ff3b9f0deeddaeded",
+        "round-2/recovery-ping-b.json": "6c05c93cb41bb48b58a630dcfb0b4e70d1adc19e8c19429e8d97cfb122f6112a",
+        "node-b.log": "41e170dae46355f2ad759c8d8f5d9ab345c32817be6e5c375f6e79afba3f7156",
+        "round-1/queue-pressure.json": "2e29c9964b1efa77b9de79e9f5f9605b8f183b5cfe6341bf199302f4f97797df",
+        "round-1/recovery-ping-a.stdout": "1a397a0b3b5a6f08a0a67146ecf4764bf3b1b188febdc84fb0640e0fccc4352f",
+        "round-1/recovery-ping-b.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "round-1/pressure-ping.log": "e08dc8dc67908e093d0f044b4bcddccf0b9cd7994739aab218b6393aa3b9009c",
+        "round-1/recovery-ping-b.stdout": "8cf4f6e37dcb3797a162dc7bf4aa99c42c060679905b2f9a3a0367670a62c067",
+        "round-1/queue-pressure-partial.json": "2d80f4b7f140171f8768833356beed0619156857ae649fb16c91ad0647bd96ee",
+        "round-1/queue-pressure-drain.json": "1febf756d1a24797a8d7e6e71ddb77008513b0db2ab41a557b7b5f4d8b50243f",
+        "round-1/recovery-ping-a.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "round-1/recovery-ping-a.json": "71ca52841d6703f1c2c07fbbb3c7354f0c1b9a7dc5923537003b4da0f95222c1",
+        "round-1/recovery-ping-b.json": "01dd0026bffecd01f7785e340f4a46bdb3f7184c7e0265673530535cdc6c4f32",
+        "repro-commands.sh": "b20a0cc6d5b3dcb48a1df8590c15198f4b0ac90b1144ca6044a48335ed3aeada",
+        "round-4/queue-pressure.json": "2aa75437041f7e1c531fc647e96608beaf60fae3b7acbaae4034ba3ccd6dcbe4",
+        "round-4/recovery-ping-a.stdout": "d0b78d3cde291da0173e217b21972dc5b73b3d1165b1c514198fd076b65578bc",
+        "round-4/recovery-ping-b.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "round-4/pressure-ping.log": "3f5b61bcee1afd339870d70493aafc360ce80caf1d2bc045545c94e9a623394c",
+        "round-4/recovery-ping-b.stdout": "e47795a50f1f56d73b8a0bcb7dd58815e886a8d6aa56d75f985cda5fe0270936",
+        "round-4/queue-pressure-partial.json": "c67c2ca46d818a0e6683fd68a5f53638dc5bcfc41242fe9c790e07b69ded4144",
+        "round-4/queue-pressure-drain.json": "edf2b4ab84e22784ce0b91cff91d2a213e58338fc6550b34cd3041ae8308327c",
+        "round-4/recovery-ping-a.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "round-4/recovery-ping-a.json": "d6140d6e0dc376306a642fd1683a84e956b9c2d7a944fcd5821978542f96f07a",
+        "round-4/recovery-ping-b.json": "51840567435aa68f60ef42b9e526f3fc518c60325a5438fa452987f075a4a05b",
+        "queue-pressure-series.json": "d98ff669bc24bcefd3fdf1a712ac678c1256528e98762de61112f192e21d75a1"
+      },
+      "json_bytes": 3446195,
+      "node_log_bytes": 1241692,
+      "strict_recovery_batches": 10,
+      "elapsed_seconds": 160.6,
+      "outer_log": {
+        "path": "/tmp/p2p-vpn-pressure-allocation-packets-2.log",
+        "sha256": "2bdc5f27806b4b79d6097108f4cfc0606282256927b4464166fb4c23c611a9c8",
+        "exit_code": 0
+      }
+    }
+  ]
+}
