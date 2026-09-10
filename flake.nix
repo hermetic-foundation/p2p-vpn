@@ -360,6 +360,7 @@
                 androidE2eFixture
                 package
                 pkgs.bash
+                pkgs.gawk
                 pkgs.coreutils
                 pkgs.gnugrep
                 pkgs.gnused
@@ -372,6 +373,7 @@
                 export P2P_VPN_ADB=${android.androidSdk}/bin/adb
                 export P2P_VPN_ANDROID_APK=${android.androidDebugApk}/p2p-vpn-debug.apk
                 export P2P_VPN_ANDROID_PROCESS_COLLECTOR=${./scripts/android-process-sample.sh}
+                export P2P_VPN_ANDROID_RESOURCE_CONTROLS=${./scripts/android-resource-controls.sh}
                 export P2P_VPN_ANDROID_E2E_FIXTURE=${androidE2eFixture}/bin/p2p-vpn-android-e2e-fixture
                 export P2P_VPN_BIN=${package}/bin/p2p-vpn
                 exec bash ${./scripts/android-e2e.sh} "$@"
@@ -442,6 +444,7 @@
               {
                 nativeBuildInputs = [
                   pkgs.bash
+                  pkgs.gawk
                   pkgs.coreutils
                   pkgs.gnugrep
                   pkgs.gnused
@@ -454,6 +457,13 @@
                 shellcheck ${./scripts/android-resource-isolation.sh}
                 shellcheck ${./tests/android-resource-isolation.sh}
                 shellcheck ${./scripts/android-process-sample.sh}
+                shellcheck ${./scripts/android-resource-controls.sh}
+                shellcheck ${./tests/android-resource-power.sh}
+                shellcheck ${./tests/android-resource-sample.sh}
+                P2P_VPN_ANDROID_RESOURCE_CONTROLS=${./scripts/android-resource-controls.sh} \
+                  bash ${./tests/android-resource-power.sh}
+                P2P_VPN_ANDROID_RESOURCE_CONTROLS=${./scripts/android-resource-controls.sh} \
+                  bash ${./tests/android-resource-sample.sh}
                 shellcheck ${./tests/android-process-sample.sh}
                 shellcheck ${./tests/android-fixture-path-budget.sh}
                 P2P_VPN_ANDROID_HARNESS=${./scripts/android-e2e.sh} \

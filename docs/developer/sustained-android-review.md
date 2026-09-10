@@ -151,7 +151,7 @@ so their build/test suites were not repeated for this shell-only addition.
 ## Next Work
 
 1. Preserve refreshed artifact hashes and verify them again before emulator admission.
-2. Integrate runtime sampling and collector-on/off controls with the emulator-tested process collector.
+2. Apply the measured [collector controls](android-resource-controls.md) to sustained runtime sampling; retain observer-cost limits.
 3. Freeze S7's 30-second warmup, 300-second idle/load windows, five independent transitions, actual offered load and watchdogs.
 4. Require healthy sibling traffic and identity continuity while the other network is disabled or unavailable.
 5. Run paired captures; audit cadence, recovery, teardown and storage cleanup before accepting results.
@@ -392,3 +392,7 @@ used the preceding APK with valid native input. Recheck the final hash before S7
 
 Build logs: `/tmp/p2p-vpn-android-resource-status-{build,final-build,test-debug}.log`.
 Observer overhead, scheduling/wakeup proxies and sustained phases remain open.
+
+The subsequent [four-window collector comparison](android-resource-controls.md)
+now measures observer overhead. Scheduling/wakeup attribution and sustained S7
+are still open; the measured observer cost is not negligible.

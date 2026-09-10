@@ -61,7 +61,7 @@ Usage: p2p-vpn-android-e2e [OPTIONS]
 Options:
   --scenario NAME        Select boot-smoke, profile-persistence, always-on,
                          pairing-traffic, underlay-recovery, network-workflow,
-                         multi-network, multi-network-resource-admission,
+                         multi-network, multi-network-resource-admission, multi-network-resource-controls,
                          or process-sample-smoke.
   --path-mode MODE       Select automatic, quic-stream, tcp-stream, owned-quic, relay-only,
                          or relay-to-direct.
@@ -79,6 +79,8 @@ Environment:
                          Per-command ADB limit; defaults to 120 seconds.
   P2P_VPN_ANDROID_PROCESS_COLLECTOR
                          Process sampler path for the root-capable emulator smoke check.
+  P2P_VPN_ANDROID_RESOURCE_CONTROLS
+                         Sourced collector-overhead workload for the owned emulator.
 
 Exit codes:
   0   Scenario passed.
@@ -138,7 +140,7 @@ done
 pairing_scenario=0
 case "$scenario" in
   boot-smoke|profile-persistence|always-on|process-sample-smoke) ;;
-  pairing-traffic|underlay-recovery|network-workflow|multi-network|multi-network-resource-admission) pairing_scenario=1 ;;
+  pairing-traffic|underlay-recovery|network-workflow|multi-network|multi-network-resource-admission|multi-network-resource-controls) pairing_scenario=1 ;;
   *)
     echo "unsupported Android E2E scenario: $scenario" >&2
     exit 2
@@ -2193,7 +2195,7 @@ run_multi_network_scenario() {
     return 1
   fi
 
-  if [[ "$scenario" == multi-network-resource-admission ]]; then
+  if [[ "$scenario" == multi-network-resource-* ]]; then
     if ! android_automation resource-status > "$output_dir/resource-counters.json" \
       || ! jq -e --arg alpha "$alpha_id" --arg beta "$beta_id" '
         .schema_version == 1 and .ok and
@@ -2214,6 +2216,17 @@ run_multi_network_scenario() {
     outcome=passed
     outcome_detail="Two isolated networks admitted; sustained measurements have not run"
     record_step resource_admission passed "$outcome_detail"
+    if [[ "$scenario" == multi-network-resource-controls ]]; then
+      # shellcheck disable=SC1090
+      source "${P2P_VPN_ANDROID_RESOURCE_CONTROLS:-$(dirname "$0")/android-resource-controls.sh}"
+      if ! run_android_resource_controls; then
+        outcome=failed
+        outcome_detail="Android collector overhead controls failed; retain partial observations"
+        record_step resource_controls failed "$outcome_detail"
+        return 1
+      fi
+      outcome_detail="Collector overhead controls captured; sustained S7 remains open"
+    fi
     return 0
   fi
 

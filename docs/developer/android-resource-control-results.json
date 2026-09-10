@@ -1,0 +1,544 @@
+{
+  "schema_version": 1,
+  "scope": "single_boot_off_on_on_off_idle_collector_comparison",
+  "raw_directory": "/tmp/p2p-vpn-android-resource-controls-2",
+  "guest_clock_ticks_per_second": 100,
+  "host_clock_ticks_per_second": 100,
+  "windows": [
+    {
+      "index": 1,
+      "mode": "off",
+      "app_before": {
+        "schema_version": 1,
+        "pid": 2230,
+        "start_ticks": 2018,
+        "started_uptime_seconds": 119.5,
+        "finished_uptime_seconds": 119.5,
+        "user_ticks": 362,
+        "system_ticks": 129,
+        "os_threads": 30,
+        "rss_kib": 206664,
+        "fds": 124,
+        "leader_voluntary_context_switches": 1683,
+        "leader_involuntary_context_switches": 608
+      },
+      "app_after": {
+        "schema_version": 1,
+        "pid": 2230,
+        "start_ticks": 2018,
+        "started_uptime_seconds": 179.54,
+        "finished_uptime_seconds": 179.54,
+        "user_ticks": 454,
+        "system_ticks": 140,
+        "os_threads": 30,
+        "rss_kib": 204908,
+        "fds": 124,
+        "leader_voluntary_context_switches": 1712,
+        "leader_involuntary_context_switches": 608
+      },
+      "emulator_before": {
+        "schema_version": 1,
+        "pid": 264,
+        "start_ticks": 88802208,
+        "started_uptime_seconds": 888145.38,
+        "finished_uptime_seconds": 888145.38,
+        "user_ticks": 7308,
+        "system_ticks": 1468,
+        "os_threads": 250,
+        "rss_kib": 3860204,
+        "fds": 146,
+        "leader_voluntary_context_switches": 38,
+        "leader_involuntary_context_switches": 6
+      },
+      "emulator_after": {
+        "schema_version": 1,
+        "pid": 264,
+        "start_ticks": 88802208,
+        "started_uptime_seconds": 888205.42,
+        "finished_uptime_seconds": 888205.42,
+        "user_ticks": 7550,
+        "system_ticks": 1524,
+        "os_threads": 237,
+        "rss_kib": 3860140,
+        "fds": 146,
+        "leader_voluntary_context_switches": 38,
+        "leader_involuntary_context_switches": 6
+      },
+      "app": {
+        "seconds": 60.03999999999999,
+        "cpu_percent": 1.7155229846768822,
+        "rss_before": 206664,
+        "rss_after": 204908,
+        "fds_before": 124,
+        "fds_after": 124,
+        "threads_before": 30,
+        "threads_after": 30
+      },
+      "emulator": {
+        "seconds": 60.04000000003725,
+        "cpu_percent": 4.963357761489259,
+        "rss_before": 3860204,
+        "rss_after": 3860140,
+        "fds_before": 146,
+        "fds_after": 146,
+        "threads_before": 250,
+        "threads_after": 237
+      }
+    },
+    {
+      "index": 2,
+      "mode": "on",
+      "app_before": {
+        "schema_version": 1,
+        "pid": 2230,
+        "start_ticks": 2018,
+        "started_uptime_seconds": 179.74,
+        "finished_uptime_seconds": 179.74,
+        "user_ticks": 459,
+        "system_ticks": 140,
+        "os_threads": 30,
+        "rss_kib": 207628,
+        "fds": 124,
+        "leader_voluntary_context_switches": 1730,
+        "leader_involuntary_context_switches": 608
+      },
+      "app_after": {
+        "schema_version": 1,
+        "pid": 2230,
+        "start_ticks": 2018,
+        "started_uptime_seconds": 239.78,
+        "finished_uptime_seconds": 239.78,
+        "user_ticks": 566,
+        "system_ticks": 158,
+        "os_threads": 30,
+        "rss_kib": 207572,
+        "fds": 122,
+        "leader_voluntary_context_switches": 1837,
+        "leader_involuntary_context_switches": 621
+      },
+      "emulator_before": {
+        "schema_version": 1,
+        "pid": 264,
+        "start_ticks": 88802208,
+        "started_uptime_seconds": 888205.62,
+        "finished_uptime_seconds": 888205.62,
+        "user_ticks": 7564,
+        "system_ticks": 1526,
+        "os_threads": 237,
+        "rss_kib": 3860140,
+        "fds": 146,
+        "leader_voluntary_context_switches": 38,
+        "leader_involuntary_context_switches": 6
+      },
+      "emulator_after": {
+        "schema_version": 1,
+        "pid": 264,
+        "start_ticks": 88802208,
+        "started_uptime_seconds": 888265.66,
+        "finished_uptime_seconds": 888265.66,
+        "user_ticks": 7948,
+        "system_ticks": 1590,
+        "os_threads": 235,
+        "rss_kib": 3860120,
+        "fds": 147,
+        "leader_voluntary_context_switches": 38,
+        "leader_involuntary_context_switches": 6
+      },
+      "app": {
+        "seconds": 60.03999999999999,
+        "cpu_percent": 2.081945369753498,
+        "rss_before": 207628,
+        "rss_after": 207572,
+        "fds_before": 124,
+        "fds_after": 122,
+        "threads_before": 30,
+        "threads_after": 30
+      },
+      "emulator": {
+        "seconds": 60.04000000003725,
+        "cpu_percent": 7.4616922051919055,
+        "rss_before": 3860140,
+        "rss_after": 3860120,
+        "fds_before": 146,
+        "fds_after": 147,
+        "threads_before": 237,
+        "threads_after": 235
+      }
+    },
+    {
+      "index": 3,
+      "mode": "on",
+      "app_before": {
+        "schema_version": 1,
+        "pid": 2230,
+        "start_ticks": 2018,
+        "started_uptime_seconds": 239.99,
+        "finished_uptime_seconds": 239.99,
+        "user_ticks": 571,
+        "system_ticks": 159,
+        "os_threads": 30,
+        "rss_kib": 207284,
+        "fds": 122,
+        "leader_voluntary_context_switches": 1844,
+        "leader_involuntary_context_switches": 626
+      },
+      "app_after": {
+        "schema_version": 1,
+        "pid": 2230,
+        "start_ticks": 2018,
+        "started_uptime_seconds": 300.03,
+        "finished_uptime_seconds": 300.03,
+        "user_ticks": 685,
+        "system_ticks": 174,
+        "os_threads": 30,
+        "rss_kib": 207696,
+        "fds": 124,
+        "leader_voluntary_context_switches": 1937,
+        "leader_involuntary_context_switches": 640
+      },
+      "emulator_before": {
+        "schema_version": 1,
+        "pid": 264,
+        "start_ticks": 88802208,
+        "started_uptime_seconds": 888265.87,
+        "finished_uptime_seconds": 888265.87,
+        "user_ticks": 7962,
+        "system_ticks": 1592,
+        "os_threads": 235,
+        "rss_kib": 3860120,
+        "fds": 146,
+        "leader_voluntary_context_switches": 38,
+        "leader_involuntary_context_switches": 6
+      },
+      "emulator_after": {
+        "schema_version": 1,
+        "pid": 264,
+        "start_ticks": 88802208,
+        "started_uptime_seconds": 888325.91,
+        "finished_uptime_seconds": 888325.92,
+        "user_ticks": 8340,
+        "system_ticks": 1669,
+        "os_threads": 235,
+        "rss_kib": 3860120,
+        "fds": 146,
+        "leader_voluntary_context_switches": 38,
+        "leader_involuntary_context_switches": 6
+      },
+      "app": {
+        "seconds": 60.039999999999964,
+        "cpu_percent": 2.148567621585611,
+        "rss_before": 207284,
+        "rss_after": 207696,
+        "fds_before": 122,
+        "fds_after": 124,
+        "threads_before": 30,
+        "threads_after": 30
+      },
+      "emulator": {
+        "seconds": 60.04000000003725,
+        "cpu_percent": 7.578281145898029,
+        "rss_before": 3860120,
+        "rss_after": 3860120,
+        "fds_before": 146,
+        "fds_after": 146,
+        "threads_before": 235,
+        "threads_after": 235
+      }
+    },
+    {
+      "index": 4,
+      "mode": "off",
+      "app_before": {
+        "schema_version": 1,
+        "pid": 2230,
+        "start_ticks": 2018,
+        "started_uptime_seconds": 300.24,
+        "finished_uptime_seconds": 300.24,
+        "user_ticks": 690,
+        "system_ticks": 175,
+        "os_threads": 30,
+        "rss_kib": 207012,
+        "fds": 124,
+        "leader_voluntary_context_switches": 1945,
+        "leader_involuntary_context_switches": 645
+      },
+      "app_after": {
+        "schema_version": 1,
+        "pid": 2230,
+        "start_ticks": 2018,
+        "started_uptime_seconds": 360.28,
+        "finished_uptime_seconds": 360.29,
+        "user_ticks": 783,
+        "system_ticks": 183,
+        "os_threads": 30,
+        "rss_kib": 206876,
+        "fds": 124,
+        "leader_voluntary_context_switches": 1974,
+        "leader_involuntary_context_switches": 645
+      },
+      "emulator_before": {
+        "schema_version": 1,
+        "pid": 264,
+        "start_ticks": 88802208,
+        "started_uptime_seconds": 888326.13,
+        "finished_uptime_seconds": 888326.13,
+        "user_ticks": 8354,
+        "system_ticks": 1671,
+        "os_threads": 235,
+        "rss_kib": 3860120,
+        "fds": 146,
+        "leader_voluntary_context_switches": 38,
+        "leader_involuntary_context_switches": 6
+      },
+      "emulator_after": {
+        "schema_version": 1,
+        "pid": 264,
+        "start_ticks": 88802208,
+        "started_uptime_seconds": 888386.17,
+        "finished_uptime_seconds": 888386.17,
+        "user_ticks": 8586,
+        "system_ticks": 1724,
+        "os_threads": 235,
+        "rss_kib": 3860120,
+        "fds": 146,
+        "leader_voluntary_context_switches": 38,
+        "leader_involuntary_context_switches": 6
+      },
+      "app": {
+        "seconds": 60.039999999999964,
+        "cpu_percent": 1.6822118587608272,
+        "rss_before": 207012,
+        "rss_after": 206876,
+        "fds_before": 124,
+        "fds_after": 124,
+        "threads_before": 30,
+        "threads_after": 30
+      },
+      "emulator": {
+        "seconds": 60.04000000003725,
+        "cpu_percent": 4.746835443035029,
+        "rss_before": 3860120,
+        "rss_after": 3860120,
+        "fds_before": 146,
+        "fds_after": 146,
+        "threads_before": 235,
+        "threads_after": 235
+      }
+    }
+  ],
+  "quality": {
+    "on_windows": 2,
+    "process_samples_per_on_window": 60,
+    "runtime_samples_per_on_window": 12,
+    "max_process_gap_seconds": 1.02,
+    "max_process_duration_seconds": 0.01,
+    "max_runtime_gap_millis": 5010,
+    "max_runtime_duration_millis": 80
+  },
+  "raw_sha256": [
+    {
+      "sha256": "6bd009710f1a176dadf503ad60542435e6b5d64e97b628cbd1612b3f620f0de6",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/android.log"
+    },
+    {
+      "sha256": "28b2b56d86dba86c2bd8ee13e3fcca56e5ca8c1719aa7c78a5fcf07489a210af",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/control-1-off-boundary-after.jsonl"
+    },
+    {
+      "sha256": "0f93709330402451157209ad823fd7b774ba00887462101f83a204034d7e13cf",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/control-1-off-boundary-before.jsonl"
+    },
+    {
+      "sha256": "e525db3e6db1e9e825647cf8acaa36f7f0bd4fd6a8200c5a799329c37717be23",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/control-1-off-emulator-after.jsonl"
+    },
+    {
+      "sha256": "cf861af34216d97013f2bf5348089464f3e964b860b73ab3998fb484dcdf01c8",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/control-1-off-emulator-before.jsonl"
+    },
+    {
+      "sha256": "a233d3c64b9526a88a0b0acbb5bf24466094345d448f31a969384c3283f22e1e",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/control-1-off-host-load-after.txt"
+    },
+    {
+      "sha256": "1c67366cc45cdd7850dba36de7653489e2d312f3436000126e72621a4374b0a5",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/control-1-off-host-load-before.txt"
+    },
+    {
+      "sha256": "1d98093b42e88f718b37935a076f5be9d1b80a6e610c300118ccd361f19593f4",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/control-1-off-process-after.jsonl"
+    },
+    {
+      "sha256": "829ba69f77f336e00e68d6fb67994706e240fc39d18b7d02fd45ab5ccbe932ae",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/control-1-off-process-before.jsonl"
+    },
+    {
+      "sha256": "fcbc0238ee2657b92074ace657ad48aaaaf06fbaad6e46568ff90e721d3a35de",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/control-1-off-window.json"
+    },
+    {
+      "sha256": "27206e7867b5586187cccdcc1dbfc97279188e5bef85710f36e8e28ce4ec4245",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/control-2-on-boundary-after.jsonl"
+    },
+    {
+      "sha256": "ede03c535291ebd94dc9e2ec540cab3ed4c3107ec5ec7158a40cc58b12e0aad2",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/control-2-on-boundary-before.jsonl"
+    },
+    {
+      "sha256": "99270fa26e2a7ed4632e8dd1b5797c2ebe1f6b800d362cab224fac0b377bde91",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/control-2-on-emulator-after.jsonl"
+    },
+    {
+      "sha256": "aff07e98e10fd98bb9779c828ece53f6f6eebe3e636eb10bb71bccba75b3a73a",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/control-2-on-emulator-before.jsonl"
+    },
+    {
+      "sha256": "ddeab92e8033d9878f7309c02913b35229feb9b70a862a2626562cb556ec5cd5",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/control-2-on-host-load-after.txt"
+    },
+    {
+      "sha256": "1f0b863e2ace7000013d382bec2e5aeb55c564be9a7401b385eac7e3bad4e28d",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/control-2-on-host-load-before.txt"
+    },
+    {
+      "sha256": "b1c426ac09f1d610820b7f17b9385e6b8764a9eea1a609a543346f8b74c754bc",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/control-2-on-process-after.jsonl"
+    },
+    {
+      "sha256": "4f4b2c136fb8acffe05f09a2401e1bb3b6e129c923ddce83ccc36e7fa2458185",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/control-2-on-process-before.jsonl"
+    },
+    {
+      "sha256": "9deeff9f8efc46a9f7cde84d0095d0110f045c14652dbf2f739efae00b7d545e",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/control-2-on-process.jsonl"
+    },
+    {
+      "sha256": "a298ca4e02123210cb808a1a176a52a70afd42fad5203161143e9e7c50c1bd61",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/control-2-on-runtime.jsonl"
+    },
+    {
+      "sha256": "2111808b02f65023ed43e13df288b26dd25cc25f2d72d92268ff5bcdc79f4b89",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/control-2-on-window.json"
+    },
+    {
+      "sha256": "0299ea1e81e4f4c6eb88d681d71ea614fabea59f998eeecc57a569ef20beb8ae",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/control-3-on-boundary-after.jsonl"
+    },
+    {
+      "sha256": "e92a552d94c4902e349ac60d1e92c7cbb18b930ae5ce7423170469f77053893b",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/control-3-on-boundary-before.jsonl"
+    },
+    {
+      "sha256": "1ee89fa42c65b38246a7884e1005e65028bcfb40ee1b11502a35d65a6b8d9019",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/control-3-on-emulator-after.jsonl"
+    },
+    {
+      "sha256": "7b6124209d1115ab325786609b51724aa7b4296360caeb21ad3c9c55e0968d2a",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/control-3-on-emulator-before.jsonl"
+    },
+    {
+      "sha256": "8147f341e71be2b85b904a707300d3b79f81a6e8642ae9808a2e0d0c3dc15461",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/control-3-on-host-load-after.txt"
+    },
+    {
+      "sha256": "9c9d74c3899641e0fb8b3a02c003be1c8c223ca95a313efb56271e04e7ea2ab7",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/control-3-on-host-load-before.txt"
+    },
+    {
+      "sha256": "a5deaffdb456c6ef6ce5fc84ae6c9914c033167ff06792dc943cffef183c595b",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/control-3-on-process-after.jsonl"
+    },
+    {
+      "sha256": "0af433bd524210ca732ec4c64a7d824848ff59522ffc5b4c920db7df69ea39ee",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/control-3-on-process-before.jsonl"
+    },
+    {
+      "sha256": "7757725eacd41a00ae0f1d80d971d79ce1ed94e2706bec72494c76da57a60613",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/control-3-on-process.jsonl"
+    },
+    {
+      "sha256": "c315df7b21b8cbc51d2e340a8a4a4d46e8bcd25d326b4d312dfe64b4d1f9171a",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/control-3-on-runtime.jsonl"
+    },
+    {
+      "sha256": "95bfb6fb648fb31c2b416dfb64ffff156f25866868f2e974995b58b0ffb381e8",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/control-3-on-window.json"
+    },
+    {
+      "sha256": "3745c169a162b65e05b55ea0c34ba5a70e4304a41bc306457adea4db709d712f",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/control-4-off-boundary-after.jsonl"
+    },
+    {
+      "sha256": "291b5ca03b25a56ad683963ed3a2cccf7d85ec691110a7c3af805e19107c9922",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/control-4-off-boundary-before.jsonl"
+    },
+    {
+      "sha256": "0b59b1559ed652b340b6ccbf40fcb497eebfb4159ff2aea71675183572e55933",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/control-4-off-emulator-after.jsonl"
+    },
+    {
+      "sha256": "a957045d610d00f4435ea56b4b236ff7fe767c34e0f60e154182f6414249e6d0",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/control-4-off-emulator-before.jsonl"
+    },
+    {
+      "sha256": "d2f90134be32711e59c3b5df7d84f202a7cf16f39fe3e91c5a1ef5eee7b7b275",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/control-4-off-host-load-after.txt"
+    },
+    {
+      "sha256": "a3c0af91ba88555967d36027acce6a44848522dbcfa1cb8832b3f9e5b63af611",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/control-4-off-host-load-before.txt"
+    },
+    {
+      "sha256": "202b39b2e951a799558adc6921e8a6f9867d45dc9167e618a31ec435a7a2115a",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/control-4-off-process-after.jsonl"
+    },
+    {
+      "sha256": "b6968efde50ef203ec9fc92384d4976694ed6e6406f4a279abb0ba63b587e4a1",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/control-4-off-process-before.jsonl"
+    },
+    {
+      "sha256": "1c311b823ca7d8a99e98e7fe694e4422569afd47557962f88a9f7e4e69eecbf3",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/control-4-off-window.json"
+    },
+    {
+      "sha256": "af059ae475693ac86eb7cda70fb6e9d752ccb6cb1682fb680a85712952dcc431",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/emulator.log"
+    },
+    {
+      "sha256": "44b3dda9bcc24c2771e5e572269f09d670d0fa1561fdf8d092e9725d12e7132a",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/evidence.json"
+    },
+    {
+      "sha256": "63533d75aa1f03abe8846035d164aa304f5828999efe60cfd346289b6fdc4964",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/fixture-secondary.log"
+    },
+    {
+      "sha256": "8e3ac18e5d18c2897bf973650e0563691fc7740f8d245ea727565a28e8a3379b",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/fixture.log"
+    },
+    {
+      "sha256": "6b8cc956ea9659a1ddaeeea367094ab880dac2330b2c74dff9db5703a15b106b",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/resource-admission.json"
+    },
+    {
+      "sha256": "f8cee25c4f7097f83da73dcc4b83f94940386a19c0ab35a3612236735d0260a6",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/resource-counters.json"
+    },
+    {
+      "sha256": "eea8254c7500ba3de996aa8ad6af399183f04e17d4a8102fde539dbc93a90012",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/resource-guest-clock.txt"
+    },
+    {
+      "sha256": "eea8254c7500ba3de996aa8ad6af399183f04e17d4a8102fde539dbc93a90012",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/resource-host-clock.txt"
+    },
+    {
+      "sha256": "038f34f8e01b64a15c5b68c9aa61b8486d8338060fe14f0b6c4cbae392883dbd",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/resource-power.txt"
+    },
+    {
+      "sha256": "cbfc5f4f46947a84c46216ae8ee0bfaebce09bbac37337972e033b39056106eb",
+      "path": "/tmp/p2p-vpn-android-resource-controls-2/resource-root.txt"
+    }
+  ]
+}
