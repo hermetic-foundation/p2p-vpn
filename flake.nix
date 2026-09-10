@@ -460,10 +460,13 @@
                 shellcheck ${./scripts/android-resource-controls.sh}
                 shellcheck ${./tests/android-resource-power.sh}
                 shellcheck ${./tests/android-resource-sample.sh}
+                shellcheck ${./tests/android-resource-window.sh}
                 P2P_VPN_ANDROID_RESOURCE_CONTROLS=${./scripts/android-resource-controls.sh} \
                   bash ${./tests/android-resource-power.sh}
                 P2P_VPN_ANDROID_RESOURCE_CONTROLS=${./scripts/android-resource-controls.sh} \
                   bash ${./tests/android-resource-sample.sh}
+                P2P_VPN_ANDROID_RESOURCE_CONTROLS=${./scripts/android-resource-controls.sh} \
+                  bash ${./tests/android-resource-window.sh}
                 shellcheck ${./tests/android-process-sample.sh}
                 shellcheck ${./tests/android-fixture-path-budget.sh}
                 P2P_VPN_ANDROID_HARNESS=${./scripts/android-e2e.sh} \

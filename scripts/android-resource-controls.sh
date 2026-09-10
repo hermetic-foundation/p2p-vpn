@@ -43,7 +43,9 @@ resource_native_sample() {
 }
 
 resource_control_window() (
-  local mode="$1" prefix="$2" started deadline sampler="" status=0
+  local mode="$1" prefix="$2" duration="${3:-60}" started deadline sampler="" status=0
+  [[ "$duration" == 60 || "$duration" == 300 ]] || exit 2
+  [[ "$mode" == on || "$mode" == off ]] || exit 2
   trap 'if [[ -n "$sampler" ]]; then kill "$sampler" 2>/dev/null || true; wait "$sampler" 2>/dev/null || true; fi' EXIT
   resource_native_sample "$prefix-boundary-before.jsonl" || exit 1
   adb_run shell -T sh -s -- "$resource_app_pid" 1 <"$resource_collector" \
@@ -51,12 +53,12 @@ resource_control_window() (
   sh "$resource_collector" "$resource_emulator_pid" 1 >"$prefix-emulator-before.jsonl" || exit 1
   cat /proc/loadavg >"$prefix-host-load-before.txt"
   started="$(monotonic_millis)"
-  deadline=$((started + 60000))
+  deadline=$((started + duration * 1000))
   if [[ "$mode" == on ]]; then
-    timeout --signal=TERM --kill-after=2s 75 "${adb[@]}" shell -T sh -s \
-      -- "$resource_app_pid" 60 <"$resource_collector" >"$prefix-process.jsonl" &
+    timeout --signal=TERM --kill-after=2s "$((duration + 15))" "${adb[@]}" shell -T sh -s \
+      -- "$resource_app_pid" "$duration" <"$resource_collector" >"$prefix-process.jsonl" &
     sampler=$!
-    for index in $(seq 0 11); do
+    for index in $(seq 0 "$((duration / 5 - 1))"); do
       resource_sleep_until "$((started + index * 5000))"
       resource_native_sample "$prefix-runtime.jsonl" || exit 1
     done
@@ -73,23 +75,24 @@ resource_control_window() (
   cat /proc/loadavg >"$prefix-host-load-after.txt"
   resource_native_sample "$prefix-boundary-after.jsonl" || exit 1
   jq -n --arg mode "$mode" --argjson started "$started" \
+    --argjson duration "$duration" \
     --argjson finished "$(monotonic_millis)" \
-    '{mode:$mode, started_millis:$started, finished_millis:$finished, requested_window_millis:60000}' \
+    '{mode:$mode, started_millis:$started, finished_millis:$finished, requested_window_millis:($duration * 1000)}' \
     >"$prefix-window.json"
   for process in process emulator; do
-    jq -es 'length == 2 and .[0].pid == .[1].pid and .[0].start_ticks == .[1].start_ticks and
-      .[1].started_uptime_seconds >= (.[0].started_uptime_seconds + 60) and
-      .[1].started_uptime_seconds <= (.[0].started_uptime_seconds + 70) and
+    jq -es --argjson duration "$duration" 'length == 2 and .[0].pid == .[1].pid and .[0].start_ticks == .[1].start_ticks and
+      .[1].started_uptime_seconds >= (.[0].started_uptime_seconds + $duration) and
+      .[1].started_uptime_seconds <= (.[0].started_uptime_seconds + $duration + 10) and
       .[1].user_ticks >= .[0].user_ticks and .[1].system_ticks >= .[0].system_ticks' \
       "$prefix-$process-before.jsonl" "$prefix-$process-after.jsonl" >/dev/null || exit 1
   done
   if [[ "$mode" == on ]]; then
-    jq -es 'length == 60 and ([.[].start_ticks] | unique | length) == 1 and
+    jq -es --argjson duration "$duration" 'length == $duration and ([.[].start_ticks] | unique | length) == 1 and
       (. as $rows | all(range(1; length);
         ($rows[.].started_uptime_seconds - $rows[. - 1].started_uptime_seconds) >= 1 and
         ($rows[.].started_uptime_seconds - $rows[. - 1].started_uptime_seconds) <= 1.5))' \
       "$prefix-process.jsonl" >/dev/null || exit 1
-    jq -es 'length == 12 and all(.[]; (.finished_millis - .started_millis) <= 2000) and
+    jq -es --argjson duration "$duration" 'length == ($duration / 5) and all(.[]; (.finished_millis - .started_millis) <= 2000) and
       (. as $rows | all(range(1; length);
         ($rows[.].started_millis - $rows[. - 1].started_millis) >= 4500 and
         ($rows[.].started_millis - $rows[. - 1].started_millis) <= 5500))' \

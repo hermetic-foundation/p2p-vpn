@@ -112,3 +112,24 @@ from other host activity. S7 idle/load and independent network transitions remai
 ShellCheck, new-script formatting, negative/positive resource tests and all raw
 hash checks pass. The Nix structure derivation evaluates offline; its full legacy
 matrix was not rerun. No production code or native build changed in this step.
+
+## Sustained Window Support
+
+`resource_control_window` now accepts an optional third argument of `60` or `300`
+seconds. Its default remains 60, preserving the recorded control workload.
+The 300-second option is preparation for S7, not evidence that S7 has run.
+
+| Contract | 60 Seconds | 300 Seconds |
+| --- | --- | --- |
+| Process samples when on | 60 | 300 |
+| Runtime samples when on | 12 | 60 |
+| Sampler timeout | 75 seconds | 315 seconds |
+| Endpoint elapsed bound | 60 to 70 seconds | 300 to 310 seconds |
+
+Cadence and process identity checks are unchanged. Invalid durations and modes
+are rejected before collection. Synthetic clock tests verify off-window timing
+and metadata for both durations; these tests do not sleep or run an emulator.
+
+The first mock collector test failed because its generated command lacked a
+line continuation. The corrected fixture passes. Live 300-second sampling and
+fixed-rate traffic remain the next verification gate.
