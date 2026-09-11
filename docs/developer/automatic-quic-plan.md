@@ -245,6 +245,23 @@ It is not a loss-free cellular stability pass; the recovery outage and asymmetri
 - The causal diagnosis is an inference from logs plus dial scheduling behavior.
   A fresh physical cellular transition must verify the recovery-time effect.
 
+#### Prepared Retest Artifacts
+
+| Artifact | SHA-256 |
+| --- | --- |
+| Linux binary | `7ed6326f8fca385f803cce033142270aff69d570518b1a2d61ce95035a7cd0da` |
+| ARM64 JNI library | `84eed4238a6c862b5558416c18a8adf1128f0493d629eb912032d31635525211` |
+| ARM64-only debug APK | `1eafd5c91e3fb5e9c8f9581f8e09d0c8cc015b55c9b5289a57230e6851ac9413` |
+
+- Linux and Android native builds completed offline with one Cargo job each.
+  The JNI library targets Android 26 and has 16 KiB ELF load alignment.
+- APK assembly passed from a clean temporary project copy. Signature and 16 KiB zip alignment passed;
+  cached JVM test outputs were reused rather than freshly executed.
+- The APK is an ARM64 physical-test artifact, not the dual-ABI release package.
+  No phone, profile, service, route or personal-flake state changed during preparation.
+- Build logs: `/tmp/p2p-vpn-recovery-dial-order-{linux,android,apk}.log`.
+  Root-inclusive `/tmp/p2p-vpn-*` usage was 10,238,272 KiB, below 10 GiB.
+
 ### Requirement Status
 
 | Requirement | Verified evidence | Remaining work |
