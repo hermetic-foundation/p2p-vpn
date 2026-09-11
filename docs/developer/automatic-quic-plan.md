@@ -3,7 +3,8 @@
 ## Status
 
 Core implementation published as `8690bce2`; NixOS wiring published as `43345ef1`.
-Acceptance remains incomplete. Local evidence does not certify physical Android or public-network recovery.
+Required local and matched-build physical acceptance is complete. The remaining limits below
+separate this goal from release certification and the independent Android process-restart issue.
 
 ### Active Cellular Recovery Fix
 
@@ -219,8 +220,8 @@ Acceptance remains incomplete. Local evidence does not certify physical Android 
 - The temporary Linux unit stopped at its deadline. The original Nix service is active,
   has no drop-in, and the temporary binary and override are absent.
 
-This proves autonomous physical underlay movement, relay fallback and promotion back to QUIC.
-It is not a loss-free cellular stability pass; the recovery outage and asymmetric loss remain in scope.
+This proved autonomous physical underlay movement, relay fallback and promotion back to QUIC.
+At that checkpoint, the recovery outage and asymmetric loss remained in scope for the later retest.
 
 ### Cellular Recovery Dial Ordering
 
@@ -243,7 +244,7 @@ It is not a loss-free cellular stability pass; the recovery outage and asymmetri
 - Evidence: `/tmp/p2p-vpn-recovery-dial-order-{focused,core-final,clippy-final}.log`.
   Fix published as `db9d4c0e`.
 - The causal diagnosis is an inference from logs plus dial scheduling behavior.
-  A fresh physical cellular transition must verify the recovery-time effect.
+  The matched-build physical transition below verifies autonomous relay recovery after this change.
 
 #### Prepared Retest Artifacts
 
@@ -276,27 +277,70 @@ It is not a loss-free cellular stability pass; the recovery outage and asymmetri
   Nix evidence: `/tmp/p2p-vpn-recovery-dial-order-{nixos-eval,source-parity}.log`.
 - Ignored namespace and resource scenarios are not part of the workspace total.
   Existing explicit scenario evidence remains listed in this document.
-- These checks do not replace the pending matched-build physical movement retest.
+- These checks do not replace the matched-build physical movement evidence below.
+
+### Matched-Build Physical Acceptance
+
+- Source `db9d4c0e` ran on the Pixel and Linux peer with the prepared artifacts above.
+  The NixOS-generated minimal config omitted `network.packet_plane` and all manual peer endpoints.
+- The APK was upgraded in place. Peer ID, hostname, network ID, overlay addresses,
+  pairing and membership state remained unchanged.
+- USB provided management and observation only. No runtime restart, reconnect command,
+  route edit, endpoint injection, pairing operation or deadline extension occurred during movement.
+- Evidence: `/tmp/p2p-vpn-physical-retest.FJICpc/`.
+  It contains every ping, path snapshot, Android status, scoped log and generated summary.
+
+| Phase | Linux to Pixel | Pixel to Linux | Selected payload behavior |
+| --- | ---: | ---: | --- |
+| Wi-Fi baseline, 1,280 bytes | 30/30 | 30/30 | Owned QUIC datagram |
+| Cellular oversize check, 1,280 bytes | 24/24 MTU signals | 24/24 MTU signals | No oversized relay submission |
+| Cellular, 1,200 bytes | 39/40 | 39/40 | Circuit-relay stream |
+| Wi-Fi return, cached 1,200-byte PMTU | 50/50 | 50/50 | Direct datagram; QUIC preferred after recovery |
+| Wi-Fi return, restored 1,280-byte PMTU | 30/30 | 30/30 | Owned QUIC datagram |
+
+- Baseline Linux and Android owned-QUIC counters each grew from zero to 60.
+  Owned-UDP counters remained zero.
+- A fresh relay connection established about 66 seconds after cellular observation began.
+  Linux relay payload submissions reached 83; retain the one lost packet in each direction.
+- Relay paths advertised MTU 1,200. Every 1,280-byte DF attempt received an MTU-1,200
+  fragmentation-needed result, and no oversized relay payload was submitted.
+- On LAN return, both kernels temporarily retained the learned 1,200-byte PMTU.
+  Smaller traffic passed over owned QUIC while the cache expired; full-MTU traffic then passed.
+- Return snapshots grew Linux owned-QUIC from 70 to 220 and Android from 67 to 216.
+  Linux also submitted four packets through UDP during one transient QUIC fallback window.
+- Android stayed connected at runtime generation one. Its underlay counters recorded one loss,
+  one recovery and zero runtime-recovery failures before returning to validated Wi-Fi.
+- The original NixOS service is active with no drop-in. The temporary Linux binary was removed;
+  the upgraded Android app retained its profile and remains connected.
+
+This proves the required automatic QUIC baseline, physical relay fallback, MTU handling,
+LAN-first recovery and promotion back to QUIC. It is not a loss-free cellular result,
+an IPv6 physical PMTU certification or a dual-ABI Android release build.
 
 ### Requirement Status
 
-| Requirement | Verified evidence | Remaining work |
+| Requirement | Status | Evidence and residual limit |
 | --- | --- | --- |
-| Defaults and overrides | Shared config and Android profile regressions; 26 NixOS contracts; Pixel profile upgrade | Native NixOS activation |
-| QUIC payload preference | Minimal TUN fixture; physical Pixel/Linux traffic; OnePlus bidirectional backend counters | Longer physical stability and unresolved Pixel loss |
-| Compatibility | Explicit UDP-only and stream-only current peers; override round trips; isolated relay payloads | Archived-release compatibility is not established |
-| Autonomous recovery | Four initiator orderings; namespace blocking; OnePlus QUIC block/re-promotion | Physical movement, residual loss and sustained settling |
-| MTU and isolation | 1,280-byte IPv4 fallback/recovery traffic; Android supervisor tests | Smaller-underlay MTU boundaries and physical multi-network behavior |
-| Verification | 1,532 workspace tests at `eb0fb4ca`; required root Clippy groups; ARM64 build; earlier fresh JVM tests; Nix source parity | Full Nix package realization and remaining targeted scenarios |
-| Deployment | Verified debug APK upgrades on Pixel and OnePlus preserving profiles | Physical stability, fallback and recovery checks |
-| Delivery | Core and NixOS commits pushed to main | Final evidence review and requirement-by-requirement closeout |
+| Defaults and overrides | Complete | Shared config and Android profile regressions; 26 NixOS contracts; unchanged minimal NixOS activation and Pixel profile |
+| QUIC payload preference | Complete | Minimal TUN fixture and matched Pixel/Linux payload counters; four Linux packets used allowed UDP fallback during return |
+| Compatibility | Complete | Explicit UDP-only and stream-only current peers, override round trips and isolated relay payload; archived binary releases are not release-certified |
+| Autonomous recovery | Complete | Four initiator orderings, blocked-QUIC fixtures and matched physical Wi-Fi/cellular/Wi-Fi movement; cellular recovery took about 66 seconds |
+| MTU and isolation | Complete | Smaller 1,200-byte relay MTU signaled and carried traffic; multi-network supervisor tests; physical IPv6 PMTU is not certified |
+| Verification | Complete | 1,537 workspace tests, required Clippy groups, ARM64 build, JVM coverage, Nix evaluations/source parity and no applicable formal models |
+| Deployment | Complete | Matched debug APK and Linux binary preserved identity and minimal config; APK is ARM64 test-only, not a release artifact |
+| Delivery | Complete | Atomic implementation and NixOS commits are on `main`; this closeout records the final evidence |
 
 - UDP compatibility uses a current runtime with QUIC disabled, not an archived release.
 - Namespace underlays are isolated fixtures, not substitutes for physical or public-NAT evidence.
-- The separate Android always-on process-restart finding is not claimed fixed here.
-- Remaining evidence gaps do not authorize deployment, underlay changes or personal-flake edits.
+- The separate Android always-on process-restart finding remains outside this goal.
+  Release packaging and broader device/network certification remain future release work.
 
-### Latest Workspace And Movement Readiness
+## Historical Checkpoints
+
+The dated checkpoints below preserve the evidence and limits known at each stage.
+Their pending-work statements are superseded by the final requirement status above.
+
+### Earlier Workspace And Movement Readiness
 
 - Source `8b4e8d55`: the session-ID fix now passes the full workspace/all-target run.
   Result: 1,530 passed, 46 ignored, zero failures; core suite duration 47.31 seconds.

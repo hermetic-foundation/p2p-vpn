@@ -223,6 +223,30 @@ QUIC can reject a packet below the overlay MTU when its transport datagram limit
 If fallback also fails, this counts as `PacketTooLarge`, not `NoTransportPeer`.
 A successful payload submission counter alone does not prove delivery.
 
+## Path MTU Changes
+
+A fallback path can have a smaller MTU than the normal direct path. Circuit relay paths
+currently advertise 1,200 bytes; the default direct overlay MTU is 1,280 bytes.
+
+| Observation | Meaning |
+| --- | --- |
+| `Frag needed ... mtu = 1200` | p2p-vpn rejected an oversized IPv4 packet and returned the usable path MTU. |
+| `Message too long, mtu=1200` | The local kernel retained that learned PMTU and rejected the packet before TUN delivery. |
+| Relay payload counter unchanged | The oversized packet was not submitted to the relay stream. |
+| Smaller packets still pass | The path is operational at its advertised MTU. |
+
+After returning to a larger LAN path, the kernel can retain the smaller PMTU temporarily.
+Traffic at the cached MTU continues while the cache expires; full-size traffic then resumes.
+
+Check Linux PMTU state without modifying it:
+
+```sh
+ip route get PEER_OVERLAY_IP
+```
+
+Use `p2p-vpn mtu --live` and payload counters to confirm the selected path. Do not flush
+route caches as routine recovery; that hides whether automatic path and PMTU recovery work.
+
 Useful membership counters:
 
 | Counter | Meaning |
