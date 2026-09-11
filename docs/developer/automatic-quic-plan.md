@@ -262,6 +262,22 @@ It is not a loss-free cellular stability pass; the recovery outage and asymmetri
 - Build logs: `/tmp/p2p-vpn-recovery-dial-order-{linux,android,apk}.log`.
   Root-inclusive `/tmp/p2p-vpn-*` usage was 10,238,272 KiB, below 10 GiB.
 
+#### Final Local Validation
+
+| Check | Result |
+| --- | --- |
+| Workspace, all targets | 1,537 passed, 46 ignored, zero failed |
+| NixOS consumer contracts | 17 of 17 true |
+| NixOS QUIC-default contracts | Nine of nine true |
+| Nix source parity | Passed at `/nix/store/62qx97yw616rspgr5lvni11z71vsr0pk-p2p-vpn-rust-test-sources` |
+| Formal-model scan | No Lean, TLA+ or Alloy models present |
+
+- Workspace evidence: `/tmp/p2p-vpn-recovery-dial-order-workspace.log`.
+  Nix evidence: `/tmp/p2p-vpn-recovery-dial-order-{nixos-eval,source-parity}.log`.
+- Ignored namespace and resource scenarios are not part of the workspace total.
+  Existing explicit scenario evidence remains listed in this document.
+- These checks do not replace the pending matched-build physical movement retest.
+
 ### Requirement Status
 
 | Requirement | Verified evidence | Remaining work |
