@@ -222,6 +222,29 @@ Acceptance remains incomplete. Local evidence does not certify physical Android 
 This proves autonomous physical underlay movement, relay fallback and promotion back to QUIC.
 It is not a loss-free cellular stability pass; the recovery outage and asymmetric loss remain in scope.
 
+### Cellular Recovery Dial Ordering
+
+- The movement logs show ready relay attempts while an existing peer dial was still pending.
+  Failed grouped dials listed stale LAN and public direct addresses before relay addresses.
+- Code review confirmed one-address dial concurrency and `NotDialing` admission.
+  A pending stale-direct group could therefore prevent a newly ready relay dial from starting.
+- Recovery now ranks addresses in this order: explicit direct override, current-LAN direct,
+  authenticated relay, then other discovered direct addresses.
+- Dial concurrency remains one. LAN-first behavior, explicit overrides, authorization,
+  path scoring and later promotion to QUIC are unchanged.
+
+| Validation | Result |
+| --- | --- |
+| Focused recovery-order tests | Five passed, zero failed |
+| Full core suite | 1,175 passed, eight ignored, zero failed |
+| Formatting | Passed |
+| Required Clippy groups | Passed; existing warnings remain |
+
+- Evidence: `/tmp/p2p-vpn-recovery-dial-order-{focused,core-final,clippy-final}.log`.
+  Fix published as `db9d4c0e`.
+- The causal diagnosis is an inference from logs plus dial scheduling behavior.
+  A fresh physical cellular transition must verify the recovery-time effect.
+
 ### Requirement Status
 
 | Requirement | Verified evidence | Remaining work |
