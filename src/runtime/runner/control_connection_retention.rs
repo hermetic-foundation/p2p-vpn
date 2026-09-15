@@ -8,6 +8,7 @@ pub(super) fn should_retain_control_connection(
     peer_capabilities: &PeerCapabilities,
     paths: &PathSet,
     active_connections: &HashMap<(Libp2pPeerId, ConnectionId), ConnectedPoint>,
+    local_networks: &[LocalInterfaceNetwork],
 ) -> bool {
     if !forwarder.is_configured_transport_peer(peer)
         || !peer_capabilities.contains(PeerId::from_libp2p(peer))
@@ -25,18 +26,35 @@ pub(super) fn should_retain_control_connection(
                 .latest_connection_id
                 .is_some_and(|id| active_connections.contains_key(&(peer, id)))
     };
-    let preference = |kind| match kind {
+    let transport_preference = |kind| match kind {
         PathKind::DirectQuicStream => 0,
         PathKind::DirectTcpStream => 1,
         _ => 2,
     };
     let kind = path_kind_for_endpoint(endpoint);
+    let preference = |endpoint: &ConnectedPoint| {
+        let locality = if endpoint_is_on_current_lan(endpoint, local_networks) {
+            0
+        } else if endpoint.is_relayed() {
+            2
+        } else {
+            1
+        };
+        (
+            locality,
+            transport_preference(path_kind_for_endpoint(endpoint)),
+        )
+    };
     let preferred = paths
         .candidates_for(PeerId::from_libp2p(peer))
         .filter(eligible)
-        .map(|path| preference(path.kind))
+        .filter_map(|path| {
+            active_connections
+                .get(&(peer, path.latest_connection_id?))
+                .map(preference)
+        })
         .min();
-    preferred == Some(preference(kind))
+    preferred == Some(preference(endpoint))
         && paths.candidates_for(PeerId::from_libp2p(peer)).any(|path| {
             eligible(&path)
                 && path.kind == kind
@@ -118,6 +136,15 @@ mod tests {
         }
 
         fn retains(&self, peer: Libp2pPeerId, connection: ConnectionId) -> bool {
+            self.retains_with_networks(peer, connection, &[])
+        }
+
+        fn retains_with_networks(
+            &self,
+            peer: Libp2pPeerId,
+            connection: ConnectionId,
+            local_networks: &[LocalInterfaceNetwork],
+        ) -> bool {
             should_retain_control_connection(
                 peer,
                 connection,
@@ -125,6 +152,7 @@ mod tests {
                 &self.capabilities,
                 &self.paths,
                 &self.connections,
+                local_networks,
             )
         }
     }
@@ -223,6 +251,39 @@ mod tests {
         fixture.connections.remove(&(peer, tcp));
         assert!(!fixture.retains(peer, tcp));
         assert!(fixture.retains(peer, relay));
+    }
+
+    #[test]
+    fn prefers_current_lan_before_wan_transport() {
+        let mut fixture = Fixture::new();
+        let peer = fixture.peer;
+        let wan_quic = fixture.establish(peer, PathKind::DirectQuicStream, 1);
+        let lan_tcp = fixture.establish(peer, PathKind::DirectTcpStream, 2);
+        fixture.connections.insert(
+            (peer, wan_quic),
+            ConnectedPoint::Dialer {
+                address: "/ip4/198.51.100.2/udp/4001/quic-v1".parse().unwrap(),
+                role_override: libp2p::core::Endpoint::Dialer,
+                port_use: libp2p::core::transport::PortUse::Reuse,
+            },
+        );
+        fixture.connections.insert(
+            (peer, lan_tcp),
+            ConnectedPoint::Dialer {
+                address: "/ip4/10.253.0.2/tcp/4001".parse().unwrap(),
+                role_override: libp2p::core::Endpoint::Dialer,
+                port_use: libp2p::core::transport::PortUse::New,
+            },
+        );
+        let networks = [LocalInterfaceNetwork {
+            ip: "10.253.0.1".parse().unwrap(),
+            netmask: "255.255.255.0".parse().unwrap(),
+        }];
+
+        assert!(!fixture.retains_with_networks(peer, wan_quic, &networks));
+        assert!(fixture.retains_with_networks(peer, lan_tcp, &networks));
+        assert!(fixture.retains(peer, wan_quic));
+        assert!(!fixture.retains(peer, lan_tcp));
     }
 
     #[test]

@@ -124,8 +124,13 @@ async fn failed_packet_connection_cannot_veto_fresh_opposite_role_connection() {
     assert_eq!(fixture.packet_in_flight.stats().packets, 0);
     fixture.epochs.record_established(fresh);
     fixture.active_connections.insert((peer, fresh), opposite);
-    let redundant =
-        redundant_direct_connection_ids(local, peer, &fixture.active_connections, &fixture.epochs);
+    let redundant = redundant_direct_connection_ids(
+        local,
+        peer,
+        &fixture.active_connections,
+        &fixture.epochs,
+        &[],
+    );
     assert!(
         !redundant.contains(&fresh),
         "failed preferred connection vetoed fresh replacement"

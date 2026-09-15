@@ -1998,6 +1998,7 @@ where
                 }
             }
             _ = timers.redial.tick() => {
+                let local_networks = local_interface_networks(&forwarder.config().interface.name);
                 node.swarm.behaviour_mut().connection_retention.retain_connections(|peer, connection| {
                     should_retain_control_connection(
                         peer,
@@ -2006,6 +2007,7 @@ where
                         &peer_capabilities,
                         &paths,
                         &active_connections,
+                        &local_networks,
                     )
                 });
                 let public_discovery_quiet = public_discovery_suppressed(
@@ -9534,7 +9536,11 @@ fn should_dial_discovered_address(
     peer: Libp2pPeerId,
     connected: bool,
     address: &Multiaddr,
+    lan_promotion: bool,
 ) -> bool {
+    if lan_promotion && relayed_address_relay_peer(address).is_none() {
+        return true;
+    }
     match redial_connection_state(paths, peer, connected) {
         RedialConnectionState::DirectOnly | RedialConnectionState::DirectAndRelay => false,
         RedialConnectionState::RelayOnly
@@ -11955,6 +11961,7 @@ async fn handle_swarm_event(
                 code_pairing_sessions: context.code_pairing_sessions,
                 membership_probe_connections: context.membership_probe_connections,
                 connection_epochs: context.connection_epochs,
+                active_connections: context.active_connections,
                 public_discovery_quiet,
                 kademlia_maintenance: context.kademlia_maintenance,
             };
@@ -19245,6 +19252,15 @@ fn direct_endpoint_remote_ip(endpoint: &ConnectedPoint) -> Option<IpAddr> {
     })
 }
 
+fn endpoint_is_on_current_lan(
+    endpoint: &ConnectedPoint,
+    local_networks: &[LocalInterfaceNetwork],
+) -> bool {
+    !endpoint.is_relayed()
+        && direct_endpoint_remote_ip(endpoint)
+            .is_some_and(|ip| local_networks.iter().any(|network| network.contains(ip)))
+}
+
 fn local_ip_for_remote(remote_ip: IpAddr) -> Option<IpAddr> {
     let bind_addr = match remote_ip {
         IpAddr::V4(_) => SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
@@ -20295,6 +20311,7 @@ fn redundant_direct_connection_ids(
     remote_peer: Libp2pPeerId,
     active_connections: &HashMap<(Libp2pPeerId, ConnectionId), ConnectedPoint>,
     connection_epochs: &ConnectionEpochs,
+    local_networks: &[LocalInterfaceNetwork],
 ) -> Vec<ConnectionId> {
     let local_is_preferred_initiator = local_peer.to_bytes() < remote_peer.to_bytes();
     let mut redundant = Vec::new();
@@ -20309,8 +20326,28 @@ fn redundant_direct_connection_ids(
                     .then_some((*connection_id, endpoint))
             })
             .collect::<Vec<_>>();
+        let has_lan_connection = direct_connections
+            .iter()
+            .any(|(_, endpoint)| endpoint_is_on_current_lan(endpoint, local_networks));
+        let preferred_connections = direct_connections
+            .iter()
+            .copied()
+            .filter(|(_, endpoint)| {
+                !has_lan_connection || endpoint_is_on_current_lan(endpoint, local_networks)
+            })
+            .collect::<Vec<_>>();
+        if has_lan_connection {
+            redundant.extend(
+                direct_connections
+                    .iter()
+                    .filter_map(|(connection_id, endpoint)| {
+                        (!endpoint_is_on_current_lan(endpoint, local_networks))
+                            .then_some(*connection_id)
+                    }),
+            );
+        }
         let desired_is_initiator = local_is_preferred_initiator;
-        let desired = direct_connections
+        let desired = preferred_connections
             .iter()
             .filter_map(|(connection_id, endpoint)| {
                 let is_initiator = connection_is_handshake_initiator(endpoint);
@@ -20319,7 +20356,7 @@ fn redundant_direct_connection_ids(
             .collect::<Vec<_>>();
 
         if desired.is_empty() {
-            let initiated = direct_connections
+            let initiated = preferred_connections
                 .iter()
                 .filter_map(|(connection_id, endpoint)| {
                     connection_is_handshake_initiator(endpoint).then_some(*connection_id)
@@ -20335,7 +20372,7 @@ fn redundant_direct_connection_ids(
         }
 
         redundant.extend(
-            direct_connections
+            preferred_connections
                 .iter()
                 .filter_map(|(connection_id, endpoint)| {
                     let is_initiator = connection_is_handshake_initiator(endpoint);
@@ -20368,9 +20405,14 @@ fn close_redundant_direct_connections(
     }
 
     let local_peer = *swarm.local_peer_id();
-    for connection_id in
-        redundant_direct_connection_ids(local_peer, peer, active_connections, connection_epochs)
-    {
+    let local_networks = local_interface_networks(&forwarder.config().interface.name);
+    for connection_id in redundant_direct_connection_ids(
+        local_peer,
+        peer,
+        active_connections,
+        connection_epochs,
+        &local_networks,
+    ) {
         if !connection_epochs.mark_retiring(connection_id) {
             continue;
         }
@@ -20446,6 +20488,7 @@ struct BehaviourEventContext<'a> {
     code_pairing_sessions: &'a mut CodePairingSessions,
     membership_probe_connections: &'a mut MembershipProbeConnections,
     connection_epochs: &'a mut ConnectionEpochs,
+    active_connections: &'a HashMap<(Libp2pPeerId, ConnectionId), ConnectedPoint>,
     public_discovery_quiet: bool,
     kademlia_maintenance: &'a mut KademliaMaintenance,
 }
@@ -20471,12 +20514,13 @@ fn handle_behaviour_event(
                     address.clone(),
                     Instant::now(),
                 );
-                learn_peer_address(
+                learn_lan_peer_address(
                     swarm,
                     context.connection_epochs,
                     context.forwarder,
                     context.discovered_peer_addresses,
                     context.paths,
+                    context.active_connections,
                     context.metrics,
                     peer,
                     address,
@@ -21769,6 +21813,91 @@ fn learn_peer_address(
     discovery: &DiscoveryConfig,
     source: DiscoveredPeerAddressSource,
 ) {
+    learn_peer_address_with_policy(
+        swarm,
+        connection_epochs,
+        forwarder,
+        discovered_peer_addresses,
+        paths,
+        metrics,
+        peer,
+        address,
+        discovery,
+        source,
+        false,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn learn_lan_peer_address(
+    swarm: &mut Swarm<Behaviour>,
+    connection_epochs: &mut ConnectionEpochs,
+    forwarder: &Forwarder,
+    discovered_peer_addresses: &mut DiscoveredPeerAddresses,
+    paths: &PathSet,
+    active_connections: &HashMap<(Libp2pPeerId, ConnectionId), ConnectedPoint>,
+    metrics: &RuntimeMetrics,
+    peer: Libp2pPeerId,
+    address: Multiaddr,
+    discovery: &DiscoveryConfig,
+    source: DiscoveredPeerAddressSource,
+) {
+    let local_networks = local_interface_networks(&forwarder.config().interface.name);
+    let lan_promotion = should_promote_lan_address(
+        peer,
+        &address,
+        active_connections,
+        connection_epochs,
+        &local_networks,
+    );
+    learn_peer_address_with_policy(
+        swarm,
+        connection_epochs,
+        forwarder,
+        discovered_peer_addresses,
+        paths,
+        metrics,
+        peer,
+        address,
+        discovery,
+        source,
+        lan_promotion,
+    );
+}
+
+fn should_promote_lan_address(
+    peer: Libp2pPeerId,
+    address: &Multiaddr,
+    active_connections: &HashMap<(Libp2pPeerId, ConnectionId), ConnectedPoint>,
+    connection_epochs: &ConnectionEpochs,
+    local_networks: &[LocalInterfaceNetwork],
+) -> bool {
+    let address_is_on_lan = first_ip_in_multiaddr(address)
+        .is_some_and(|ip| local_networks.iter().any(|network| network.contains(ip)));
+    address_is_on_lan
+        && !active_connections
+            .iter()
+            .any(|((candidate, id), endpoint)| {
+                *candidate == peer
+                    && connection_epochs.is_usable(*id)
+                    && endpoint_is_on_current_lan(endpoint, local_networks)
+            })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn learn_peer_address_with_policy(
+    swarm: &mut Swarm<Behaviour>,
+    connection_epochs: &mut ConnectionEpochs,
+    forwarder: &Forwarder,
+    discovered_peer_addresses: &mut DiscoveredPeerAddresses,
+    paths: &PathSet,
+    metrics: &RuntimeMetrics,
+    peer: Libp2pPeerId,
+    address: Multiaddr,
+    discovery: &DiscoveryConfig,
+    source: DiscoveredPeerAddressSource,
+    lan_promotion: bool,
+) {
     if peer == *swarm.local_peer_id() {
         return;
     }
@@ -21867,7 +21996,13 @@ fn learn_peer_address(
         autonat.add_server(peer, Some(address.clone()));
     }
 
-    if !should_dial_discovered_address(paths, peer, swarm.is_connected(&peer), &address) {
+    if !should_dial_discovered_address(
+        paths,
+        peer,
+        swarm.is_connected(&peer),
+        &address,
+        lan_promotion,
+    ) {
         return;
     }
     if !discovered_peer_addresses.is_ready_at(peer, &address, now) {
@@ -21878,6 +22013,16 @@ fn learn_peer_address(
         return;
     }
     metrics.record_discovered_address_dial_attempt();
+    if lan_promotion {
+        log_runtime_event(
+            LogLevel::Info,
+            "lan_path_promotion_dial_started",
+            &[
+                ("peer", &peer.to_string()),
+                ("address", &address.to_string()),
+            ],
+        );
+    }
     if let Err(error) = dial_known_peer_addresses(
         swarm,
         connection_epochs,
@@ -31884,7 +32029,8 @@ mod tests {
             &paths,
             peer,
             true,
-            &relay_address
+            &relay_address,
+            false
         ));
 
         paths.record_established(overlay, PathKind::DirectTcpStream);
@@ -31893,13 +32039,15 @@ mod tests {
             &paths,
             peer,
             true,
-            &relay_address
+            &relay_address,
+            false
         ));
         assert!(should_dial_discovered_address(
             &paths,
             peer,
             true,
-            &direct_address
+            &direct_address,
+            false
         ));
 
         paths.record_established(overlay, PathKind::DirectUdpDatagram);
@@ -31907,7 +32055,8 @@ mod tests {
             &paths,
             peer,
             true,
-            &relay_address
+            &relay_address,
+            false
         ));
 
         paths.record_established(overlay, PathKind::CircuitRelay);
@@ -31915,7 +32064,8 @@ mod tests {
             &paths,
             peer,
             true,
-            &relay_address
+            &relay_address,
+            false
         ));
 
         paths.record_closed(overlay, PathKind::CircuitRelay);
@@ -31923,7 +32073,8 @@ mod tests {
             &paths,
             peer,
             true,
-            &relay_address
+            &relay_address,
+            false
         ));
 
         paths.record_established(overlay, PathKind::DirectTcpStream);
@@ -31931,7 +32082,84 @@ mod tests {
             &paths,
             peer,
             true,
-            &direct_address
+            &direct_address,
+            false
+        ));
+        assert!(should_dial_discovered_address(
+            &paths,
+            peer,
+            true,
+            &direct_address,
+            true
+        ));
+        assert!(!should_dial_discovered_address(
+            &paths,
+            peer,
+            true,
+            &relay_address,
+            true
+        ));
+    }
+
+    #[test]
+    fn lan_promotion_requires_current_subnet_and_no_usable_lan_connection() {
+        let peer = peer_id();
+        let lan_address: Multiaddr = "/ip4/10.253.0.2/tcp/4001".parse().unwrap();
+        let off_lan_address: Multiaddr = "/ip4/198.51.100.2/tcp/4001".parse().unwrap();
+        let networks = [LocalInterfaceNetwork {
+            ip: "10.253.0.1".parse().unwrap(),
+            netmask: "255.255.255.0".parse().unwrap(),
+        }];
+        let wan = ConnectionId::new_unchecked(1);
+        let lan = ConnectionId::new_unchecked(2);
+        let mut epochs = ConnectionEpochs::default();
+        epochs.record_started(wan);
+        epochs.record_started(lan);
+        let mut connections = HashMap::from([(
+            (peer, wan),
+            ConnectedPoint::Dialer {
+                address: off_lan_address.clone(),
+                role_override: Endpoint::Dialer,
+                port_use: PortUse::New,
+            },
+        )]);
+
+        assert!(should_promote_lan_address(
+            peer,
+            &lan_address,
+            &connections,
+            &epochs,
+            &networks
+        ));
+        assert!(!should_promote_lan_address(
+            peer,
+            &off_lan_address,
+            &connections,
+            &epochs,
+            &networks
+        ));
+        connections.insert(
+            (peer, lan),
+            ConnectedPoint::Dialer {
+                address: lan_address.clone(),
+                role_override: Endpoint::Dialer,
+                port_use: PortUse::New,
+            },
+        );
+        assert!(!should_promote_lan_address(
+            peer,
+            &lan_address,
+            &connections,
+            &epochs,
+            &networks
+        ));
+        epochs.mark_retiring(lan);
+        assert!(should_promote_lan_address(
+            peer,
+            &lan_address,
+            &connections,
+            &epochs,
+            &networks
         ));
     }
 
@@ -35434,6 +35662,7 @@ mod tests {
                 code_pairing_sessions: &mut CodePairingSessions::new(),
                 membership_probe_connections: &mut MembershipProbeConnections::default(),
                 connection_epochs: &mut ConnectionEpochs::default(),
+                active_connections: &HashMap::new(),
                 public_discovery_quiet: false,
                 kademlia_maintenance: maintenance,
             },
@@ -36481,7 +36710,7 @@ mod tests {
         epochs.record_started(latest_outbound);
         epochs.record_started(inbound);
         assert_eq!(
-            redundant_direct_connection_ids(preferred, other, &preferred_connections, &epochs,)
+            redundant_direct_connection_ids(preferred, other, &preferred_connections, &epochs, &[])
                 .into_iter()
                 .collect::<HashSet<_>>(),
             HashSet::from([first_outbound, inbound])
@@ -36492,23 +36721,41 @@ mod tests {
         nonpreferred_connections.insert((preferred, latest_outbound), outbound_endpoint);
         nonpreferred_connections.insert((preferred, inbound), inbound_endpoint);
         assert_eq!(
-            redundant_direct_connection_ids(other, preferred, &nonpreferred_connections, &epochs,)
-                .into_iter()
-                .collect::<HashSet<_>>(),
+            redundant_direct_connection_ids(
+                other,
+                preferred,
+                &nonpreferred_connections,
+                &epochs,
+                &[]
+            )
+            .into_iter()
+            .collect::<HashSet<_>>(),
             HashSet::from([first_outbound, latest_outbound])
         );
 
         epochs.mark_retiring(inbound);
         assert_eq!(
-            redundant_direct_connection_ids(other, preferred, &nonpreferred_connections, &epochs,),
+            redundant_direct_connection_ids(
+                other,
+                preferred,
+                &nonpreferred_connections,
+                &epochs,
+                &[],
+            ),
             vec![first_outbound]
         );
 
         epochs.advance();
         epochs.record_started(latest_outbound);
         assert!(
-            redundant_direct_connection_ids(other, preferred, &nonpreferred_connections, &epochs,)
-                .is_empty()
+            redundant_direct_connection_ids(
+                other,
+                preferred,
+                &nonpreferred_connections,
+                &epochs,
+                &[]
+            )
+            .is_empty()
         );
     }
 
@@ -36544,8 +36791,8 @@ mod tests {
                 ((preferred, ordinary), inbound.clone()),
                 ((preferred, punched), outbound(other_role)),
             ]);
-            let removed_a = redundant_direct_connection_ids(preferred, other, &a, &epochs);
-            let removed_b = redundant_direct_connection_ids(other, preferred, &b, &epochs);
+            let removed_a = redundant_direct_connection_ids(preferred, other, &a, &epochs, &[]);
+            let removed_b = redundant_direct_connection_ids(other, preferred, &b, &epochs, &[]);
             let kept_a: HashSet<_> = [ordinary, punched]
                 .into_iter()
                 .filter(|id| !removed_a.contains(id))
@@ -36563,6 +36810,48 @@ mod tests {
                 assert_eq!(kept_b, HashSet::from([ordinary]));
             }
         }
+    }
+
+    #[test]
+    fn direct_connection_deduplication_keeps_current_lan_before_newer_wan() {
+        let mut peers = [peer_id(), peer_id()];
+        peers.sort_by_key(|peer| peer.to_bytes());
+        let [preferred, other] = peers;
+        let lan = ConnectionId::new_unchecked(1);
+        let wan = ConnectionId::new_unchecked(2);
+        let networks = [LocalInterfaceNetwork {
+            ip: "10.253.0.1".parse().unwrap(),
+            netmask: "255.255.255.0".parse().unwrap(),
+        }];
+        let dialer = |address: &str| ConnectedPoint::Dialer {
+            address: address.parse().unwrap(),
+            role_override: Endpoint::Dialer,
+            port_use: PortUse::New,
+        };
+        let listener = |remote: &str| ConnectedPoint::Listener {
+            local_addr: "/ip4/10.253.0.2/tcp/4001".parse().unwrap(),
+            send_back_addr: remote.parse().unwrap(),
+        };
+        let a = HashMap::from([
+            ((other, lan), dialer("/ip4/10.253.0.2/tcp/4001")),
+            ((other, wan), dialer("/ip4/198.51.100.2/tcp/4001")),
+        ]);
+        let b = HashMap::from([
+            ((preferred, lan), listener("/ip4/10.253.0.1/tcp/5001")),
+            ((preferred, wan), listener("/ip4/198.51.100.1/tcp/5001")),
+        ]);
+        let mut epochs = ConnectionEpochs::default();
+        epochs.record_started(lan);
+        epochs.record_started(wan);
+
+        assert_eq!(
+            redundant_direct_connection_ids(preferred, other, &a, &epochs, &networks),
+            vec![wan]
+        );
+        assert_eq!(
+            redundant_direct_connection_ids(other, preferred, &b, &epochs, &networks),
+            vec![wan]
+        );
     }
 
     #[test]
