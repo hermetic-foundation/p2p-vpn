@@ -41,11 +41,19 @@ const PROTOCOL_VERSION: &str = "/p2p-vpn/0.1.0";
 const CONNECTION_PING_INTERVAL: Duration = Duration::from_secs(15);
 const CONNECTION_PING_TIMEOUT: Duration = Duration::from_secs(20);
 const SWARM_IDLE_CONNECTION_TIMEOUT: Duration = Duration::from_secs(60);
+const OVERLAY_MDNS_QUERY_INTERVAL: Duration = Duration::from_secs(10);
 const DIAL_CONCURRENCY_FACTOR: NonZeroU8 = NonZeroU8::MIN;
 const KADEMLIA_QUERY_PARALLELISM: NonZeroUsize = NonZeroUsize::MIN;
 const KADEMLIA_QUERY_POOL_CAPACITY: NonZeroUsize = NonZeroUsize::new(32).unwrap();
 const KADEMLIA_QUERY_CANDIDATES: usize = 256;
 const KADEMLIA_QUERY_ADDRESS_BYTES: usize = 256 * 1024;
+
+fn overlay_mdns_config() -> mdns::Config {
+    mdns::Config {
+        query_interval: OVERLAY_MDNS_QUERY_INTERVAL,
+        ..mdns::Config::default()
+    }
+}
 
 #[derive(NetworkBehaviour)]
 pub struct Behaviour {
@@ -184,7 +192,7 @@ pub(crate) fn build_node_with_dial_observer(
                 }
                 let mdns = if behaviour_discovery.mdns {
                     Some(mdns::tokio::Behaviour::new(
-                        mdns::Config::default(),
+                        overlay_mdns_config(),
                         local_peer_id,
                     )?)
                 } else {
@@ -777,6 +785,15 @@ mod tests {
             queue: QueueConfig::default(),
             resources: crate::config::ResourceConfig::default(),
         }
+    }
+
+    #[test]
+    fn overlay_mdns_queries_frequently_enough_for_lan_first_recovery() {
+        assert_eq!(
+            overlay_mdns_config().query_interval,
+            OVERLAY_MDNS_QUERY_INTERVAL
+        );
+        assert!(OVERLAY_MDNS_QUERY_INTERVAL < Duration::from_secs(15));
     }
 
     #[tokio::test]

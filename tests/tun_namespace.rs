@@ -3542,19 +3542,10 @@ fn network_move_overlay_config(
         relay.peer_id
     );
     let relayed_remote = format!("{relay_base}/p2p/{}", remote.peer_id);
-    let (
-        interface,
-        listen,
-        direct_remote,
-        packet_endpoint,
-        local_routes,
-        peer_routes,
-        reservations,
-    ) = match role {
+    let (interface, listen, packet_endpoint, local_routes, peer_routes, reservations) = match role {
         "a" => (
             "hse2ea",
             "/ip4/10.253.0.1/tcp/42401",
-            "/ip4/10.253.0.2/tcp/42402",
             "10.253.0.1:43401",
             vec![RouteConfig {
                 prefix: "10.41.0.0/24".to_owned(),
@@ -3566,7 +3557,6 @@ fn network_move_overlay_config(
         "b" => (
             "hse2eb",
             "/ip4/10.253.0.2/tcp/42402",
-            "/ip4/10.253.0.1/tcp/42401",
             "10.253.0.2:43402",
             Vec::new(),
             vec![RouteConfig {
@@ -3577,10 +3567,13 @@ fn network_move_overlay_config(
         ),
         other => panic!("unknown network move node role {other}"),
     };
-    let mut peer = peer_config(remote, Some(direct_remote), peer_routes);
+    let mut peer = peer_config(remote, None, peer_routes);
     peer.addresses.push(relayed_remote);
     let mut config = node_config(NETWORK_NAME, interface, local, listen, local_routes, peer);
-    config.network.discovery = relay_promotion_test_discovery();
+    config.network.discovery = DiscoveryConfig {
+        mdns: true,
+        ..relay_promotion_test_discovery()
+    };
     config.network.relay.reservations = reservations;
     enable_test_packet_plane(&mut config, packet_endpoint);
     config.network.packet_plane.session_ttl_seconds = 3;

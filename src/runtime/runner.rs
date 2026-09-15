@@ -183,6 +183,7 @@ const KADEMLIA_MAINTENANCE_POLL_INTERVAL: Duration = Duration::from_secs(5);
 const KADEMLIA_MAINTENANCE_INTERVAL: Duration = Duration::from_mins(2);
 const KADEMLIA_MAINTENANCE_QUERY_TIMEOUT: Duration = Duration::from_secs(90);
 const PUBLIC_DISCOVERY_LAN_FIRST_GRACE: Duration = Duration::from_secs(60);
+const PEER_RECOVERY_LAN_FIRST_GRACE: Duration = Duration::from_secs(15);
 const PUBLIC_DISCOVERY_BACKOFF_BASE: Duration = Duration::from_secs(30);
 const PUBLIC_DISCOVERY_BACKOFF_MAX: Duration = Duration::from_mins(10);
 const PATH_PROBE_INTERVAL: Duration = Duration::from_secs(5);
@@ -5069,6 +5070,15 @@ fn handle_runtime_network_change(
     context
         .discovered_peer_addresses
         .reset_recovery_backoff(&mut context.node.swarm.behaviour_mut().kad);
+    let recovery_started_at = Instant::now();
+    for peer in context.forwarder.configured_transport_peers() {
+        start_peer_lan_first_recovery(
+            context.discovered_peer_addresses,
+            peer,
+            recovery_started_at,
+            "network_change",
+        );
+    }
     context.configured_relay_reservation_retries.reset();
     context.relay_readiness.reset();
     context.public_discovery_backoff.reset();
@@ -6583,6 +6593,7 @@ fn handle_redial_tick(
         &discovered_addresses,
         discovered_peer_addresses,
         paths,
+        public_discovery_quiet,
         metrics,
         |relay| relay_readiness.relay_ready(relay),
     );
@@ -6596,6 +6607,7 @@ fn handle_redial_tick(
             &node.configured_peer_addresses,
             discovered_peer_addresses,
             paths,
+            public_discovery_quiet,
             metrics,
             relay,
         );
@@ -7743,6 +7755,7 @@ fn redial_known_addresses(
     discovered_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
     discovered_address_state: &mut DiscoveredPeerAddresses,
     paths: &PathSet,
+    lan_first_for_all: bool,
     metrics: &RuntimeMetrics,
     relay_ready: impl FnMut(Libp2pPeerId) -> bool,
 ) {
@@ -7771,8 +7784,19 @@ fn redial_known_addresses(
 
     for (peer, addresses) in group_peer_dial_targets(targets.addresses) {
         let now = Instant::now();
+        let lan_first =
+            lan_first_for_all || discovered_address_state.lan_first_recovery_active(peer, now);
         let mut ready_addresses = addresses
             .into_iter()
+            .filter(|address| {
+                !lan_first
+                    || recovery_address_allowed_during_lan_first(
+                        peer,
+                        address,
+                        configured_peer_addresses,
+                        &local_networks,
+                    )
+            })
             .filter(|address| {
                 discovered_address_state.should_attempt_recovery_dial_at(peer, address, now)
             })
@@ -7869,6 +7893,27 @@ fn sort_peer_recovery_dial_addresses(
         }
         3
     });
+}
+
+fn recovery_address_allowed_during_lan_first(
+    peer: Libp2pPeerId,
+    address: &Multiaddr,
+    configured_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
+    local_networks: &[LocalInterfaceNetwork],
+) -> bool {
+    let address = peer_dial_address(peer, address.clone());
+    let explicitly_configured_direct =
+        configured_peer_addresses
+            .iter()
+            .any(|(configured_peer, configured_address)| {
+                *configured_peer == peer
+                    && relayed_address_relay_peer(configured_address).is_none()
+                    && peer_dial_address(peer, configured_address.clone()) == address
+            });
+    explicitly_configured_direct
+        || (relayed_address_relay_peer(&address).is_none()
+            && first_ip_in_multiaddr(&address)
+                .is_some_and(|ip| local_networks.iter().any(|network| network.contains(ip))))
 }
 
 fn dial_known_peer_addresses(
@@ -9050,6 +9095,7 @@ fn dial_relay_ready_configured_peers(
     configured_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
     discovered_peer_addresses: &mut DiscoveredPeerAddresses,
     paths: &PathSet,
+    lan_first_for_all: bool,
     metrics: &RuntimeMetrics,
     relay: Libp2pPeerId,
 ) {
@@ -9078,8 +9124,19 @@ fn dial_relay_ready_configured_peers(
     );
     for (peer, addresses) in group_peer_dial_targets(targets) {
         let now = Instant::now();
+        let lan_first =
+            lan_first_for_all || discovered_peer_addresses.lan_first_recovery_active(peer, now);
         let ready_addresses = addresses
             .into_iter()
+            .filter(|address| {
+                !lan_first
+                    || recovery_address_allowed_during_lan_first(
+                        peer,
+                        address,
+                        configured_peer_addresses,
+                        &[],
+                    )
+            })
             .filter(|address| {
                 discovered_peer_addresses.should_attempt_recovery_dial_at(peer, address, now)
             })
@@ -9223,8 +9280,24 @@ fn redial_selected_addresses(
         .collect();
     for (peer, addresses) in group_peer_dial_targets(selected_targets) {
         let now = Instant::now();
+        start_peer_lan_first_recovery(
+            discovered_address_state,
+            peer,
+            now,
+            "selected_path_recovery",
+        );
+        let lan_first = discovered_address_state.lan_first_recovery_active(peer, now);
         let mut ready_addresses = addresses
             .into_iter()
+            .filter(|address| {
+                !lan_first
+                    || recovery_address_allowed_during_lan_first(
+                        peer,
+                        address,
+                        configured_peer_addresses,
+                        &local_networks,
+                    )
+            })
             .filter(|address| {
                 discovered_address_state.should_attempt_recovery_dial_at(peer, address, now)
             })
@@ -9283,6 +9356,8 @@ fn redial_packet_plane_recovery_addresses(
     let local_peer = *swarm.local_peer_id();
     let now = Instant::now();
     let local_networks = local_interface_networks("");
+    start_peer_lan_first_recovery(discovered_peer_addresses, peer, now, "packet_path_recovery");
+    let lan_first = discovered_peer_addresses.lan_first_recovery_active(peer, now);
     let ready_discovered_addresses = discovered_peer_addresses.redial_candidates_at(now);
     let mut ready_addresses = packet_plane_recovery_targets(
         local_peer,
@@ -9293,6 +9368,15 @@ fn redial_packet_plane_recovery_addresses(
     )
     .into_iter()
     .map(|(_, address)| address)
+    .filter(|address| {
+        !lan_first
+            || recovery_address_allowed_during_lan_first(
+                peer,
+                address,
+                configured_peer_addresses,
+                &local_networks,
+            )
+    })
     .filter(|address| discovered_peer_addresses.should_attempt_recovery_dial_at(peer, address, now))
     .collect::<Vec<_>>();
     if ready_addresses.is_empty() {
@@ -9669,6 +9753,7 @@ struct DiscoveredPeerAddresses {
     recovery_dial_attempts: HashMap<(Libp2pPeerId, RecoveryDialTarget), RecoveryDialAttempt>,
     last_recovery_dial_prune: Option<Instant>,
     recovery_queries: RecoveryQueries,
+    lan_first_recovery_until: HashMap<Libp2pPeerId, Instant>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -9816,7 +9901,30 @@ impl DiscoveredPeerAddresses {
         }
         self.recovery_dial_attempts.clear();
         self.last_recovery_dial_prune = None;
+        self.lan_first_recovery_until.clear();
         finish_targeted_recovery_queries(kademlia, self.recovery_queries.reset());
+    }
+
+    fn start_lan_first_recovery(&mut self, peer: Libp2pPeerId, now: Instant) -> bool {
+        if self.lan_first_recovery_until.contains_key(&peer) {
+            return false;
+        }
+        if self.lan_first_recovery_until.len() >= MAX_MEMBERSHIP_RECORDS {
+            return false;
+        }
+        self.lan_first_recovery_until
+            .insert(peer, now + PEER_RECOVERY_LAN_FIRST_GRACE);
+        true
+    }
+
+    fn lan_first_recovery_active(&self, peer: Libp2pPeerId, now: Instant) -> bool {
+        self.lan_first_recovery_until
+            .get(&peer)
+            .is_some_and(|until| *until > now)
+    }
+
+    fn finish_lan_first_recovery(&mut self, peer: Libp2pPeerId) -> bool {
+        self.lan_first_recovery_until.remove(&peer).is_some()
     }
 
     fn remove(&mut self, peer: Libp2pPeerId, address: &Multiaddr) -> bool {
@@ -9967,11 +10075,12 @@ impl DiscoveredPeerAddresses {
             attempt.failure_count = 0;
             attempt.retry_after = now + REDIAL_INTERVAL;
         }
+        self.finish_lan_first_recovery(peer);
         self.recovery_queries.connected(peer, now);
     }
 
     fn should_query_recovery_discovery_at(&mut self, peer: Libp2pPeerId, now: Instant) -> bool {
-        self.recovery_queries.should_query(peer, now)
+        !self.lan_first_recovery_active(peer, now) && self.recovery_queries.should_query(peer, now)
     }
 
     fn record_recovery_discovery_queries(
@@ -10024,6 +10133,29 @@ impl DiscoveredPeerAddresses {
         }
         self.recovery_dial_attempts.len() < MAX_RECOVERY_DIAL_ATTEMPTS
     }
+}
+
+fn start_peer_lan_first_recovery(
+    recovery: &mut DiscoveredPeerAddresses,
+    peer: Libp2pPeerId,
+    now: Instant,
+    reason: &'static str,
+) {
+    if !recovery.start_lan_first_recovery(peer, now) {
+        return;
+    }
+    log_runtime_event(
+        LogLevel::Info,
+        "peer_lan_first_recovery_started",
+        &[
+            ("peer", &peer.to_string()),
+            ("reason", reason),
+            (
+                "grace_millis",
+                &PEER_RECOVERY_LAN_FIRST_GRACE.as_millis().to_string(),
+            ),
+        ],
+    );
 }
 
 fn recovery_dial_target(peer: Libp2pPeerId, address: &Multiaddr) -> RecoveryDialTarget {
@@ -12702,6 +12834,14 @@ async fn handle_swarm_event(
                     context.configured_peer_addresses,
                     context.discovered_peer_addresses,
                     context.paths,
+                    context.public_discovery_holdoff_active
+                        || public_discovery_quiet_mode(
+                            context.forwarder,
+                            context.paths,
+                            context.peer_capabilities,
+                            Some(context.packet_plane),
+                            context.packet_plane_quic.as_deref(),
+                        ),
                     context.metrics,
                     relay,
                 );
@@ -12966,6 +13106,13 @@ fn dial_ready_relays_for_configured_peer(
         return;
     }
 
+    start_peer_lan_first_recovery(
+        context.discovered_peer_addresses,
+        peer,
+        Instant::now(),
+        "relay_path_recovery",
+    );
+
     for relay in context.relay_readiness.ready_relays() {
         dial_relay_ready_configured_peers(
             swarm,
@@ -12976,6 +13123,7 @@ fn dial_ready_relays_for_configured_peer(
             context.configured_peer_addresses,
             context.discovered_peer_addresses,
             context.paths,
+            false,
             context.metrics,
             relay,
         );
@@ -20680,6 +20828,7 @@ fn handle_behaviour_event(
             context.configured_peer_addresses,
             context.discovered_peer_addresses,
             context.metrics,
+            context.public_discovery_quiet,
             context.discovery,
             context.kademlia_maintenance,
             &event,
@@ -21126,12 +21275,19 @@ fn handle_kademlia_event(
                         }
                     }
                 } else {
+                    let now = Instant::now();
                     dial_kademlia_providers(
                         swarm,
                         context.connection_epochs,
                         context.forwarder,
                         context.metrics,
                         providers,
+                        |peer| {
+                            !context.public_discovery_quiet
+                                && !context
+                                    .discovered_peer_addresses
+                                    .lan_first_recovery_active(peer, now)
+                        },
                     );
                 }
             }
@@ -21427,7 +21583,24 @@ fn handle_kademlia_peer_address_record_result(
         peer_record.record.value.as_slice(),
     ) {
         Ok((peer, addresses)) => {
+            let now = Instant::now();
+            let local_networks =
+                local_interface_networks(&context.forwarder.config().interface.name);
+            let lan_first = context.public_discovery_quiet
+                || context
+                    .discovered_peer_addresses
+                    .lan_first_recovery_active(peer, now);
             for address in addresses {
+                if lan_first
+                    && !recovery_address_allowed_during_lan_first(
+                        peer,
+                        &address,
+                        &[],
+                        &local_networks,
+                    )
+                {
+                    continue;
+                }
                 learn_peer_address(
                     swarm,
                     context.connection_epochs,
@@ -21531,6 +21704,9 @@ fn handle_kademlia_closest_peer_result(
     ) = result
     {
         for peer in peers {
+            let lan_first = public_discovery_quiet
+                || discovered_peer_addresses
+                    .lan_first_recovery_active(peer.peer_id, Instant::now());
             let accepted_addresses = accepted_discovery_addresses(
                 metrics,
                 peer.peer_id,
@@ -21538,7 +21714,7 @@ fn handle_kademlia_closest_peer_result(
                 DiscoveredPeerAddressSource::PublicDiscovery,
                 "kademlia_closest_peer",
             );
-            if !public_discovery_quiet {
+            if !lan_first {
                 for address in &accepted_addresses {
                     learn_peer_address(
                         swarm,
@@ -21577,12 +21753,14 @@ fn dial_kademlia_providers(
     forwarder: &Forwarder,
     metrics: &RuntimeMetrics,
     providers: &HashSet<Libp2pPeerId>,
+    mut dial_allowed: impl FnMut(Libp2pPeerId) -> bool,
 ) {
     metrics.record_kademlia_providers_found(providers.len());
     for provider in providers {
         if *provider == *swarm.local_peer_id()
             || !forwarder.is_configured_transport_peer(*provider)
             || swarm.is_connected(provider)
+            || !dial_allowed(*provider)
         {
             metrics.record_kademlia_provider_ignored();
             continue;
@@ -21652,6 +21830,7 @@ fn handle_relay_event(
     configured_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
     discovered_peer_addresses: &mut DiscoveredPeerAddresses,
     metrics: &RuntimeMetrics,
+    public_discovery_quiet: bool,
     discovery: &DiscoveryConfig,
     kademlia_maintenance: &mut KademliaMaintenance,
     event: &relay::client::Event,
@@ -21668,6 +21847,7 @@ fn handle_relay_event(
             configured_peer_addresses,
             discovered_peer_addresses,
             paths,
+            public_discovery_quiet,
             metrics,
             relay_peer_id,
         );
@@ -30110,6 +30290,7 @@ mod tests {
             &forwarder,
             &metrics,
             &providers,
+            |_| true,
         );
 
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
@@ -34009,6 +34190,95 @@ mod tests {
         );
 
         assert_eq!(addresses, vec![explicit, current_lan, relayed]);
+    }
+
+    #[test]
+    fn lan_first_recovery_allows_only_current_lan_and_explicit_direct_addresses() {
+        let peer = peer_id();
+        let relay = peer_id();
+        let local_networks = [LocalInterfaceNetwork {
+            ip: IpAddr::V4(Ipv4Addr::new(192, 168, 51, 10)),
+            netmask: IpAddr::V4(Ipv4Addr::new(255, 255, 255, 0)),
+        }];
+        let explicit: Multiaddr = "/dns4/peer.example/tcp/4001".parse().unwrap();
+        let current_lan: Multiaddr = "/ip4/192.168.51.20/udp/4001/quic-v1".parse().unwrap();
+        let stale_lan: Multiaddr = "/ip4/192.168.0.20/tcp/4001".parse().unwrap();
+        let public_direct: Multiaddr = "/ip4/203.0.113.20/tcp/4001".parse().unwrap();
+        let relayed: Multiaddr =
+            format!("/ip4/198.51.100.10/tcp/4001/p2p/{relay}/p2p-circuit/p2p/{peer}")
+                .parse()
+                .unwrap();
+        let configured = [(peer, explicit.clone())];
+
+        assert!(recovery_address_allowed_during_lan_first(
+            peer,
+            &explicit,
+            &configured,
+            &local_networks
+        ));
+        assert!(recovery_address_allowed_during_lan_first(
+            peer,
+            &current_lan,
+            &configured,
+            &local_networks
+        ));
+        assert!(!recovery_address_allowed_during_lan_first(
+            peer,
+            &stale_lan,
+            &configured,
+            &local_networks
+        ));
+        assert!(!recovery_address_allowed_during_lan_first(
+            peer,
+            &public_direct,
+            &configured,
+            &local_networks
+        ));
+        assert!(!recovery_address_allowed_during_lan_first(
+            peer,
+            &relayed,
+            &configured,
+            &local_networks
+        ));
+    }
+
+    #[test]
+    fn lan_first_recovery_window_is_bounded_and_not_extended_by_retries() {
+        let peer = peer_id();
+        let started_at = Instant::now();
+        let mut recovery = DiscoveredPeerAddresses::default();
+
+        assert!(recovery.start_lan_first_recovery(peer, started_at));
+        assert!(recovery.lan_first_recovery_active(
+            peer,
+            started_at + PEER_RECOVERY_LAN_FIRST_GRACE - Duration::from_millis(1)
+        ));
+        assert!(
+            !recovery.start_lan_first_recovery(peer, started_at + PEER_RECOVERY_LAN_FIRST_GRACE)
+        );
+        assert!(
+            !recovery.lan_first_recovery_active(peer, started_at + PEER_RECOVERY_LAN_FIRST_GRACE)
+        );
+        assert!(recovery.finish_lan_first_recovery(peer));
+        assert!(
+            recovery.start_lan_first_recovery(peer, started_at + PEER_RECOVERY_LAN_FIRST_GRACE)
+        );
+    }
+
+    #[test]
+    fn lan_first_recovery_defers_public_discovery_until_grace_expires() {
+        let peer = peer_id();
+        let started_at = Instant::now();
+        let mut recovery = DiscoveredPeerAddresses::default();
+
+        assert!(recovery.start_lan_first_recovery(peer, started_at));
+        assert!(!recovery.should_query_recovery_discovery_at(peer, started_at));
+        assert!(
+            recovery.should_query_recovery_discovery_at(
+                peer,
+                started_at + PEER_RECOVERY_LAN_FIRST_GRACE
+            )
+        );
     }
 
     #[test]
