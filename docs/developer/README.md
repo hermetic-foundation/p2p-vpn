@@ -19,6 +19,7 @@ Use these docs when changing, testing, or debugging `p2p-vpn`.
 | [DNS Architecture](dns.md) | Authenticated naming, resolver protocol, limits, and NixOS lifecycle. |
 | [Testing](testing.md) | Unit, Nix, namespace, and two-host tests. |
 | [Network Debugging](network-debugging.md) | Artifact capture and failure triage. |
+| [LAN-First Routing Audit](lan-first-routing-audit.md) | Discovery, promotion, selection gaps, and verification contract. |
 | [Public Bootstrap Smoke](public-bootstrap-smoke.md) | Recorded public reachability evidence. |
 
 ## Development Shell
