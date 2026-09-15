@@ -9856,8 +9856,10 @@ fn record_public_discovery_address_rejected(
 impl DiscoveredPeerAddresses {
     fn retain_recovery_discovery_peers(
         &mut self,
-        authorized: impl FnMut(Libp2pPeerId) -> bool,
+        mut authorized: impl FnMut(Libp2pPeerId) -> bool,
     ) -> Vec<kad::QueryId> {
+        self.lan_first_recovery_until
+            .retain(|peer, _| authorized(*peer));
         self.recovery_queries.retain_peers(authorized)
     }
 
@@ -9906,6 +9908,8 @@ impl DiscoveredPeerAddresses {
     }
 
     fn start_lan_first_recovery(&mut self, peer: Libp2pPeerId, now: Instant) -> bool {
+        self.lan_first_recovery_until
+            .retain(|existing_peer, until| *existing_peer == peer || *until > now);
         if self.lan_first_recovery_until.contains_key(&peer) {
             return false;
         }
@@ -31784,10 +31788,15 @@ mod tests {
                 .prepare_reconfigure(config.clone(), 1_000)
                 .unwrap(),
         );
+        assert!(recovery.start_lan_first_recovery(allowed, now));
+        assert!(recovery.start_lan_first_recovery(removed, now));
         assert_eq!(
             reconcile_recovery_query_authorization(&forwarder, &mut recovery, &mut kad),
             1
         );
+        assert!(recovery.lan_first_recovery_until.contains_key(&allowed));
+        assert!(!recovery.lan_first_recovery_until.contains_key(&removed));
+        recovery.finish_lan_first_recovery(allowed);
         assert!(kad.query(&removed_query).is_none());
         assert!(kad.query(&unrelated_query).is_some());
         assert!(recovery.recovery_queries.state(&removed).is_none());
@@ -34263,6 +34272,25 @@ mod tests {
         assert!(
             recovery.start_lan_first_recovery(peer, started_at + PEER_RECOVERY_LAN_FIRST_GRACE)
         );
+    }
+
+    #[test]
+    fn starting_peer_recovery_prunes_other_expired_windows() {
+        let expired_peer = peer_id();
+        let new_peer = peer_id();
+        let started_at = Instant::now();
+        let mut recovery = DiscoveredPeerAddresses::default();
+
+        assert!(recovery.start_lan_first_recovery(expired_peer, started_at));
+        assert!(
+            recovery.start_lan_first_recovery(new_peer, started_at + PEER_RECOVERY_LAN_FIRST_GRACE)
+        );
+        assert!(
+            !recovery
+                .lan_first_recovery_until
+                .contains_key(&expired_peer)
+        );
+        assert!(recovery.lan_first_recovery_until.contains_key(&new_peer));
     }
 
     #[test]
