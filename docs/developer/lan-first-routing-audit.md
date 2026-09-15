@@ -36,16 +36,16 @@ existing WAN connection is promoted after a LAN address becomes available.
 
 The policy is split across independent mechanisms:
 
-| Mechanism | Current behavior | Gap |
+| Mechanism | Pre-fix behavior | Correction |
 | --- | --- | --- |
-| Startup holdoff | Delays public bootstrap for 60 seconds. | Applies only to public bootstrap. |
-| mDNS | Continuously discovers interface-local addresses. | Cannot force an immediate query through the libp2p API. |
-| Discovery dial admission | Dials when disconnected or relay-only. | Rejects a LAN address when any healthy direct path exists. |
-| Recovery ordering | Sorts known current-subnet addresses before relays and stale direct addresses. | Cannot prefer an address that mDNS has not emitted yet. |
-| Direct deduplication | Chooses a stable initiator per transport. | Does not prefer current-subnet connections. |
-| Retention | Prefers QUIC control, then TCP, then relay. | Does not distinguish LAN from WAN direct connections. |
-| Packet negotiation | Filters signed endpoint candidates when a healthy LAN control connection exists. | Never runs if LAN control promotion is suppressed. |
-| Packet selection | Uses negotiated datagram health and RTT. | Path diagnostics do not themselves identify endpoint locality. |
+| Startup holdoff | Delayed public bootstrap for 60 seconds. | All automatic public overlay dials honor the holdoff. |
+| mDNS | Queried every five minutes after startup. | Overlay queries run every 10 seconds. |
+| Discovery dial admission | Rejected LAN when any direct path existed. | A current-subnet candidate may promote over WAN. |
+| Recovery ordering | Sorted only addresses already known. | A 15-second peer recovery window waits for fresh LAN discovery. |
+| Direct deduplication | Chose initiator and transport without locality. | Current-subnet connections survive before other tie-breakers. |
+| Retention | Preferred QUIC, TCP, then relay. | LAN direct precedes WAN direct and relay. |
+| Packet negotiation | Needed a LAN control connection first. | LAN promotion triggers endpoint renegotiation. |
+| Packet selection | Used packet health and RTT. | The selected healthy LAN packet path retains normal scoring. |
 
 The primary defect is deterministic:
 
@@ -73,14 +73,20 @@ discard it because initiator role and transport currently outrank locality.
 | QUIC preference | LAN selection must not disable QUIC or owned packet-plane negotiation. |
 | Network movement | Interface-change recovery invalidates stale paths and restarts bounded discovery. |
 
-## Planned Correction
+## Implemented Policy
 
-1. Treat an mDNS address on a current local subnet as a promotion candidate.
-2. Suppress the dial only when a healthy current-subnet control connection exists.
-3. Rank current-subnet connections before transport and initiator tie-breakers.
-4. Let the existing authenticated packet negotiation migrate to matching LAN endpoints.
-5. Preserve public direct and relay connections until LAN health is established.
-6. Add explicit promotion, stale-LAN, simultaneous-result, and fallback tests.
+| Event | LAN phase | Fallback phase |
+| --- | --- | --- |
+| Process startup | mDNS is active immediately. | Automatic public discovery starts after 60 seconds. |
+| Supported path lost | Current-subnet and explicit direct addresses remain dialable for 15 seconds. | Retained WAN, Kademlia, and relay targets become eligible at the deadline. |
+| Network changed | Paths and recovery state are invalidated; each authorized peer starts a new LAN phase. | Public recovery resumes after each peer deadline. |
+| LAN appears later | mDNS may open an authenticated LAN connection alongside WAN. | WAN remains usable until LAN establishment and negotiation succeed. |
+
+Recovery retries do not extend the 15-second deadline. A successful replacement
+connection closes that recovery generation.
+
+Explicit direct peer addresses remain eligible during the LAN phase. Relayed
+addresses and automatic public direct addresses do not.
 
 ## Verification Contract
 
@@ -92,3 +98,23 @@ discard it because initiator role and transport currently outrank locality.
 | Stale LAN fallback | Failed LAN dial does not remove a healthy WAN/relay path. |
 | Payload migration | Negotiated packet endpoint changes to the current subnet. |
 | No manual rescue | Tests perform no daemon restart or address injection after start. |
+
+## Verification Results
+
+| Claim | Automated evidence |
+| --- | --- |
+| Initial LAN-first | The namespace movement test starts with no configured direct peer address and selects a discovered LAN datagram path. |
+| Late promotion | Unit tests permit current-subnet promotion while a WAN direct connection exists. |
+| Stable selection | Direct deduplication and retention tests keep LAN before WAN. |
+| Stale LAN fallback | Recovery-window tests reject stale-subnet addresses and release public discovery at 15 seconds. |
+| Relay fallback | The namespace movement test removes the LAN link and reaches the peer through circuit relay. |
+| LAN return | The same running daemons restore the link, rediscover it through mDNS, and promote back to direct datagrams. |
+| Payload proof | Overlay ping and packet-path counters pass in all three phases. |
+
+Command:
+
+```sh
+nix develop -c cargo test --test tun_namespace \
+  tun_namespace_recovers_relay_and_direct_after_network_move \
+  -- --ignored --nocapture
+```

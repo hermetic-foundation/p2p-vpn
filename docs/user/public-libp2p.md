@@ -45,13 +45,30 @@ This keeps control traffic available when packets use a separate UDP connection.
 
 ### Returning To LAN
 
-After a direct LAN connection returns, packet negotiation prefers endpoints on
-that LAN when both peers already advertise them. A public-looking address does
-not override that peer-specific preference merely because it is public-looking.
+After a direct LAN connection returns, mDNS promotes an authenticated
+current-subnet connection. Packet negotiation then prefers matching LAN endpoints.
 
-- Existing discovery and dial cooldowns can delay promotion.
-- Without a healthy direct LAN connection or mutually advertised endpoints, existing endpoint selection remains in effect.
+- Overlay mDNS queries run every 10 seconds.
+- Existing discovery and dial cooldowns can still delay promotion.
+- WAN remains available until LAN connection and packet-path health are established.
 - Endpoint signatures, peer authorization, and packet-path health checks remain required.
+
+### LAN-First Timing
+
+| Situation | LAN-first window | After the window |
+| --- | --- | --- |
+| Daemon startup | Up to 60 seconds | Automatic public discovery and relay routing may start. |
+| Peer path lost | 15 seconds | Retained public direct and relay targets may be retried. |
+| Underlay changed | 15 seconds per authorized peer | Public recovery resumes for peers still unreachable. |
+
+During a peer recovery window:
+
+1. Current-subnet mDNS addresses are eligible immediately.
+2. Explicit direct peer addresses remain eligible as overrides.
+3. Automatic WAN, Kademlia, and circuit-relay peer dials wait.
+
+Repeated failures do not restart the window. A peer that is absent from LAN
+therefore incurs a bounded delay before public fallback.
 
 ### UDP Session Renewal
 

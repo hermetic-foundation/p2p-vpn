@@ -514,9 +514,10 @@ physical network. Validation affects which available network is preferred.
 
 No profile change or service restart is required.
 
-Public discovery starts after a 60-second LAN-first grace period.
+Startup public discovery begins after a 60-second LAN-first grace period.
 
-Traffic may pause during that convergence window after an underlay change.
+After path loss or an underlay change, each peer gets a 15-second LAN-first
+recovery window. Traffic may pause during that bounded convergence period.
 
 ## Export Diagnostics
 
