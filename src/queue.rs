@@ -3,7 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::{PeerId, Sequence};
+use crate::{PeerId, Sequence, SessionId};
 
 pub type FlowShard = u8;
 
@@ -12,6 +12,7 @@ const FLOW_SHARDS: FlowShard = 16;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Packet {
     peer: PeerId,
+    session_id: Option<SessionId>,
     sequence: Sequence,
     flow_shard: FlowShard,
     bytes: Vec<u8>,
@@ -23,6 +24,7 @@ impl Packet {
     pub fn new(peer: PeerId, sequence: Sequence, bytes: Vec<u8>) -> Self {
         Self {
             peer,
+            session_id: None,
             sequence,
             flow_shard: flow_shard(&bytes),
             bytes,
@@ -34,10 +36,28 @@ impl Packet {
     pub fn new_at(peer: PeerId, sequence: Sequence, bytes: Vec<u8>, enqueued_at: Instant) -> Self {
         Self {
             peer,
+            session_id: None,
             sequence,
             flow_shard: flow_shard(&bytes),
             bytes,
             enqueued_at,
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn new_for_session(
+        peer: PeerId,
+        session_id: SessionId,
+        sequence: Sequence,
+        bytes: Vec<u8>,
+    ) -> Self {
+        Self {
+            peer,
+            session_id: Some(session_id),
+            sequence,
+            flow_shard: flow_shard(&bytes),
+            bytes,
+            enqueued_at: Instant::now(),
         }
     }
 
@@ -49,6 +69,11 @@ impl Packet {
     #[must_use]
     pub const fn sequence(&self) -> Sequence {
         self.sequence
+    }
+
+    #[must_use]
+    pub(crate) const fn session_id(&self) -> Option<SessionId> {
+        self.session_id
     }
 
     #[must_use]

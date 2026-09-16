@@ -706,7 +706,7 @@ impl Forwarder {
 
     fn packet_frame(&self, packet: &Packet) -> Result<Frame, ForwardError> {
         Ok(Frame::packet(
-            self.session_id,
+            packet.session_id().unwrap_or(self.session_id),
             packet.sequence(),
             packet.payload().to_vec(),
         )?)
@@ -746,8 +746,8 @@ impl Forwarder {
             });
         }
 
-        let frame = Frame::path_probe(self.session_id, self.next_sequence, payload.to_vec())?;
-        self.next_sequence = self.next_sequence.wrapping_add(1);
+        let (session_id, sequence) = self.take_outbound_sequence();
+        let frame = Frame::path_probe(session_id, sequence, payload.to_vec())?;
         Ok(frame)
     }
 
@@ -775,10 +775,26 @@ impl Forwarder {
         if !self.authorization.peers.contains_key(&route.owner) {
             return Err(ForwardError::NoTransportPeer(route.owner));
         }
-        let sequence = self.next_sequence;
-        self.next_sequence = self.next_sequence.wrapping_add(1);
+        let (session_id, sequence) = self.take_outbound_sequence();
 
-        Ok(Packet::new(route.owner, sequence, packet))
+        Ok(Packet::new_for_session(
+            route.owner,
+            session_id,
+            sequence,
+            packet,
+        ))
+    }
+
+    fn take_outbound_sequence(&mut self) -> (SessionId, Sequence) {
+        let current = (self.session_id, self.next_sequence);
+        // The frame epoch and sequence form the packet-plane AEAD nonce.
+        if self.next_sequence == Sequence::MAX {
+            self.session_id = self.session_id.wrapping_add(1).max(1);
+            self.next_sequence = 0;
+        } else {
+            self.next_sequence += 1;
+        }
+        current
     }
 
     fn authorize_local_source(&self, source: IpAddr) -> Result<(), ForwardError> {
@@ -3006,6 +3022,7 @@ mod tests {
 
         let queued_packet = queues.dequeue().expect("queued packet");
         assert_eq!(queued_packet.peer(), remote_overlay);
+        assert_eq!(queued_packet.session_id(), Some(forwarder.session_id));
         assert_eq!(queued_packet.sequence(), 0);
     }
 
@@ -3033,6 +3050,39 @@ mod tests {
         assert_eq!(frame.header.session_id, forwarder.session_id);
         assert_eq!(frame.header.sequence, 0);
         assert_eq!(frame.header.payload_len, 20);
+    }
+
+    #[test]
+    fn outbound_sequence_wrap_rotates_epoch_without_relabeling_queued_packets() {
+        let remote = Keypair::generate_ed25519().public().to_peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let config = config_for(remote);
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        forwarder.session_id = 41;
+        forwarder.next_sequence = Sequence::MAX;
+        let packet = ipv4_packet(local_ipv4(&config), builtin_ipv4(remote_overlay));
+        let mut queues = PeerQueues::new(2, 2560);
+
+        forwarder
+            .enqueue_tun_packet(&mut queues, packet.clone())
+            .expect("last packet in old epoch");
+        forwarder
+            .enqueue_tun_packet(&mut queues, packet)
+            .expect("first packet in new epoch");
+        let old_epoch = queues.dequeue().expect("old epoch packet");
+        let new_epoch = queues.dequeue().expect("new epoch packet");
+        let old_frame = forwarder.packet_frame(&old_epoch).unwrap();
+        let new_frame = forwarder.packet_frame(&new_epoch).unwrap();
+
+        assert_eq!(
+            (old_frame.header.session_id, old_frame.header.sequence),
+            (41, Sequence::MAX)
+        );
+        assert_eq!(
+            (new_frame.header.session_id, new_frame.header.sequence),
+            (42, 0)
+        );
+        assert_eq!((forwarder.session_id, forwarder.next_sequence), (42, 1));
     }
 
     #[test]
