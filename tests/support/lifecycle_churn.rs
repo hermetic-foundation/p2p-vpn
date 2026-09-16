@@ -73,6 +73,7 @@ pub fn capture(temp: &Path, pid_a: u32, pid_b: u32, address_b: Ipv4Addr) {
             &roles,
             idle_sample::Phase {
                 workload: "lifecycle_churn_unavailable",
+                topology: idle_sample::DIRECT_UDP_TOPOLOGY,
                 duration: Duration::from_secs(30),
                 warmup: if cycle == 1 {
                     idle_sample::WARMUP
@@ -106,6 +107,7 @@ pub fn capture(temp: &Path, pid_a: u32, pid_b: u32, address_b: Ipv4Addr) {
                 &roles,
                 idle_sample::Phase {
                     workload: "lifecycle_churn_recovery",
+                    topology: idle_sample::DIRECT_UDP_TOPOLOGY,
                     duration: Duration::from_secs(40),
                     warmup: Duration::ZERO,
                     report_name: &observations,
@@ -149,6 +151,7 @@ pub fn capture(temp: &Path, pid_a: u32, pid_b: u32, address_b: Ipv4Addr) {
         &roles,
         idle_sample::Phase {
             workload: "lifecycle_churn_settle",
+            topology: idle_sample::DIRECT_UDP_TOPOLOGY,
             duration: Duration::from_secs(60),
             warmup: Duration::ZERO,
             report_name: settle,

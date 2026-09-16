@@ -44,18 +44,23 @@ fn parse(lines: &[String]) -> Result<BTreeMap<String, Value>, String> {
                 .bytes()
                 .all(|c| c.is_ascii_alphanumeric() || c == b'_')
         {
-            return Err("invalid counter shape".to_owned());
+            continue;
         }
         let value = match fields[1] {
             "true" => Value::Bool(true),
             "false" => Value::Bool(false),
-            text => Value::from(text.parse::<u64>().map_err(|_| "invalid counter value")?),
+            text => match text.parse::<u64>() {
+                Ok(value) => Value::from(value),
+                Err(_) => continue,
+            },
         };
         if values.insert(fields[0].to_owned(), value).is_some() {
             return Err("duplicate counter".to_owned());
         }
     }
-    Ok(values)
+    (!values.is_empty())
+        .then_some(values)
+        .ok_or_else(|| "no numeric counters".to_owned())
 }
 
 fn next_slot(slot: Duration, elapsed: Duration) -> Duration {
@@ -137,6 +142,17 @@ mod tests {
         ] {
             assert!(parse(&bad).is_err());
         }
+        let values = parse(&[
+            "packet_plane_quic_listener 127.0.0.1:52820".to_owned(),
+            "packet_plane_quic_session peer endpoint 127.0.0.1:52820".to_owned(),
+            "outbound_owned_quic_datagram_packets 7".to_owned(),
+        ])
+        .unwrap();
+        assert_eq!(
+            values["outbound_owned_quic_datagram_packets"],
+            Value::from(7)
+        );
+        assert_eq!(values.len(), 1);
     }
 
     #[test]

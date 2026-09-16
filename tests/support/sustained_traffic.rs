@@ -10,6 +10,7 @@ use std::{
 };
 
 pub const TEST_NAME: &str = "tun_namespace_measures_sustained_traffic_resources";
+pub const QUIC_TEST_NAME: &str = "tun_namespace_measures_sustained_quic_resources";
 pub const SMOKE_ENV: &str = "P2P_VPN_REVIEW_TRAFFIC_SMOKE";
 const WORKER: &str = "sustained_traffic::traffic_worker";
 
@@ -53,31 +54,52 @@ fn delivered(report: &paced_ping::Report, settings: paced_ping::Settings) -> boo
         && report.duplicate_replies == 0
 }
 
-fn fixed_transport(load: &serde_json::Value, drain: &serde_json::Value) -> bool {
-    let metric = "outbound_stream_fallback_packets";
+pub fn is_test(test_name: &str) -> bool {
+    [TEST_NAME, QUIC_TEST_NAME].contains(&test_name)
+}
+
+fn fixed_transport(
+    load: &serde_json::Value,
+    drain: &serde_json::Value,
+    require_owned_quic: bool,
+) -> bool {
+    let fallback_metric = "outbound_stream_fallback_packets";
+    let health_metric = if require_owned_quic {
+        "path_healthy_direct_quic_datagram_paths"
+    } else {
+        "path_healthy_direct_udp_datagram_paths"
+    };
     ["a", "b"].into_iter().all(|role| {
-        let state_metric = |phase: &serde_json::Value, boundary: &str| {
+        let state_metric = |phase: &serde_json::Value, boundary: &str, metric: &str| {
             let lines: Vec<String> =
                 serde_json::from_value(phase[boundary][role]["state"].clone()).ok()?;
             super::state_metric_count(&lines, metric)
         };
-        let Some(initial) = state_metric(load, "daemon_before") else {
+        let Some(initial_fallback) = state_metric(load, "daemon_before", fallback_metric) else {
             return false;
         };
-        [load, drain].into_iter().all(|phase| {
-            state_metric(phase, "daemon_before") == Some(initial)
-                && state_metric(phase, "daemon_after") == Some(initial)
+        let stable_backend = [load, drain].into_iter().all(|phase| {
+            state_metric(phase, "daemon_before", fallback_metric) == Some(initial_fallback)
+                && state_metric(phase, "daemon_after", fallback_metric) == Some(initial_fallback)
                 && phase["runtime_samples"].as_array().is_some_and(|rows| {
                     let samples: Vec<_> = rows.iter().filter(|row| row["role"] == role).collect();
                     !samples.is_empty()
                         && samples.iter().all(|row| {
-                            row["values"][metric].as_u64() == u64::try_from(initial).ok()
-                                && row["values"]["path_healthy_direct_udp_datagram_paths"]
+                            row["values"][fallback_metric].as_u64()
+                                == u64::try_from(initial_fallback).ok()
+                                && row["values"][health_metric]
                                     .as_u64()
                                     .is_some_and(|count| count > 0)
                         })
                 })
-        })
+        });
+        if !stable_backend || !require_owned_quic {
+            return stable_backend;
+        }
+        let payload_metric = "outbound_owned_quic_datagram_packets";
+        state_metric(load, "daemon_before", payload_metric)
+            .zip(state_metric(load, "daemon_after", payload_metric))
+            .is_some_and(|(before, after)| after > before)
     })
 }
 
@@ -109,7 +131,13 @@ fn traffic_worker() {
     file.sync_all().unwrap();
 }
 
-pub fn capture(temp: &Path, pid_a: u32, pid_b: u32, destination: Ipv4Addr) {
+pub fn capture(
+    temp: &Path,
+    pid_a: u32,
+    pid_b: u32,
+    destination: Ipv4Addr,
+    require_owned_quic: bool,
+) {
     let (traffic, drain) = settings();
     let roles = [("a", pid_a), ("b", pid_b)];
     let started = Instant::now();
@@ -122,6 +150,11 @@ pub fn capture(temp: &Path, pid_a: u32, pid_b: u32, destination: Ipv4Addr) {
         &roles,
         idle_sample::Phase {
             workload: "sustained_traffic",
+            topology: if require_owned_quic {
+                "two isolated namespaces; direct owned QUIC DATAGRAM; no Internet route"
+            } else {
+                idle_sample::DIRECT_UDP_TOPOLOGY
+            },
             duration: Duration::from_secs(u64::from(traffic.seconds)),
             warmup: idle_sample::WARMUP,
             report_name: "traffic-sample.json",
@@ -181,6 +214,11 @@ pub fn capture(temp: &Path, pid_a: u32, pid_b: u32, destination: Ipv4Addr) {
         &roles,
         idle_sample::Phase {
             workload: "sustained_traffic_drain",
+            topology: if require_owned_quic {
+                "two isolated namespaces; direct owned QUIC DATAGRAM; no Internet route"
+            } else {
+                idle_sample::DIRECT_UDP_TOPOLOGY
+            },
             duration: drain,
             warmup: Duration::ZERO,
             report_name: "traffic-drain-sample.json",
@@ -195,6 +233,7 @@ pub fn capture(temp: &Path, pid_a: u32, pid_b: u32, destination: Ipv4Addr) {
     let fixed_transport = fixed_transport(
         &phase("traffic-sample.json"),
         &phase("traffic-drain-sample.json"),
+        require_owned_quic,
     );
     let same_processes = process_before
         .iter()
@@ -220,6 +259,7 @@ pub fn capture(temp: &Path, pid_a: u32, pid_b: u32, destination: Ipv4Addr) {
         "schema_version": 1, "complete": complete,
         "proof_eligible": complete && traffic.seconds == 300 && drain.as_secs() == 60,
         "requests_per_second": traffic.rate, "payload_bytes": traffic.payload_bytes,
+        "required_backend": if require_owned_quic { "owned_quic_datagram" } else { "owned_udp_datagram" },
         "requested_traffic_seconds": traffic.seconds, "drain_seconds": drain.as_secs(),
         "generator": report, "generator_exit_wait_seconds": generator_exit_wait_seconds,
         "delivery_passed": delivered(&report, traffic), "final_pings": pings,
@@ -260,19 +300,38 @@ fn transport_evidence_rejects_fallback_missing_and_unhealthy_samples() {
                 {"role": "b", "values": {"outbound_stream_fallback_packets": 2, "path_healthy_direct_udp_datagram_paths": 1}}]
         })
     };
-    assert!(fixed_transport(&phase(2), &phase(2)));
-    assert!(!fixed_transport(&phase(3), &phase(2)));
-    assert!(!fixed_transport(&phase(2), &phase(3)));
+    assert!(fixed_transport(&phase(2), &phase(2), false));
+    assert!(!fixed_transport(&phase(3), &phase(2), false));
+    assert!(!fixed_transport(&phase(2), &phase(3), false));
     let mut missing = phase(2);
     missing["daemon_after"]["b"]["state"] = serde_json::json!([]);
-    assert!(!fixed_transport(&phase(2), &missing));
+    assert!(!fixed_transport(&phase(2), &missing, false));
     let mut unhealthy = phase(2);
     unhealthy["runtime_samples"][0]["values"]["path_healthy_direct_udp_datagram_paths"] =
         serde_json::json!(0);
-    assert!(!fixed_transport(&unhealthy, &phase(2)));
+    assert!(!fixed_transport(&unhealthy, &phase(2), false));
     let mut missing_role = phase(2);
     missing_role["runtime_samples"] = serde_json::json!([]);
-    assert!(!fixed_transport(&missing_role, &phase(2)));
+    assert!(!fixed_transport(&missing_role, &phase(2), false));
+}
+
+#[test]
+fn quic_transport_evidence_requires_payload_growth_and_no_stream_fallback() {
+    let phase = |fallback, before, after, healthy| {
+        serde_json::json!({
+            "daemon_before": {"a": {"state": [format!("outbound_stream_fallback_packets {fallback}"), format!("outbound_owned_quic_datagram_packets {before}")]}, "b": {"state": [format!("outbound_stream_fallback_packets {fallback}"), format!("outbound_owned_quic_datagram_packets {before}")]}},
+            "daemon_after": {"a": {"state": [format!("outbound_stream_fallback_packets {fallback}"), format!("outbound_owned_quic_datagram_packets {after}")]}, "b": {"state": [format!("outbound_stream_fallback_packets {fallback}"), format!("outbound_owned_quic_datagram_packets {after}")]}},
+            "runtime_samples": [
+                {"role": "a", "values": {"outbound_stream_fallback_packets": fallback, "path_healthy_direct_quic_datagram_paths": healthy}},
+                {"role": "b", "values": {"outbound_stream_fallback_packets": fallback, "path_healthy_direct_quic_datagram_paths": healthy}}]
+        })
+    };
+    let load = phase(0, 10, 20, 1);
+    let drain = phase(0, 20, 20, 1);
+    assert!(fixed_transport(&load, &drain, true));
+    assert!(!fixed_transport(&phase(0, 10, 10, 1), &drain, true));
+    assert!(!fixed_transport(&phase(0, 10, 20, 0), &drain, true));
+    assert!(!fixed_transport(&load, &phase(1, 20, 20, 1), true));
 }
 
 #[test]

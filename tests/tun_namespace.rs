@@ -107,6 +107,16 @@ fn tun_namespace_measures_sustained_traffic_resources() {
 }
 
 #[test]
+#[ignore = "bounded sustained QUIC resource capture; requires isolated namespaces"]
+fn tun_namespace_measures_sustained_quic_resources() {
+    match env::var(CHILD_ENV).as_deref() {
+        Ok("orchestrator") => run_direct_orchestrator(sustained_traffic::QUIC_TEST_NAME),
+        Ok("node") => run_node_child(),
+        _ => reexec_orchestrator(sustained_traffic::QUIC_TEST_NAME),
+    }
+}
+
+#[test]
 #[ignore = "bounded unavailable-peer resource capture; requires namespaces and idle sampling"]
 fn tun_namespace_measures_unavailable_peer_resources() {
     match env::var(CHILD_ENV).as_deref() {
@@ -572,7 +582,7 @@ fn reexec_orchestrator(test_name: &str) {
             "graceful review requires a direct, pressure or churn fixture"
         );
     }
-    if [sustained_traffic::TEST_NAME, lifecycle_churn::TEST_NAME].contains(&test_name) {
+    if sustained_traffic::is_test(test_name) || test_name == lifecycle_churn::TEST_NAME {
         assert!(
             keep_temp_artifacts(),
             "sustained traffic requires retained evidence"
@@ -625,7 +635,7 @@ fn reexec_orchestrator(test_name: &str) {
         Duration::from_secs(240)
     } else if test_name == lifecycle_churn::TEST_NAME {
         lifecycle_churn::watchdog()
-    } else if test_name == sustained_traffic::TEST_NAME {
+    } else if sustained_traffic::is_test(test_name) {
         Duration::from_secs(90) + sustained_traffic::duration_budget()
     } else if test_name == unavailable_peer::TEST_NAME {
         Duration::from_secs(90) + unavailable_peer::WATCHDOG_EXTRA
@@ -659,7 +669,7 @@ fn reexec_orchestrator(test_name: &str) {
     if idle_extra > Duration::ZERO
         || test_name == recovery_soak::TEST_NAME
         || test_name == tcp_collision::TEST_NAME
-        || test_name == sustained_traffic::TEST_NAME
+        || sustained_traffic::is_test(test_name)
         || test_name == lifecycle_churn::TEST_NAME
     {
         eprint!("{}", String::from_utf8_lossy(&output.stderr));
@@ -678,12 +688,19 @@ fn run_direct_orchestrator(test_name: &str) {
     } else {
         (identity_a, identity_b)
     };
-    let temp_dir = env::temp_dir().join(format!("p2p-vpn-{test_name}-{}", std::process::id()));
+    let artifact_label = if test_name == sustained_traffic::QUIC_TEST_NAME {
+        "sustained-quic"
+    } else {
+        test_name
+    };
+    let temp_dir = env::temp_dir().join(format!("p2p-vpn-{artifact_label}-{}", std::process::id()));
     let temp_dir = init_namespace_temp_dir(&temp_dir, test_name);
     let start_a = temp_dir.join("start-a");
     let start_b = temp_dir.join("start-b");
 
-    let config_b = if test_name == DIRECT_QUIC_TEST_NAME {
+    let owned_quic =
+        test_name == DIRECT_QUIC_TEST_NAME || test_name == sustained_traffic::QUIC_TEST_NAME;
+    let config_b = if owned_quic {
         direct_quic_overlay_config("b", &identity_b, &identity_a)
     } else {
         direct_overlay_config("b", &identity_b, &identity_a)
@@ -721,7 +738,7 @@ fn run_direct_orchestrator(test_name: &str) {
     wait_for_daemon_running(&temp_dir, "b");
     fs::write(&start_a, b"start").expect("write node A start file");
     wait_for_file(&temp_dir.join("ready-a"));
-    if test_name == DIRECT_QUIC_TEST_NAME {
+    if owned_quic {
         wait_for_peer_ready(&temp_dir, "a");
         wait_for_peer_ready(&temp_dir, "b");
         wait_for_owned_quic_packet_plane_sessions(&temp_dir);
@@ -744,7 +761,7 @@ fn run_direct_orchestrator(test_name: &str) {
     let initiator_routes = ns_command_output(node_a.id(), "ip", &["route", "show", "table", "all"]);
     let responder_addresses = ns_command_output(node_b.id(), "ip", &["addr", "show"]);
     let responder_routes = ns_command_output(node_b.id(), "ip", &["route", "show", "table", "all"]);
-    if test_name == DIRECT_QUIC_TEST_NAME {
+    if owned_quic {
         wait_for_owned_quic_packet_plane_datagrams(&temp_dir);
     } else if test_name == QUEUE_PRESSURE_TEST_NAME {
         queue_pressure::capture(&temp_dir, node_a.id(), node_b.id(), address_b);
@@ -754,8 +771,8 @@ fn run_direct_orchestrator(test_name: &str) {
 
     if test_name == unavailable_peer::TEST_NAME {
         unavailable_peer::capture(&temp_dir, node_a.id(), node_b.id(), address_b);
-    } else if test_name == sustained_traffic::TEST_NAME {
-        sustained_traffic::capture(&temp_dir, node_a.id(), node_b.id(), address_b);
+    } else if sustained_traffic::is_test(test_name) {
+        sustained_traffic::capture(&temp_dir, node_a.id(), node_b.id(), address_b, owned_quic);
     } else if test_name == lifecycle_churn::TEST_NAME {
         lifecycle_churn::capture(&temp_dir, node_a.id(), node_b.id(), address_b);
     } else {
@@ -788,7 +805,7 @@ fn run_direct_orchestrator(test_name: &str) {
     );
     let initiator_log = read_log(&temp_dir.join("node-a.log"));
     let responder_log = read_log(&temp_dir.join("node-b.log"));
-    if test_name == DIRECT_QUIC_TEST_NAME {
+    if owned_quic {
         assert_owned_quic_packet_plane_datagrams_used("node A", &initiator_log, &responder_log);
         assert_owned_quic_packet_plane_datagrams_used("node B", &responder_log, &initiator_log);
     } else if test_name != QUEUE_PRESSURE_TEST_NAME {
@@ -3828,7 +3845,7 @@ async fn run_ready_node(
             if env::args().any(|argument| argument == lifecycle_churn::TEST_NAME) {
                 lifecycle_churn::DIAGNOSTICS_INTERVAL
             } else if idle_sample::requested_duration().is_some()
-                || env::args().any(|argument| argument == sustained_traffic::TEST_NAME)
+                || env::args().any(|argument| sustained_traffic::is_test(&argument))
             {
                 idle_sample::METRICS_INTERVAL
             } else if env::args().any(|argument| argument == QUEUE_PRESSURE_TEST_NAME) {
@@ -4190,7 +4207,9 @@ fn is_mdns_test_child() -> bool {
 }
 
 fn is_direct_quic_test_child() -> bool {
-    env::args().any(|argument| argument == DIRECT_QUIC_TEST_NAME)
+    env::args().any(|argument| {
+        argument == DIRECT_QUIC_TEST_NAME || argument == sustained_traffic::QUIC_TEST_NAME
+    })
 }
 
 fn is_relay_promotion_test_child() -> bool {

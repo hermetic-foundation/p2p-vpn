@@ -20,6 +20,8 @@ pub const SAMPLE_ENV: &str = "P2P_VPN_TUN_E2E_IDLE_SECONDS";
 pub const RUNTIME_SAMPLING_ENV: &str = "P2P_VPN_TUN_E2E_IDLE_RUNTIME_SAMPLING";
 pub const WARMUP: Duration = Duration::from_secs(30);
 pub const METRICS_INTERVAL: Duration = Duration::from_secs(5);
+pub const DIRECT_UDP_TOPOLOGY: &str =
+    "two isolated namespaces; direct owned UDP; no Internet route";
 
 fn parse_runtime_sampling(value: Option<&str>) -> Result<bool, &'static str> {
     match value {
@@ -141,6 +143,7 @@ pub(super) fn capture_with_transition(
         roles,
         Phase {
             workload,
+            topology: DIRECT_UDP_TOPOLOGY,
             duration,
             warmup: WARMUP,
             report_name: "idle-sample.json",
@@ -152,6 +155,7 @@ pub(super) fn capture_with_transition(
 
 pub(super) struct Phase<'a> {
     pub workload: &'a str,
+    pub topology: &'a str,
     pub duration: Duration,
     pub warmup: Duration,
     pub report_name: &'a str,
@@ -166,6 +170,7 @@ pub(super) fn capture_phase(
 ) {
     let Phase {
         workload,
+        topology,
         duration,
         warmup,
         report_name,
@@ -245,7 +250,7 @@ pub(super) fn capture_phase(
         "capture_started_unix_millis": capture_started_unix_millis,
         "capture_finished_unix_millis": capture_finished_unix_millis,
         "workload": workload, "transition_seconds": transition_seconds,
-        "build_profile": "cargo integration test", "topology": "two isolated namespaces; direct UDP; no Internet route",
+        "build_profile": "cargo integration test", "topology": topology,
         "fixture_metrics_interval_seconds": diagnostics_interval.as_secs(),
         "available_parallelism": thread::available_parallelism().unwrap().get(),
         "kernel_release": fs::read_to_string("/proc/sys/kernel/osrelease").unwrap().trim(),
