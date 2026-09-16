@@ -1796,6 +1796,14 @@ impl PacketPlaneRuntime {
     }
 }
 
+fn quic_payload_mtu(connection: &Connection, negotiated_mtu: u16) -> u16 {
+    let payload_size = connection
+        .max_datagram_size()
+        .unwrap_or_default()
+        .saturating_sub(PACKET_PLANE_DATAGRAM_OVERHEAD_LEN);
+    negotiated_mtu.min(u16::try_from(payload_size).unwrap_or(u16::MAX))
+}
+
 impl PacketPlaneQuicRuntime {
     pub fn bind(listen_addr: SocketAddr) -> Result<Self, PacketPlaneQuicError> {
         Self::bind_with_replay_window_limit(
@@ -1832,7 +1840,13 @@ impl PacketPlaneQuicRuntime {
         let mut sessions = self
             .sessions
             .values()
-            .map(PacketPlaneSession::snapshot)
+            .map(|session| {
+                let mut snapshot = session.snapshot();
+                if let Some(connection) = self.connections.get(&session.peer) {
+                    snapshot.mtu = quic_payload_mtu(connection, session.mtu);
+                }
+                snapshot
+            })
             .collect::<Vec<_>>();
         sessions.sort_by_key(|session| session.peer.to_string());
         let live_endpoints = sessions
@@ -1929,7 +1943,9 @@ impl PacketPlaneQuicRuntime {
 
     #[must_use]
     pub fn session_mtu_for(&self, peer: PeerId) -> Option<u16> {
-        self.sessions.get(&peer).map(|session| session.mtu)
+        let session = self.sessions.get(&peer)?;
+        let connection = self.connections.get(&peer)?;
+        Some(quic_payload_mtu(connection, session.mtu))
     }
 
     #[must_use]
@@ -2010,8 +2026,14 @@ impl PacketPlaneQuicRuntime {
         local: &VerifiedPacketPlaneHandshake,
         remote: &VerifiedPacketPlaneHandshake,
     ) -> Result<PacketPlaneSessionSnapshot, PacketPlaneQuicError> {
-        if !self.connections.contains_key(&remote.peer) {
-            return Err(PacketPlaneQuicError::NoConnection { peer: remote.peer });
+        let connection = self
+            .connections
+            .get(&remote.peer)
+            .ok_or(PacketPlaneQuicError::NoConnection { peer: remote.peer })?;
+        if connection.max_datagram_size().is_none() {
+            return Err(PacketPlaneQuicError::SendDatagram(
+                quinn::SendDatagramError::UnsupportedByPeer,
+            ));
         }
         let keys = PacketPlaneSessionKeys::derive(role, local_secret, local, remote)?;
         let session = PacketPlaneSession {
@@ -2044,12 +2066,13 @@ impl PacketPlaneQuicRuntime {
             .connections
             .get(&peer)
             .ok_or(PacketPlaneQuicError::NoConnection { peer })?;
+        let effective_mtu = quic_payload_mtu(connection, session.mtu);
         let payload_len = frame.payload.len();
-        if payload_len > usize::from(session.mtu) {
+        if payload_len > usize::from(effective_mtu) {
             return Err(PacketPlaneQuicError::Datagram(
                 PacketPlaneDatagramError::PayloadTooLarge {
                     actual: payload_len,
-                    max: usize::from(session.mtu),
+                    max: usize::from(effective_mtu),
                 },
             ));
         }
@@ -4246,19 +4269,23 @@ mod tests {
                 &hello,
             )
             .unwrap();
-        assert_eq!(sender.session_mtu_for(accept.peer), Some(1280));
-        assert!(
-            sender.connections[&accept.peer]
-                .max_datagram_size()
-                .unwrap()
-                < 1200
+        let datagram_limit = sender.connections[&accept.peer]
+            .max_datagram_size()
+            .expect("peer supports datagrams");
+        let payload_limit = datagram_limit
+            .checked_sub(PACKET_PLANE_DATAGRAM_OVERHEAD_LEN)
+            .expect("datagram limit accommodates authenticated framing");
+        assert!(datagram_limit < 1200);
+        assert_eq!(
+            sender.session_mtu_for(accept.peer),
+            Some(u16::try_from(payload_limit).unwrap())
         );
         let oversized = Frame::packet(77, 42, vec![0x45; 1280]).unwrap();
         assert!(matches!(
             sender.send_frame_to_peer(accept.peer, &oversized),
-            Err(PacketPlaneQuicError::SendDatagram(
-                quinn::SendDatagramError::TooLarge
-            ))
+            Err(PacketPlaneQuicError::Datagram(
+                PacketPlaneDatagramError::PayloadTooLarge { actual: 1280, max }
+            )) if max == payload_limit
         ));
         let small = Frame::packet(77, 43, vec![0x45; 20]).unwrap();
         sender.send_frame_to_peer(accept.peer, &small).unwrap();
@@ -4270,12 +4297,6 @@ mod tests {
         assert_eq!(received.peer, Some(hello.peer));
         assert!(sender.has_session(accept.peer));
 
-        let datagram_limit = sender.connections[&accept.peer]
-            .max_datagram_size()
-            .expect("peer supports datagrams");
-        let payload_limit = datagram_limit
-            .checked_sub(PACKET_PLANE_DATAGRAM_OVERHEAD_LEN)
-            .expect("datagram limit accommodates authenticated framing");
         let boundary = Frame::packet(77, 44, vec![0x45; payload_limit]).unwrap();
         assert_eq!(
             sender.send_frame_to_peer(accept.peer, &boundary).unwrap(),
@@ -4290,9 +4311,9 @@ mod tests {
         let over_boundary = Frame::packet(77, 45, vec![0x45; payload_limit + 1]).unwrap();
         assert!(matches!(
             sender.send_frame_to_peer(accept.peer, &over_boundary),
-            Err(PacketPlaneQuicError::SendDatagram(
-                quinn::SendDatagramError::TooLarge
-            ))
+            Err(PacketPlaneQuicError::Datagram(
+                PacketPlaneDatagramError::PayloadTooLarge { actual, max }
+            )) if actual == payload_limit + 1 && max == payload_limit
         ));
         let after_rejection = Frame::packet(77, 46, vec![0x45; payload_limit]).unwrap();
         sender

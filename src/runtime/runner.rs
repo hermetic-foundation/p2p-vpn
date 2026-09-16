@@ -27768,7 +27768,13 @@ mod tests {
         assert!(snapshot.certificate_der.is_some());
         assert_eq!(snapshot.sessions.len(), 1);
         assert_eq!(snapshot.sessions[0].peer, remote_overlay);
-        assert_eq!(snapshot.sessions[0].mtu, 1_200);
+        assert_eq!(
+            snapshot.sessions[0].mtu,
+            local
+                .session_mtu_for(remote_overlay)
+                .expect("live QUIC session MTU")
+        );
+        assert!(snapshot.sessions[0].mtu <= 1_200);
         assert_eq!(snapshot.sessions[0].role, PacketPlaneSessionRole::Initiator);
         assert_eq!(
             current_packet_plane_quic_snapshot(None),
