@@ -210,10 +210,22 @@ fn assert_payload_growth(
     backend: PacketPlaneDatagramEvidence,
     before: [usize; 2],
 ) {
-    let after = payload_counts(temp_dir, backend);
-    for (before, after) in before.into_iter().zip(after) {
+    for (role, before) in ["a", "b"].into_iter().zip(before) {
+        let expected = before + 10;
+        let lines = wait_for_daemon_state(
+            temp_dir,
+            role,
+            Duration::from_secs(5),
+            &format!("{} payload counter growth", backend.context()),
+            |lines| {
+                state_metric_count(lines, backend.payload_metric())
+                    .is_some_and(|after| after >= expected)
+            },
+        );
+        let after =
+            state_metric_count(&lines, backend.payload_metric()).expect("backend payload counter");
         assert!(
-            after >= before + 10,
+            after >= expected,
             "{} did not send ten payloads: {before} -> {after}",
             backend.context()
         );

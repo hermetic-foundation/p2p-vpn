@@ -39,6 +39,8 @@ const QUIC_BINDING_DOMAIN: &[u8] = b"p2p-vpn QUIC connection binding v1";
 const QUIC_BINDING_TOKEN_LEN: usize = 32;
 const QUIC_BINDING_WIRE_LEN: usize = QUIC_BINDING_MAGIC.len() + QUIC_BINDING_TOKEN_LEN;
 const QUIC_BINDING_READ_TIMEOUT: Duration = Duration::from_secs(2);
+const QUIC_BINDING_EARLY_TTL: Duration = Duration::from_secs(2);
+const QUIC_BINDING_EARLY_SWEEP_INTERVAL: Duration = Duration::from_millis(100);
 const QUIC_BINDING_MAX_IN_FLIGHT: usize = 16;
 pub const PACKET_PLANE_DATAGRAM_HEADER_LEN: usize = 24;
 pub const PACKET_PLANE_AEAD_TAG_LEN: usize = 16;
@@ -767,6 +769,7 @@ struct PacketPlaneQuicAcceptState {
     closed: bool,
     expected: HashMap<PacketPlaneQuicBinding, usize>,
     pending: HashMap<PacketPlaneQuicBinding, Connection>,
+    early: HashMap<PacketPlaneQuicBinding, (Connection, Instant)>,
 }
 
 #[derive(Debug, Default)]
@@ -789,6 +792,12 @@ impl PacketPlaneQuicAcceptRouter {
     ) -> PacketPlaneQuicBindingRegistration {
         let mut state = self.state.lock().expect("QUIC accept router lock poisoned");
         *state.expected.entry(binding).or_default() += 1;
+        if !state.pending.contains_key(&binding)
+            && let Some((connection, _)) = state.early.remove(&binding)
+        {
+            state.pending.insert(binding, connection);
+            self.routed.notify_waiters();
+        }
         self.registered.notify_one();
         PacketPlaneQuicBindingRegistration {
             router: Arc::clone(self),
@@ -807,14 +816,57 @@ impl PacketPlaneQuicAcceptRouter {
     fn route(&self, binding: PacketPlaneQuicBinding, connection: Connection) -> bool {
         let mut state = self.state.lock().expect("QUIC accept router lock poisoned");
         if state.closed
-            || !state.expected.contains_key(&binding)
             || state.pending.contains_key(&binding)
+            || state.early.contains_key(&binding)
         {
             return false;
         }
-        state.pending.insert(binding, connection);
-        self.routed.notify_waiters();
+        if state.expected.contains_key(&binding) {
+            state.pending.insert(binding, connection);
+            self.routed.notify_waiters();
+        } else if state.early.len() < QUIC_BINDING_MAX_IN_FLIGHT {
+            state.early.insert(binding, (connection, Instant::now()));
+        } else {
+            return false;
+        }
         true
+    }
+
+    fn dispatch_capacity(&self, handshakes: usize) -> bool {
+        let state = self.state.lock().expect("QUIC accept router lock poisoned");
+        !state.expected.is_empty()
+            && handshakes.saturating_add(state.early.len()) < QUIC_BINDING_MAX_IN_FLIGHT
+    }
+
+    fn has_early_bindings(&self) -> bool {
+        !self
+            .state
+            .lock()
+            .expect("QUIC accept router lock poisoned")
+            .early
+            .is_empty()
+    }
+
+    fn expire_early_bindings(&self, now: Instant) {
+        let expired = {
+            let mut state = self.state.lock().expect("QUIC accept router lock poisoned");
+            let expired = state
+                .early
+                .iter()
+                .filter_map(|(binding, (_, received_at))| {
+                    (now.saturating_duration_since(*received_at) >= QUIC_BINDING_EARLY_TTL)
+                        .then_some(*binding)
+                })
+                .collect::<Vec<_>>();
+            expired
+                .into_iter()
+                .filter_map(|binding| state.early.remove(&binding))
+                .map(|(connection, _)| connection)
+                .collect::<Vec<_>>()
+        };
+        for connection in expired {
+            connection.close(0_u32.into(), b"unregistered QUIC connection binding");
+        }
     }
 
     fn ensure_dispatcher(self: &Arc<Self>, endpoint: Endpoint) {
@@ -2227,6 +2279,8 @@ async fn dispatch_bound_quic_connections(
     weak_router: Weak<PacketPlaneQuicAcceptRouter>,
 ) {
     let mut handshakes = JoinSet::new();
+    let mut early_sweep = tokio::time::interval(QUIC_BINDING_EARLY_SWEEP_INTERVAL);
+    early_sweep.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         let Some(router) = weak_router.upgrade() else {
             break;
@@ -2234,14 +2288,17 @@ async fn dispatch_bound_quic_connections(
         let registered = Arc::clone(&router.registered).notified_owned();
         tokio::pin!(registered);
         registered.as_mut().enable();
-        if !router.has_expected_bindings() && handshakes.is_empty() {
+        if !router.has_expected_bindings() && handshakes.is_empty() && !router.has_early_bindings()
+        {
             registered.await;
             continue;
         }
+        let can_accept = router.dispatch_capacity(handshakes.len());
+        let has_early = router.has_early_bindings();
         drop(router);
 
         tokio::select! {
-            incoming = endpoint.accept(), if handshakes.len() < QUIC_BINDING_MAX_IN_FLIGHT => {
+            incoming = endpoint.accept(), if can_accept => {
                 let Some(incoming) = incoming else {
                     if let Some(router) = weak_router.upgrade() {
                         router.mark_closed();
@@ -2276,6 +2333,11 @@ async fn dispatch_bound_quic_connections(
                     .is_some_and(|router| router.route(binding, connection.clone()));
                 if !was_routed {
                     connection.close(0_u32.into(), b"unexpected QUIC connection binding");
+                }
+            }
+            _ = early_sweep.tick(), if has_early => {
+                if let Some(router) = weak_router.upgrade() {
+                    router.expire_early_bindings(Instant::now());
                 }
             }
         }
@@ -3896,13 +3958,26 @@ mod tests {
             accepted_b.connection.remote_address(),
             client_b.local_addr()
         );
-        let state = server
-            .accept_router
-            .state
-            .lock()
-            .expect("QUIC accept router lock poisoned");
-        assert!(state.expected.is_empty());
-        assert!(state.pending.is_empty());
+        {
+            let state = server
+                .accept_router
+                .state
+                .lock()
+                .expect("QUIC accept router lock poisoned");
+            assert!(state.expected.is_empty());
+            assert!(state.pending.is_empty());
+            assert_eq!(state.early.len(), 1);
+        }
+        timeout(QUIC_BINDING_EARLY_TTL + Duration::from_secs(1), async {
+            loop {
+                if server.accept_router.state.lock().unwrap().early.is_empty() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("unknown binding should expire");
 
         drop((
             unknown_connection,
@@ -3977,6 +4052,63 @@ mod tests {
             authorized_connection,
             accepted,
         ));
+    }
+
+    #[tokio::test]
+    async fn quic_bound_accept_routes_connection_that_arrives_before_registration() {
+        let server = PacketPlaneQuicRuntime::bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let client = PacketPlaneQuicRuntime::bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let stale_binding = PacketPlaneQuicBinding::from_bytes([7; QUIC_BINDING_TOKEN_LEN]);
+        let early_binding = PacketPlaneQuicBinding::from_bytes([8; QUIC_BINDING_TOKEN_LEN]);
+        let stale_accept = tokio::spawn({
+            let connector = server.connector();
+            async move { connector.accept_bound(stale_binding).await }
+        });
+        timeout(Duration::from_secs(1), async {
+            while !server.accept_router.has_expected_bindings() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("stale binding registration should start dispatcher");
+
+        let client_connection = client
+            .connector()
+            .connect_bound(
+                server.local_addr(),
+                server.server_certificate(),
+                early_binding,
+            )
+            .await
+            .unwrap();
+        timeout(Duration::from_secs(1), async {
+            while !server
+                .accept_router
+                .state
+                .lock()
+                .unwrap()
+                .early
+                .contains_key(&early_binding)
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("early binding should be held for control-plane registration");
+
+        let accepted = timeout(
+            Duration::from_secs(1),
+            server.connector().accept_bound(early_binding),
+        )
+        .await
+        .expect("early binding registration should route immediately")
+        .unwrap();
+        assert_eq!(accepted.connection.remote_address(), client.local_addr());
+        assert!(server.accept_router.state.lock().unwrap().early.is_empty());
+
+        stale_accept.abort();
+        assert!(matches!(stale_accept.await, Err(error) if error.is_cancelled()));
+        drop((client_connection, accepted));
     }
 
     #[test]
