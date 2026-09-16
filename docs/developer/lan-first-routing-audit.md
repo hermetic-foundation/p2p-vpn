@@ -91,9 +91,28 @@ The post-correction capture is retained outside the repository at:
 One initial QUIC connection failure and two later peer-connection demotions
 recovered without intervention. Four LAN QUIC sessions remained installed.
 
-The remaining physical gate is an upgraded Android rollout followed by an
-Android LAN-to-WAN-to-LAN movement cycle. Until then, mixed-version fallback is
-verified, but final Android movement evidence is incomplete.
+### Linux All-Host Validation
+
+The five Linux hosts were validated on the physical LAN on 2026-09-16. The
+test used overlay DNS for SSH and `pv1` as the ICMP source interface.
+
+| Check | Result |
+| --- | --- |
+| Directed host pairs | All 20 combinations passed. |
+| Sustained payload | 30 packets per pair; 600 sent and 600 received. |
+| Packet loss | Zero on every pair. |
+| Linux QUIC sessions | Four per host, all at authenticated `192.168.0.x:52821` endpoints. |
+| Selected Linux paths | All `direct_quic_datagram`; no selected relay. |
+| Relay packet counter | Zero on all five hosts. |
+| Test-window failures | Zero QUIC failures, demotions, relay fallbacks, or packet rejects. |
+
+The older Android member remained reachable through authenticated LAN UDP
+fallback. Android deployment and movement verification was explicitly deferred
+for this validation pass.
+
+Physical Linux WAN fallback and subsequent LAN return still require an
+authorized underlay movement test. The namespace test covers the same state
+transition without manual daemon rescue.
 
 ## Failure Mechanism
 
