@@ -2525,6 +2525,14 @@ mod tests {
         (initiator_keys, responder_keys)
     }
 
+    async fn receive_quic_frame_bounded(
+        runtime: &mut PacketPlaneQuicRuntime,
+    ) -> Result<PacketPlaneReceivedFrame, PacketPlaneQuicError> {
+        timeout(Duration::from_secs(1), runtime.recv_frame_from_session())
+            .await
+            .expect("QUIC receive should be bounded")
+    }
+
     #[test]
     fn handshake_round_trips_and_verifies_signature() {
         let identity = NodeIdentity::generate_ed25519().expect("identity");
@@ -4082,6 +4090,109 @@ mod tests {
         assert_eq!(inbound.frame, frame);
         assert_eq!(inbound.remote_addr, sender_addr);
         assert_eq!(inbound.local_addr, receiver_addr);
+    }
+
+    #[tokio::test]
+    async fn quic_runtime_tolerates_loss_and_reordering_but_rejects_replay() {
+        let mut sender = PacketPlaneQuicRuntime::bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let mut receiver = PacketPlaneQuicRuntime::bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let (initiator_secret, responder_secret, hello, accept) =
+            verified_session_pair_with_endpoints(sender.local_addr(), receiver.local_addr(), 1280);
+        let (connect, incoming) = tokio::join!(
+            sender.connect_peer(
+                accept.peer,
+                receiver.local_addr(),
+                receiver.server_certificate()
+            ),
+            receiver.accept_peer(hello.peer)
+        );
+        connect.unwrap();
+        incoming.unwrap();
+        sender
+            .establish_session(
+                PacketPlaneSessionRole::Initiator,
+                &initiator_secret,
+                &hello,
+                &accept,
+            )
+            .unwrap();
+        receiver
+            .establish_session(
+                PacketPlaneSessionRole::Responder,
+                &responder_secret,
+                &accept,
+                &hello,
+            )
+            .unwrap();
+
+        let send_raw = |sequence| {
+            let frame = Frame::packet(77, sequence, vec![0x45; 20]).unwrap();
+            let datagram = sender.sessions[&accept.peer]
+                .keys
+                .seal
+                .seal_frame(&frame)
+                .unwrap();
+            sender.connections[&accept.peer]
+                .send_datagram(datagram.into())
+                .unwrap();
+            frame
+        };
+        let high = send_raw(100);
+        assert_eq!(
+            receive_quic_frame_bounded(&mut receiver)
+                .await
+                .unwrap()
+                .frame,
+            high
+        );
+        let reordered = send_raw(98);
+        assert_eq!(
+            receive_quic_frame_bounded(&mut receiver)
+                .await
+                .unwrap()
+                .frame,
+            reordered
+        );
+
+        send_raw(98);
+        assert!(matches!(
+            receive_quic_frame_bounded(&mut receiver).await,
+            Err(PacketPlaneQuicError::Datagram(
+                PacketPlaneDatagramError::ReplayedDatagram {
+                    session_id: 77,
+                    sequence: 98
+                }
+            ))
+        ));
+
+        let advanced = send_raw(164);
+        assert_eq!(
+            receive_quic_frame_bounded(&mut receiver)
+                .await
+                .unwrap()
+                .frame,
+            advanced
+        );
+        send_raw(100);
+        assert!(matches!(
+            receive_quic_frame_bounded(&mut receiver).await,
+            Err(PacketPlaneQuicError::Datagram(
+                PacketPlaneDatagramError::DatagramOutsideReplayWindow {
+                    session_id: 77,
+                    sequence: 100
+                }
+            ))
+        ));
+
+        let after_rejections = send_raw(165);
+        assert_eq!(
+            receive_quic_frame_bounded(&mut receiver)
+                .await
+                .unwrap()
+                .frame,
+            after_rejections
+        );
+        assert!(receiver.has_session(hello.peer));
     }
 
     #[tokio::test]
