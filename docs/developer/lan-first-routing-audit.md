@@ -69,6 +69,32 @@ are bounded to two seconds, and cancelled waiters release retained state.
 Mixed versions advertise an explicit bound-QUIC capability. Owned QUIC is used
 only when both peers support it; otherwise they retain UDP and stream fallback.
 
+### Bound-QUIC Rollout
+
+The post-correction capture is retained outside the repository at:
+
+```text
+/tmp/p2p-vpn-lan-first-final-20260916T0918
+```
+
+| Observation | Result |
+| --- | --- |
+| Linux capability | Four available Linux peers advertise bound owned QUIC. |
+| Linux packet paths | Four owned QUIC sessions use authenticated `192.168.0.x:52821` endpoints. |
+| Android compatibility | The older Pixel advertises no bound QUIC and retains its LAN UDP session. |
+| Payload | All four Linux peers returned five of five overlay ICMP replies. |
+| Relay fallback | Zero packets used relay stream fallback. |
+| Decrypt failures | Zero over the first 18 minutes after simultaneous restart. |
+| Quiet dwell | Zero QUIC failures, demotions, renegotiations, or rejects from 09:18 to 09:20. |
+| Local resources | About 38 MiB RSS, 19 threads, and 1% CPU in the post-dwell sample. |
+
+One initial QUIC connection failure and two later peer-connection demotions
+recovered without intervention. Four LAN QUIC sessions remained installed.
+
+The remaining physical gate is an upgraded Android rollout followed by an
+Android LAN-to-WAN-to-LAN movement cycle. Until then, mixed-version fallback is
+verified, but final Android movement evidence is incomplete.
+
 ## Failure Mechanism
 
 The policy is split across independent mechanisms:
