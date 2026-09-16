@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     fmt, io,
     net::SocketAddr,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock, Weak},
     time::{Duration, Instant},
 };
 
@@ -19,7 +19,8 @@ use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 use sha2_010::{Digest as _, Sha256 as HkdfSha256};
 use tokio::{
     net::UdpSocket,
-    sync::{Mutex as AsyncMutex, Notify},
+    sync::Notify,
+    task::{AbortHandle, JoinSet},
 };
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
 
@@ -38,6 +39,7 @@ const QUIC_BINDING_DOMAIN: &[u8] = b"p2p-vpn QUIC connection binding v1";
 const QUIC_BINDING_TOKEN_LEN: usize = 32;
 const QUIC_BINDING_WIRE_LEN: usize = QUIC_BINDING_MAGIC.len() + QUIC_BINDING_TOKEN_LEN;
 const QUIC_BINDING_READ_TIMEOUT: Duration = Duration::from_secs(2);
+const QUIC_BINDING_MAX_IN_FLIGHT: usize = 16;
 pub const PACKET_PLANE_DATAGRAM_HEADER_LEN: usize = 24;
 pub const PACKET_PLANE_AEAD_TAG_LEN: usize = 16;
 pub const PACKET_PLANE_MAX_UDP_DATAGRAM_LEN: usize = 65_535;
@@ -753,8 +755,16 @@ pub struct PacketPlaneQuicConnection {
     connection: Connection,
 }
 
+impl Drop for PacketPlaneQuicRuntime {
+    fn drop(&mut self) {
+        self.endpoint
+            .close(0_u32.into(), b"packet-plane runtime stopped");
+    }
+}
+
 #[derive(Debug, Default)]
 struct PacketPlaneQuicAcceptState {
+    closed: bool,
     expected: HashMap<PacketPlaneQuicBinding, usize>,
     pending: HashMap<PacketPlaneQuicBinding, Connection>,
 }
@@ -762,7 +772,8 @@ struct PacketPlaneQuicAcceptState {
 #[derive(Debug, Default)]
 struct PacketPlaneQuicAcceptRouter {
     state: Mutex<PacketPlaneQuicAcceptState>,
-    accept_lock: AsyncMutex<()>,
+    dispatcher: OnceLock<AbortHandle>,
+    registered: Arc<Notify>,
     routed: Notify,
 }
 
@@ -778,6 +789,7 @@ impl PacketPlaneQuicAcceptRouter {
     ) -> PacketPlaneQuicBindingRegistration {
         let mut state = self.state.lock().expect("QUIC accept router lock poisoned");
         *state.expected.entry(binding).or_default() += 1;
+        self.registered.notify_one();
         PacketPlaneQuicBindingRegistration {
             router: Arc::clone(self),
             binding,
@@ -794,12 +806,57 @@ impl PacketPlaneQuicAcceptRouter {
 
     fn route(&self, binding: PacketPlaneQuicBinding, connection: Connection) -> bool {
         let mut state = self.state.lock().expect("QUIC accept router lock poisoned");
-        if !state.expected.contains_key(&binding) || state.pending.contains_key(&binding) {
+        if state.closed
+            || !state.expected.contains_key(&binding)
+            || state.pending.contains_key(&binding)
+        {
             return false;
         }
         state.pending.insert(binding, connection);
         self.routed.notify_waiters();
         true
+    }
+
+    fn ensure_dispatcher(self: &Arc<Self>, endpoint: Endpoint) {
+        self.dispatcher.get_or_init(|| {
+            tokio::spawn(dispatch_bound_quic_connections(
+                endpoint,
+                Arc::downgrade(self),
+            ))
+            .abort_handle()
+        });
+    }
+
+    fn has_expected_bindings(&self) -> bool {
+        !self
+            .state
+            .lock()
+            .expect("QUIC accept router lock poisoned")
+            .expected
+            .is_empty()
+    }
+
+    fn is_closed(&self) -> bool {
+        self.state
+            .lock()
+            .expect("QUIC accept router lock poisoned")
+            .closed
+    }
+
+    fn mark_closed(&self) {
+        self.state
+            .lock()
+            .expect("QUIC accept router lock poisoned")
+            .closed = true;
+        self.routed.notify_waiters();
+    }
+}
+
+impl Drop for PacketPlaneQuicAcceptRouter {
+    fn drop(&mut self) {
+        if let Some(dispatcher) = self.dispatcher.get() {
+            dispatcher.abort();
+        }
     }
 }
 
@@ -1830,7 +1887,9 @@ impl PacketPlaneQuicRuntime {
     }
 
     pub fn install_connection(&mut self, peer: PeerId, connection: PacketPlaneQuicConnection) {
-        self.connections.insert(peer, connection.connection);
+        if let Some(previous) = self.connections.insert(peer, connection.connection) {
+            previous.close(0_u32.into(), b"packet-plane connection replaced");
+        }
     }
 
     #[must_use]
@@ -1839,7 +1898,11 @@ impl PacketPlaneQuicRuntime {
     }
 
     pub fn forget_connection(&mut self, peer: PeerId) -> bool {
-        self.connections.remove(&peer).is_some()
+        let Some(connection) = self.connections.remove(&peer) else {
+            return false;
+        };
+        connection.close(0_u32.into(), b"packet-plane connection forgotten");
+        true
     }
 
     pub(crate) fn peers(&self) -> impl Iterator<Item = PeerId> + '_ {
@@ -1847,7 +1910,10 @@ impl PacketPlaneQuicRuntime {
     }
 
     pub fn forget_peer(&mut self, peer: PeerId) -> bool {
-        let removed_connection = self.connections.remove(&peer).is_some();
+        let removed_connection = self.connections.remove(&peer).is_some_and(|connection| {
+            connection.close(0_u32.into(), b"packet-plane peer forgotten");
+            true
+        });
         let removed_session = self.sessions.remove(&peer).is_some();
         removed_connection || removed_session
     }
@@ -1906,7 +1972,9 @@ impl PacketPlaneQuicRuntime {
         let mut expired = expired_peers
             .into_iter()
             .filter_map(|peer| {
-                self.connections.remove(&peer);
+                if let Some(connection) = self.connections.remove(&peer) {
+                    connection.close(0_u32.into(), b"packet-plane session expired");
+                }
                 self.sessions.remove(&peer)
             })
             .map(|session| session.snapshot())
@@ -2115,6 +2183,7 @@ impl PacketPlaneQuicConnector {
         binding: PacketPlaneQuicBinding,
     ) -> Result<PacketPlaneQuicConnection, PacketPlaneQuicError> {
         let _registration = self.accept_router.register(binding);
+        self.accept_router.ensure_dispatcher(self.endpoint.clone());
         loop {
             let routed = self.accept_router.routed.notified();
             tokio::pin!(routed);
@@ -2122,37 +2191,73 @@ impl PacketPlaneQuicConnector {
             if let Some(connection) = self.accept_router.take(binding) {
                 return Ok(PacketPlaneQuicConnection { connection });
             }
-
-            let _accept = tokio::select! {
-                () = &mut routed => continue,
-                accept = self.accept_router.accept_lock.lock() => accept,
-            };
-            if let Some(connection) = self.accept_router.take(binding) {
-                return Ok(PacketPlaneQuicConnection { connection });
+            if self.accept_router.is_closed() {
+                return Err(PacketPlaneQuicError::EndpointClosed);
             }
-            let incoming = self
-                .endpoint
-                .accept()
-                .await
-                .ok_or(PacketPlaneQuicError::EndpointClosed)?;
-            let Ok(connection) = incoming.await else {
-                continue;
-            };
-            let Ok(Ok(received_binding)) =
-                tokio::time::timeout(QUIC_BINDING_READ_TIMEOUT, receive_quic_binding(&connection))
+            routed.await;
+        }
+    }
+}
+
+async fn dispatch_bound_quic_connections(
+    endpoint: Endpoint,
+    weak_router: Weak<PacketPlaneQuicAcceptRouter>,
+) {
+    let mut handshakes = JoinSet::new();
+    loop {
+        let Some(router) = weak_router.upgrade() else {
+            break;
+        };
+        let registered = Arc::clone(&router.registered).notified_owned();
+        tokio::pin!(registered);
+        registered.as_mut().enable();
+        if !router.has_expected_bindings() && handshakes.is_empty() {
+            registered.await;
+            continue;
+        }
+        drop(router);
+
+        tokio::select! {
+            incoming = endpoint.accept(), if handshakes.len() < QUIC_BINDING_MAX_IN_FLIGHT => {
+                let Some(incoming) = incoming else {
+                    if let Some(router) = weak_router.upgrade() {
+                        router.mark_closed();
+                    }
+                    break;
+                };
+                handshakes.spawn(async move {
+                    let Ok(connection) = incoming.await else {
+                        return None;
+                    };
+                    let binding = match tokio::time::timeout(
+                        QUIC_BINDING_READ_TIMEOUT,
+                        receive_quic_binding(&connection),
+                    )
                     .await
-            else {
-                connection.close(0_u32.into(), b"invalid QUIC connection binding");
-                continue;
-            };
-            if !self
-                .accept_router
-                .route(received_binding, connection.clone())
-            {
-                connection.close(0_u32.into(), b"unexpected QUIC connection binding");
+                    {
+                        Ok(Ok(binding)) => binding,
+                        _ => {
+                            connection.close(0_u32.into(), b"invalid QUIC connection binding");
+                            return None;
+                        }
+                    };
+                    Some((binding, connection))
+                });
+            }
+            result = handshakes.join_next(), if !handshakes.is_empty() => {
+                let Ok(Some((binding, connection))) = result.expect("guarded by non-empty handshake set") else {
+                    continue;
+                };
+                let was_routed = weak_router
+                    .upgrade()
+                    .is_some_and(|router| router.route(binding, connection.clone()));
+                if !was_routed {
+                    connection.close(0_u32.into(), b"unexpected QUIC connection binding");
+                }
             }
         }
     }
+    handshakes.abort_all();
 }
 
 async fn send_quic_binding(
@@ -3777,6 +3882,72 @@ mod tests {
         ));
     }
 
+    #[tokio::test]
+    async fn stalled_quic_binding_does_not_block_authorized_peer() {
+        let server = PacketPlaneQuicRuntime::bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let stalled_client = PacketPlaneQuicRuntime::bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let authorized_client =
+            PacketPlaneQuicRuntime::bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let binding = PacketPlaneQuicBinding::from_bytes([5; QUIC_BINDING_TOKEN_LEN]);
+        let certificate = server.server_certificate();
+        let server_addr = server.local_addr();
+        let accept = tokio::spawn({
+            let connector = server.connector();
+            async move { connector.accept_bound(binding).await }
+        });
+
+        timeout(Duration::from_secs(1), async {
+            loop {
+                if server.accept_router.has_expected_bindings() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("binding registration should become visible");
+
+        let stalled_connection = stalled_client
+            .connector()
+            .connect(server_addr, certificate.clone())
+            .await
+            .unwrap();
+        let mut stalled_stream = stalled_connection.connection.open_uni().await.unwrap();
+        stalled_stream.write_all(b"p2p").await.unwrap();
+        tokio::time::sleep(Duration::from_millis(25)).await;
+
+        let authorized_connection = authorized_client
+            .connector()
+            .connect_bound(server_addr, certificate, binding)
+            .await
+            .unwrap();
+        let accepted = timeout(Duration::from_secs(1), accept)
+            .await
+            .expect("stalled binding must not serialize authorized acceptance")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            accepted.connection.remote_address(),
+            authorized_client.local_addr()
+        );
+        assert!(
+            server
+                .accept_router
+                .state
+                .lock()
+                .unwrap()
+                .expected
+                .is_empty()
+        );
+
+        drop((
+            stalled_stream,
+            stalled_connection,
+            authorized_connection,
+            accepted,
+        ));
+    }
+
     #[test]
     fn quic_binding_is_derived_from_the_verified_handshake() {
         let (_, _, hello, accept) = verified_session_pair();
@@ -3828,6 +3999,33 @@ mod tests {
             .state
             .lock()
             .expect("QUIC accept router lock poisoned");
+        assert!(state.expected.is_empty());
+        assert!(state.pending.is_empty());
+    }
+
+    #[tokio::test]
+    async fn closing_quic_endpoint_wakes_bound_accept() {
+        let server = PacketPlaneQuicRuntime::bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let binding = PacketPlaneQuicBinding::from_bytes([6; QUIC_BINDING_TOKEN_LEN]);
+        let accept = tokio::spawn({
+            let connector = server.connector();
+            async move { connector.accept_bound(binding).await }
+        });
+        timeout(Duration::from_secs(1), async {
+            while !server.accept_router.has_expected_bindings() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("binding registration should become visible");
+
+        server.endpoint.close(0_u32.into(), b"closed by test");
+        assert!(matches!(
+            timeout(Duration::from_secs(1), accept).await,
+            Ok(Ok(Err(PacketPlaneQuicError::EndpointClosed)))
+        ));
+        let state = server.accept_router.state.lock().unwrap();
+        assert!(state.closed);
         assert!(state.expected.is_empty());
         assert!(state.pending.is_empty());
     }
@@ -4070,6 +4268,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn replacing_quic_connection_closes_previous_connection() {
+        let mut client = PacketPlaneQuicRuntime::bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let server = PacketPlaneQuicRuntime::bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let peer = PeerId::from_bytes([7; 32]);
+        let client_connector = client.connector();
+        let server_connector = server.connector();
+
+        let (first_client, first_server) = tokio::join!(
+            client_connector.connect(server.local_addr(), server.server_certificate()),
+            server_connector.accept(),
+        );
+        let first_client = first_client.unwrap();
+        let first_server = first_server.unwrap();
+        let replaced = first_client.connection.clone();
+        client.install_connection(peer, first_client);
+
+        let (second_client, second_server) = tokio::join!(
+            client_connector.connect(server.local_addr(), server.server_certificate()),
+            server_connector.accept(),
+        );
+        client.install_connection(peer, second_client.unwrap());
+        timeout(Duration::from_secs(1), async {
+            while replaced.close_reason().is_none() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("replaced connection should close promptly");
+        assert!(client.has_usable_connection(peer));
+
+        drop((first_server, second_server));
+    }
+
+    #[tokio::test]
     async fn quic_runtime_expires_sessions_and_connections() {
         let mut sender =
             PacketPlaneQuicRuntime::bind("127.0.0.1:0".parse().expect("sender socket"))
@@ -4110,6 +4342,7 @@ mod tests {
         assert!(sender.has_session(accept.peer));
         assert!(sender.can_receive());
         assert!(sender.expire_sessions(Duration::from_mins(1)).is_empty());
+        let expired_connection = sender.connections[&accept.peer].clone();
 
         let expired = sender.expire_sessions(Duration::ZERO);
 
@@ -4117,6 +4350,13 @@ mod tests {
         assert_eq!(expired[0].peer, accept.peer);
         assert!(!sender.has_session(accept.peer));
         assert!(!sender.can_receive());
+        timeout(Duration::from_secs(1), async {
+            while expired_connection.close_reason().is_none() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("expired connection should close promptly");
     }
 
     #[tokio::test]
