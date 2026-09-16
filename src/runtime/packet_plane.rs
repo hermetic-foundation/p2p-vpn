@@ -1904,7 +1904,6 @@ impl PacketPlaneQuicRuntime {
         if let Some(previous) = self.connections.insert(peer, connection.connection) {
             previous.close(0_u32.into(), b"packet-plane connection replaced");
         }
-        self.sessions.remove(&peer);
     }
 
     #[must_use]
@@ -4404,8 +4403,7 @@ mod tests {
     async fn replacing_quic_connection_closes_previous_connection() {
         let mut client = PacketPlaneQuicRuntime::bind("127.0.0.1:0".parse().unwrap()).unwrap();
         let server = PacketPlaneQuicRuntime::bind("127.0.0.1:0".parse().unwrap()).unwrap();
-        let (initiator_secret, _responder_secret, hello, accept) = verified_session_pair();
-        let peer = accept.peer;
+        let peer = PeerId::from_bytes([7; 32]);
         let client_connector = client.connector();
         let server_connector = server.connector();
 
@@ -4417,22 +4415,12 @@ mod tests {
         let first_server = first_server.unwrap();
         let replaced = first_client.connection.clone();
         client.install_connection(peer, first_client);
-        client
-            .establish_session(
-                PacketPlaneSessionRole::Initiator,
-                &initiator_secret,
-                &hello,
-                &accept,
-            )
-            .unwrap();
-        assert!(client.has_session(peer));
 
         let (second_client, second_server) = tokio::join!(
             client_connector.connect(server.local_addr(), server.server_certificate()),
             server_connector.accept(),
         );
         client.install_connection(peer, second_client.unwrap());
-        assert!(!client.has_session(peer));
         timeout(Duration::from_secs(1), async {
             while replaced.close_reason().is_none() {
                 tokio::task::yield_now().await;
