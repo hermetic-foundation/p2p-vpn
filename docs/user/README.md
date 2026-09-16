@@ -14,6 +14,7 @@ Use these docs when you want to run `p2p-vpn`.
 | [Network Membership](membership.md) | Understand whole-overlay convergence, trust, routes, and recovery. |
 | [Overlay DNS](dns.md) | Resolve authenticated members by short and canonical names. |
 | [Operations](operations.md) | Inspect a daemon, health-check it, and stop it. |
+| [Packet Transports](transports.md) | Understand path ordering, fallback, MTU, and diagnostics. |
 | [Public libp2p/IPFS](public-libp2p.md) | Use public bootstrap and relay infrastructure safely. |
 
 ## Minimum Requirements

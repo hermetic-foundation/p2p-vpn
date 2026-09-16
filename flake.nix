@@ -5670,6 +5670,7 @@
                 cp ${./docs/user/operations.md} "$release_dir/docs/user/operations.md"
                 cp ${./docs/user/pairing.md} "$release_dir/docs/user/pairing.md"
                 cp ${./docs/user/public-libp2p.md} "$release_dir/docs/user/public-libp2p.md"
+                cp ${./docs/user/transports.md} "$release_dir/docs/user/transports.md"
                 cp ${./docs/developer/README.md} "$release_dir/docs/developer/README.md"
                 cp ${./docs/developer/android.md} "$release_dir/docs/developer/android.md"
                 cp ${./docs/developer/architecture.md} "$release_dir/docs/developer/architecture.md"
@@ -5680,6 +5681,7 @@
                 cp ${./docs/developer/testing.md} "$release_dir/docs/developer/testing.md"
                 cp ${./docs/developer/network-debugging.md} "$release_dir/docs/developer/network-debugging.md"
                 cp ${./docs/developer/public-bootstrap-smoke.md} "$release_dir/docs/developer/public-bootstrap-smoke.md"
+                cp ${./docs/developer/quic.md} "$release_dir/docs/developer/quic.md"
                 cp ${./flake.nix} "$release_dir/flake.nix"
                 cp ${./flake.lock} "$release_dir/flake.lock"
                 cp ${./Cargo.toml} "$release_dir/Cargo.toml"
@@ -5933,6 +5935,7 @@
                   "$root/docs/user/operations.md" \
                   "$root/docs/user/pairing.md" \
                   "$root/docs/user/public-libp2p.md" \
+                  "$root/docs/user/transports.md" \
                   "$root/docs/developer/README.md" \
                   "$root/docs/developer/android.md" \
                   "$root/docs/developer/architecture.md" \
@@ -5943,6 +5946,7 @@
                   "$root/docs/developer/testing.md" \
                   "$root/docs/developer/network-debugging.md" \
                   "$root/docs/developer/public-bootstrap-smoke.md" \
+                  "$root/docs/developer/quic.md" \
                   "$root/examples/nixos-mesh/README.md" \
                   "$root/examples/nixos-mesh/flake.nix" \
                   "$root/nix/android.nix" \

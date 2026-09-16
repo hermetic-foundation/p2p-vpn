@@ -87,6 +87,36 @@ comparing samples.
 
 Recorded results: [controlled idle comparison](idle-resource-comparison.md).
 
+### Sustained QUIC Sampling
+
+Run the fixed owned-QUIC load and drain proof:
+
+```sh
+P2P_VPN_TUN_E2E_KEEP_TEMP=1 \
+  nix develop -c cargo test --test tun_namespace \
+  tun_namespace_measures_sustained_quic_resources \
+  -- --ignored --exact --nocapture
+```
+
+The fixture sends 50 packets per second for 300 seconds.
+It then samples a 60-second drain without payload traffic.
+
+Acceptance requires:
+
+| Check | Required Result |
+| --- | --- |
+| Delivery | 15,000 valid packets; no duplicates or skips |
+| Backend | Owned-QUIC payload counters grow on both nodes |
+| Path | One healthy owned-QUIC session remains selected |
+| Fallback | Stream fallback counters stay flat |
+| Queues | Packet, byte, drop, and expiry values remain zero |
+| Ownership | QUIC tasks and owners drain to zero |
+| Process | Identity remains stable; descriptors and threads stay bounded |
+| Recovery | Final bidirectional five-packet checks pass |
+
+The 2026-09-16 run passed all checks.
+See [QUIC Data Plane](quic.md#sustained-quic-result) for measured values.
+
 ### Unavailable Peer Capture
 
 Use `tun_namespace_measures_unavailable_peer_resources` instead of the connected

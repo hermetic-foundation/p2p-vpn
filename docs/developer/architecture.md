@@ -188,6 +188,9 @@ route policy; the queued-frame boundary rechecks the current owner before sendin
 | libp2p circuit relay stream fallback | Connection-pinned packet stream. |
 | Native libp2p QUIC DATAGRAM | Blocked by dependency surface. |
 
+See [QUIC Data Plane](quic.md) for the binding protocol, lifecycle, limits,
+fallback order, diagnostics, and current acceptance evidence.
+
 ### Stream Ownership
 
 | Direction | Default Owner |

@@ -1,5 +1,8 @@
 # Automatic QUIC Packet Transport
 
+> Historical implementation journal. For the current contract, limits, evidence,
+> and requirement audit, use [QUIC Data Plane](quic.md).
+
 ## Status
 
 Core implementation published as `8690bce2`; NixOS wiring published as `43345ef1`.

@@ -85,6 +85,7 @@ Status is conservative.
 | 2026-09-01 | Android multi-network E2E | Two networks, eight traffic directions, overlap, isolation, process, update, lockdown, and reboot passed. |
 | 2026-09-02 | Android physical app workflow | API 37 arm64 install, nested UI, switch lifecycle, peers, update, autonomous boot restoration, and bidirectional dual-stack traffic passed. |
 | 2026-09-03 | Ownerless membership convergence VM | Arbitrary revoke, inviter survival, self-resign, and deliberate re-admission converged across three edge nodes. |
+| 2026-09-16 | Sustained owned-QUIC namespace proof | 15,000/15,000 packets, stable resources, zero fallback, queue growth, failures, or demotions. |
 
 ## Main Remaining Gaps
 
