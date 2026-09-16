@@ -1437,6 +1437,7 @@ async fn quic_reset_discards_cancelled_and_old_results_without_consuming_new_tas
             capabilities.clone(),
             role,
             PacketPlaneQuicConnectionDirection::Connect,
+            PacketPlaneQuicBinding::from_bytes([7; 32]),
         );
     }
     let old = roles.map(|role| {
@@ -1453,6 +1454,7 @@ async fn quic_reset_discards_cancelled_and_old_results_without_consuming_new_tas
             capabilities.clone(),
             role,
             PacketPlaneQuicConnectionDirection::Connect,
+            PacketPlaneQuicBinding::from_bytes([9; 32]),
         );
     }
     let current = roles.map(|role| {
@@ -1549,6 +1551,7 @@ async fn quic_reset_discards_cancelled_and_old_results_without_consuming_new_tas
         capabilities,
         role,
         PacketPlaneQuicConnectionDirection::Connect,
+        PacketPlaneQuicBinding::from_bytes([11; 32]),
     );
     assert!(negotiator.quic_connection_task_handles[&(peer, role)].generation > generation);
     negotiator.clear();

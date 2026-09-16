@@ -32,6 +32,43 @@ The capture shows a healthy baseline, not the reported failure:
 This proves that LAN packet transport can work. It does not prove that an
 existing WAN connection is promoted after a LAN address becomes available.
 
+### Full-Network Rollout
+
+The post-policy rollout capture uses the same evidence directory.
+
+| Observation | Result |
+| --- | --- |
+| Available authorized peers | Five of six; the OnePlus was offline. |
+| Authenticated endpoints | All five used `192.168.0.x`. |
+| Linux payload | Four of four peers returned five ICMP replies. |
+| Android payload session | The Pixel had an authenticated LAN session; ICMP was unavailable. |
+| Relay selection | No available member selected a relay. |
+| Packet counters | QUIC datagrams increased by 25; relay fallback stayed at zero. |
+
+The rollout also exposed a separate concurrent owned-QUIC defect. Over an
+equivalent 2.5-hour window, decrypt rejects rose from 0 to 417 and QUIC
+connection failures rose from 0 to 257.
+
+#### QUIC Root Cause
+
+Each peer responder independently called the same unscoped QUIC `accept()`.
+An accepted connection could be installed for whichever peer task woke first,
+rather than the peer that negotiated its session keys.
+
+| Failure stage | Effect |
+| --- | --- |
+| Concurrent capability exchange | Several peer responders wait on one QUIC endpoint. |
+| Connection arrival | The wrong responder can claim a valid connection. |
+| Packet decrypt | Session keys do not match; payload is rejected. |
+| Recovery | The path demotes and retries every 30 seconds. |
+
+The correction derives a connection token from the signed Hello and routes
+accepted QUIC connections by that token. Unknown tokens are discarded, reads
+are bounded to two seconds, and cancelled waiters release retained state.
+
+Mixed versions advertise an explicit bound-QUIC capability. Owned QUIC is used
+only when both peers support it; otherwise they retain UDP and stream fallback.
+
 ## Failure Mechanism
 
 The policy is split across independent mechanisms:
@@ -110,6 +147,7 @@ addresses and automatic public direct addresses do not.
 | Relay fallback | The namespace movement test removes the LAN link and reaches the peer through circuit relay. |
 | LAN return | The same running daemons restore the link, rediscover it through mDNS, and promote back to direct datagrams. |
 | Payload proof | Overlay ping and packet-path counters pass in all three phases. |
+| Concurrent QUIC ownership | Out-of-order connections reach their matching peer waiter; unknown tokens and cancelled waiters leave no retained state. |
 
 Command:
 

@@ -81,6 +81,20 @@ while the replacement handshake completes. No additional configuration is needed
 - Network changes and unconfirmed paths still require packet-path health checks.
 - `packet_plane_retiring_sessions` in Status/State counts previous sessions awaiting cleanup, at most one per current peer session.
 
+### Rolling QUIC Upgrades
+
+Owned QUIC packet sessions require both peers to support connection-bound QUIC.
+No configuration is needed.
+
+| Peer combination | Packet behavior |
+| --- | --- |
+| Both support bound QUIC | Prefer owned QUIC datagrams. |
+| Either peer is older | Use owned UDP, then normal stream fallback. |
+| Both peers are upgraded later | Capability refresh enables QUIC automatically. |
+
+This gate prevents an accepted QUIC connection from being associated with the
+wrong peer during mixed-version or concurrent startup.
+
 ## Public DHT Resource Policy
 
 Public IPFS Kademlia always runs in client mode.

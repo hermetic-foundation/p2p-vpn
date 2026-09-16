@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     fmt, io,
     net::SocketAddr,
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -17,7 +17,10 @@ use quinn::{ClientConfig, Connection, Endpoint, ServerConfig, TransportConfig};
 use rand_core::OsRng;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 use sha2_010::{Digest as _, Sha256 as HkdfSha256};
-use tokio::net::UdpSocket;
+use tokio::{
+    net::UdpSocket,
+    sync::{Mutex as AsyncMutex, Notify},
+};
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
 
 use crate::{
@@ -30,6 +33,11 @@ const DATAGRAM_MAGIC: &[u8; 8] = b"p2pvpnD1";
 const HANDSHAKE_MAGIC: &[u8; 8] = b"p2pvpnH1";
 const HANDSHAKE_SIGNING_DOMAIN: &[u8] = b"p2p-vpn packet-plane handshake v1";
 const SESSION_KDF_DOMAIN: &[u8] = b"p2p-vpn packet-plane session keys v1";
+const QUIC_BINDING_MAGIC: &[u8; 8] = b"p2pvpnQ1";
+const QUIC_BINDING_DOMAIN: &[u8] = b"p2p-vpn QUIC connection binding v1";
+const QUIC_BINDING_TOKEN_LEN: usize = 32;
+const QUIC_BINDING_WIRE_LEN: usize = QUIC_BINDING_MAGIC.len() + QUIC_BINDING_TOKEN_LEN;
+const QUIC_BINDING_READ_TIMEOUT: Duration = Duration::from_secs(2);
 pub const PACKET_PLANE_DATAGRAM_HEADER_LEN: usize = 24;
 pub const PACKET_PLANE_AEAD_TAG_LEN: usize = 16;
 pub const PACKET_PLANE_MAX_UDP_DATAGRAM_LEN: usize = 65_535;
@@ -94,6 +102,50 @@ pub struct VerifiedPacketPlaneHandshake {
     pub nonce: u64,
     pub mtu: u16,
     pub endpoint: SocketAddr,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct PacketPlaneQuicBinding([u8; QUIC_BINDING_TOKEN_LEN]);
+
+impl PacketPlaneQuicBinding {
+    #[cfg(test)]
+    #[must_use]
+    pub const fn from_bytes(token: [u8; QUIC_BINDING_TOKEN_LEN]) -> Self {
+        Self(token)
+    }
+
+    #[must_use]
+    pub fn from_handshake(handshake: &VerifiedPacketPlaneHandshake) -> Self {
+        let mut digest = HkdfSha256::new();
+        digest.update(QUIC_BINDING_DOMAIN);
+        digest.update([handshake.kind as u8]);
+        digest.update(handshake.peer.as_bytes());
+        digest.update(handshake.ephemeral_public_key);
+        digest.update(handshake.session_id.to_be_bytes());
+        digest.update(handshake.nonce.to_be_bytes());
+        let digest = digest.finalize();
+        let mut token = [0; QUIC_BINDING_TOKEN_LEN];
+        token.copy_from_slice(&digest);
+        Self(token)
+    }
+
+    fn encode(self) -> [u8; QUIC_BINDING_WIRE_LEN] {
+        let mut encoded = [0; QUIC_BINDING_WIRE_LEN];
+        encoded[..QUIC_BINDING_MAGIC.len()].copy_from_slice(QUIC_BINDING_MAGIC);
+        encoded[QUIC_BINDING_MAGIC.len()..].copy_from_slice(&self.0);
+        encoded
+    }
+
+    fn decode(encoded: &[u8]) -> Result<Self, PacketPlaneQuicError> {
+        if encoded.len() != QUIC_BINDING_WIRE_LEN
+            || encoded[..QUIC_BINDING_MAGIC.len()] != QUIC_BINDING_MAGIC[..]
+        {
+            return Err(quic_binding_error("invalid connection binding"));
+        }
+        let mut token = [0; QUIC_BINDING_TOKEN_LEN];
+        token.copy_from_slice(&encoded[QUIC_BINDING_MAGIC.len()..]);
+        Ok(Self(token))
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -685,6 +737,7 @@ pub struct PacketPlaneQuicRuntime {
     endpoint: Endpoint,
     local_addr: SocketAddr,
     server_certificate: CertificateDer<'static>,
+    accept_router: Arc<PacketPlaneQuicAcceptRouter>,
     connections: HashMap<PeerId, Connection>,
     sessions: HashMap<PeerId, PacketPlaneSession>,
     max_replay_windows_per_session: usize,
@@ -693,10 +746,85 @@ pub struct PacketPlaneQuicRuntime {
 #[derive(Clone)]
 pub struct PacketPlaneQuicConnector {
     endpoint: Endpoint,
+    accept_router: Arc<PacketPlaneQuicAcceptRouter>,
 }
 
 pub struct PacketPlaneQuicConnection {
     connection: Connection,
+}
+
+#[derive(Debug, Default)]
+struct PacketPlaneQuicAcceptState {
+    expected: HashMap<PacketPlaneQuicBinding, usize>,
+    pending: HashMap<PacketPlaneQuicBinding, Connection>,
+}
+
+#[derive(Debug, Default)]
+struct PacketPlaneQuicAcceptRouter {
+    state: Mutex<PacketPlaneQuicAcceptState>,
+    accept_lock: AsyncMutex<()>,
+    routed: Notify,
+}
+
+struct PacketPlaneQuicBindingRegistration {
+    router: Arc<PacketPlaneQuicAcceptRouter>,
+    binding: PacketPlaneQuicBinding,
+}
+
+impl PacketPlaneQuicAcceptRouter {
+    fn register(
+        self: &Arc<Self>,
+        binding: PacketPlaneQuicBinding,
+    ) -> PacketPlaneQuicBindingRegistration {
+        let mut state = self.state.lock().expect("QUIC accept router lock poisoned");
+        *state.expected.entry(binding).or_default() += 1;
+        PacketPlaneQuicBindingRegistration {
+            router: Arc::clone(self),
+            binding,
+        }
+    }
+
+    fn take(&self, binding: PacketPlaneQuicBinding) -> Option<Connection> {
+        self.state
+            .lock()
+            .expect("QUIC accept router lock poisoned")
+            .pending
+            .remove(&binding)
+    }
+
+    fn route(&self, binding: PacketPlaneQuicBinding, connection: Connection) -> bool {
+        let mut state = self.state.lock().expect("QUIC accept router lock poisoned");
+        if !state.expected.contains_key(&binding) || state.pending.contains_key(&binding) {
+            return false;
+        }
+        state.pending.insert(binding, connection);
+        self.routed.notify_waiters();
+        true
+    }
+}
+
+impl Drop for PacketPlaneQuicBindingRegistration {
+    fn drop(&mut self) {
+        let mut state = self
+            .router
+            .state
+            .lock()
+            .expect("QUIC accept router lock poisoned");
+        let remove = match state.expected.get_mut(&self.binding) {
+            Some(count) if *count > 1 => {
+                *count -= 1;
+                false
+            }
+            Some(_) => true,
+            None => false,
+        };
+        if remove {
+            state.expected.remove(&self.binding);
+            if let Some(connection) = state.pending.remove(&self.binding) {
+                connection.close(0_u32.into(), b"QUIC binding no longer expected");
+            }
+        }
+    }
 }
 
 impl Default for PacketPlaneRuntime {
@@ -1630,6 +1758,7 @@ impl PacketPlaneQuicRuntime {
             endpoint,
             local_addr,
             server_certificate,
+            accept_router: Arc::new(PacketPlaneQuicAcceptRouter::default()),
             connections: HashMap::new(),
             sessions: HashMap::new(),
             max_replay_windows_per_session: max_replay_windows_per_session.max(1),
@@ -1696,6 +1825,7 @@ impl PacketPlaneQuicRuntime {
     pub fn connector(&self) -> PacketPlaneQuicConnector {
         PacketPlaneQuicConnector {
             endpoint: self.endpoint.clone(),
+            accept_router: Arc::clone(&self.accept_router),
         }
     }
 
@@ -1958,6 +2088,17 @@ impl PacketPlaneQuicConnector {
         Ok(PacketPlaneQuicConnection { connection })
     }
 
+    pub async fn connect_bound(
+        &self,
+        endpoint: SocketAddr,
+        trusted_certificate: CertificateDer<'static>,
+        binding: PacketPlaneQuicBinding,
+    ) -> Result<PacketPlaneQuicConnection, PacketPlaneQuicError> {
+        let connection = self.connect(endpoint, trusted_certificate).await?;
+        send_quic_binding(&connection.connection, binding).await?;
+        Ok(connection)
+    }
+
     pub async fn accept(&self) -> Result<PacketPlaneQuicConnection, PacketPlaneQuicError> {
         let incoming = self
             .endpoint
@@ -1968,6 +2109,80 @@ impl PacketPlaneQuicConnector {
             connection: incoming.await?,
         })
     }
+
+    pub async fn accept_bound(
+        &self,
+        binding: PacketPlaneQuicBinding,
+    ) -> Result<PacketPlaneQuicConnection, PacketPlaneQuicError> {
+        let _registration = self.accept_router.register(binding);
+        loop {
+            let routed = self.accept_router.routed.notified();
+            tokio::pin!(routed);
+            routed.as_mut().enable();
+            if let Some(connection) = self.accept_router.take(binding) {
+                return Ok(PacketPlaneQuicConnection { connection });
+            }
+
+            let _accept = tokio::select! {
+                () = &mut routed => continue,
+                accept = self.accept_router.accept_lock.lock() => accept,
+            };
+            if let Some(connection) = self.accept_router.take(binding) {
+                return Ok(PacketPlaneQuicConnection { connection });
+            }
+            let incoming = self
+                .endpoint
+                .accept()
+                .await
+                .ok_or(PacketPlaneQuicError::EndpointClosed)?;
+            let Ok(connection) = incoming.await else {
+                continue;
+            };
+            let Ok(Ok(received_binding)) =
+                tokio::time::timeout(QUIC_BINDING_READ_TIMEOUT, receive_quic_binding(&connection))
+                    .await
+            else {
+                connection.close(0_u32.into(), b"invalid QUIC connection binding");
+                continue;
+            };
+            if !self
+                .accept_router
+                .route(received_binding, connection.clone())
+            {
+                connection.close(0_u32.into(), b"unexpected QUIC connection binding");
+            }
+        }
+    }
+}
+
+async fn send_quic_binding(
+    connection: &Connection,
+    binding: PacketPlaneQuicBinding,
+) -> Result<(), PacketPlaneQuicError> {
+    let mut stream = connection.open_uni().await?;
+    stream
+        .write_all(&binding.encode())
+        .await
+        .map_err(|error| quic_binding_error(error.to_string()))?;
+    stream
+        .finish()
+        .map_err(|error| quic_binding_error(error.to_string()))?;
+    Ok(())
+}
+
+async fn receive_quic_binding(
+    connection: &Connection,
+) -> Result<PacketPlaneQuicBinding, PacketPlaneQuicError> {
+    let mut stream = connection.accept_uni().await?;
+    let encoded = stream
+        .read_to_end(QUIC_BINDING_WIRE_LEN)
+        .await
+        .map_err(|error| quic_binding_error(error.to_string()))?;
+    PacketPlaneQuicBinding::decode(&encoded)
+}
+
+fn quic_binding_error(error: impl Into<String>) -> PacketPlaneQuicError {
+    PacketPlaneQuicError::Io(io::Error::new(io::ErrorKind::InvalidData, error.into()))
 }
 
 fn quic_server_config() -> Result<(ServerConfig, CertificateDer<'static>), PacketPlaneQuicError> {
@@ -1992,7 +2207,7 @@ fn quic_client_config(
 
 fn packet_plane_quic_transport_config() -> TransportConfig {
     let mut transport = TransportConfig::default();
-    transport.max_concurrent_uni_streams(0_u8.into());
+    transport.max_concurrent_uni_streams(1_u8.into());
     transport.datagram_receive_buffer_size(Some(PACKET_PLANE_MAX_UDP_DATAGRAM_LEN * 4));
     transport
 }
@@ -3490,6 +3705,134 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn quic_bound_accept_routes_concurrent_peers_and_discards_unknown_bindings() {
+        let server = PacketPlaneQuicRuntime::bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let client_a = PacketPlaneQuicRuntime::bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let client_b = PacketPlaneQuicRuntime::bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let unknown_client = PacketPlaneQuicRuntime::bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let binding_a = PacketPlaneQuicBinding::from_bytes([1; QUIC_BINDING_TOKEN_LEN]);
+        let binding_b = PacketPlaneQuicBinding::from_bytes([2; QUIC_BINDING_TOKEN_LEN]);
+        let unknown_binding = PacketPlaneQuicBinding::from_bytes([3; QUIC_BINDING_TOKEN_LEN]);
+        let certificate = server.server_certificate();
+        let server_addr = server.local_addr();
+
+        let accept_a = tokio::spawn({
+            let connector = server.connector();
+            async move { connector.accept_bound(binding_a).await }
+        });
+        let accept_b = tokio::spawn({
+            let connector = server.connector();
+            async move { connector.accept_bound(binding_b).await }
+        });
+        tokio::task::yield_now().await;
+
+        let unknown_connection = unknown_client
+            .connector()
+            .connect_bound(server_addr, certificate.clone(), unknown_binding)
+            .await
+            .unwrap();
+        let client_b_connection = client_b
+            .connector()
+            .connect_bound(server_addr, certificate.clone(), binding_b)
+            .await
+            .unwrap();
+        let client_a_connection = client_a
+            .connector()
+            .connect_bound(server_addr, certificate, binding_a)
+            .await
+            .unwrap();
+
+        let accepted_a = timeout(Duration::from_secs(2), accept_a)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let accepted_b = timeout(Duration::from_secs(2), accept_b)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            accepted_a.connection.remote_address(),
+            client_a.local_addr()
+        );
+        assert_eq!(
+            accepted_b.connection.remote_address(),
+            client_b.local_addr()
+        );
+        let state = server
+            .accept_router
+            .state
+            .lock()
+            .expect("QUIC accept router lock poisoned");
+        assert!(state.expected.is_empty());
+        assert!(state.pending.is_empty());
+
+        drop((
+            unknown_connection,
+            client_a_connection,
+            client_b_connection,
+            accepted_a,
+            accepted_b,
+        ));
+    }
+
+    #[test]
+    fn quic_binding_is_derived_from_the_verified_handshake() {
+        let (_, _, hello, accept) = verified_session_pair();
+        let hello_binding = PacketPlaneQuicBinding::from_handshake(&hello);
+        let accept_binding = PacketPlaneQuicBinding::from_handshake(&accept);
+
+        assert_ne!(hello_binding, accept_binding);
+        assert_eq!(
+            PacketPlaneQuicBinding::decode(&hello_binding.encode()).unwrap(),
+            hello_binding
+        );
+
+        let mut invalid = hello_binding.encode();
+        invalid[0] ^= 0xff;
+        assert!(PacketPlaneQuicBinding::decode(&invalid).is_err());
+    }
+
+    #[tokio::test]
+    async fn cancelling_bound_quic_accept_releases_registration() {
+        let server = PacketPlaneQuicRuntime::bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let binding = PacketPlaneQuicBinding::from_bytes([4; QUIC_BINDING_TOKEN_LEN]);
+        let accept = tokio::spawn({
+            let connector = server.connector();
+            async move { connector.accept_bound(binding).await }
+        });
+
+        timeout(Duration::from_secs(1), async {
+            loop {
+                let registered = server
+                    .accept_router
+                    .state
+                    .lock()
+                    .expect("QUIC accept router lock poisoned")
+                    .expected
+                    .contains_key(&binding);
+                if registered {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("accept registration should become visible");
+
+        accept.abort();
+        assert!(matches!(accept.await, Err(error) if error.is_cancelled()));
+        let state = server
+            .accept_router
+            .state
+            .lock()
+            .expect("QUIC accept router lock poisoned");
+        assert!(state.expected.is_empty());
+        assert!(state.pending.is_empty());
+    }
+
+    #[tokio::test]
     async fn quic_runtime_sends_encrypted_frame_to_registered_peer() {
         let mut sender =
             PacketPlaneQuicRuntime::bind("127.0.0.1:0".parse().expect("sender socket"))
@@ -3561,6 +3904,7 @@ mod tests {
             local_addr: endpoint.local_addr().unwrap(),
             endpoint,
             server_certificate: certificate.clone(),
+            accept_router: Arc::new(PacketPlaneQuicAcceptRouter::default()),
             connections: HashMap::new(),
             sessions: HashMap::new(),
             max_replay_windows_per_session: 16,

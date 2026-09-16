@@ -106,10 +106,11 @@ use crate::{
         packet_plane::{
             PacketPlaneEphemeralSecret, PacketPlaneHandshake, PacketPlaneHandshakeError,
             PacketPlaneHandshakeKind, PacketPlaneHandshakeParams, PacketPlaneIoError,
-            PacketPlaneQuicConnection, PacketPlaneQuicConnector, PacketPlaneQuicError,
-            PacketPlaneQuicRuntime, PacketPlaneQuicSnapshot, PacketPlaneReceivedFrame,
-            PacketPlaneRuntime, PacketPlaneSessionError, PacketPlaneSessionRole,
-            PacketPlaneSessionSnapshot, PacketPlaneSnapshot, VerifiedPacketPlaneHandshake,
+            PacketPlaneQuicBinding, PacketPlaneQuicConnection, PacketPlaneQuicConnector,
+            PacketPlaneQuicError, PacketPlaneQuicRuntime, PacketPlaneQuicSnapshot,
+            PacketPlaneReceivedFrame, PacketPlaneRuntime, PacketPlaneSessionError,
+            PacketPlaneSessionRole, PacketPlaneSessionSnapshot, PacketPlaneSnapshot,
+            VerifiedPacketPlaneHandshake,
         },
         pairing_code::{
             PairingCodeRejectionReason, PairingCodeRequest, PairingCodeResponse,
@@ -439,6 +440,7 @@ impl PacketPlaneNegotiator {
         remote_capabilities: ControlCapabilities,
         role: PacketPlaneQuicNegotiationRole,
         preferred_direction: PacketPlaneQuicConnectionDirection,
+        binding: PacketPlaneQuicBinding,
     ) {
         self.next_quic_connection_task_generation = self
             .next_quic_connection_task_generation
@@ -451,6 +453,7 @@ impl PacketPlaneNegotiator {
                 peer,
                 &remote_capabilities,
                 preferred_direction,
+                binding,
                 PACKET_PLANE_QUIC_CONNECT_TIMEOUT,
             )
             .await;
@@ -17268,15 +17271,29 @@ fn capability_response_for_peer_with_membership_records_result(
         return (rejected_capabilities_response(reason), membership_changed);
     }
 
-    let capabilities = if membership_changed {
+    let response_capabilities = if membership_changed {
         refreshed_local_capabilities(local_capabilities, forwarder)
     } else {
         local_capabilities.clone()
     };
+    let response_capabilities =
+        capabilities_for_remote_protocol(&response_capabilities, capabilities);
     (
-        accepted_capabilities_response(&capabilities),
+        accepted_capabilities_response(&response_capabilities),
         membership_changed,
     )
+}
+
+fn capabilities_for_remote_protocol(
+    local: &ControlCapabilities,
+    remote: &ControlCapabilities,
+) -> ControlCapabilities {
+    if remote.supports_bound_owned_quic_packet_plane {
+        return local.clone();
+    }
+    let mut compatible = local.clone().with_owned_quic_packet_plane(false);
+    compatible.owned_quic_packet_endpoint_candidates.clear();
+    compatible
 }
 
 #[cfg(test)]
@@ -17306,7 +17323,10 @@ fn capability_response_for_peer(
         );
     }
 
-    accepted_capabilities_response(local_capabilities)
+    accepted_capabilities_response(&capabilities_for_remote_protocol(
+        local_capabilities,
+        capabilities,
+    ))
 }
 
 fn learn_membership_records_from_capabilities(
@@ -18000,6 +18020,14 @@ fn log_control_capabilities_summary(
                     "false"
                 },
             ),
+            (
+                "bound_owned_quic",
+                if capabilities.supports_bound_owned_quic_packet_plane {
+                    "true"
+                } else {
+                    "false"
+                },
+            ),
         ],
     );
 }
@@ -18093,6 +18121,7 @@ fn maybe_send_packet_plane_hello(
     ) {
         Ok((secret, handshake, verified)) => match handshake.encode() {
             Ok(encoded) => {
+                let quic_binding = PacketPlaneQuicBinding::from_handshake(&verified);
                 negotiator.insert(remote_overlay, secret, verified, backend);
                 let request_id = swarm
                     .behaviour_mut()
@@ -18109,6 +18138,7 @@ fn maybe_send_packet_plane_hello(
                             remote_capabilities.clone().into_owned(),
                             PacketPlaneQuicNegotiationRole::Initiator,
                             PacketPlaneQuicConnectionDirection::Connect,
+                            quic_binding,
                         );
                     } else {
                         negotiator.remove_peer(remote_overlay);
@@ -18167,6 +18197,8 @@ fn packet_plane_negotiation_backend(
     }
     if local_capabilities.supports_owned_quic_packet_plane
         && remote_capabilities.supports_owned_quic_packet_plane
+        && local_capabilities.supports_bound_owned_quic_packet_plane
+        && remote_capabilities.supports_bound_owned_quic_packet_plane
         && packet_plane_quic.is_some_and(|packet_plane| {
             packet_plane_quic_session_needs_negotiation(packet_plane, peer, remote_quic_endpoint)
         })
@@ -18216,6 +18248,8 @@ fn packet_plane_accept_backend(
 ) -> Option<PacketDatagramBackend> {
     if local_capabilities.supports_owned_quic_packet_plane
         && remote_capabilities.supports_owned_quic_packet_plane
+        && local_capabilities.supports_bound_owned_quic_packet_plane
+        && remote_capabilities.supports_bound_owned_quic_packet_plane
         && first_packet_plane_quic_endpoint(local_capabilities).is_some()
         && first_packet_plane_quic_endpoint(remote_capabilities).is_some()
         && endpoint_is_advertised_for_backend(
@@ -18265,6 +18299,7 @@ fn has_healthy_path_kind(paths: &PathSet, peer: PeerId, path: PathKind) -> bool 
 async fn connect_packet_plane_quic_peer(
     connector: &PacketPlaneQuicConnector,
     remote_capabilities: &ControlCapabilities,
+    binding: PacketPlaneQuicBinding,
     timeout_duration: Duration,
 ) -> Result<PacketPlaneQuicConnection, PacketPlaneNegotiationError> {
     let endpoint = first_packet_plane_quic_endpoint(remote_capabilities)
@@ -18276,7 +18311,7 @@ async fn connect_packet_plane_quic_peer(
         .ok_or(PacketPlaneNegotiationError::MissingRemoteEndpoint)?;
     tokio::time::timeout(
         timeout_duration,
-        connector.connect(endpoint, CertificateDer::from(certificate)),
+        connector.connect_bound(endpoint, CertificateDer::from(certificate), binding),
     )
     .await
     .map_err(|_| PacketPlaneNegotiationError::Quic("connect_timeout".to_owned()))?
@@ -18285,9 +18320,10 @@ async fn connect_packet_plane_quic_peer(
 
 async fn accept_packet_plane_quic_peer(
     connector: &PacketPlaneQuicConnector,
+    binding: PacketPlaneQuicBinding,
     timeout_duration: Duration,
 ) -> Result<PacketPlaneQuicConnection, PacketPlaneNegotiationError> {
-    tokio::time::timeout(timeout_duration, connector.accept())
+    tokio::time::timeout(timeout_duration, connector.accept_bound(binding))
         .await
         .map_err(|_| PacketPlaneNegotiationError::Quic("accept_timeout".to_owned()))?
         .map_err(|error| PacketPlaneNegotiationError::Quic(packet_plane_quic_error_detail(&error)))
@@ -18319,14 +18355,21 @@ async fn attempt_packet_plane_quic_connection(
     connector: &PacketPlaneQuicConnector,
     remote_capabilities: &ControlCapabilities,
     direction: PacketPlaneQuicConnectionDirection,
+    binding: PacketPlaneQuicBinding,
     timeout_duration: Duration,
 ) -> Result<PacketPlaneQuicConnection, PacketPlaneNegotiationError> {
     match direction {
         PacketPlaneQuicConnectionDirection::Connect => {
-            connect_packet_plane_quic_peer(connector, remote_capabilities, timeout_duration).await
+            connect_packet_plane_quic_peer(
+                connector,
+                remote_capabilities,
+                binding,
+                timeout_duration,
+            )
+            .await
         }
         PacketPlaneQuicConnectionDirection::Accept => {
-            accept_packet_plane_quic_peer(connector, timeout_duration).await
+            accept_packet_plane_quic_peer(connector, binding, timeout_duration).await
         }
     }
 }
@@ -18336,12 +18379,14 @@ async fn establish_packet_plane_quic_connection(
     peer: PeerId,
     remote_capabilities: &ControlCapabilities,
     preferred_direction: PacketPlaneQuicConnectionDirection,
+    binding: PacketPlaneQuicBinding,
     timeout_duration: Duration,
 ) -> Result<PacketPlaneQuicConnection, PacketPlaneNegotiationError> {
     match attempt_packet_plane_quic_connection(
         connector,
         remote_capabilities,
         preferred_direction,
+        binding,
         timeout_duration,
     )
     .await
@@ -18364,6 +18409,7 @@ async fn establish_packet_plane_quic_connection(
                 connector,
                 remote_capabilities,
                 reverse_direction,
+                binding,
                 timeout_duration,
             )
             .await
@@ -18451,6 +18497,7 @@ async fn accept_packet_plane_hello(
         backend,
     )?;
     if backend == PacketDatagramBackend::OwnedQuic {
+        let quic_binding = PacketPlaneQuicBinding::from_handshake(&hello);
         let connector = context
             .packet_plane_quic
             .as_deref_mut()
@@ -18469,6 +18516,7 @@ async fn accept_packet_plane_hello(
             preferred_remote_capabilities.into_owned(),
             PacketPlaneQuicNegotiationRole::Responder,
             PacketPlaneQuicConnectionDirection::Accept,
+            quic_binding,
         );
         return accept.encode().map_err(PacketPlaneNegotiationError::Encode);
     }
@@ -19211,6 +19259,7 @@ fn update_observed_packet_plane_endpoints(
             .push(endpoint);
         capabilities.owned_quic_packet_plane_certificate_der = Some(certificate_der);
         capabilities.supports_owned_quic_packet_plane = true;
+        capabilities.supports_bound_owned_quic_packet_plane = true;
         capabilities.supports_quic_datagrams = true;
         update.quic_candidate_added = true;
     }
@@ -43808,6 +43857,70 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn packet_plane_negotiation_uses_udp_for_legacy_unbound_quic_peer() {
+        let peer = PeerId::from_libp2p(peer_id());
+        let mut local = ControlCapabilities::local("lab", None, 1280)
+            .with_owned_udp_packet_plane(true)
+            .with_packet_endpoint_candidates(vec!["127.0.0.1:10001".to_owned()])
+            .with_owned_quic_packet_endpoint_candidates(vec!["127.0.0.1:10002".to_owned()])
+            .with_owned_quic_packet_plane_certificate(vec![1]);
+        let mut remote = local.clone();
+        remote.supports_bound_owned_quic_packet_plane = false;
+        let packet_plane = PacketPlaneRuntime::disabled();
+        let quic = PacketPlaneQuicRuntime::bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let mut paths = PathSet::new();
+        paths.record_established(peer, PathKind::DirectTcpStream);
+
+        assert_eq!(
+            packet_plane_negotiation_backend(
+                &paths,
+                &local,
+                &remote,
+                &packet_plane,
+                Some(&quic),
+                peer,
+            ),
+            Some(PacketDatagramBackend::OwnedUdp)
+        );
+        assert_eq!(
+            packet_plane_accept_backend(&local, &remote, "127.0.0.1:10002".parse().unwrap(),),
+            None
+        );
+
+        local.supports_bound_owned_quic_packet_plane = false;
+        assert_eq!(
+            packet_plane_negotiation_backend(
+                &paths,
+                &local,
+                &remote,
+                &packet_plane,
+                Some(&quic),
+                peer,
+            ),
+            Some(PacketDatagramBackend::OwnedUdp)
+        );
+    }
+
+    #[test]
+    fn capability_response_withdraws_quic_from_legacy_unbound_peer() {
+        let local = ControlCapabilities::local("lab", None, 1280)
+            .with_owned_udp_packet_plane(true)
+            .with_packet_endpoint_candidates(vec!["127.0.0.1:10001".to_owned()])
+            .with_owned_quic_packet_endpoint_candidates(vec!["127.0.0.1:10002".to_owned()])
+            .with_owned_quic_packet_plane_certificate(vec![1]);
+        let mut legacy = local.clone();
+        legacy.supports_bound_owned_quic_packet_plane = false;
+
+        let compatible = capabilities_for_remote_protocol(&local, &legacy);
+        assert!(!compatible.supports_owned_quic_packet_plane);
+        assert!(!compatible.supports_bound_owned_quic_packet_plane);
+        assert_eq!(compatible.owned_quic_packet_plane_certificate_der, None);
+        assert!(compatible.owned_quic_packet_endpoint_candidates.is_empty());
+        assert_eq!(compatible.preferred_path, "direct_udp_datagram");
+        assert_eq!(capabilities_for_remote_protocol(&local, &local), local);
+    }
+
+    #[tokio::test]
     async fn packet_plane_negotiation_replaces_session_when_remote_endpoint_changes() {
         let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
         let remote_identity =
@@ -44003,6 +44116,7 @@ mod tests {
             PacketDatagramBackend::OwnedQuic,
         )
         .expect("signed quic hello");
+        let quic_binding = PacketPlaneQuicBinding::from_handshake(&verified_hello);
         negotiator.insert(
             responder_overlay,
             secret,
@@ -44016,6 +44130,7 @@ mod tests {
             responder_capabilities.clone(),
             PacketPlaneQuicNegotiationRole::Initiator,
             PacketPlaneQuicConnectionDirection::Connect,
+            quic_binding,
         );
         let response = packet_plane_accept_response_for_peer(
             PacketPlaneAcceptContext {
@@ -44178,6 +44293,7 @@ mod tests {
         let direction_timeout = TokioDuration::from_millis(250);
         let initiator_connector = initiator_quic.connector();
         let responder_connector = responder_quic.connector();
+        let quic_binding = PacketPlaneQuicBinding::from_bytes([13; 32]);
 
         let (initiator_result, responder_result) = tokio::join!(
             establish_packet_plane_quic_connection(
@@ -44185,6 +44301,7 @@ mod tests {
                 responder_overlay,
                 &responder_capabilities,
                 PacketPlaneQuicConnectionDirection::Connect,
+                quic_binding,
                 direction_timeout,
             ),
             establish_packet_plane_quic_connection(
@@ -44192,6 +44309,7 @@ mod tests {
                 initiator_overlay,
                 &initiator_capabilities,
                 PacketPlaneQuicConnectionDirection::Accept,
+                quic_binding,
                 direction_timeout,
             )
         );
@@ -44420,6 +44538,7 @@ mod tests {
             remote_capabilities.clone(),
             PacketPlaneQuicNegotiationRole::Initiator,
             PacketPlaneQuicConnectionDirection::Connect,
+            PacketPlaneQuicBinding::from_bytes([17; 32]),
         );
         let first_task = negotiator
             .quic_connection_task_handles
@@ -44434,6 +44553,7 @@ mod tests {
             remote_capabilities,
             PacketPlaneQuicNegotiationRole::Initiator,
             PacketPlaneQuicConnectionDirection::Connect,
+            PacketPlaneQuicBinding::from_bytes([19; 32]),
         );
         assert_eq!(negotiator.quic_connection_task_handles.len(), 1);
         assert_ne!(

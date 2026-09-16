@@ -240,6 +240,26 @@ capability event. Session expiry uses the same eligibility checks.
 `packet_plane_pending_hello_expired`, `packet_plane_hello_sent`, and
 `packet_plane_stale_response_ignored` expose timeout, retry, and correlation events.
 
+### Owned QUIC Connection Binding
+
+Owned QUIC connections are bound to the verified packet-plane handshake before
+they can carry packets.
+
+| Step | Rule |
+| --- | --- |
+| Token | SHA-256 over the signed Hello identity, ephemeral key, session ID, nonce, and role. |
+| Wire preface | The initiator sends `p2pvpnQ1` and the 32-byte token on the first unidirectional stream. |
+| Dispatch | One shared accept router assigns the connection to the waiter for that token. |
+| Unknown token | The connection is closed and is not retained. |
+| Stalled preface | The connection is closed after two seconds. |
+| Cancelled waiter | Its registration and any queued connection are removed. |
+
+The router permits connections for different peers to arrive in any order.
+It never assigns an accepted connection by task scheduling order.
+
+Capability `supports_bound_owned_quic_packet_plane` gates this protocol.
+If either peer omits it, negotiation uses owned UDP or stream fallback.
+
 ## Queueing
 
 Queues are per peer.

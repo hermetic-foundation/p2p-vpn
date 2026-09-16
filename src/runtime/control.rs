@@ -69,6 +69,8 @@ pub struct ControlCapabilities {
     #[serde(default)]
     pub supports_owned_quic_packet_plane: bool,
     #[serde(default)]
+    pub supports_bound_owned_quic_packet_plane: bool,
+    #[serde(default)]
     pub owned_quic_packet_plane_certificate_der: Option<Vec<u8>>,
     #[serde(default)]
     pub owned_quic_packet_endpoint_candidates: Vec<String>,
@@ -104,6 +106,7 @@ impl ControlCapabilities {
             supports_native_quic_datagrams: false,
             supports_owned_udp_packet_plane: false,
             supports_owned_quic_packet_plane: false,
+            supports_bound_owned_quic_packet_plane: false,
             owned_quic_packet_plane_certificate_der: None,
             owned_quic_packet_endpoint_candidates: Vec::new(),
             packet_endpoint_candidates: Vec::new(),
@@ -168,6 +171,7 @@ impl ControlCapabilities {
     pub fn with_owned_quic_packet_plane(mut self, supported: bool) -> Self {
         self.supports_owned_quic_packet_plane = supported;
         if !supported {
+            self.supports_bound_owned_quic_packet_plane = false;
             self.owned_quic_packet_plane_certificate_der = None;
         }
         self.supports_quic_datagrams = self.supports_native_quic_datagrams
@@ -180,6 +184,7 @@ impl ControlCapabilities {
     #[must_use]
     pub fn with_owned_quic_packet_plane_certificate(mut self, certificate_der: Vec<u8>) -> Self {
         self.supports_owned_quic_packet_plane = true;
+        self.supports_bound_owned_quic_packet_plane = true;
         self.owned_quic_packet_plane_certificate_der = Some(certificate_der);
         self.supports_quic_datagrams = true;
         self.refresh_preferred_path();
@@ -387,6 +392,13 @@ impl PeerCapabilities {
     }
 
     #[must_use]
+    pub fn supports_bound_owned_quic_packet_plane_for(&self, peer: PeerId) -> bool {
+        self.peers
+            .get(&peer)
+            .is_some_and(|capabilities| capabilities.supports_bound_owned_quic_packet_plane)
+    }
+
+    #[must_use]
     pub fn owned_quic_packet_plane_certificate_for(&self, peer: PeerId) -> Option<&[u8]> {
         self.peers.get(&peer).and_then(|capabilities| {
             capabilities
@@ -487,6 +499,11 @@ pub fn validate_capabilities(
             .direct_address_candidates
             .iter()
             .any(|address| address.parse::<libp2p::Multiaddr>().is_err())
+    {
+        return Some(ControlRejectionReason::UnsupportedPreferredPath);
+    }
+    if capabilities.supports_bound_owned_quic_packet_plane
+        && !capabilities.supports_owned_quic_packet_plane
     {
         return Some(ControlRejectionReason::UnsupportedPreferredPath);
     }
@@ -1314,6 +1331,7 @@ mod tests {
         assert!(!capabilities.supports_native_quic_datagrams);
         assert!(!capabilities.supports_owned_udp_packet_plane);
         assert!(!capabilities.supports_owned_quic_packet_plane);
+        assert!(!capabilities.supports_bound_owned_quic_packet_plane);
         assert_eq!(capabilities.owned_quic_packet_plane_certificate_der, None);
         assert!(capabilities.packet_endpoint_candidates.is_empty());
         assert!(!capabilities.supports_membership_record_pages);
@@ -1328,6 +1346,7 @@ mod tests {
         assert!(!owned.supports_native_quic_datagrams);
         assert!(owned.supports_owned_udp_packet_plane);
         assert!(!owned.supports_owned_quic_packet_plane);
+        assert!(!owned.supports_bound_owned_quic_packet_plane);
         assert_eq!(owned.preferred_path, "direct_udp_datagram");
 
         let certificate_der = test_owned_quic_certificate_der();
@@ -1338,6 +1357,7 @@ mod tests {
         assert!(!owned_quic.supports_native_quic_datagrams);
         assert!(!owned_quic.supports_owned_udp_packet_plane);
         assert!(owned_quic.supports_owned_quic_packet_plane);
+        assert!(owned_quic.supports_bound_owned_quic_packet_plane);
         assert_eq!(owned_quic.preferred_path, "direct_quic_datagram");
         assert_eq!(
             owned_quic
@@ -1617,6 +1637,7 @@ mod tests {
         assert!(!decoded.supports_native_quic_datagrams);
         assert!(!decoded.supports_owned_udp_packet_plane);
         assert!(!decoded.supports_owned_quic_packet_plane);
+        assert!(!decoded.supports_bound_owned_quic_packet_plane);
         assert_eq!(decoded.owned_quic_packet_plane_certificate_der, None);
     }
 }
