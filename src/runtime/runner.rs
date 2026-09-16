@@ -8561,7 +8561,7 @@ fn admit_discovered_relay_infrastructure_peer<'a>(
 }
 
 fn admit_connected_auto_relay_infrastructure_probe(
-    swarm: &mut Swarm<Behaviour>,
+    local_peer: Libp2pPeerId,
     forwarder: &Forwarder,
     infrastructure_peers: &mut InfrastructurePeers,
     auto_relay: &mut AutoRelayState,
@@ -8570,10 +8570,7 @@ fn admit_connected_auto_relay_infrastructure_probe(
     endpoint: &ConnectedPoint,
     relay_server_enabled: bool,
 ) {
-    if relay_server_enabled
-        || peer == *swarm.local_peer_id()
-        || forwarder.is_configured_transport_peer(peer)
-    {
+    if relay_server_enabled || peer == local_peer || forwarder.is_configured_transport_peer(peer) {
         return;
     }
     let Some(address) = connected_auto_relay_candidate_address(peer, endpoint) else {
@@ -8605,7 +8602,6 @@ fn admit_connected_auto_relay_infrastructure_probe(
             ("address", &address.to_string()),
         ],
     );
-    attempt_auto_relay_reservations(swarm, auto_relay, metrics);
 }
 
 fn remove_overlay_peer_from_infrastructure(
@@ -8770,6 +8766,7 @@ fn record_auto_relay_listener_termination(
     listener_id: ListenerId,
     now: Instant,
     event: &str,
+    reason: &str,
 ) -> Option<ReleasedAutoRelayListener> {
     let released = auto_relay.release_listener_for_retry_after(listener_id, now)?;
     let status = if released.was_accepted {
@@ -8798,6 +8795,7 @@ fn record_auto_relay_listener_termination(
             ("listener", &listener_id.to_string()),
             ("status", status),
             ("evicted", &evicted.to_string()),
+            ("reason", reason),
         ],
     );
     Some(released)
@@ -12281,7 +12279,7 @@ async fn handle_swarm_event(
                 }
                 EstablishedConnectionAuthorization::InfrastructureProbe => {
                     admit_connected_auto_relay_infrastructure_probe(
-                        swarm,
+                        *swarm.local_peer_id(),
                         context.forwarder,
                         context.infrastructure_peers,
                         context.auto_relay,
@@ -12805,6 +12803,7 @@ async fn handle_swarm_event(
                 );
                 return Ok(());
             }
+            advertise_relay_server_external_address(swarm, context.relay_server_enabled, &address);
             let mut publish_peer_address_record = kademlia_peer_address_is_advertisable(&address);
             if let Some(relay) = relayed_address_relay_peer(&address) {
                 if !context
@@ -12873,6 +12872,7 @@ async fn handle_swarm_event(
             listener_id,
             address,
         } => {
+            withdraw_relay_server_external_address(swarm, context.relay_server_enabled, &address);
             if context
                 .retiring_configured_relay_reservation_listeners
                 .contains(&listener_id)
@@ -12911,7 +12911,7 @@ async fn handle_swarm_event(
         SwarmEvent::ListenerClosed {
             listener_id,
             addresses,
-            ..
+            reason,
         } => {
             let retired_configured_listener = context
                 .retiring_configured_relay_reservation_listeners
@@ -12927,6 +12927,11 @@ async fn handle_swarm_event(
                 );
             } else {
                 for address in addresses {
+                    withdraw_relay_server_external_address(
+                        swarm,
+                        context.relay_server_enabled,
+                        &address,
+                    );
                     if let Some(relay) = relayed_address_relay_peer(&address)
                         && let Some(relay_base_address) =
                             relay_base_address_from_relayed_listen_address(&address)
@@ -12963,6 +12968,7 @@ async fn handle_swarm_event(
                     listener_id,
                     Instant::now(),
                     "auto_relay_reservation_listener_closed",
+                    &format!("{reason:?}"),
                 )
                 .is_some_and(|released| released.was_accepted)
                 {
@@ -12985,6 +12991,7 @@ async fn handle_swarm_event(
                     listener_id,
                     Instant::now(),
                     "auto_relay_reservation_listener_error",
+                    &error.to_string(),
                 )
                 .is_some_and(|released| released.was_accepted)
             {
@@ -13014,21 +13021,57 @@ fn advertise_relay_server_listener_address(
     relay_server_enabled: bool,
     endpoint: &ConnectedPoint,
 ) {
-    if !relay_server_enabled {
-        return;
-    }
     let ConnectedPoint::Listener { local_addr, .. } = endpoint else {
         return;
     };
-    if !direct_address_is_specific(local_addr) {
-        return;
+    advertise_relay_server_external_address(swarm, relay_server_enabled, local_addr);
+}
+
+fn advertise_relay_server_external_address(
+    swarm: &mut Swarm<Behaviour>,
+    relay_server_enabled: bool,
+    address: &Multiaddr,
+) -> bool {
+    if !relay_server_enabled
+        || !relay_server_external_address_is_advertisable(address)
+        || swarm.external_addresses().any(|known| known == address)
+    {
+        return false;
     }
-    swarm.add_external_address(local_addr.clone());
+    swarm.add_external_address(address.clone());
     log_runtime_event(
         LogLevel::Info,
         "relay_server_external_address_advertised",
-        &[("address", &local_addr.to_string())],
+        &[("address", &address.to_string())],
     );
+    true
+}
+
+fn withdraw_relay_server_external_address(
+    swarm: &mut Swarm<Behaviour>,
+    relay_server_enabled: bool,
+    address: &Multiaddr,
+) -> bool {
+    if !relay_server_enabled
+        || !relay_server_external_address_is_advertisable(address)
+        || !swarm.external_addresses().any(|known| known == address)
+    {
+        return false;
+    }
+    swarm.remove_external_address(address);
+    log_runtime_event(
+        LogLevel::Info,
+        "relay_server_external_address_withdrawn",
+        &[("address", &address.to_string())],
+    );
+    true
+}
+
+fn relay_server_external_address_is_advertisable(address: &Multiaddr) -> bool {
+    if relayed_address_relay_peer(address).is_some() {
+        return false;
+    }
+    direct_address_is_specific(address)
 }
 
 fn direct_address_is_specific(address: &Multiaddr) -> bool {
@@ -33054,6 +33097,49 @@ mod tests {
     }
 
     #[test]
+    fn connected_probe_defers_reservation_until_identify_confirms_relay() {
+        let local = peer_id();
+        let relay = peer_id();
+        let configured_peer = peer_id();
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let config = config_with_peer(&local_identity, configured_peer);
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let address: Multiaddr = format!("/ip4/192.168.51.254/tcp/4001/p2p/{relay}")
+            .parse()
+            .expect("relay address");
+        let endpoint = ConnectedPoint::Dialer {
+            address,
+            role_override: Endpoint::Dialer,
+            port_use: PortUse::Reuse,
+        };
+        let mut infrastructure_peers = InfrastructurePeers::default();
+        let mut auto_relay = AutoRelayState::default();
+        let metrics = RuntimeMetrics::default();
+
+        admit_connected_auto_relay_infrastructure_probe(
+            local,
+            &forwarder,
+            &mut infrastructure_peers,
+            &mut auto_relay,
+            &metrics,
+            relay,
+            &endpoint,
+            false,
+        );
+
+        assert!(infrastructure_peers.contains(relay));
+        assert_eq!(auto_relay.snapshot(Instant::now()).candidates, 1);
+        assert!(auto_relay.pending_reservations.is_empty());
+        assert!(auto_relay.reservation_listeners.is_empty());
+        assert_eq!(
+            metrics
+                .snapshot(crate::queue::QueueStats::default())
+                .auto_relay_reservation_attempts,
+            0
+        );
+    }
+
+    #[test]
     fn connected_probe_endpoint_rejects_relayed_candidate_address() {
         let relay = peer_id();
         let peer = peer_id();
@@ -35329,11 +35415,20 @@ mod tests {
         let unspecified_v4: Multiaddr = "/ip4/0.0.0.0/tcp/4001".parse().expect("unspecified v4");
         let concrete_v6: Multiaddr = "/ip6/fd00::1/tcp/4001".parse().expect("concrete v6");
         let unspecified_v6: Multiaddr = "/ip6/::/tcp/4001".parse().expect("unspecified v6");
+        let relay = peer_id();
+        let relayed: Multiaddr = format!("/ip4/192.168.41.254/tcp/4001/p2p/{relay}/p2p-circuit")
+            .parse()
+            .expect("relayed address");
 
-        assert!(direct_address_is_specific(&concrete_v4));
-        assert!(direct_address_is_specific(&concrete_v6));
-        assert!(!direct_address_is_specific(&unspecified_v4));
-        assert!(!direct_address_is_specific(&unspecified_v6));
+        assert!(relay_server_external_address_is_advertisable(&concrete_v4));
+        assert!(relay_server_external_address_is_advertisable(&concrete_v6));
+        assert!(!relay_server_external_address_is_advertisable(
+            &unspecified_v4
+        ));
+        assert!(!relay_server_external_address_is_advertisable(
+            &unspecified_v6
+        ));
+        assert!(!relay_server_external_address_is_advertisable(&relayed));
     }
 
     #[test]
