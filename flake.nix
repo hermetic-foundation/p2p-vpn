@@ -549,6 +549,9 @@
                     *yasna-0.5.2.drv)
                       printf '%s\n' '{"derivations":{"crate":{"env":{"buildCommand":"extract .cargo-checksum.json"},"outputs":{"out":{"path":"test"}}}}}'
                       ;;
+                    *maven-metadata.xml.drv)
+                      printf '%s\n' '{"derivations":{"metadata":{"env":{"allowSubstitutes":"","buildCommand":"target=$out$destination\nprintf \"%s\" \"$text\" > \"$target\"\n","buildInputs":"","name":"maven-metadata.xml","nativeBuildInputs":"","preferLocalBuild":"1","text":"<?xml version=\"1.0\"?><metadata/>"},"outputs":{"out":{"path":"test"}}}}}'
+                      ;;
                     *)
                       printf '%s\n' '{"derivations":{"package":{"outputs":{"out":{"path":"test"}}}}}'
                       ;;
@@ -557,9 +560,10 @@
                 fi
 
                 if [[ "''${1:-}" == build && " $* " == *' --dry-run '* ]]; then
-                  printf 'these 3 derivations will be built:\n' >&2
+                  printf 'these 4 derivations will be built:\n' >&2
                   printf '  /nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-p2p-vpn-android-e2e.drv\n' >&2
                   printf '  /nix/store/cccccccccccccccccccccccccccccccc-yasna-0.5.2.drv\n' >&2
+                  printf '  /nix/store/dddddddddddddddddddddddddddddddd-maven-metadata.xml.drv\n' >&2
                   if [[ "$mode" == dangerous ]]; then
                     printf '  /nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-gcc-15.3.0.drv\n' >&2
                   else

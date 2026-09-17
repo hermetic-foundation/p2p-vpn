@@ -274,6 +274,26 @@ is_cargo_vendor_unpack_derivation() {
     && grep -Fq '.cargo-checksum.json' <<<"$derivation_json"
 }
 
+is_local_maven_metadata_derivation() {
+  local path="$1"
+  [[ "${path##*/}" == *-maven-metadata.xml.drv ]] || return 1
+
+  jq -e '
+    (.derivations | to_entries) as $entries
+    | ($entries | length) == 1
+      and ($entries[0].value.env as $env
+        | $env.name == "maven-metadata.xml"
+          and $env.preferLocalBuild == "1"
+          and $env.allowSubstitutes == ""
+          and $env.buildInputs == ""
+          and $env.nativeBuildInputs == ""
+          and ($env.text | type == "string" and length <= 1048576)
+          and ($env.buildCommand | type == "string"
+            and contains("target=$out$destination")
+            and contains("printf \"%s\" \"$text\" > \"$target\"")))
+  ' <<<"$derivation_json" >/dev/null
+}
+
 is_approved_local_derivation() {
   local path="$1"
   local name="${path##*/}"
@@ -292,7 +312,9 @@ is_approved_local_derivation() {
       ;;
   esac
 
-  is_fixed_output_derivation || is_cargo_vendor_unpack_derivation
+  is_fixed_output_derivation \
+    || is_cargo_vendor_unpack_derivation \
+    || is_local_maven_metadata_derivation "$path"
 }
 
 unexpected_derivations=()
