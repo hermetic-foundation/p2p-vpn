@@ -2579,6 +2579,12 @@ mod android {
             android_logger::init_once(
                 android_logger::Config::default()
                     .with_tag("p2p-vpn")
+                    // Logcat writes are synchronous; mDNS may warn once per oversized relay address.
+                    .with_filter(
+                        android_logger::FilterBuilder::new()
+                            .parse("info,libp2p_mdns=error")
+                            .build(),
+                    )
                     .with_max_level(log::LevelFilter::Info),
             );
             set_hook(Box::new(|panic| {
