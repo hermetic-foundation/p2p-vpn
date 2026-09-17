@@ -119,6 +119,8 @@ EOF
         has_profile=true
         if [[ "$mode" == fresh-pair && ! -f "$state_dir/profile-created" ]]; then
           has_profile=false
+        elif [[ "$mode" == delayed-profile && "$count" -lt 3 ]]; then
+          has_profile=false
         fi
         response="$(jq -nc \
           --argjson changes "$count" \

@@ -476,6 +476,23 @@ wait_for_service_status() {
   return 1
 }
 
+wait_for_readable_profile_status() {
+  local deadline=$((SECONDS + 30))
+  local status
+  while ((SECONDS <= deadline)); do
+    if status="$(get_status)" \
+      && jq -e '
+        .value.snapshot.has_profile and
+        (.value.snapshot.profile_unreadable | not)
+      ' <<< "$status" >/dev/null; then
+      printf '%s\n' "$status"
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
 wait_for_profile_status() {
   local deadline=$((SECONDS + 60))
   local status
@@ -1118,12 +1135,8 @@ start_app
 if [[ "$pair_fresh_profile" -eq 1 ]]; then
   pair_new_profile || fail_audit "fresh-profile code pairing did not complete"
 else
-  initial_status="$(wait_for_service_status)" \
-    || fail_audit "the Android debug service did not become ready"
-  if ! jq -e '.value.snapshot.has_profile and (.value.snapshot.profile_unreadable | not)' \
-    <<< "$initial_status" >/dev/null; then
-    fail_audit "no readable Android profile exists; pair first or use --pair"
-  fi
+  initial_status="$(wait_for_readable_profile_status)" \
+    || fail_audit "no readable Android profile exists; pair first or use --pair"
   if [[ "$(jq -r '.value.snapshot.network_name' <<< "$initial_status")" != "$network" ]]; then
     fail_audit "the saved Android profile belongs to a different network"
   fi

@@ -2072,6 +2072,8 @@
                   "$test_root/full-evidence" \
                   "$test_root/core-state" \
                   "$test_root/core-evidence" \
+                  "$test_root/delayed-profile-state" \
+                  "$test_root/delayed-profile-evidence" \
                   "$test_root/upstream-vpn-state" \
                   "$test_root/upstream-vpn-evidence" \
                   "$test_root/failure-state" \
@@ -2271,6 +2273,27 @@
                   .sustained.sent >= 20
                 ' "$test_root/core-evidence/evidence.json" >/dev/null
                 test "$(grep -c ' install -r ' "$test_root/core-state/adb.log")" -eq 2
+
+                env \
+                  "''${common_environment[@]}" \
+                  P2P_VPN_ANDROID_DEVICE_AUDIT_FAKE_STATE="$test_root/delayed-profile-state" \
+                  P2P_VPN_ANDROID_DEVICE_AUDIT_FAKE_MODE=delayed-profile \
+                  bash ${./scripts/android-device-audit.sh} \
+                    --scenario core \
+                    --network physical-test \
+                    --peer-ipv4 100.64.0.1 \
+                    --peer-ipv6 fd42::1 \
+                    --output "$test_root/delayed-profile-evidence" \
+                    --apk "$test_root/fake.apk" \
+                    --duration-seconds 1 \
+                    --sample-seconds 1 \
+                    --doze-seconds 1 \
+                    --transition-timeout 10 \
+                    --allow-short
+
+                jq -e '.outcome == "passed"' \
+                  "$test_root/delayed-profile-evidence/evidence.json" >/dev/null
+                test "$(< "$test_root/delayed-profile-state/status-count")" -ge 3
 
                 env \
                   "''${common_environment[@]}" \
