@@ -2579,10 +2579,11 @@ mod android {
             android_logger::init_once(
                 android_logger::Config::default()
                     .with_tag("p2p-vpn")
-                    // Logcat writes are synchronous; mDNS may warn once per oversized relay address.
+                    // Logcat writes are synchronous. Keep Android lifecycle events and genuine
+                    // native errors visible, but exclude discovery churn from the packet runtime.
                     .with_filter(
                         android_logger::FilterBuilder::new()
-                            .parse("info,libp2p_mdns=error")
+                            .parse("error,p2p_vpn_android=info,libp2p_mdns=off")
                             .build(),
                     )
                     .with_max_level(log::LevelFilter::Info),
