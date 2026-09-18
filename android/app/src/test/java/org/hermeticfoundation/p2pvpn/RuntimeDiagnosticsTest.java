@@ -28,6 +28,11 @@ public final class RuntimeDiagnosticsTest {
                                 "stream_fallback_path_demotions 14",
                                 "outbound_queue_blocked_no_supported_path_events 15",
                                 "outbound_queue_blocked_packet_window_events 16",
+                                "tun_read_packets 17",
+                                "tun_write_packets 18",
+                                "outbound_sent_packets 19",
+                                "outbound_owned_quic_datagram_packets 20",
+                                "inbound_accepted_packets 21",
                                 "peer_secret 999"));
 
         assertEquals(1, diagnostics.peersWithoutSupportedPath);
@@ -46,6 +51,11 @@ public final class RuntimeDiagnosticsTest {
         assertEquals(14, diagnostics.streamFallbackPathDemotions);
         assertEquals(15, diagnostics.blockedNoSupportedPathEvents);
         assertEquals(16, diagnostics.blockedPacketWindowEvents);
+        assertEquals(17, diagnostics.tunReadPackets);
+        assertEquals(18, diagnostics.tunWritePackets);
+        assertEquals(19, diagnostics.outboundSentPackets);
+        assertEquals(20, diagnostics.outboundOwnedQuicDatagramPackets);
+        assertEquals(21, diagnostics.inboundAcceptedPackets);
     }
 
     @Test

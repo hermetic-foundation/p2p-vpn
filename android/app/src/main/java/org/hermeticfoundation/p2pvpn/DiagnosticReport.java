@@ -133,6 +133,7 @@ final class DiagnosticReport {
         appendUnderlay(report, input);
         appendPaths(report, input.paths, input.runtime);
         appendQueueAndDrops(report, input.runtime);
+        appendTraffic(report, input.runtime);
         appendResources(report, input.resources);
         report.append(",\"pairing\":{");
         report.append("\"operation_active\":").append(input.pairingActive);
@@ -225,6 +226,18 @@ final class DiagnosticReport {
                 .append(runtime.packetPlanePathDemotions);
         report.append(",\"stream_path_demotions\":")
                 .append(runtime.streamFallbackPathDemotions)
+                .append('}');
+    }
+
+    private static void appendTraffic(StringBuilder report, RuntimeDiagnostics runtime) {
+        report.append(",\"traffic\":{");
+        report.append("\"tun_read_packets\":").append(runtime.tunReadPackets);
+        report.append(",\"tun_write_packets\":").append(runtime.tunWritePackets);
+        report.append(",\"outbound_sent_packets\":").append(runtime.outboundSentPackets);
+        report.append(",\"outbound_owned_quic_datagram_packets\":")
+                .append(runtime.outboundOwnedQuicDatagramPackets);
+        report.append(",\"inbound_accepted_packets\":")
+                .append(runtime.inboundAcceptedPackets)
                 .append('}');
     }
 

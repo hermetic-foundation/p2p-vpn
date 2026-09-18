@@ -17,6 +17,11 @@ final class RuntimeDiagnostics {
     final long streamFallbackPathDemotions;
     final long blockedNoSupportedPathEvents;
     final long blockedPacketWindowEvents;
+    final long tunReadPackets;
+    final long tunWritePackets;
+    final long outboundSentPackets;
+    final long outboundOwnedQuicDatagramPackets;
+    final long inboundAcceptedPackets;
 
     private RuntimeDiagnostics(long[] values) {
         peersWithoutSupportedPath = values[0];
@@ -35,14 +40,19 @@ final class RuntimeDiagnostics {
         streamFallbackPathDemotions = values[13];
         blockedNoSupportedPathEvents = values[14];
         blockedPacketWindowEvents = values[15];
+        tunReadPackets = values[16];
+        tunWritePackets = values[17];
+        outboundSentPackets = values[18];
+        outboundOwnedQuicDatagramPackets = values[19];
+        inboundAcceptedPackets = values[20];
     }
 
     static RuntimeDiagnostics empty() {
-        return new RuntimeDiagnostics(new long[16]);
+        return new RuntimeDiagnostics(new long[21]);
     }
 
     static RuntimeDiagnostics fromLines(Iterable<String> lines) {
-        long[] values = new long[16];
+        long[] values = new long[21];
         for (String line : lines) {
             int separator = line.indexOf(' ');
             if (separator <= 0 || separator == line.length() - 1) {
@@ -104,6 +114,16 @@ final class RuntimeDiagnostics {
                 return 14;
             case "outbound_queue_blocked_packet_window_events":
                 return 15;
+            case "tun_read_packets":
+                return 16;
+            case "tun_write_packets":
+                return 17;
+            case "outbound_sent_packets":
+                return 18;
+            case "outbound_owned_quic_datagram_packets":
+                return 19;
+            case "inbound_accepted_packets":
+                return 20;
             default:
                 return -1;
         }

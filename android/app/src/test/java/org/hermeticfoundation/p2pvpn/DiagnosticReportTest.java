@@ -28,6 +28,10 @@ public final class DiagnosticReportTest {
                                 "queue_queued_packets 4",
                                 "queue_dropped_packets 5",
                                 "outbound_dropped_packets 6",
+                                "tun_read_packets 8",
+                                "tun_write_packets 9",
+                                "outbound_owned_quic_datagram_packets 10",
+                                "inbound_accepted_packets 11",
                                 "stream_fallback_path_demotions 7"));
         DiagnosticReport.Input input =
                 new DiagnosticReport.Input(
@@ -66,6 +70,10 @@ public final class DiagnosticReportTest {
         assertTrue(report.contains("\"lockdown\":false"));
         assertTrue(report.contains("\"peers_without_supported_path\":1"));
         assertTrue(report.contains("\"queue_packets\":5"));
+        assertTrue(report.contains("\"tun_read_packets\":8"));
+        assertTrue(report.contains("\"tun_write_packets\":9"));
+        assertTrue(report.contains("\"outbound_owned_quic_datagram_packets\":10"));
+        assertTrue(report.contains("\"inbound_accepted_packets\":11"));
         assertTrue(report.contains("\"process_cpu_millis\":100"));
         assertTrue(report.contains("\"name\":\"underlay_recovery_completed\""));
         assertTrue(report.contains("\"kind\":\"unknown\""));
