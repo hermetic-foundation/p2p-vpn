@@ -168,6 +168,7 @@ mod recovery_event_tests;
 mod settling_timeline_tests;
 
 const TUN_READ_CHANNEL: usize = 1024;
+const MAX_CONSECUTIVE_RUNTIME_DATA_EVENTS: usize = 64;
 const REDIAL_INTERVAL: Duration = Duration::from_secs(10);
 const BLOCKED_QUEUE_REDIAL_INTERVAL: Duration = Duration::from_secs(2);
 const PAIRING_GLOBAL_RATE_MULTIPLIER: u32 = 8;
@@ -1791,6 +1792,8 @@ where
     tokio::pin!(shutdown);
 
     let mut packet_authorization_revision = None;
+    let mut runtime_data_priority = RuntimeDataPriority::default();
+    let mut tun_reader_open = true;
     loop {
         membership_record_syncs.reconcile_authorization(&forwarder, &metrics);
         if packet_authorization_revision != Some(forwarder.authorization_revision()) {
@@ -1815,7 +1818,15 @@ where
             );
             packet_authorization_revision = Some(forwarder.authorization_revision());
         }
+        let runtime_data_available = tun_reader_open
+            || packet_plane.can_receive()
+            || packet_plane_quic
+                .as_ref()
+                .is_some_and(PacketPlaneQuicRuntime::can_receive);
+        let mut processed_runtime_data = false;
         tokio::select! {
+            biased;
+
             reason = &mut shutdown => {
                 log_runtime_event(
                     LogLevel::Info,
@@ -1835,154 +1846,91 @@ where
                 );
                 return Ok(());
             }
-            Some(packet) = tun_rx.recv() => {
-                if let Err(error) = forwarder.enqueue_tun_packet(&mut queues, packet) {
-                    metrics.record_outbound_drop(outbound_drop_reason(&error));
-                    eprintln!("dropping outbound packet: {error:?}");
-                }
-                drain_runtime_outbound_queue(RuntimeOutboundDrain {
-                    connection_epochs: &mut connection_epochs,
-                    node: &mut node,
-                    forwarder: &forwarder,
-                    queues: &mut queues,
-                    paths: &mut paths,
-                    peer_capabilities: &peer_capabilities,
-                    queue_runtime: &mut queue_runtime,
-                    writer: &mut writer,
-                    packet_plane: &packet_plane,
-                    packet_plane_quic: packet_plane_quic.as_ref(),
-                    metrics: &metrics,
-                })
-                .await;
-            }
-            event = node.swarm.select_next_some() => {
-                handle_swarm_event(
-                    &mut node.swarm,
-                    SwarmEventContext {
-                        forwarder: &mut forwarder,
-                        membership: &mut membership,
-                        tun_runtime: &mut tun_runtime,
-                        route_controller: route_controller.as_mut(),
-                        infrastructure_peers: &mut infrastructure_peers,
-                        routing_infrastructure_peers: &mut routing_infrastructure_peers,
-                        writer: &mut writer,
-                        paths: &mut paths,
-                        peer_capabilities: &mut peer_capabilities,
-                        relay_readiness: &mut relay_readiness,
-                        auto_relay: &mut auto_relay,
-                        public_discovery_backoff: &mut public_discovery_backoff,
-                        public_discovery_holdoff_active: public_discovery_holdoff_active(
-                            public_discovery_holdoff_until,
-                            Instant::now(),
-                        ),
-                        relay_addresses: &node.relay_peer_addresses,
-                        configured_peer_addresses: &node.configured_peer_addresses,
-                        configured_relay_reservation_listeners:
-                            &mut node.configured_relay_reservation_listeners,
-                        retiring_configured_relay_reservation_listeners:
-                            &mut node.retiring_configured_relay_reservation_listeners,
-                        relay_server_enabled: node.startup.relay_server_enabled,
-                        discovered_peer_addresses: &mut queue_runtime.discovered_peer_addresses,
-                        packet_in_flight: &mut queue_runtime.packet_in_flight,
-                        inbound_packet_rate_limiters: &mut inbound_packet_rate_limiters,
-                        pairing_request_rate_limiters: &mut pairing_request_rate_limiters,
-                        membership_page_rate_limiters: &mut membership_page_rate_limiters,
-                        membership_record_syncs: &mut membership_record_syncs,
-                        pairing_handshake_rate_limiter: &mut pairing_handshake_rate_limiter,
-                        metrics: &metrics,
-                        local_capabilities: &mut local_capabilities,
-                        persistent_packet_endpoint_candidates:
-                            &persistent_packet_endpoint_candidates,
-                        persistent_packet_plane_quic_endpoint_candidates:
-                            &persistent_packet_plane_quic_endpoint_candidates,
-                        previous_membership_tags: &previous_membership_tags,
-                        discovery: &discovery,
-                        identity: &node.identity,
-                        packet_plane: &mut packet_plane,
-                        packet_plane_quic: packet_plane_quic.as_mut(),
-                        packet_plane_negotiator: &mut packet_plane_negotiator,
-                        path_probe_tracker: &mut path_probe_tracker,
-                        packet_plane_session_ttl,
-                        packet_plane_replay_windows_per_session,
-                        pairing_replay_tokens: &mut pairing_replay_tokens,
-                        code_pairing_sessions: &mut code_pairing_sessions,
-                        pairing_state_store: pairing_state_store.as_ref(),
-                        active_connections: &mut active_connections,
-                        connection_epochs: &mut connection_epochs,
-                        membership_probe_connections: &mut membership_probe_connections,
-                        kademlia_maintenance: &mut kademlia_maintenance,
-                    },
-                    event,
-                ).await?;
-                reconcile_runtime_kademlia_scope(
-                    &mut node,
-                    &local_capabilities,
-                    &previous_membership_tags,
-                    &mut kademlia_rendezvous_key,
-                    &mut kademlia_lookup_keys,
-                    &mut kademlia_membership_records_key,
-                    &mut kademlia_membership_record_lookup_keys,
-                );
-                drain_runtime_outbound_queue(RuntimeOutboundDrain {
-                    connection_epochs: &mut connection_epochs,
-                    node: &mut node,
-                    forwarder: &forwarder,
-                    queues: &mut queues,
-                    paths: &mut paths,
-                    peer_capabilities: &peer_capabilities,
-                    queue_runtime: &mut queue_runtime,
-                    writer: &mut writer,
-                    packet_plane: &packet_plane,
-                    packet_plane_quic: packet_plane_quic.as_ref(),
-                    metrics: &metrics,
-                })
-                .await;
-            }
-            received = packet_plane.recv_frame_from_session(), if packet_plane.can_receive() => {
-                match received {
-                    Ok(received) => {
-                        let mut packet_plane_context = PacketPlaneInboundContext {
-                            forwarder: &mut forwarder,
-                            writer: &mut writer,
+            event = receive_runtime_data(
+                &mut tun_rx,
+                tun_reader_open,
+                &mut packet_plane,
+                packet_plane_quic.as_mut(),
+            ), if runtime_data_available && runtime_data_priority.allows_data() => {
+                match event {
+                    RuntimeDataEvent::Tun(Some(packet)) => {
+                        processed_runtime_data = true;
+                        if let Err(error) = forwarder.enqueue_tun_packet(&mut queues, packet) {
+                            metrics.record_outbound_drop(outbound_drop_reason(&error));
+                            eprintln!("dropping outbound packet: {error:?}");
+                        }
+                        drain_runtime_outbound_queue(RuntimeOutboundDrain {
+                            connection_epochs: &mut connection_epochs,
+                            node: &mut node,
+                            forwarder: &forwarder,
+                            queues: &mut queues,
                             paths: &mut paths,
                             peer_capabilities: &peer_capabilities,
-                            inbound_packet_rate_limiters: &mut inbound_packet_rate_limiters,
-                            packet_plane: Some(&packet_plane),
-                            packet_plane_quic: packet_plane_quic.as_ref(),
-                            backend: PacketDatagramBackend::OwnedUdp,
-                            path_probe_tracker: &mut path_probe_tracker,
-                            metrics: &metrics,
-                        };
-                        handle_packet_plane_received(&mut packet_plane_context, &received).await?;
-                    }
-                    Err(error) => handle_packet_plane_receive_error(&metrics, &error),
-                }
-            }
-            received = async {
-                packet_plane_quic
-                    .as_mut()
-                    .expect("packet-plane QUIC runtime is present")
-                    .recv_frame_from_session()
-                    .await
-            }, if packet_plane_quic.as_ref().is_some_and(PacketPlaneQuicRuntime::can_receive) => {
-                match received {
-                    Ok(received) => {
-                        let mut packet_plane_context = PacketPlaneInboundContext {
-                            forwarder: &mut forwarder,
+                            queue_runtime: &mut queue_runtime,
                             writer: &mut writer,
-                            paths: &mut paths,
-                            peer_capabilities: &peer_capabilities,
-                            inbound_packet_rate_limiters: &mut inbound_packet_rate_limiters,
-                            packet_plane: Some(&packet_plane),
+                            packet_plane: &packet_plane,
                             packet_plane_quic: packet_plane_quic.as_ref(),
-                            backend: PacketDatagramBackend::OwnedQuic,
-                            path_probe_tracker: &mut path_probe_tracker,
                             metrics: &metrics,
-                        };
-                        handle_packet_plane_received(&mut packet_plane_context, &received).await?;
+                        })
+                        .await;
                     }
-                    Err(error) => {
-                        handle_packet_plane_quic_receive_error(&mut paths, &metrics, &error);
+                    RuntimeDataEvent::Tun(None) => tun_reader_open = false,
+                    RuntimeDataEvent::Udp(received) => {
+                        processed_runtime_data = true;
+                        match received {
+                            Ok(received) => {
+                                let mut packet_plane_context = PacketPlaneInboundContext {
+                                    forwarder: &mut forwarder,
+                                    writer: &mut writer,
+                                    paths: &mut paths,
+                                    peer_capabilities: &peer_capabilities,
+                                    inbound_packet_rate_limiters:
+                                        &mut inbound_packet_rate_limiters,
+                                    packet_plane: Some(&packet_plane),
+                                    packet_plane_quic: packet_plane_quic.as_ref(),
+                                    backend: PacketDatagramBackend::OwnedUdp,
+                                    path_probe_tracker: &mut path_probe_tracker,
+                                    metrics: &metrics,
+                                };
+                                handle_packet_plane_received(
+                                    &mut packet_plane_context,
+                                    &received,
+                                )
+                                .await?;
+                            }
+                            Err(error) => handle_packet_plane_receive_error(&metrics, &error),
+                        }
+                    }
+                    RuntimeDataEvent::Quic(received) => {
+                        processed_runtime_data = true;
+                        match received {
+                            Ok(received) => {
+                                let mut packet_plane_context = PacketPlaneInboundContext {
+                                    forwarder: &mut forwarder,
+                                    writer: &mut writer,
+                                    paths: &mut paths,
+                                    peer_capabilities: &peer_capabilities,
+                                    inbound_packet_rate_limiters: &mut inbound_packet_rate_limiters,
+                                    packet_plane: Some(&packet_plane),
+                                    packet_plane_quic: packet_plane_quic.as_ref(),
+                                    backend: PacketDatagramBackend::OwnedQuic,
+                                    path_probe_tracker: &mut path_probe_tracker,
+                                    metrics: &metrics,
+                                };
+                                handle_packet_plane_received(
+                                    &mut packet_plane_context,
+                                    &received,
+                                )
+                                .await?;
+                            }
+                            Err(error) => {
+                                handle_packet_plane_quic_receive_error(
+                                    &mut paths,
+                                    &metrics,
+                                    &error,
+                                );
+                            }
+                        }
                     }
                 }
             }
@@ -2340,6 +2288,7 @@ where
                         if respond_to.send(response).is_err() {
                             eprintln!("runtime network change response receiver dropped");
                         }
+                        runtime_data_priority.record_other();
                         continue;
                     }
                     RuntimeControlRequest::MembershipRevoke {
@@ -2436,6 +2385,7 @@ where
                                 "control socket membership mutation response receiver dropped"
                             );
                         }
+                        runtime_data_priority.record_other();
                         continue;
                     }
                     RuntimeControlRequest::PairRpc { request, respond_to } => {
@@ -2549,6 +2499,7 @@ where
                         if respond_to.send(response).is_err() {
                             eprintln!("control socket pair RPC response receiver dropped");
                         }
+                        runtime_data_priority.record_other();
                         continue;
                     }
                     request => request,
@@ -2613,6 +2564,89 @@ where
                     return Ok(());
                 }
             }
+            event = node.swarm.select_next_some() => {
+                handle_swarm_event(
+                    &mut node.swarm,
+                    SwarmEventContext {
+                        forwarder: &mut forwarder,
+                        membership: &mut membership,
+                        tun_runtime: &mut tun_runtime,
+                        route_controller: route_controller.as_mut(),
+                        infrastructure_peers: &mut infrastructure_peers,
+                        routing_infrastructure_peers: &mut routing_infrastructure_peers,
+                        writer: &mut writer,
+                        paths: &mut paths,
+                        peer_capabilities: &mut peer_capabilities,
+                        relay_readiness: &mut relay_readiness,
+                        auto_relay: &mut auto_relay,
+                        public_discovery_backoff: &mut public_discovery_backoff,
+                        public_discovery_holdoff_active: public_discovery_holdoff_active(
+                            public_discovery_holdoff_until,
+                            Instant::now(),
+                        ),
+                        relay_addresses: &node.relay_peer_addresses,
+                        configured_peer_addresses: &node.configured_peer_addresses,
+                        configured_relay_reservation_listeners:
+                            &mut node.configured_relay_reservation_listeners,
+                        retiring_configured_relay_reservation_listeners:
+                            &mut node.retiring_configured_relay_reservation_listeners,
+                        relay_server_enabled: node.startup.relay_server_enabled,
+                        discovered_peer_addresses: &mut queue_runtime.discovered_peer_addresses,
+                        packet_in_flight: &mut queue_runtime.packet_in_flight,
+                        inbound_packet_rate_limiters: &mut inbound_packet_rate_limiters,
+                        pairing_request_rate_limiters: &mut pairing_request_rate_limiters,
+                        membership_page_rate_limiters: &mut membership_page_rate_limiters,
+                        membership_record_syncs: &mut membership_record_syncs,
+                        pairing_handshake_rate_limiter: &mut pairing_handshake_rate_limiter,
+                        metrics: &metrics,
+                        local_capabilities: &mut local_capabilities,
+                        persistent_packet_endpoint_candidates:
+                            &persistent_packet_endpoint_candidates,
+                        persistent_packet_plane_quic_endpoint_candidates:
+                            &persistent_packet_plane_quic_endpoint_candidates,
+                        previous_membership_tags: &previous_membership_tags,
+                        discovery: &discovery,
+                        identity: &node.identity,
+                        packet_plane: &mut packet_plane,
+                        packet_plane_quic: packet_plane_quic.as_mut(),
+                        packet_plane_negotiator: &mut packet_plane_negotiator,
+                        path_probe_tracker: &mut path_probe_tracker,
+                        packet_plane_session_ttl,
+                        packet_plane_replay_windows_per_session,
+                        pairing_replay_tokens: &mut pairing_replay_tokens,
+                        code_pairing_sessions: &mut code_pairing_sessions,
+                        pairing_state_store: pairing_state_store.as_ref(),
+                        active_connections: &mut active_connections,
+                        connection_epochs: &mut connection_epochs,
+                        membership_probe_connections: &mut membership_probe_connections,
+                        kademlia_maintenance: &mut kademlia_maintenance,
+                    },
+                    event,
+                ).await?;
+                reconcile_runtime_kademlia_scope(
+                    &mut node,
+                    &local_capabilities,
+                    &previous_membership_tags,
+                    &mut kademlia_rendezvous_key,
+                    &mut kademlia_lookup_keys,
+                    &mut kademlia_membership_records_key,
+                    &mut kademlia_membership_record_lookup_keys,
+                );
+                drain_runtime_outbound_queue(RuntimeOutboundDrain {
+                    connection_epochs: &mut connection_epochs,
+                    node: &mut node,
+                    forwarder: &forwarder,
+                    queues: &mut queues,
+                    paths: &mut paths,
+                    peer_capabilities: &peer_capabilities,
+                    queue_runtime: &mut queue_runtime,
+                    writer: &mut writer,
+                    packet_plane: &packet_plane,
+                    packet_plane_quic: packet_plane_quic.as_ref(),
+                    metrics: &metrics,
+                })
+                .await;
+            }
             () = async {
                 timers.metrics
                     .as_mut()
@@ -2632,6 +2666,12 @@ where
                     ),
                 );
             }
+            () = tokio::task::yield_now(), if !runtime_data_priority.allows_data() => {}
+        }
+        if processed_runtime_data {
+            runtime_data_priority.record_data();
+        } else {
+            runtime_data_priority.record_other();
         }
         persist_membership_records_if_changed(
             membership_state_store.as_ref(),
@@ -10339,6 +10379,56 @@ struct TunReadWorker {
     receiver: mpsc::Receiver<Vec<u8>>,
     cancellation: Option<Box<dyn FnOnce() + Send>>,
     worker: Option<std::thread::JoinHandle<()>>,
+}
+
+#[derive(Debug)]
+enum RuntimeDataEvent {
+    Tun(Option<Vec<u8>>),
+    Udp(Result<PacketPlaneReceivedFrame, PacketPlaneIoError>),
+    Quic(Result<PacketPlaneReceivedFrame, PacketPlaneQuicError>),
+}
+
+async fn receive_runtime_data(
+    tun: &mut TunReadWorker,
+    tun_open: bool,
+    packet_plane: &mut PacketPlaneRuntime,
+    packet_plane_quic: Option<&mut PacketPlaneQuicRuntime>,
+) -> RuntimeDataEvent {
+    let udp_can_receive = packet_plane.can_receive();
+    let quic_can_receive = packet_plane_quic
+        .as_ref()
+        .is_some_and(|runtime| runtime.can_receive());
+    tokio::select! {
+        packet = tun.recv(), if tun_open => RuntimeDataEvent::Tun(packet),
+        received = packet_plane.recv_frame_from_session(), if udp_can_receive => {
+            RuntimeDataEvent::Udp(received)
+        }
+        received = async {
+            packet_plane_quic
+                .expect("packet-plane QUIC runtime is present")
+                .recv_frame_from_session()
+                .await
+        }, if quic_can_receive => RuntimeDataEvent::Quic(received),
+    }
+}
+
+#[derive(Debug, Default)]
+struct RuntimeDataPriority {
+    consecutive_events: usize,
+}
+
+impl RuntimeDataPriority {
+    const fn allows_data(&self) -> bool {
+        self.consecutive_events < MAX_CONSECUTIVE_RUNTIME_DATA_EVENTS
+    }
+
+    fn record_data(&mut self) {
+        self.consecutive_events = self.consecutive_events.saturating_add(1);
+    }
+
+    fn record_other(&mut self) {
+        self.consecutive_events = 0;
+    }
 }
 
 impl TunReadWorker {
@@ -23234,6 +23324,26 @@ mod tests {
 
     fn peer_id() -> Libp2pPeerId {
         Keypair::generate_ed25519().public().to_peer_id()
+    }
+
+    #[test]
+    fn runtime_data_priority_bounds_packet_bursts() {
+        let mut priority = RuntimeDataPriority::default();
+        for _ in 0..MAX_CONSECUTIVE_RUNTIME_DATA_EVENTS {
+            assert!(priority.allows_data());
+            priority.record_data();
+        }
+        assert!(!priority.allows_data());
+    }
+
+    #[test]
+    fn runtime_data_priority_resumes_after_other_work() {
+        let mut priority = RuntimeDataPriority::default();
+        for _ in 0..MAX_CONSECUTIVE_RUNTIME_DATA_EVENTS {
+            priority.record_data();
+        }
+        priority.record_other();
+        assert!(priority.allows_data());
     }
 
     #[tokio::test]
