@@ -502,7 +502,8 @@ wait_for_profile_status() {
         .value.snapshot.has_profile and
         (.value.snapshot.profile_unreadable | not) and
         .value.snapshot.network_name == $network and
-        (.value.snapshot.hostname | type == "string" and test("^android-[0-9a-f]{16}$"))
+        (.value.snapshot.hostname | type == "string" and
+          test("^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"))
       ' <<< "$status" >/dev/null; then
       printf '%s\n' "$status"
       return 0
@@ -521,7 +522,8 @@ sanitize_status() {
       profile_stored,
       profile_readable: (.has_profile and (.profile_unreadable | not)),
       network_matches: (.network_name == $network),
-      hostname_assigned: (.hostname | type == "string" and test("^android-[0-9a-f]{16}$")),
+      hostname_assigned: (.hostname | type == "string" and
+        test("^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")),
       address_families: ([.addresses[]? | if contains(":") then "ipv6" else "ipv4" end] | unique),
       runtime_generation,
       underlay,
