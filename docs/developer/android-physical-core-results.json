@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "kind": "p2p-vpn-android-physical-core-results",
+  "source_commit": "29d050179627",
+  "audit_reporting_fix_commit": "5c90c89d8928",
+  "started_at": "2026-09-18T01:58:28Z",
+  "finished_at": "2026-09-18T02:39:13Z",
+  "outcome": "passed",
+  "proof_eligible": true,
+  "device": {
+    "abi": "arm64-v8a",
+    "android_api": 37,
+    "identifiers_excluded": true
+  },
+  "transitions": {
+    "lan_baseline": {
+      "dual_stack_packets_sent": 20,
+      "dual_stack_packets_received": 20
+    },
+    "cellular": {
+      "dual_stack_packets_sent": 20,
+      "dual_stack_packets_received": 20,
+      "convergence_millis": 63174,
+      "runtime_generation_preserved": true
+    },
+    "lan_return": {
+      "dual_stack_packets_sent": 20,
+      "dual_stack_packets_received": 20,
+      "convergence_millis": 17526,
+      "runtime_generation_preserved": true,
+      "validation_peer_local_direct_quic_datagram_selected": true,
+      "validation_peer_healthy_relay_selected": false
+    }
+  },
+  "doze": {
+    "hold_seconds": 300,
+    "deep_idle_observed": true,
+    "dual_stack_packets_sent": 20,
+    "dual_stack_packets_received": 20,
+    "runtime_generation_preserved": true
+  },
+  "sustained": {
+    "duration_seconds": 1800,
+    "sample_interval_seconds": 60,
+    "samples": 24,
+    "packets_sent": 480,
+    "packets_received": 479,
+    "packet_loss_basis_points": 20,
+    "maximum_loss_basis_points": 100,
+    "failed_samples": 1
+  },
+  "lifecycle": {
+    "process_service_recreation_passed": true,
+    "in_place_apk_update_passed": true,
+    "identity_preserved": true,
+    "profile_preserved": true,
+    "membership_state_preserved": true
+  },
+  "final_route": {
+    "target": "validation_linux_peer",
+    "underlay": "wifi",
+    "selected_path": "direct_quic_datagram",
+    "selected_path_relayed": false,
+    "endpoint_on_current_lan": true,
+    "overlay_ipv4_packets_sent": 5,
+    "overlay_ipv4_packets_received": 5,
+    "overlay_ipv6_packets_sent": 5,
+    "overlay_ipv6_packets_received": 5
+  },
+  "artifacts": {
+    "apk_sha256": "c6d5db42b79a830ab7e58ed5579034622ecbd8b41f94337d7b8c17def34bfa16",
+    "raw_evidence_sha256": "39055e09b91a542ceeab7f68b781f01e4f25148866db7583c62eb24204c7e7c7",
+    "raw_evidence_bytes": 63725,
+    "encrypted_profile_sha256_before_and_after": "ffbfa97f372ce441fddff8a7567ca098955b945744200c00f3ae834afaf4c970",
+    "membership_state_sha256_before_and_after": "8d56b15224c89372be8c2bb25a819b3c91e690e0e0f7e9ce2d4dbe1312f6d7bf"
+  },
+  "limits": {
+    "upstream_hotspot_vpn_tested": false,
+    "battery_measurement_unplugged": false,
+    "raw_identifiers_retained": false,
+    "hostname_label_in_raw_report_used_legacy_validator": true
+  }
+}

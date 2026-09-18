@@ -2,8 +2,9 @@
 
 ## Scope
 
-Audited through 2026-09-07, including NixOS lifecycle/LAN/pairing checks at
-`cf18fb51`, membership convergence at `4bb8ff1e`, and Android failures at
+Audited through 2026-09-17, including NixOS lifecycle/LAN/pairing checks at
+`cf18fb51`, membership convergence at `4bb8ff1e`, and physical Android core
+validation at `29d05017`. Earlier Android failures at
 `fe950142` (isolation), `bac49191` (reboot recovery), and `23e5159d`
 (process recovery), followed by the 68-check Android pass at `deedd041`.
 
@@ -43,7 +44,7 @@ are reconciled. Android lifecycle and final platform certification remain separa
 | Code-pairing Nix activation | [Strengthened LAN check](nixos-pairing-activation-review.md): all eight subtests pass, including actual system builds/switches on both guests, automatic service restarts, unchanged identities, and restored traffic. | Fixture secrets, not age decryption; local store-path switch, not consumer-flake remote deployment, reboot, or zero-loss proof. |
 | Storage repair VM | Full lifecycle check passes at `cf18fb51`; automatic service/DNS recovery after permission repair preserves identity and membership bytes. | Permission failure, not ENOSPC, interrupted writes, power loss, or OS reboot. |
 | Transport VMs | QUIC-stream, QUIC-datagram, and forced-relay checks pass at `859b29d5`. Strengthened movement test passes twice with selected relay payloads, unchanged invocation IDs/configs, and direct LAN return. | Fixed an invalid exact-one relay-path assertion after a two-path failure. Corrected runs had one path; controlled IPv4 fixtures, not public NAT or saturation evidence. |
-| Android | [Current multi-network run](android-lifecycle-audit.md#current-multi-network-run) at `d6b6b1b0`: 68 checks pass, including process/reboot restoration and sibling failure isolation. The audit also verifies cancellation, activity binding, recreation and VPN denial. | Controlled emulator, not physical carrier/VPN evidence. Readiness retries occurred; historical packet-loss attribution and sustained overload remain separate limits. |
+| Android | [Physical core audit](android-physical-core-validation.md) passes LAN to cellular to LAN, dual-stack recovery, 300-second Doze, 1,800-second endurance, process recreation and in-place update. The emulator lifecycle run remains complementary coverage. | One physical model, carrier and LAN. No upstream hotspot VPN; USB-powered battery results are not energy evidence. |
 | Resources | Historical debug comparison plus two current release-profile idle captures at `89709e4f`: 0.133-0.167% of one core per node. | Small static topology; current-only release results are not a release baseline comparison. Connection and drop increments remain visible in [measurement limits](idle-resource-comparison.md#release-profile-follow-up). |
 | Inventory evaluation | [Joint/separate diagnostic](inventory-evaluation-measurement.md) passed at 8, 32, and 128 records. | Single unoptimized run; not daemon throughput or memory evidence. |
 | Retained membership | [Forwarder comparison](forwarder-resource-comparison.md): original debug samples plus 12 release-profile samples comparing `f24831fa` and `89709e4f` at 8, 128, and 256 records. | No memory reduction established; RSS is not exact map allocation cost or whole-daemon footprint. |
