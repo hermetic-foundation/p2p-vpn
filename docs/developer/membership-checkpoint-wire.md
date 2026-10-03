@@ -156,6 +156,27 @@ Replies bind the complete signed command digest. The caller must also match the
 libp2p request ID and authenticated target peer. A different boundary, even with
 the same authority revision, does not acknowledge the expected result.
 
+### Reply Ownership And Identify
+
+| Surface | Runtime Contract |
+| --- | --- |
+| Ownership key | Inbound request ID, authenticated peer, and connection ID. |
+| Eligible reply | Valid scoped request with `applied`, or `stale_base` carrying a current boundary. |
+| Capacity | At most 32 owners; capacity exhaustion returns `busy` before mutation application. |
+| Lifetime | Fixed five seconds from receipt; repeated tracking cannot extend it. |
+| Send failure | Release ownership if the response channel refuses the reply. |
+| Terminal event | Release only on matching `ResponseSent` or `InboundFailure`. |
+| Expiry | Retire ownership automatically; no persistent per-device entry. |
+| Identify | Preserve checkpoint-only catch-up/reply connections without promoting packet authority. |
+
+An excluded peer may still own a pending control reply after its removal commits.
+Premature Identify rejection can cancel that ACK; bounded ownership permits
+delivery without re-admitting the peer or treating it as routing infrastructure.
+
+Outgoing handoffs also retain control-only peers while bounded requests are in
+flight. These exceptions do not authorize packets, routes, ordinary publication,
+or a permanent departed-publisher profile.
+
 ### Departure And Lost Acknowledgments
 
 - Capture the signed command and bounded recipients before local self-removal.

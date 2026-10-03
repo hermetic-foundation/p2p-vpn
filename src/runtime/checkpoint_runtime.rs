@@ -8,6 +8,7 @@ use std::{
 use libp2p::{
     PeerId, Swarm,
     request_response::{self, Message},
+    swarm::ConnectionId,
 };
 
 use crate::{
@@ -31,8 +32,8 @@ use super::{
             CheckpointSyncLimits, MAX_TRANSFER_SESSIONS,
         },
         checkpoint_mutation::{
-            CheckpointMutationRequest, CheckpointMutationResponse, MutationOutcome,
-            MutationRejection,
+            CheckpointMutationRequest, CheckpointMutationResponse, MAX_MUTATION_STREAMS,
+            MUTATION_REQUEST_TIMEOUT, MutationOutcome, MutationRejection,
         },
     },
     forward::{ForwardError, Forwarder},
@@ -53,6 +54,13 @@ struct PendingResync {
     deadline: Instant,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct PendingMutationResponse {
+    peer: PeerId,
+    connection: ConnectionId,
+    deadline: Instant,
+}
+
 pub(crate) struct CheckpointRuntime {
     network_name: String,
     credentials: CheckpointCredentials,
@@ -69,6 +77,7 @@ pub(crate) struct CheckpointRuntime {
     candidates: HashMap<PeerId, (CheckpointCapabilities, Instant)>,
     handoff: Option<MutationHandoff>,
     mutation_requests: HashMap<request_response::OutboundRequestId, PeerId>,
+    mutation_responses: HashMap<request_response::InboundRequestId, PendingMutationResponse>,
     last_handoff: HandoffReport,
     route_cleanup_pending: bool,
     enrollment_floor: Option<SnapshotRank>,
@@ -230,6 +239,7 @@ impl CheckpointRuntime {
             candidates: HashMap::new(),
             handoff: None,
             mutation_requests: HashMap::new(),
+            mutation_responses: HashMap::new(),
             last_handoff: HandoffReport::default(),
             route_cleanup_pending: false,
             enrollment_floor,
@@ -280,6 +290,10 @@ impl CheckpointRuntime {
             }
         };
         lines.push(format!("checkpoint_sync_state {state}"));
+        lines.push(format!(
+            "checkpoint_mutation_pending_responses {}",
+            self.mutation_responses.len()
+        ));
         for (name, value) in [
             (
                 "authority_revision",
@@ -394,6 +408,21 @@ impl CheckpointRuntime {
         self.candidates
             .iter()
             .filter_map(move |(peer, (_, deadline))| (now < *deadline).then_some(*peer))
+            .chain(
+                self.mutation_responses
+                    .values()
+                    .filter_map(move |response| (now < response.deadline).then_some(response.peer)),
+            )
+            .chain(
+                self.mutation_requests
+                    .values()
+                    .copied()
+                    .filter(move |peer| {
+                        self.handoff.as_ref().is_some_and(|handoff| {
+                            now < handoff.deadline() && handoff.is_in_flight(*peer)
+                        })
+                    }),
+            )
     }
 
     pub(crate) fn drive_sync(
@@ -403,6 +432,7 @@ impl CheckpointRuntime {
         now: Instant,
     ) -> Result<(), RunnerError> {
         self.transfer.cleanup(now);
+        self.cleanup_mutation_responses(now);
         self.candidates.retain(|_, (_, deadline)| now < *deadline);
         let connected = swarm
             .connected_peers()
@@ -785,6 +815,7 @@ impl CheckpointRuntime {
         swarm: &mut Swarm<Behaviour>,
         now: Instant,
     ) -> Result<(), RunnerError> {
+        self.cleanup_mutation_responses(now);
         self.finish_handoff_if_due(now);
         let Some(handoff) = &mut self.handoff else {
             return Ok(());
@@ -867,24 +898,47 @@ impl CheckpointRuntime {
         now: Instant,
         wall_now: u64,
     ) -> bool {
+        self.cleanup_mutation_responses(now);
         self.finish_handoff_if_due(now);
         match event {
             request_response::Event::Message {
                 peer,
+                connection_id,
                 message:
                     Message::Request {
-                        request, channel, ..
+                        request_id,
+                        request,
+                        channel,
                     },
-                ..
             } => {
                 let revision = forwarder.membership_revision();
-                let outcome =
-                    self.incoming_mutation_outcome(&request, peer, store, forwarder, wall_now);
+                // Do not durably apply a command when its ACK has no bounded owner.
+                let outcome = if self.mutation_responses.len() >= MAX_MUTATION_STREAMS {
+                    MutationOutcome::Rejected {
+                        reason: MutationRejection::Busy,
+                        current: None,
+                    }
+                } else {
+                    self.incoming_mutation_outcome(&request, peer, store, forwarder, wall_now)
+                };
                 if let Ok(response) = CheckpointMutationResponse::for_request(&request, outcome) {
-                    let _ = swarm
+                    let owned = self.track_mutation_response(
+                        request_id,
+                        peer,
+                        connection_id,
+                        &request,
+                        outcome,
+                        now,
+                    );
+                    if swarm
                         .behaviour_mut()
                         .checkpoint_mutation
-                        .send_response(channel, response);
+                        .send_response(channel, response)
+                        .is_err()
+                        && owned
+                    {
+                        self.retire_mutation_response(request_id, peer, connection_id);
+                    }
                 }
                 return forwarder.membership_revision() != revision;
             }
@@ -944,8 +998,17 @@ impl CheckpointRuntime {
                     self.fail_mutation_request(request_id, now);
                 }
             }
-            request_response::Event::InboundFailure { .. }
-            | request_response::Event::ResponseSent { .. } => (),
+            request_response::Event::InboundFailure {
+                peer,
+                connection_id,
+                request_id,
+                ..
+            }
+            | request_response::Event::ResponseSent {
+                peer,
+                connection_id,
+                request_id,
+            } => self.retire_mutation_response(request_id, peer, connection_id),
         }
         self.finish_handoff_if_due(now);
         false
@@ -956,14 +1019,98 @@ impl CheckpointRuntime {
         event: request_response::Event<CheckpointMutationRequest, CheckpointMutationResponse>,
         now: Instant,
     ) {
-        if let request_response::Event::Message {
-            message: Message::Response { request_id, .. },
-            ..
-        } = event
-        {
-            self.fail_mutation_request(request_id, now);
+        self.cleanup_mutation_responses(now);
+        match event {
+            request_response::Event::Message {
+                message: Message::Response { request_id, .. },
+                ..
+            } => self.fail_mutation_request(request_id, now),
+            request_response::Event::InboundFailure {
+                peer,
+                connection_id,
+                request_id,
+                ..
+            }
+            | request_response::Event::ResponseSent {
+                peer,
+                connection_id,
+                request_id,
+            } => self.retire_mutation_response(request_id, peer, connection_id),
+            _ => (),
         }
         self.finish_handoff_if_due(now);
+    }
+
+    fn cleanup_mutation_responses(&mut self, now: Instant) {
+        self.mutation_responses
+            .retain(|_, response| now < response.deadline);
+    }
+
+    pub(crate) fn owns_mutation_response(
+        &self,
+        peer: PeerId,
+        connection: ConnectionId,
+        now: Instant,
+    ) -> bool {
+        self.mutation_responses.values().any(|response| {
+            response.peer == peer && response.connection == connection && now < response.deadline
+        })
+    }
+
+    /// This exception keeps only an authenticated command's bounded ACK transport.
+    /// It never changes the roster, packet grants, or snapshot publication rights.
+    fn track_mutation_response(
+        &mut self,
+        request_id: request_response::InboundRequestId,
+        peer: PeerId,
+        connection: ConnectionId,
+        request: &CheckpointMutationRequest,
+        outcome: MutationOutcome,
+        now: Instant,
+    ) -> bool {
+        self.cleanup_mutation_responses(now);
+        if self.mutation_responses.len() >= MAX_MUTATION_STREAMS
+            || request.validate_for(peer, self.anchor()).is_err()
+            || !matches!(
+                outcome,
+                MutationOutcome::Applied(_)
+                    | MutationOutcome::Rejected {
+                        reason: MutationRejection::StaleBase,
+                        current: Some(_),
+                    }
+            )
+        {
+            return false;
+        }
+        if let Some(response) = self.mutation_responses.get(&request_id) {
+            return response.peer == peer
+                && response.connection == connection
+                && self.owns_mutation_response(peer, connection, now);
+        }
+        self.mutation_responses.insert(
+            request_id,
+            PendingMutationResponse {
+                peer,
+                connection,
+                deadline: now + MUTATION_REQUEST_TIMEOUT,
+            },
+        );
+        true
+    }
+
+    fn retire_mutation_response(
+        &mut self,
+        request_id: request_response::InboundRequestId,
+        peer: PeerId,
+        connection: ConnectionId,
+    ) {
+        if self
+            .mutation_responses
+            .get(&request_id)
+            .is_some_and(|response| response.peer == peer && response.connection == connection)
+        {
+            self.mutation_responses.remove(&request_id);
+        }
     }
 
     fn fail_mutation_request(
@@ -1171,6 +1318,18 @@ mod tests {
 
     const WALL_NOW: u64 = 10_000;
 
+    fn unused_ipv4_identity(allocated: &mut HashSet<std::net::Ipv4Addr>) -> NodeIdentity {
+        (0..1_024)
+            .find_map(|_| {
+                let identity = NodeIdentity::generate_ed25519().unwrap();
+                let peer = crate::PeerId::from_libp2p(identity.peer_id.parse().unwrap());
+                allocated
+                    .insert(crate::route::builtin_ipv4(peer))
+                    .then_some(identity)
+            })
+            .expect("fixture must allocate distinct derived IPv4 addresses")
+    }
+
     struct Fixture {
         directory: PathBuf,
         store: MembershipStateStore,
@@ -1194,7 +1353,10 @@ mod tests {
                 CheckpointCredentials::new(NetworkAnchor::new([45; 32]).unwrap(), vec![89; 32])
                     .unwrap();
             let local = NodeIdentity::generate_ed25519().unwrap();
-            let member = NodeIdentity::generate_ed25519().unwrap();
+            let mut allocated = HashSet::from([crate::route::builtin_ipv4(
+                crate::PeerId::from_libp2p(local.peer_id.parse().unwrap()),
+            )]);
+            let member = unused_ipv4_identity(&mut allocated);
             let config: Config = serde_json::from_value(serde_json::json!({
                 "network": {"name": "lab", "local_peer": local.peer_id, "private_key": local.private_key},
                 "peers": [{"id": member.peer_id, "name": "stale-member"}],
@@ -2336,6 +2498,414 @@ mod tests {
         .unwrap()
     }
 
+    async fn connected_mutation_nodes(
+        fixture: &Fixture,
+    ) -> (
+        super::super::p2p::P2pNode,
+        super::super::p2p::P2pNode,
+        [ConnectionId; 2],
+    ) {
+        use futures::StreamExt as _;
+        use libp2p::swarm::{SwarmEvent, dial_opts::DialOpts};
+
+        let mut sender = test_node(&fixture.local);
+        let mut receiver = test_node(&fixture.member);
+        let connections = tokio::time::timeout(Duration::from_secs(5), async {
+            let address = loop {
+                if let SwarmEvent::NewListenAddr { address, .. } =
+                    receiver.swarm.select_next_some().await
+                {
+                    break address;
+                }
+            };
+            sender
+                .swarm
+                .dial(
+                    DialOpts::peer_id(receiver.local_peer_id)
+                        .addresses(vec![address])
+                        .build(),
+                )
+                .unwrap();
+            let mut connections = [None; 2];
+            while connections.iter().any(Option::is_none) {
+                tokio::select! {
+                    event = sender.swarm.select_next_some() => {
+                        if let SwarmEvent::ConnectionEstablished { connection_id, .. } = event {
+                            connections[0] = Some(connection_id);
+                        }
+                    }
+                    event = receiver.swarm.select_next_some() => {
+                        if let SwarmEvent::ConnectionEstablished { connection_id, .. } = event {
+                            connections[1] = Some(connection_id);
+                        }
+                    }
+                }
+            }
+            connections.map(Option::unwrap)
+        })
+        .await
+        .expect("real mutation connection");
+        (sender, receiver, connections)
+    }
+
+    async fn receive_mutation_request(
+        sender: &mut super::super::p2p::P2pNode,
+        receiver: &mut super::super::p2p::P2pNode,
+        request: CheckpointMutationRequest,
+    ) -> request_response::Event<CheckpointMutationRequest, CheckpointMutationResponse> {
+        use super::super::p2p::BehaviourEvent;
+        use futures::StreamExt as _;
+        use libp2p::swarm::SwarmEvent;
+
+        sender
+            .swarm
+            .behaviour_mut()
+            .checkpoint_mutation
+            .send_request(&receiver.local_peer_id, request);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                tokio::select! {
+                    _ = sender.swarm.select_next_some() => (),
+                    event = receiver.swarm.select_next_some() => {
+                        if let SwarmEvent::Behaviour(BehaviourEvent::CheckpointMutation(
+                            event @ request_response::Event::Message {
+                                message: Message::Request { .. }, ..
+                            },
+                        )) = event {
+                            break event;
+                        }
+                    }
+                }
+            }
+        })
+        .await
+        .expect("real mutation request")
+    }
+
+    fn identify_info(identity: &NodeIdentity) -> libp2p::identify::Info {
+        libp2p::identify::Info {
+            public_key: identity.public_key().unwrap(),
+            protocol_version: "p2p-vpn-test".into(),
+            agent_version: "checkpoint-ack-regression".into(),
+            listen_addrs: Vec::new(),
+            protocols: vec![libp2p::StreamProtocol::new(
+                super::super::control::checkpoint_mutation::CHECKPOINT_MUTATION_PROTOCOL,
+            )],
+            observed_addr: "/ip4/127.0.0.1/tcp/4001".parse().unwrap(),
+            signed_peer_record: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn mutation_reply_owners_are_scoped_bounded_and_retired_without_packet_grants() {
+        let fixture = Fixture::new("reply-owner-bounds");
+        let (mut runtime, mut forwarder, store) = surviving_owner(&fixture);
+        let mutation = fixture
+            .state
+            .sign_mutation_at(
+                &fixture.local,
+                MembershipChange::RemoveMember(fixture.local.peer_id.clone()),
+                WALL_NOW,
+            )
+            .unwrap();
+        let request = CheckpointMutationRequest::new(mutation).unwrap();
+        let peer = fixture.local.peer_id.parse().unwrap();
+        let outcome =
+            runtime.incoming_mutation_outcome(&request, peer, &store, &mut forwarder, WALL_NOW);
+        assert!(matches!(outcome, MutationOutcome::Applied(_)));
+        assert!(!forwarder.is_configured_transport_peer(peer));
+        let state_path = fixture.directory.join("survivor/membership-state.json");
+        let disk = fs::read(&state_path).unwrap();
+        let (mut sender, mut receiver, connections) = connected_mutation_nodes(&fixture).await;
+        let now = Instant::now();
+        let mut owners = Vec::new();
+        for index in 0..=MAX_MUTATION_STREAMS {
+            let event = receive_mutation_request(&mut sender, &mut receiver, request.clone()).await;
+            if index == MAX_MUTATION_STREAMS {
+                use super::super::p2p::BehaviourEvent;
+                use futures::StreamExt as _;
+                use libp2p::swarm::SwarmEvent;
+
+                let before = runtime.state().retained();
+                assert!(!runtime.handle_mutation_event(
+                    &mut receiver.swarm,
+                    event,
+                    &store,
+                    &mut forwarder,
+                    now,
+                    WALL_NOW,
+                ));
+                assert_eq!(runtime.state().retained(), before);
+                let outcome = tokio::time::timeout(Duration::from_secs(5), async {
+                    loop {
+                        tokio::select! {
+                            event = sender.swarm.select_next_some() => {
+                                if let SwarmEvent::Behaviour(BehaviourEvent::CheckpointMutation(
+                                    request_response::Event::Message {
+                                        message: Message::Response { response, .. }, ..
+                                    },
+                                )) = event {
+                                    break response.validate_for(&request).unwrap();
+                                }
+                            }
+                            _ = receiver.swarm.select_next_some() => (),
+                        }
+                    }
+                })
+                .await
+                .expect("bounded reply owners send Busy instead of applying");
+                assert_eq!(
+                    outcome,
+                    MutationOutcome::Rejected {
+                        reason: MutationRejection::Busy,
+                        current: None,
+                    }
+                );
+                break;
+            }
+            let request_response::Event::Message {
+                peer: transport_peer,
+                connection_id,
+                message:
+                    Message::Request {
+                        request_id,
+                        channel,
+                        ..
+                    },
+            } = event
+            else {
+                unreachable!("request fixture")
+            };
+            drop(channel);
+            assert_eq!(transport_peer, peer);
+            assert_eq!(connection_id, connections[1]);
+            if index == 0 {
+                assert!(!runtime.track_mutation_response(
+                    request_id,
+                    PeerId::random(),
+                    connection_id,
+                    &request,
+                    outcome,
+                    now,
+                ));
+                let mut wrong_scope = request.clone();
+                wrong_scope.mutation.payload.anchor = NetworkAnchor::new([91; 32]).unwrap();
+                assert!(!runtime.track_mutation_response(
+                    request_id,
+                    peer,
+                    connection_id,
+                    &wrong_scope,
+                    outcome,
+                    now,
+                ));
+                let mut bad_signature = request.clone();
+                bad_signature.mutation.signature.push('!');
+                assert!(!runtime.track_mutation_response(
+                    request_id,
+                    peer,
+                    connection_id,
+                    &bad_signature,
+                    outcome,
+                    now,
+                ));
+                assert!(!runtime.track_mutation_response(
+                    request_id,
+                    peer,
+                    connection_id,
+                    &request,
+                    MutationOutcome::Rejected {
+                        reason: MutationRejection::Invalid,
+                        current: None
+                    },
+                    now,
+                ));
+            }
+            assert!(runtime.track_mutation_response(
+                request_id,
+                peer,
+                connection_id,
+                &request,
+                outcome,
+                now
+            ));
+            owners.push(request_id);
+            if index == 0 {
+                let deadline = runtime.mutation_responses[&request_id].deadline;
+                assert!(runtime.track_mutation_response(
+                    request_id,
+                    peer,
+                    connection_id,
+                    &request,
+                    outcome,
+                    now + Duration::from_secs(4),
+                ));
+                assert_eq!(runtime.mutation_responses[&request_id].deadline, deadline);
+            }
+        }
+        assert_eq!(runtime.mutation_responses.len(), MAX_MUTATION_STREAMS);
+        assert!(runtime.owns_mutation_response(peer, connections[1], now));
+        assert!(!runtime.owns_mutation_response(PeerId::random(), connections[1], now));
+        let other_connection = ConnectionId::new_unchecked(usize::MAX);
+        assert!(!runtime.owns_mutation_response(peer, other_connection, now));
+        runtime.retire_mutation_response(owners[0], PeerId::random(), connections[1]);
+        runtime.retire_mutation_response(owners[0], peer, other_connection);
+        assert_eq!(runtime.mutation_responses.len(), MAX_MUTATION_STREAMS);
+        runtime.handle_mutation_event(
+            &mut receiver.swarm,
+            request_response::Event::ResponseSent {
+                peer,
+                connection_id: connections[1],
+                request_id: owners[0],
+            },
+            &store,
+            &mut forwarder,
+            now,
+            WALL_NOW,
+        );
+        assert_eq!(runtime.mutation_responses.len(), MAX_MUTATION_STREAMS - 1);
+        runtime.discard_mutation_event(
+            request_response::Event::InboundFailure {
+                peer,
+                connection_id: connections[1],
+                request_id: owners[1],
+                error: request_response::InboundFailure::ConnectionClosed,
+            },
+            now,
+        );
+        assert_eq!(runtime.mutation_responses.len(), MAX_MUTATION_STREAMS - 2);
+        assert!(!runtime.owns_mutation_response(
+            peer,
+            connections[1],
+            now + MUTATION_REQUEST_TIMEOUT
+        ));
+        assert_eq!(
+            runtime
+                .sync_candidates(now + MUTATION_REQUEST_TIMEOUT)
+                .count(),
+            0
+        );
+        runtime.cleanup_mutation_responses(now + MUTATION_REQUEST_TIMEOUT);
+        assert!(runtime.mutation_responses.is_empty());
+        assert!(!forwarder.is_configured_transport_peer(peer));
+        assert_eq!(fs::read(&state_path).unwrap(), disk);
+    }
+
+    #[tokio::test]
+    async fn identify_after_durable_departure_preserves_real_ack_then_retires_connection() {
+        use super::super::{p2p::BehaviourEvent, runner::dispatch_checkpoint_identify_test_event};
+        use futures::StreamExt as _;
+        use libp2p::swarm::SwarmEvent;
+
+        for infrastructure_candidate in [false, true] {
+            let fixture = Fixture::new(&format!("identify-ack-{infrastructure_candidate}"));
+            let (mut creator, mut creator_forwarder) = fixture.participating();
+            let (mut survivor, mut survivor_forwarder, survivor_store) = surviving_owner(&fixture);
+            let (mut sender, mut receiver, connections) = connected_mutation_nodes(&fixture).await;
+            creator
+                .apply_change_with_handoff(
+                    MembershipChange::RemoveMember(fixture.local.peer_id.clone()),
+                    &fixture.local,
+                    &fixture.store,
+                    &mut creator_forwarder,
+                    &[receiver.local_peer_id],
+                    Instant::now(),
+                    WALL_NOW,
+                )
+                .unwrap();
+            assert_eq!(creator.state().sync_state(), MembershipSyncState::Excluded);
+            creator
+                .drive_mutations(&mut sender.swarm, Instant::now())
+                .unwrap();
+            dispatch_checkpoint_identify_test_event(
+                &mut sender,
+                &mut creator_forwarder,
+                &creator,
+                receiver.local_peer_id,
+                connections[0],
+                identify_info(&fixture.member),
+                infrastructure_candidate,
+            );
+            let mut queued = false;
+            let mut flushed = false;
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    tokio::select! {
+                        event = sender.swarm.select_next_some() => {
+                            assert!(!matches!(event, SwarmEvent::ConnectionClosed { .. }), "sender retired before ACK");
+                            if let SwarmEvent::Behaviour(BehaviourEvent::CheckpointMutation(event)) = event {
+                                creator.handle_mutation_event(
+                                    &mut sender.swarm, event, &fixture.store,
+                                    &mut creator_forwarder, Instant::now(), WALL_NOW,
+                                );
+                            }
+                        }
+                        event = receiver.swarm.select_next_some() => {
+                            assert!(!matches!(event, SwarmEvent::ConnectionClosed { .. }), "receiver retired before ACK");
+                            if let SwarmEvent::Behaviour(BehaviourEvent::CheckpointMutation(event)) = event {
+                                let received = matches!(&event, request_response::Event::Message { message: Message::Request { .. }, .. });
+                                let response_sent = matches!(&event, request_response::Event::ResponseSent { .. });
+                                survivor.handle_mutation_event(
+                                    &mut receiver.swarm, event, &survivor_store,
+                                    &mut survivor_forwarder, Instant::now(), WALL_NOW,
+                                );
+                                if received {
+                                    queued = true;
+                                    assert!(!survivor_forwarder.is_configured_transport_peer(sender.local_peer_id));
+                                    assert_eq!(survivor.mutation_responses.len(), 1);
+                                    assert!(survivor.owns_mutation_response(sender.local_peer_id, connections[1], Instant::now()));
+                                    dispatch_checkpoint_identify_test_event(
+                                        &mut receiver, &mut survivor_forwarder, &survivor,
+                                        sender.local_peer_id, connections[1], identify_info(&fixture.local),
+                                        infrastructure_candidate,
+                                    );
+                                }
+                                flushed |= response_sent;
+                            }
+                        }
+                    }
+                    if creator.last_handoff.acknowledged == 1 && flushed {
+                        break;
+                    }
+                }
+            }).await.expect("ACK must survive Identify before flush");
+            assert!(queued);
+            assert_eq!(creator.last_handoff.failed, 0);
+            assert!(survivor.mutation_responses.is_empty());
+            assert!(
+                !survivor
+                    .sync_candidates(Instant::now())
+                    .any(|peer| peer == sender.local_peer_id)
+            );
+            assert!(
+                !fs::read_to_string(fixture.directory.join("survivor/membership-state.json"))
+                    .unwrap()
+                    .contains(&fixture.local.peer_id)
+            );
+            dispatch_checkpoint_identify_test_event(
+                &mut receiver,
+                &mut survivor_forwarder,
+                &survivor,
+                sender.local_peer_id,
+                connections[1],
+                identify_info(&fixture.local),
+                infrastructure_candidate,
+            );
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    tokio::select! {
+                        _ = sender.swarm.select_next_some() => (),
+                        event = receiver.swarm.select_next_some() => {
+                            if matches!(event, SwarmEvent::ConnectionClosed { .. }) { break; }
+                        }
+                    }
+                }
+            })
+            .await
+            .expect("unowned excluded peer is retired after ACK");
+            assert_eq!(creator.last_handoff.acknowledged, 1);
+        }
+    }
+
     #[tokio::test]
     async fn handoff_acknowledgments_bind_request_peer_command_and_result_boundary() {
         use libp2p::swarm::ConnectionId;
@@ -2635,8 +3205,19 @@ mod tests {
             WALL_NOW,
         )
         .unwrap();
+        let mut allocated = selected
+            .snapshot()
+            .payload
+            .members
+            .iter()
+            .map(|member| {
+                crate::route::builtin_ipv4(crate::PeerId::from_libp2p(
+                    member.subject.peer_id.parse().unwrap(),
+                ))
+            })
+            .collect::<HashSet<_>>();
         for _ in 0..100 {
-            let member = NodeIdentity::generate_ed25519().unwrap();
+            let member = unused_ipv4_identity(&mut allocated);
             let admission = selected
                 .sign_mutation_at(
                     &fixture.member,
@@ -2951,7 +3532,19 @@ mod tests {
         let armed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let failures = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let mut fixture = Fixture::new("three-daemon-departure");
-        let third = NodeIdentity::generate_ed25519().unwrap();
+        let mut allocated = fixture
+            .state
+            .snapshot()
+            .payload
+            .members
+            .iter()
+            .map(|member| {
+                crate::route::builtin_ipv4(crate::PeerId::from_libp2p(
+                    member.subject.peer_id.parse().unwrap(),
+                ))
+            })
+            .collect::<HashSet<_>>();
+        let third = unused_ipv4_identity(&mut allocated);
         let admission = fixture
             .state
             .sign_mutation_at(
@@ -3140,6 +3733,24 @@ mod tests {
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
 
+            // A survivor's advertisement may have started a live refresh even
+            // though the exact-base departure was durably applied and ACKed.
+            let ready = Instant::now();
+            loop {
+                if controls[1]
+                    .state()
+                    .await
+                    .unwrap()
+                    .contains(&"checkpoint_sync_state participating".to_owned())
+                {
+                    break;
+                }
+                assert!(
+                    ready.elapsed() < Duration::from_secs(20),
+                    "survivor did not finish live refresh"
+                );
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
             let removal = controls[1]
                 .revoke_member(Some(identities[2].peer_id.clone()))
                 .await

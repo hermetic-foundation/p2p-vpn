@@ -137,6 +137,16 @@ The control API reports local durable application, not network-wide delivery.
 An isolated creator leaving cannot guarantee that an offline survivor has learned
 the removal; cooperative reconciliation may discard a losing branch's decision.
 
+### Reply Delivery
+
+Inbound ACK ownership binds request ID, authenticated peer, and connection ID.
+At most 32 entries survive for a fixed five seconds; matching send/failure events
+or timeout retire them without retaining departed-device history.
+
+Identify preserves checkpoint-only catch-up and pending reply connections instead
+of canceling an ACK solely because of exclusion. These are control-only exceptions,
+not packet grants or promotion to routing infrastructure.
+
 ## Names And Re-Admission
 
 | Case | Rule |
@@ -161,6 +171,7 @@ retain inviter identity, old admission proofs, or per-device revocation markers.
 | Shared capability | 32-4,096 bytes. |
 | Resync | One bounded round, best snapshot, and compatible names. |
 | Mutation handoff | One command; 256 unique recipients, 32 in flight, three attempts each, 15 seconds total. |
+| Mutation reply ownership | At most 32 request/peer/connection entries; fixed five-second lifetime. |
 
 Normal authorization uses the active snapshot as a closed namespace. Absent
 static peers receive no implicit permission even after their tombstones are gone.
@@ -237,6 +248,7 @@ per-device revocation archive.
 | `checkpoint_decisions_may_have_been_discarded` | Last selection may have discarded losing-branch decisions. |
 | `checkpoint_handoff_active` | Whether a frozen mutation is awaiting bounded delivery. |
 | `checkpoint_handoff_pending_requests` | Owned outbound mutation request IDs. |
+| `checkpoint_mutation_pending_responses` | Bounded inbound reply owners awaiting send completion, failure, or expiry. |
 | `checkpoint_handoff_recipients` / `checkpoint_handoff_pending` | Aggregate recipient and outstanding delivery counts. |
 | `checkpoint_handoff_acknowledged` / `checkpoint_handoff_failed` | Confirmed and terminal delivery counts, not per-device history. |
 | `checkpoint_handoff_attempts` | Total attempts in the current or last handoff. |

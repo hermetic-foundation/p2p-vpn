@@ -21444,6 +21444,64 @@ fn ping_failure_requires_connection_close(error: &ping::Failure) -> bool {
     !matches!(error, ping::Failure::Unsupported)
 }
 
+#[cfg(test)]
+pub(super) fn dispatch_checkpoint_identify_test_event(
+    node: &mut P2pNode,
+    forwarder: &mut Forwarder,
+    checkpoint: &CheckpointRuntime,
+    peer: Libp2pPeerId,
+    connection: ConnectionId,
+    info: identify::Info,
+    infrastructure_candidate: bool,
+) {
+    let mut membership = OverlayMembership::from_transport_peers(
+        forwarder.config(),
+        forwarder.configured_transport_peers(),
+    )
+    .unwrap();
+    membership
+        .replace_checkpoint_sync_peers(checkpoint)
+        .unwrap();
+    assert!(!membership.allows(peer));
+    let mut tun_runtime = TunRuntimeConfig::from_config(forwarder.config()).unwrap();
+    let mut infrastructure = InfrastructurePeers::default();
+    if infrastructure_candidate {
+        infrastructure.insert(peer, info.observed_addr.clone());
+    }
+    handle_identify_received(
+        &mut node.swarm,
+        &mut BehaviourEventContext {
+            forwarder,
+            membership: &mut membership,
+            tun_runtime: &mut tun_runtime,
+            route_controller: &mut PreconfiguredTunRoutes,
+            infrastructure_peers: &mut infrastructure,
+            routing_infrastructure_peers: &mut RoutingInfrastructurePeers::default(),
+            relay_readiness: &mut RelayReadiness::default(),
+            auto_relay: &mut AutoRelayState::default(),
+            paths: &PathSet::new(),
+            relay_addresses: &[],
+            configured_peer_addresses: &[],
+            relay_server_enabled: false,
+            discovered_peer_addresses: &mut DiscoveredPeerAddresses::default(),
+            metrics: &RuntimeMetrics::default(),
+            discovery: &node.discovery,
+            local_capabilities: &mut ControlCapabilities::local("lab", None, 1280),
+            previous_membership_tags: &[],
+            identity: &node.identity,
+            code_pairing_sessions: &mut CodePairingSessions::new(),
+            membership_probe_connections: &mut MembershipProbeConnections::default(),
+            connection_epochs: &mut ConnectionEpochs::default(),
+            active_connections: &HashMap::new(),
+            public_discovery_quiet: false,
+            kademlia_maintenance: &mut KademliaMaintenance::new(Instant::now()),
+        },
+        peer,
+        connection,
+        info,
+    );
+}
+
 fn handle_identify_received(
     swarm: &mut Swarm<Behaviour>,
     context: &mut BehaviourEventContext<'_>,
@@ -21458,6 +21516,7 @@ fn handle_identify_received(
     let public_pairing_kademlia_routing =
         identify_protocols_include(&info.protocols, PUBLIC_IPFS_KADEMLIA_PROTOCOL);
     let kademlia_routing = overlay_kademlia_routing || public_pairing_kademlia_routing;
+    let checkpoint_sync = context.membership.allows_membership_sync(peer_id);
     let pairing_probe = context.code_pairing_sessions.allows_pairing_probe(peer_id)
         || context
             .membership_probe_connections
@@ -21509,6 +21568,7 @@ fn handle_identify_received(
     // temporary membership-probe window; only an active code session owns it.
     if !context.membership.allows(peer_id)
         && !context.code_pairing_sessions.allows_pairing_probe(peer_id)
+        && !checkpoint_sync
         && kademlia_routing
     {
         match context.routing_infrastructure_peers.admit(peer_id) {
@@ -21568,6 +21628,7 @@ fn handle_identify_received(
     }
     if context.infrastructure_peers.contains(peer_id)
         && !context.membership.allows(peer_id)
+        && !checkpoint_sync
         && !pairing_probe
         && !relay_hop
     {
@@ -21593,6 +21654,7 @@ fn handle_identify_received(
         }
     }
     if !context.membership.allows(peer_id)
+        && !checkpoint_sync
         && !pairing_probe
         && !relay_hop
         && !kademlia_routing
