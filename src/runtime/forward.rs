@@ -188,9 +188,35 @@ impl CheckpointProjection {
 
     fn sanitize_config(&self, config: &mut Config, now: u64) -> Result<(), ForwardError> {
         config.network.member_records.clear();
+        let local_peer = config.local_peer_id()?;
+        let membership = self.membership_at(local_peer, now);
+        let grants = |peer| {
+            membership
+                .overlay_members()
+                .find(|member| member.peer == peer)
+                .map_or_else(Vec::new, |member| member.route_grants.clone())
+        };
+        let retain_alias = |alias: &mut Option<String>,
+                            routes: &[crate::config::RouteConfig]|
+         -> Result<(), ForwardError> {
+            if let Some(ip) = alias.as_deref() {
+                let prefix = crate::config::vpn_ip_host_route(ip)?;
+                if !routes.iter().any(|route| {
+                    route.metric == 0 && route.prefix().is_ok_and(|grant| grant == prefix)
+                }) {
+                    *alias = None;
+                }
+            }
+            Ok(())
+        };
+        // Restore local aliases from signed host grants; static routes cannot supplement authority.
+        config.network.routes = grants(local_peer);
+        retain_alias(&mut config.network.vpn_ip, &config.network.routes)?;
         let mut peers = Vec::new();
-        for peer in std::mem::take(&mut config.peers) {
+        for mut peer in std::mem::take(&mut config.peers) {
             if self.active_at(peer.peer_id()?, now) {
+                peer.routes = grants(peer.peer_id()?);
+                retain_alias(&mut peer.vpn_ip, &peer.routes)?;
                 peers.push(peer);
             }
         }
@@ -1891,14 +1917,33 @@ mod tests {
         let obsolete_update = forwarder
             .prepare_checkpoint_update(&state, &checkpoint_anchor(), 1_000)
             .unwrap();
-        let mut conflict = config.clone();
-        conflict.network.routes.push(RouteConfig {
-            prefix: "10.55.0.0/24".into(),
-            metric: 10,
-        });
+        let mut conflicting_state = state.clone();
+        for identity in [&a, &b] {
+            let mut member = conflicting_state
+                .snapshot()
+                .payload
+                .member(&identity.peer_id)
+                .unwrap()
+                .clone();
+            member.roles.push(MembershipRole::RouteAuthority);
+            member.route_grants.push(RouteConfig {
+                prefix: "10.55.0.0/24".into(),
+                metric: 10,
+            });
+            checkpoint_mutate(
+                &mut conflicting_state,
+                &a,
+                MembershipChange::UpsertMember(member),
+            );
+        }
         assert!(
             forwarder
-                .prepare_checkpoint_reconfigure(conflict, &state, &checkpoint_anchor(), 1_000)
+                .prepare_checkpoint_reconfigure(
+                    config.clone(),
+                    &conflicting_state,
+                    &checkpoint_anchor(),
+                    1_000
+                )
                 .is_err()
         );
         assert!(forwarder.checkpoint.is_none());
@@ -2103,6 +2148,239 @@ mod tests {
         forwarder
             .accept_inbound_packet(b.peer_id.parse().unwrap(), &frame)
             .unwrap();
+    }
+
+    #[test]
+    fn checkpoint_signed_local_grants_restore_aliases_after_restart_and_remove_them_on_departure() {
+        let (a, _, _, mut config, mut state) = checkpoint_fixture();
+        config.network.vpn_ip = Some("10.42.0.1".into());
+        let mut member = state.snapshot().payload.member(&a.peer_id).unwrap().clone();
+        member.roles.push(MembershipRole::RouteAuthority);
+        member.route_grants = vec![
+            RouteConfig {
+                prefix: "10.42.0.1/32".into(),
+                metric: 0,
+            },
+            RouteConfig {
+                prefix: "10.70.0.0/24".into(),
+                metric: 7,
+            },
+            RouteConfig {
+                prefix: "fd42::1/128".into(),
+                metric: 0,
+            },
+        ];
+        checkpoint_mutate(&mut state, &a, MembershipChange::UpsertMember(member));
+        let mut returning = CooperativeMembershipState::restore(
+            checkpoint_capability([7; 32]),
+            a.peer_id.clone(),
+            state.retained(),
+        )
+        .unwrap();
+        let mut forwarder =
+            Forwarder::from_checkpoint_config(&config, &returning, &checkpoint_anchor(), 1_000)
+                .unwrap();
+        assert!(forwarder.config().network.routes.is_empty());
+        assert!(forwarder.config().network.vpn_ip.is_none());
+        let tun = super::super::tun::TunRuntimeConfig::from_config_with_routes(
+            forwarder.config(),
+            forwarder.authorized_routes(),
+        )
+        .unwrap();
+        assert!(tun.additional_addresses.is_empty());
+        let now = Instant::now();
+        returning.begin_resync(now, Duration::from_secs(1)).unwrap();
+        returning
+            .finish_resync(now + Duration::from_secs(1), 1_000)
+            .unwrap();
+        forwarder
+            .commit_checkpoint_update(
+                forwarder
+                    .prepare_checkpoint_update(&returning, &checkpoint_anchor(), 1_000)
+                    .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(forwarder.config().network.routes.len(), 3);
+        let tun = super::super::tun::TunRuntimeConfig::from_config_with_routes(
+            forwarder.config(),
+            forwarder.authorized_routes(),
+        )
+        .unwrap();
+        assert_eq!(tun.additional_addresses.len(), 2);
+        assert!(
+            tun.additional_addresses
+                .contains(&crate::config::vpn_ip_host_route("10.42.0.1").unwrap())
+        );
+        assert!(
+            tun.additional_addresses
+                .contains(&crate::config::vpn_ip_host_route("fd42::1").unwrap())
+        );
+        checkpoint_mutate(
+            &mut returning,
+            &a,
+            MembershipChange::RemoveMember(a.peer_id.clone()),
+        );
+        forwarder
+            .commit_checkpoint_update(
+                forwarder
+                    .prepare_checkpoint_update(&returning, &checkpoint_anchor(), 1_000)
+                    .unwrap(),
+            )
+            .unwrap();
+        let tun = super::super::tun::TunRuntimeConfig::from_config_with_routes(
+            forwarder.config(),
+            forwarder.authorized_routes(),
+        )
+        .unwrap();
+        assert!(tun.additional_addresses.is_empty());
+        assert!(tun.routes.is_empty());
+        assert!(forwarder.config().network.routes.is_empty());
+    }
+
+    #[test]
+    fn checkpoint_static_routes_and_aliases_cannot_supplement_signed_grants() {
+        let (a, b, _, mut config, mut state) = checkpoint_fixture();
+        config.network.vpn_ip = Some("10.42.0.1".into());
+        config.network.routes.push(RouteConfig {
+            prefix: "10.99.0.0/24".into(),
+            metric: 0,
+        });
+        let mut member = state.snapshot().payload.member(&b.peer_id).unwrap().clone();
+        member.roles.push(MembershipRole::RouteAuthority);
+        member.route_grants = vec![RouteConfig {
+            prefix: "10.80.0.0/24".into(),
+            metric: 8,
+        }];
+        checkpoint_mutate(&mut state, &a, MembershipChange::UpsertMember(member));
+        let forwarder =
+            Forwarder::from_checkpoint_config(&config, &state, &checkpoint_anchor(), 1_000)
+                .unwrap();
+        assert!(forwarder.config().network.vpn_ip.is_none());
+        assert!(forwarder.config().network.routes.is_empty());
+        let peer = forwarder
+            .config()
+            .peers
+            .iter()
+            .find(|peer| peer.id == b.peer_id)
+            .unwrap();
+        assert!(peer.vpn_ip.is_none());
+        assert_eq!(
+            peer.routes,
+            state
+                .snapshot()
+                .payload
+                .member(&b.peer_id)
+                .unwrap()
+                .route_grants
+        );
+        assert!(forwarder.authorized_routes().iter().any(|route| {
+            route.prefix
+                == RouteConfig {
+                    prefix: "10.80.0.0/24".into(),
+                    metric: 8,
+                }
+                .prefix()
+                .unwrap()
+        }));
+        for address in ["10.42.0.1", "10.42.0.2", "10.55.0.1", "10.99.0.1"] {
+            assert!(
+                forwarder
+                    .authorization
+                    .routes
+                    .resolve(address.parse().unwrap())
+                    .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn checkpoint_alias_configuration_cannot_override_signed_route_metrics() {
+        let (a, b, _, mut config, mut state) = checkpoint_fixture();
+        config.network.vpn_ip = Some("10.42.0.1".into());
+        for (identity, prefix, metric) in [(&a, "10.42.0.1/32", 17), (&b, "10.42.0.2/32", 29)] {
+            let mut member = state
+                .snapshot()
+                .payload
+                .member(&identity.peer_id)
+                .unwrap()
+                .clone();
+            member.roles.push(MembershipRole::RouteAuthority);
+            member.route_grants = vec![RouteConfig {
+                prefix: prefix.into(),
+                metric,
+            }];
+            checkpoint_mutate(&mut state, &a, MembershipChange::UpsertMember(member));
+        }
+        let forwarder =
+            Forwarder::from_checkpoint_config(&config, &state, &checkpoint_anchor(), 1_000)
+                .unwrap();
+        assert!(forwarder.config().network.vpn_ip.is_none());
+        assert!(
+            forwarder
+                .config()
+                .peers
+                .iter()
+                .find(|peer| peer.id == b.peer_id)
+                .unwrap()
+                .vpn_ip
+                .is_none()
+        );
+        for (address, metric) in [("10.42.0.1", 17), ("10.42.0.2", 29)] {
+            assert_eq!(
+                forwarder
+                    .authorization
+                    .routes
+                    .resolve(address.parse().unwrap())
+                    .unwrap()
+                    .metric,
+                metric
+            );
+        }
+        let tun = super::super::tun::TunRuntimeConfig::from_config_with_routes(
+            forwarder.config(),
+            forwarder.authorized_routes(),
+        )
+        .unwrap();
+        assert!(
+            tun.additional_addresses
+                .contains(&crate::config::vpn_ip_host_route("10.42.0.1").unwrap())
+        );
+    }
+
+    #[test]
+    fn checkpoint_route_policy_removal_erases_previously_signed_local_aliases() {
+        let (a, _, _, config, mut state) = checkpoint_fixture();
+        let mut member = state.snapshot().payload.member(&a.peer_id).unwrap().clone();
+        member.roles.push(MembershipRole::RouteAuthority);
+        member.route_grants = vec![RouteConfig {
+            prefix: "10.42.0.1/32".into(),
+            metric: 0,
+        }];
+        checkpoint_mutate(&mut state, &a, MembershipChange::UpsertMember(member));
+        let mut forwarder =
+            Forwarder::from_checkpoint_config(&config, &state, &checkpoint_anchor(), 1_000)
+                .unwrap();
+        assert_eq!(forwarder.config().network.routes.len(), 1);
+        let mut policy = state.snapshot().payload.policy.clone();
+        policy.route_grants_enabled = false;
+        checkpoint_mutate(&mut state, &a, MembershipChange::SetPolicy(policy));
+        forwarder
+            .commit_checkpoint_update(
+                forwarder
+                    .prepare_checkpoint_update(&state, &checkpoint_anchor(), 1_000)
+                    .unwrap(),
+            )
+            .unwrap();
+        assert!(forwarder.config().network.routes.is_empty());
+        assert!(
+            super::super::tun::TunRuntimeConfig::from_config_with_routes(
+                forwarder.config(),
+                forwarder.authorized_routes(),
+            )
+            .unwrap()
+            .additional_addresses
+            .is_empty()
+        );
     }
 
     #[test]

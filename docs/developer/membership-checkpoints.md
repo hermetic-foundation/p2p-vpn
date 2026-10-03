@@ -109,6 +109,19 @@ original deadline survive; startup/return gates are unchanged.
 Transfer framing, proofs, resource limits, and compatibility are documented in
 [Snapshot Transfer](membership-checkpoint-wire.md).
 
+### Route Projection
+
+| Input | Checkpoint Behavior |
+| --- | --- |
+| Local signed route grants | Restore routes and host-prefix TUN aliases, including after restart. |
+| Static local/peer routes | Replace with the selected member's effective signed grants. |
+| Configured VPN alias | Retain only an exact zero-metric host grant; cannot override a signed metric. |
+| Resync, local exclusion, or disabled route policy | Clear local custom routes/aliases until authority permits them. |
+
+Built-in identity-derived addresses do not grant access to an absent member.
+Conflicting signed route owners still reject projection instead of silently
+choosing one device or falling back to static configuration.
+
 ### Self-Departure
 
 1. Sign the final exact-boundary removal before local exclusion.
