@@ -955,6 +955,12 @@ impl Forwarder {
         })
     }
 
+    pub(crate) fn checkpoint_anchor(&self) -> Option<&NetworkAnchor> {
+        self.checkpoint
+            .as_ref()
+            .map(|checkpoint| &checkpoint.anchor)
+    }
+
     fn refresh_checkpoint_projection(&mut self, now: u64) -> Result<(), ForwardError> {
         if self.membership_refresh_window.contains(now) {
             return Ok(());

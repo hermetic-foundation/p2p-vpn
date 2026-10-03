@@ -7,25 +7,29 @@ Implementation in progress. This is an acceptance map, not a completion report.
 The peer-inventory cleanup is independent of durable checkpoint compaction.
 Neither hidden rows nor a fixed history limit proves that compaction is complete.
 
-The cooperative core is implemented; the rejected fixed-quorum prototype is gone.
-Production runtime and wire activation remain incomplete. Core or storage unit
-tests alone do **not** establish a functioning checkpoint network.
+Core, storage, wire transfer, and version-3 daemon restoration are implemented;
+the rejected fixed-quorum prototype is gone. Automatic migration and pairing
+activation remain incomplete; current deployments still use the legacy ledger.
 
 ## Current Evidence
 
 | Surface | Verified Result | Remaining Gap |
 | --- | --- | --- |
-| Peer inventory | `25243a3c` omits revoked rows from shared Linux/Android snapshots, including stale static metadata. | Durable enforcement history is still retained. |
+| Peer inventory | `25243a3c` omits revoked rows from shared Linux/Android snapshots, including stale static metadata. | Existing legacy networks still retain enforcement history. |
 | Runtime paths | `df78cfb3` erases unauthorized stream/datagram/relay path history and pending probes. | Other retained device state must follow checkpoint installation. |
-| Forwarding projection | Checkpoint prepare/commit rejects stale contexts, seals static fallback, and erases legacy metadata. | Daemon/wire activation is still pending. |
-| Rust workspace | 1,623 tests pass; 47 opt-in tests excluded, including 30 core, 23 storage, and 11 checkpoint-forwarder tests. | This is not a completed checkpoint runtime. |
-| Durable checkpoint state | Version-3 authentication, legacy dispatch, rollback, failure/retry, and 128 durable churn cycles pass. | Automatic migration, activation, and a full crash campaign remain. |
+| Forwarding projection | Checkpoint prepare/commit rejects stale contexts, seals static fallback, and erases legacy metadata. | Full discovery/cache/artifact cleanup remains. |
+| Snapshot transfer | 21 new control tests cover authenticated multi-page TCP/Noise transfer, scope, replay, expiry, and byte/session bounds. | Pairing and self-departure messages are not integrated. |
+| Daemon coordinator | 11 tests cover version-3 restart, bounded resync, durable removal, DNS gating, new publishers, and failed-transfer cleanup. | Ordinary networks lack automatic provisioning/migration. |
+| Rust workspace | 1,655 tests pass; 47 opt-in tests excluded, including 30 core, 23 storage, and 11 checkpoint-forwarder tests. | No deployed checkpoint-network completion claim. |
+| Durable checkpoint state | Version-3 authentication, legacy dispatch, rollback, failure/retry, and 128 durable churn cycles pass. | Automatic migration and a full crash campaign remain. |
 | Static analysis | Formatting and required correctness/suspicious/performance Clippy groups pass. | Existing non-fatal lint warnings remain. |
 | Android consumer | JVM unit tests and debug lint pass for revoked-local filtering and missing-local snapshots. | No new APK or physical-device checkpoint test. |
+| Nix source coverage | Offline `rust-test-sources` check passes with the new modules. | Full package/VM rebuilds were not run for this slice. |
 | NixOS VM preflight | The membership-convergence expression evaluates. | Offline dry run plans 2,859 uncached derivations; VM execution was not started. |
 
-Existing test passes do not prove durable compaction, automatic resync, or fork
-reconciliation. Those require the integration and evidence below.
+Core, store, and coordinator tests verify those individual layers. They do not
+prove automatic migration, complete cleanup, or deployed multi-daemon convergence;
+those require the integration and evidence below.
 
 ## Required Behavior
 
@@ -169,7 +173,7 @@ before it can support a completion claim.
 | Workstream | Required Deliverables | Status |
 | --- | --- | --- |
 | Cooperative core | Singleton snapshots, canonical rank, scoped authentication, resync gate, active-only authorization, bounded churn tests. | Implemented; 30 core tests pass. |
-| Durable state | Atomic snapshot/capability persistence, crash boundaries, migration, retired metadata cleanup, bounded disk retention. | Version-3 store and durable churn tests implemented; runtime migration/activation and full crash campaign remain. |
-| Runtime and wire | Capability/version negotiation, bounded sync window, branch selection, pairing handoff, stale-record rejection, route/DNS/discovery cleanup. | Forwarder projection API implemented; operational activation, wire, and remaining cleanup are pending. |
-| User surfaces | Linux/Android sync state, visible discarded changes, no retained inviter history, structured user/developer instructions. | Active-only inventories and missing-provenance rendering tested; sync/loss status and runtime integration remain. |
-| End-to-end proof | Multi-node forks/offline return, restart, churn measurements, CLI/Android/NixOS contracts, practical formal invariants. | Not established. |
+| Durable state | Atomic persistence, crash boundaries, migration, metadata cleanup, bounded retention. | Store and churn tests pass; automatic migration and full crash campaign remain. |
+| Runtime and wire | Version negotiation, sync, branch selection, pairing/departure, route/DNS/discovery cleanup. | Version-3 restoration and bounded transfer are wired; provisioning, pairing/departure, and full cleanup remain. |
+| User surfaces | Linux/Android sync and loss status, minimal provenance, structured instructions. | Linux aggregate status and inventories tested; Android sync/loss UI and activation workflow remain. |
+| End-to-end proof | Multi-daemon forks/offline return, restart, churn, CLI/Android/NixOS contracts. | Real two-swarm paging and one-daemon restart/revoke pass; deployed multi-node evidence remains. |

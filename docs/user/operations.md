@@ -132,7 +132,8 @@ sudo p2p-vpn peers \
 | `peers[].local` | Boolean |
 | `peers[].membership` | Optional signed-ledger state and admission provenance |
 
-Revoked, expired, and inactive signed members remain visible for audit.
+Revoked identities are omitted; expired and other inactive signed members may
+remain visible while their ledger records are retained.
 
 Their derived addresses are omitted. A signed inactive state overrides a
 matching declarative peer entry.

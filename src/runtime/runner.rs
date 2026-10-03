@@ -96,7 +96,9 @@ use crate::{
         },
         dns::{DnsRuntime, DnsRuntimeError},
         forward::{ForwardError, Forwarder, ForwarderUpdate, packet_destination, packet_source},
-        membership_store::{MembershipStateStore, MembershipStateStoreError},
+        membership_store::{
+            MembershipStateStore, MembershipStateStoreError, checkpoint::PersistedAuthority,
+        },
         p2p::{
             Behaviour, BehaviourEvent, HostConfig, P2pBuildError, P2pNode,
             kademlia_pairing_code_key, kademlia_pairing_code_v2_key, public_pairing_kad_mut,
@@ -142,6 +144,7 @@ use crate::runtime::tun::IpCommand;
 #[cfg(target_os = "linux")]
 use crate::runtime::tun::TunDevice;
 
+use super::checkpoint_runtime::CheckpointRuntime;
 use super::membership_sync_history::MembershipSyncHistory;
 #[cfg(test)]
 use super::membership_sync_history::{
@@ -1576,30 +1579,42 @@ where
         })
         .transpose()?;
     let membership_state_store = membership_state_path.map(MembershipStateStore::new);
-    let mut code_pairing_sessions = load_code_pairing_sessions(
-        pairing_state_store.as_ref(),
-        &node.network_name,
-        current_unix_seconds_lossy(),
-        Instant::now(),
-    )?;
-    reconcile_persisted_pairing_enrollments(
-        &mut node.swarm,
-        &mut code_pairing_sessions,
-        pairing_state_store.as_ref(),
-        &mut forwarder,
-        &mut membership,
-        &mut tun_runtime,
-        &node.identity,
-        route_controller.as_mut(),
-    )?;
-    load_persisted_membership_records(
+    let mut checkpoint_runtime = load_checkpoint_runtime(
         membership_state_store.as_ref(),
         &mut forwarder,
         &mut membership,
         &node.identity.peer_id,
         &metrics,
     )?;
-    if forwarder.reconcile_local_hostname_record(&node.identity, current_unix_seconds_lossy())? {
+    let mut code_pairing_sessions = load_code_pairing_sessions(
+        pairing_state_store.as_ref(),
+        &node.network_name,
+        current_unix_seconds_lossy(),
+        Instant::now(),
+    )?;
+    if checkpoint_runtime.is_none() {
+        reconcile_persisted_pairing_enrollments(
+            &mut node.swarm,
+            &mut code_pairing_sessions,
+            pairing_state_store.as_ref(),
+            &mut forwarder,
+            &mut membership,
+            &mut tun_runtime,
+            &node.identity,
+            route_controller.as_mut(),
+        )?;
+        load_persisted_membership_records(
+            membership_state_store.as_ref(),
+            &mut forwarder,
+            &mut membership,
+            &node.identity.peer_id,
+            &metrics,
+        )?;
+    }
+    if checkpoint_runtime.is_none()
+        && forwarder
+            .reconcile_local_hostname_record(&node.identity, current_unix_seconds_lossy())?
+    {
         log_runtime_event(
             LogLevel::Info,
             "local_hostname_record_updated",
@@ -1741,6 +1756,9 @@ where
             .with_owned_quic_packet_plane(local_data_plane.owned_quic_packet_plane);
     }
     local_capabilities = refreshed_local_capabilities(&local_capabilities, &forwarder);
+    if let Some(checkpoint) = &checkpoint_runtime {
+        checkpoint.decorate_capabilities(&mut local_capabilities)?;
+    }
     timers.prime().await;
     let discovery = node.discovery.clone();
     let mut control_rx = control;
@@ -1794,6 +1812,8 @@ where
     let mut packet_authorization_revision = None;
     let mut runtime_data_priority = RuntimeDataPriority::default();
     let mut tun_reader_open = true;
+    let mut checkpoint_tick = tokio::time::interval(Duration::from_secs(1));
+    checkpoint_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         membership_record_syncs.reconcile_authorization(&forwarder, &metrics);
         if packet_authorization_revision != Some(forwarder.authorization_revision()) {
@@ -1827,6 +1847,40 @@ where
         tokio::select! {
             biased;
 
+            _ = checkpoint_tick.tick(), if checkpoint_runtime.is_some() => {
+                let checkpoint = checkpoint_runtime.as_mut().expect("checkpoint owner exists");
+                let store = membership_state_store.as_ref().expect("checkpoint authority is durable");
+                sync_live_tun_routes(&forwarder, &mut tun_runtime, route_controller.as_mut())?;
+                checkpoint.drive_sync(&mut node.swarm, &peer_capabilities, Instant::now())?;
+                membership.replace_checkpoint_sync_peers(checkpoint)?;
+                let selection = checkpoint.finish_due(
+                    store, &mut forwarder, Instant::now(), current_unix_seconds_lossy(),
+                )?;
+                let pruned = checkpoint.prune_expired(
+                    &node.identity, store, &mut forwarder, current_unix_seconds_lossy(),
+                )?;
+                let renamed = checkpoint.reconcile_local_hostname(&node.identity, store, &mut forwarder, current_unix_seconds_lossy())?;
+                if selection.is_some() || pruned || renamed {
+                    membership.replace_from_forwarder(&forwarder)?;
+                    membership.replace_checkpoint_sync_peers(checkpoint)?;
+                    sync_live_tun_routes(&forwarder, &mut tun_runtime, route_controller.as_mut())?;
+                    local_capabilities = refreshed_local_capabilities(&local_capabilities, &forwarder);
+                    checkpoint.decorate_capabilities(&mut local_capabilities)?;
+                    refresh_dns_zone_if_needed(dns_runtime.as_ref(), &forwarder, &mut dns_membership_revision, true);
+                    if let Some(selection) = selection {
+                        log_runtime_event(
+                            LogLevel::Info,
+                            "membership_checkpoint_resynced",
+                            &[
+                                ("revision", &selection.selected.authority_revision.to_string()),
+                                ("remote_observed", &selection.observed_remote_offer.to_string()),
+                                ("decisions_may_have_been_discarded", &selection.decisions_may_have_been_discarded.to_string()),
+                            ],
+                        );
+                    }
+                    send_control_capabilities_to_connected_peers(&mut node.swarm, &forwarder, &local_capabilities, &metrics);
+                }
+            }
             reason = &mut shutdown => {
                 log_runtime_event(
                     LogLevel::Info,
@@ -2301,15 +2355,25 @@ where
                             .copied()
                             .filter(|peer| forwarder.is_configured_transport_peer(*peer))
                             .collect::<Vec<_>>();
-                        let response = apply_local_membership_revocation(
-                            &mut forwarder,
-                            &mut membership,
-                            &mut tun_runtime,
-                            route_controller.as_mut(),
-                            &mut local_capabilities,
-                            &node.identity,
-                            member_peer.as_deref(),
-                        );
+                        let response = if let Some(checkpoint) = &mut checkpoint_runtime {
+                            apply_checkpoint_membership_revocation(
+                                checkpoint,
+                                membership_state_store.as_ref().expect("checkpoint authority is durable"),
+                                &mut forwarder, &mut membership, &mut tun_runtime,
+                                route_controller.as_mut(), &mut local_capabilities,
+                                &node.identity, member_peer.as_deref(),
+                            )
+                        } else {
+                            apply_local_membership_revocation(
+                                &mut forwarder,
+                                &mut membership,
+                                &mut tun_runtime,
+                                route_controller.as_mut(),
+                                &mut local_capabilities,
+                                &node.identity,
+                                member_peer.as_deref(),
+                            )
+                        };
                         if let Ok(result) = &response {
                             let advertised_to = if result.resigned {
                                 send_membership_departure_to_connected_members(
@@ -2509,6 +2573,7 @@ where
                     RuntimeControlRequest::Status { .. } | RuntimeControlRequest::State { .. }
                 );
                 let control_context = RuntimeControlContext {
+                    checkpoint: checkpoint_runtime.as_ref(),
                     packet_plane_retiring_sessions: packet_plane.retiring_session_count(),
                     kademlia: diagnostics.then(|| super::kademlia_resources::KademliaResources::capture(node.swarm.behaviour())),
                     application_recovery: diagnostics.then(|| ApplicationRecoverySnapshot::capture(
@@ -2565,6 +2630,46 @@ where
                 }
             }
             event = node.swarm.select_next_some() => {
+                if let Some(checkpoint) = &mut checkpoint_runtime
+                    && let SwarmEvent::Behaviour(BehaviourEvent::Control(request_response::Event::Message {
+                        peer, connection_id, message,
+                    })) = &event
+                    && connection_epochs.is_usable(*connection_id)
+                {
+                    let capabilities = match message {
+                        Message::Request { request: ControlRequest::Capabilities(capabilities), .. }
+                        | Message::Response { response: ControlResponse::CapabilitiesAccepted(capabilities), .. } => Some(capabilities),
+                        _ => None,
+                    };
+                    if let Some(capabilities) = capabilities
+                        && checkpoint.observe_capabilities(
+                            *peer, capabilities, local_capabilities.membership_tag.as_deref(),
+                            &previous_membership_tags, Instant::now(),
+                        )
+                    {
+                        membership.replace_checkpoint_sync_peers(checkpoint)?;
+                        checkpoint.drive_sync(&mut node.swarm, &peer_capabilities, Instant::now())?;
+                    }
+                }
+                if let SwarmEvent::Behaviour(BehaviourEvent::Checkpoint(event)) = event {
+                    if !request_response_message_is_usable(&connection_epochs, &event, "checkpoint") {
+                        if let Some(checkpoint) = &mut checkpoint_runtime {
+                            checkpoint.discard_wire_event(event, Instant::now());
+                        }
+                        continue;
+                    }
+                    if let Some(checkpoint) = &mut checkpoint_runtime {
+                        checkpoint.handle_wire_event(&mut node.swarm, event, &node.identity, Instant::now(), current_unix_seconds_lossy());
+                    } else if let request_response::Event::Message {
+                        message: Message::Request {request, channel, ..}, ..
+                    } = event {
+                        let response = crate::runtime::control::checkpoint::CheckpointPageResponse::rejected(
+                            &request, crate::runtime::control::checkpoint::CheckpointRejection::UnsupportedVersion,
+                        );
+                        let _ = node.swarm.behaviour_mut().checkpoint.send_response(channel, response);
+                    }
+                    continue;
+                }
                 handle_swarm_event(
                     &mut node.swarm,
                     SwarmEventContext {
@@ -2949,6 +3054,74 @@ fn cleanup_pending_pairing_aborts_with(
     Ok(())
 }
 
+fn load_checkpoint_runtime(
+    store: Option<&MembershipStateStore>,
+    forwarder: &mut Forwarder,
+    membership: &mut OverlayMembership,
+    local_peer: &str,
+    metrics: &RuntimeMetrics,
+) -> Result<Option<CheckpointRuntime>, RunnerError> {
+    let Some(store) = store else {
+        return Ok(None);
+    };
+    let configured_secret = forwarder.config().membership_key_bytes()?;
+    let loaded = match store.load_authority(
+        &forwarder.config().network.name,
+        local_peer,
+        None,
+        configured_secret.as_deref(),
+    ) {
+        Ok(loaded) => loaded,
+        Err(error) => {
+            metrics.record_membership_state_load_failure();
+            log_runtime_event(
+                LogLevel::Error,
+                "membership_state_load_failed",
+                &[
+                    ("reason", &error.to_string()),
+                    (
+                        "action",
+                        "upgrade_or_repair_state_without_discarding_authority",
+                    ),
+                ],
+            );
+            return Err(error.into());
+        }
+    };
+    let Some(PersistedAuthority::Checkpoint(loaded)) = loaded else {
+        return Ok(None);
+    };
+    let mut runtime =
+        CheckpointRuntime::restore(forwarder.config().network.name.clone(), local_peer, loaded)?;
+    let replacement = Forwarder::from_checkpoint_config(
+        forwarder.config(),
+        runtime.state(),
+        runtime.anchor(),
+        current_unix_seconds_lossy(),
+    )?;
+    let replacement_membership = OverlayMembership::from_transport_peers(
+        replacement.config(),
+        replacement.configured_transport_peers(),
+    )?;
+    runtime.begin_resync(Instant::now())?;
+    *forwarder = replacement;
+    *membership = replacement_membership;
+    membership.replace_checkpoint_sync_peers(&runtime)?;
+    metrics.record_membership_state_loaded(runtime.state().snapshot().payload.members.len());
+    log_runtime_event(
+        LogLevel::Info,
+        "membership_checkpoint_restored",
+        &[
+            (
+                "active_members",
+                &runtime.state().snapshot().payload.members.len().to_string(),
+            ),
+            ("packet_authority", "gated_until_resync"),
+        ],
+    );
+    Ok(Some(runtime))
+}
+
 fn load_persisted_membership_records(
     store: Option<&MembershipStateStore>,
     forwarder: &mut Forwarder,
@@ -3032,6 +3205,10 @@ fn persist_membership_records(
     local_peer: &str,
     metrics: &RuntimeMetrics,
 ) -> Result<(), RunnerError> {
+    if forwarder.checkpoint_sync_state().is_some() {
+        // The serialized checkpoint owner saves before installing any projection.
+        return Ok(());
+    }
     let Some(store) = store else {
         return Ok(());
     };
@@ -5242,6 +5419,7 @@ fn handle_runtime_network_change(
 }
 
 struct RuntimeControlContext<'a> {
+    checkpoint: Option<&'a CheckpointRuntime>,
     packet_plane_retiring_sessions: usize,
     kademlia: Option<super::kademlia_resources::KademliaResources>,
     application_recovery: Option<ApplicationRecoverySnapshot>,
@@ -5291,6 +5469,9 @@ fn handle_runtime_control_request(
             if let Some(recovery) = &context.application_recovery {
                 recovery.extend_lines(&mut lines);
             }
+            if let Some(checkpoint) = context.checkpoint {
+                checkpoint.extend_status_lines(&mut lines);
+            }
             if respond_to.send(lines).is_err() {
                 eprintln!("control socket status response receiver dropped");
             }
@@ -5323,6 +5504,9 @@ fn handle_runtime_control_request(
             ));
             if let Some(recovery) = &context.application_recovery {
                 recovery.extend_lines(&mut lines);
+            }
+            if let Some(checkpoint) = context.checkpoint {
+                checkpoint.extend_status_lines(&mut lines);
             }
             if respond_to.send(lines).is_err() {
                 eprintln!("control socket state response receiver dropped");
@@ -10238,6 +10422,7 @@ fn finish_targeted_recovery_queries(
 pub struct OverlayMembership {
     peers: HashSet<Libp2pPeerId>,
     configured_infrastructure_peers: HashSet<Libp2pPeerId>,
+    checkpoint_sync_peers: HashSet<Libp2pPeerId>,
 }
 
 impl OverlayMembership {
@@ -10278,6 +10463,7 @@ impl OverlayMembership {
         Ok(Self {
             peers,
             configured_infrastructure_peers: Self::infrastructure_peers(config)?,
+            checkpoint_sync_peers: HashSet::new(),
         })
     }
 
@@ -10327,7 +10513,35 @@ impl OverlayMembership {
         Ok(Self {
             peers,
             configured_infrastructure_peers,
+            checkpoint_sync_peers: HashSet::new(),
         })
+    }
+
+    fn replace_checkpoint_sync_peers(
+        &mut self,
+        runtime: &CheckpointRuntime,
+    ) -> Result<(), ConfigError> {
+        self.checkpoint_sync_peers = runtime
+            .state()
+            .snapshot()
+            .payload
+            .members
+            .iter()
+            .map(|member| {
+                member
+                    .subject
+                    .peer_id
+                    .parse()
+                    .map_err(ConfigError::Libp2pPeerId)
+            })
+            .collect::<Result<_, _>>()?;
+        self.checkpoint_sync_peers
+            .extend(runtime.sync_candidates(Instant::now()));
+        Ok(())
+    }
+
+    fn allows_membership_sync(&self, peer: Libp2pPeerId) -> bool {
+        self.checkpoint_sync_peers.contains(&peer)
     }
 
     #[must_use]
@@ -11852,7 +12066,7 @@ fn quarantine_rejected_control_probe(
     connection_id: ConnectionId,
     reason: ControlRejectionReason,
 ) {
-    if context.membership.allows(peer) {
+    if context.membership.allows(peer) || context.membership.allows_membership_sync(peer) {
         return;
     }
     context.routing_infrastructure_peers.remove(peer);
@@ -16946,6 +17160,54 @@ fn issue_local_membership_revocation_at(
     .map_err(|error| format!("failed to sign membership revocation: {error:?}"))
 }
 
+#[allow(clippy::too_many_arguments)]
+fn apply_checkpoint_membership_revocation(
+    checkpoint: &mut CheckpointRuntime,
+    store: &MembershipStateStore,
+    forwarder: &mut Forwarder,
+    membership: &mut OverlayMembership,
+    tun_runtime: &mut TunRuntimeConfig,
+    route_controller: &mut dyn TunRouteController,
+    local_capabilities: &mut ControlCapabilities,
+    identity: &NodeIdentity,
+    member_peer: Option<&str>,
+) -> Result<MembershipMutationResult, String> {
+    let target = member_peer.unwrap_or(&identity.peer_id);
+    // Snapshot publication requires current admission. A final exact-base
+    // departure handoff must be wired before exposing resignation in this mode.
+    if target == identity.peer_id {
+        return Err("checkpoint resignation handoff is not yet supported".to_owned());
+    }
+    checkpoint
+        .apply_change(
+            crate::membership::checkpoint::MembershipChange::RemoveMember(target.to_owned()),
+            identity,
+            store,
+            forwarder,
+            current_unix_seconds_lossy(),
+        )
+        .map_err(|error| format!("checkpoint revocation was not fully installed: {error:?}"))?;
+    membership
+        .replace_from_forwarder(forwarder)
+        .map_err(|error| format!("checkpoint saved; membership refresh pending: {error:?}"))?;
+    membership
+        .replace_checkpoint_sync_peers(checkpoint)
+        .map_err(|error| format!("checkpoint saved; sync refresh pending: {error:?}"))?;
+    *local_capabilities = refreshed_local_capabilities(local_capabilities, forwarder);
+    checkpoint
+        .decorate_capabilities(local_capabilities)
+        .map_err(|error| format!("checkpoint saved; capability refresh pending: {error:?}"))?;
+    sync_live_tun_routes(forwarder, tun_runtime, route_controller)
+        .map_err(|error| format!("checkpoint saved; route cleanup pending: {error:?}"))?;
+    Ok(MembershipMutationResult {
+        member_peer: target.to_owned(),
+        issuer_peer: identity.peer_id.clone(),
+        membership_epoch: checkpoint.state().snapshot().payload.authority_revision,
+        sequence: 0,
+        resigned: false,
+    })
+}
+
 fn apply_local_membership_revocation(
     forwarder: &mut Forwarder,
     membership: &mut OverlayMembership,
@@ -17474,6 +17736,12 @@ fn learn_membership_records_from_capabilities(
     membership: &mut OverlayMembership,
     capabilities: &ControlCapabilities,
 ) -> Result<bool, ForwardError> {
+    if forwarder.checkpoint_sync_state().is_some() {
+        if capabilities.member_records.is_empty() {
+            return Ok(false);
+        }
+        return Err(ForwardError::LegacyAuthorityDisabled);
+    }
     let now_unix_seconds = current_unix_seconds_lossy();
     let stats =
         forwarder.merge_membership_records(&capabilities.member_records, now_unix_seconds)?;
@@ -17730,9 +17998,10 @@ fn refreshed_local_capabilities(
     capabilities.advertised_routes = forwarder.local_advertised_routes();
     capabilities.member_records = advertised_member_records(forwarder);
     capabilities.hostname_records = advertised_hostname_records(forwarder);
-    capabilities.supports_membership_record_pages = true;
-    capabilities.membership_records_snapshot =
-        Some(membership_records_snapshot(forwarder.member_records()));
+    capabilities.supports_membership_record_pages = forwarder.checkpoint_sync_state().is_none();
+    capabilities.membership_records_snapshot = capabilities
+        .supports_membership_record_pages
+        .then(|| membership_records_snapshot(forwarder.member_records()));
     capabilities.membership_record_count = u16::try_from(forwarder.member_records().len())
         .expect("validated membership history is bounded");
     capabilities
@@ -18067,13 +18336,25 @@ fn validate_peer_capabilities(
             Ok(changed) => changed,
             Err(_) => return (Some(ControlRejectionReason::InvalidMembershipRecord), false),
         };
-    let hostname_changed = match forwarder.merge_hostname_records(&capabilities.hostname_records) {
-        Ok(stats) => stats.accepted > 0,
-        Err(_) => {
-            return (
-                Some(ControlRejectionReason::InvalidHostnameRecord),
-                membership_changed,
-            );
+    let hostname_changed = if let Some(anchor) = forwarder.checkpoint_anchor() {
+        if !capabilities.hostname_records.is_empty()
+            || capabilities
+                .checkpoint
+                .as_ref()
+                .is_none_or(|descriptor| descriptor.validate_for(anchor).is_err())
+        {
+            return (Some(ControlRejectionReason::InvalidMembershipRecord), false);
+        }
+        false
+    } else {
+        match forwarder.merge_hostname_records(&capabilities.hostname_records) {
+            Ok(stats) => stats.accepted > 0,
+            Err(_) => {
+                return (
+                    Some(ControlRejectionReason::InvalidHostnameRecord),
+                    membership_changed,
+                );
+            }
         }
     };
     let topology_changed = membership_changed || hostname_changed;
@@ -20576,7 +20857,7 @@ fn authorize_established_connection(
         return EstablishedConnectionAuthorization::RoutingPeer;
     }
 
-    if allow_membership_probe {
+    if allow_membership_probe || membership.allows_membership_sync(peer) {
         return EstablishedConnectionAuthorization::MembershipProbe;
     }
 
@@ -20848,6 +21129,20 @@ fn handle_behaviour_event(
     match event {
         BehaviourEvent::Mdns(mdns::Event::Discovered(peers)) if context.discovery.mdns => {
             for (peer, address) in peers {
+                if context.membership.allows_membership_sync(peer)
+                    && !context.forwarder.is_configured_transport_peer(peer)
+                    && peer != *swarm.local_peer_id()
+                    && !swarm.is_connected(&peer)
+                    && address_targets_peer(peer, &address)
+                {
+                    let _ = context.connection_epochs.dial(
+                        swarm,
+                        DialOpts::peer_id(peer)
+                            .condition(PeerCondition::Disconnected)
+                            .addresses(vec![address.clone()])
+                            .build(),
+                    );
+                }
                 let infrastructure_address = address.clone();
                 context.metrics.record_code_pairing_lan_candidate();
                 context.code_pairing_sessions.record_lan_candidate(
@@ -27973,6 +28268,7 @@ mod tests {
         let reason = handle_runtime_control_request(
             RuntimeControlRequest::Shutdown { respond_to },
             &RuntimeControlContext {
+                checkpoint: None,
                 packet_plane_retiring_sessions: 0,
                 kademlia: None,
                 application_recovery: None,
@@ -28033,6 +28329,7 @@ mod tests {
             let mut expected_application_lines = Vec::new();
             application_recovery.extend_lines(&mut expected_application_lines);
             let context = RuntimeControlContext {
+                checkpoint: None,
                 packet_plane_retiring_sessions: 1,
                 kademlia: Some(
                     super::super::kademlia_resources::KademliaResources::capture(
@@ -28239,6 +28536,7 @@ mod tests {
         let reason = handle_runtime_control_request(
             RuntimeControlRequest::NetworkPeers { respond_to },
             &RuntimeControlContext {
+                checkpoint: None,
                 packet_plane_retiring_sessions: 0,
                 kademlia: None,
                 application_recovery: None,
@@ -28413,6 +28711,7 @@ mod tests {
         let reason = handle_runtime_control_request(
             RuntimeControlRequest::PeerSnapshot { respond_to },
             &RuntimeControlContext {
+                checkpoint: None,
                 packet_plane_retiring_sessions: 0,
                 kademlia: None,
                 application_recovery: None,
@@ -35208,6 +35507,7 @@ mod tests {
         let routing_peer = peer_id();
         let routing_probe = peer_id();
         let membership = OverlayMembership {
+            checkpoint_sync_peers: HashSet::new(),
             peers: HashSet::from([overlay]),
             configured_infrastructure_peers: HashSet::new(),
         };
@@ -35288,6 +35588,7 @@ mod tests {
     fn only_unauthorized_capability_rejections_outside_pairing_quarantine_transport_probes() {
         let peer = peer_id();
         let authorized = OverlayMembership {
+            checkpoint_sync_peers: HashSet::new(),
             peers: HashSet::from([peer]),
             configured_infrastructure_peers: HashSet::new(),
         };
@@ -35335,6 +35636,7 @@ mod tests {
         let infrastructure = peer_id();
         let rejected = peer_id();
         let membership = OverlayMembership {
+            checkpoint_sync_peers: HashSet::new(),
             peers: HashSet::from([allowed]),
             configured_infrastructure_peers: HashSet::new(),
         };
@@ -35402,6 +35704,7 @@ mod tests {
         let infrastructure = peer_id();
         let rejected = peer_id();
         let membership = OverlayMembership {
+            checkpoint_sync_peers: HashSet::new(),
             peers: HashSet::new(),
             configured_infrastructure_peers: HashSet::from([infrastructure]),
         };
@@ -35446,6 +35749,7 @@ mod tests {
     fn infrastructure_probe_connections_are_temporarily_admitted_without_counting_rejections() {
         let probe = peer_id();
         let membership = OverlayMembership {
+            checkpoint_sync_peers: HashSet::new(),
             peers: HashSet::new(),
             configured_infrastructure_peers: HashSet::new(),
         };
@@ -35476,6 +35780,7 @@ mod tests {
     fn inbound_membership_probe_can_present_authorization() {
         let probe = peer_id();
         let membership = OverlayMembership {
+            checkpoint_sync_peers: HashSet::new(),
             peers: HashSet::new(),
             configured_infrastructure_peers: HashSet::new(),
         };
@@ -35509,6 +35814,7 @@ mod tests {
     fn relay_server_connections_are_admitted_without_overlay_membership() {
         let client = peer_id();
         let membership = OverlayMembership {
+            checkpoint_sync_peers: HashSet::new(),
             peers: HashSet::new(),
             configured_infrastructure_peers: HashSet::new(),
         };
@@ -35608,6 +35914,7 @@ mod tests {
         assert!(infrastructure_peers.insert(peer, address.clone()));
         assert!(auto_relay.record_candidate(peer, address));
         let membership = OverlayMembership {
+            checkpoint_sync_peers: HashSet::new(),
             peers: HashSet::from([peer]),
             configured_infrastructure_peers: HashSet::new(),
         };

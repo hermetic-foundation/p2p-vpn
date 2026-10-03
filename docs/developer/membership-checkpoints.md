@@ -2,9 +2,12 @@
 
 ## Status
 
-The core protocol is implemented and unit-tested. Runtime activation, wire
-negotiation, pairing migration, and user-visible sync status remain integration
-work. Existing networks still use the legacy membership ledger.
+Core, protected storage, bounded snapshot transfer, and version-3 daemon
+restoration are implemented. Ordinary existing networks still use the legacy
+ledger: automatic provisioning/migration and pairing integration remain pending.
+
+No new configuration switch enables checkpoints yet. Self-departure delivery,
+full retained-artifact cleanup, and deployed multi-node evidence remain required.
 
 See [Acceptance](membership-checkpoint-acceptance.md) for the completion audit.
 
@@ -66,13 +69,36 @@ Rank selects a branch; it does not prove globally current or honest authority.
 ## Lifecycle
 
 1. Restore the authenticated snapshot with `ResyncRequired` authority gating.
-2. Open a fresh nonce-bound, monotonic-time resync window of at most 60 seconds.
+2. Open a fresh nonce-bound, monotonic-time resync window; the daemon uses 15 seconds.
 3. Collect authenticated offers and keep only the best snapshot and current names.
 4. Finish the window, install the chosen state, and report aggregate changes.
 5. Participate only if the local identity remains active in the chosen snapshot.
 
 An isolated survivor may finish without an offer. This preserves availability,
 but cannot establish that a disconnected partition has no newer state.
+
+### Runtime Ownership
+
+| Stage | Behavior |
+| --- | --- |
+| Restart | Version-3 state restores gated; static peers and completed pairing artifacts cannot restore grants. |
+| Catch-up | Query retained peers and bounded matching-scope control-only candidates, including newly admitted publishers. |
+| Live refresh | Keep the installed packet authority while reconciling; reject membership mutations during the round. |
+| Install | Prepare projection, atomically persist selected authority, then commit forwarding state. |
+| Visible-write failure | Keep selected authority gated; never restore older grants; an isolated survivor can retry resync. |
+| Names | Reconcile the local signed hostname independently of authority rank. |
+| Revocation | Existing control API installs an active-only snapshot and refreshes routes, inventory, and DNS. |
+
+Matching advertisements permit catch-up only. Candidates are capped at 32 and
+expire after 15 seconds; the authenticated offer must pass core validation before
+it can authorize any peer. Public IPFS peers are not blindly queried for rosters.
+
+Periodic connected-peer refresh runs no more frequently than once per minute
+unless a higher advertised rank prompts catch-up. A capability advertisement
+does not establish global freshness.
+
+Transfer framing, proofs, resource limits, and compatibility are documented in
+[Snapshot Transfer](membership-checkpoint-wire.md).
 
 ### Self-Departure
 
@@ -83,6 +109,9 @@ but cannot establish that a disconnected partition has no newer state.
 
 Transport integration must bound handoff retries and lifetime. No excluded
 publisher exception or permanent departure proof is stored in the core state.
+
+The core supports this transition; daemon self-departure handoff is not wired yet.
+Checkpoint-mode resignation currently returns an explicit unsupported error.
 
 ## Names And Re-Admission
 
@@ -116,7 +145,8 @@ static peers receive no implicit permission even after their tombstones are gone
 ### Forwarding Projection
 
 The forwarder accepts authenticated core state through a scoped prepare/commit
-update. This API is implemented; normal daemon startup does not activate it yet.
+update. Daemon startup uses it when protected version-3 authority already exists;
+legacy networks are not automatically migrated.
 
 | Surface | Checkpoint Behavior |
 | --- | --- |
@@ -135,17 +165,40 @@ Runtime integration must persist the selected core state before announcing it.
 After a visible checkpoint replacement, route/commit failures must fail closed
 or retry the selected authority; they must not restore stale grants as a fallback.
 
+### Diagnostics
+
+`daemon-status` and `daemon-state` include aggregate `checkpoint_*` fields for
+checkpoint instances. They do not export credentials, discarded rosters, or a
+per-device revocation archive.
+
+| Field | Meaning |
+| --- | --- |
+| `checkpoint_sync_state` | `resync_required`, `resyncing`, `participating`, or `excluded`. |
+| `checkpoint_authority_revision` | Installed authority revision. |
+| `checkpoint_active_members` | Retained roster population, including offline members. |
+| `checkpoint_pending_requests` | Owned outbound page requests. |
+| `checkpoint_buffered_bytes` | Reserved snapshot-transfer memory. |
+| `checkpoint_retired_transfer_slots` | Short-lived replay slots, not durable device history. |
+| `checkpoint_offers_accepted` | Authenticated offers collected by this daemon. |
+| `checkpoint_transfer_failures` | Aggregate failed transfers. |
+| `checkpoint_decisions_may_have_been_discarded` | Last selection may have discarded losing-branch decisions. |
+
 ### Commands
 
 ```sh
 nix develop -c cargo test --locked --lib membership::checkpoint
+nix develop -c cargo test --locked --lib runtime::checkpoint_runtime
+nix develop -c cargo test --locked --lib runtime::control
 ```
 
 The 30 core tests cover singleton progress, offline return, deterministic forks,
 accepted losing-branch rollback, stale replay, hostname conflicts, re-admission,
 creator departure, route policy, migration, and thousands of churn cycles.
 
-These tests establish core behavior, not a deployed checkpoint network. Durable
-storage and forwarder projection have additional focused tests. Wire/runtime
-activation, CLI/Android sync status, and multi-node end-to-end evidence remain
-required before goal completion.
+Runtime tests cover real TCP/Noise catch-up, an excluded requester, a publisher
+missing from the stale roster, isolated recovery, durable revocation, DNS gating,
+bounded candidates, failed-transfer retirement, and the existing daemon control API.
+
+These tests do not establish a deployed checkpoint network. Provisioning,
+automatic migration, pairing/self-departure, Android sync UI, full artifact
+erasure, and multi-daemon/NixOS end-to-end evidence remain required for completion.

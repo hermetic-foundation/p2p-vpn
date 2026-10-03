@@ -180,6 +180,11 @@ pub(crate) fn effective_peer_names(
     hostname_records: &HashMap<PeerId, String>,
 ) -> Result<Vec<EffectivePeerName>, ConfigError> {
     let local_peer = config.local_peer_id()?;
+    if membership.is_checkpoint_authoritative()
+        && !membership.authorizes_configured_peer(local_peer)
+    {
+        return Ok(Vec::new());
+    }
     let authorization = membership.authorization_for(local_peer);
     let mut owners = HashMap::from([(local_peer, config.local_peer()?)]);
     let mut names = Vec::new();
