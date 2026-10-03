@@ -197,6 +197,27 @@ retain inviter identity, old admission proofs, or per-device revocation markers.
 Normal authorization uses the active snapshot as a closed namespace. Absent
 static peers receive no implicit permission even after their tombstones are gone.
 
+### Discovery Retention
+
+The daemon reconciles discovery ownership after membership changes and at most
+once per second between changes. It keeps the current eligible set, not a retired
+device archive. Relearned stale overlay references are removed on the next sweep.
+
+| Owner | Cleanup Boundary |
+| --- | --- |
+| Static dial list and address protection | Remove absent overlay identities, including protected-only references. |
+| Discovered addresses, backoff, LAN-first state | Remove the departed peer's entries without resetting other peers. |
+| Recovery queries | Cancel the peer's owned queries; retain unrelated public queries. |
+| Primary and separate pairing DHT | Remove the entire departed routing entry. |
+| Cached address and legacy membership values | Remove typed records matching this network's canonical keys and supported scope. |
+| Scoped provider records | Remove ineligible providers for owned rendezvous and legacy membership keys, including public-DHT wire-key hashing. |
+| Public discovery data | Preserve unrelated networks, scopes, content keys, and infrastructure. |
+| Returning roster and temporary control owners | Preserve bounded catch-up/reply/handoff reachability without granting packets. |
+
+Tests cover both DHT modes, restoration gates, stale relearning, control-owner
+expiry without a revision change, and 512 admission/removal cycles. This is
+discovery-owner evidence, not complete artifact cleanup or deployed convergence.
+
 ## Fresh Solo Formation
 
 These APIs require explicit pairing authorization. Ordinary `PairOpen` calls

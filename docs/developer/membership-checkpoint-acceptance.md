@@ -39,7 +39,7 @@ resync. RPC and TCP/Noise regressions pass; this is not deployed-network evidenc
 | --- | --- | --- |
 | Peer inventory | `25243a3c` omits revoked rows from shared Linux/Android snapshots, including stale static metadata. | Existing legacy networks still retain enforcement history. |
 | Runtime paths | `df78cfb3` erases unauthorized stream/datagram/relay path history and pending probes. | Other retained device state must follow checkpoint installation. |
-| Address-retirement API | Eight address-retention tests pass, including protected-only deletion, canonical deduplication, and 1,024 admission/removal cycles. | The checkpoint-aware runner hook and dual-DHT cleanup tests are not wired or verified yet. |
+| Address retirement | Eight API tests cover protected-only deletion, canonical deduplication, and 1,024 cycles. Six wired-runner tests cover both DHTs, cached values/providers, relearning, control-owner expiry, and 512 cycles. | Full migration/artifact cleanup and deployed evidence remain. |
 | Forwarding projection | Seal static fallback; restore signed local aliases after restart; strip ungranted routes/aliases; preserve signed metrics and route policy. | Full discovery/cache/artifact cleanup and kernel integration remain. |
 | Snapshot/mutation transfer | 21 snapshot and 19 mutation tests cover authenticated TCP/Noise, scope, replay, deadlines, correlated replies, and frame/session bounds. | Cold gated reconnect and deployed convergence remain. |
 | Daemon coordinator | 37 tests cover restart, resync, solo APIs, removal, DNS, catch-up, handoff, enrollment gates, ACK/Identify ownership, and retained-state erasure. | Existing networks need explicit migration; departure intermittency remains. |
@@ -49,11 +49,12 @@ resync. RPC and TCP/Noise regressions pass; this is not deployed-network evidenc
 | Creator departure | Three real daemon loops deliver removal to two survivors; later survivor governance and injected route-cleanup retry pass. | Packet/route adapters are fixtures, not real TUN or deployed-node evidence. |
 | Handoff scheduling | Five tests verify recipient/in-flight bounds, fairness, fixed deadlines, retry limits, and forgotten payloads. | No deployed checkpoint-network completion claim. |
 | Fresh solo APIs | Eight tests cover empty/self-only versions 1/2, signature/scope/key/history rejection, routes, pins, isolated enrollment gates, and write-boundary recovery. | Normal daemon pairing is wired; migration, export, and deployment remain. |
-| Rust workspace | 1,761 tests pass; 47 opt-in tests excluded. Core, storage, forwarding, enrollment, and both pairing roles are covered. | Full VM/package/device checks remain. |
+| Rust workspace | 1,767 tests pass; 47 opt-in tests excluded. Core, storage, forwarding, enrollment, both pairing roles, and discovery cleanup are covered. | Full VM/package/device checks remain. |
 | Durable checkpoint state | Version-3 authentication, legacy dispatch, rollback, failure/retry, and 128 durable churn cycles pass. | Automatic migration and a full crash campaign remain. |
 | Static analysis | Formatting and required correctness/suspicious/performance Clippy groups pass. | Existing non-fatal lint warnings remain. |
 | Android consumer | JVM unit tests and debug lint pass for revoked-local filtering and missing-local snapshots. | No new APK or physical-device checkpoint test. |
 | Nix source coverage | Offline `rust-test-sources` check passes with the new modules. | Full package/VM rebuilds were not run for this slice. |
+| Package preflight | Offline `default` package dry run succeeds. | Plans 1,377 uncached derivations; the build was not started to avoid the large storage cost. |
 | NixOS VM preflight | The membership-convergence expression evaluates. | Offline dry run plans 2,859 uncached derivations; VM execution was not started. |
 
 Core, store, and coordinator tests verify those individual layers. They do not
@@ -259,8 +260,8 @@ membership file.
 | --- | --- | --- |
 | Selected snapshot and names | Retain the current roster and compatible claims, without inviter history or tombstones. | Exercise complete normal pairing, migration, restart, and churn. |
 | Forwarding config, queues, paths, and sessions | Closed checkpoint namespace and authorization pruning are covered. | Combine these effects with one ordinary membership change. |
-| Static dial references, address protection, and both DHTs | Address-retirement API is tested; runner integration remains pending. | Preserve returning roster members, public infrastructure, and bounded control-only owners. |
-| Recovery queries, dial backoff, and LAN-first state | Query authorization pruning exists; broader address retirement is being integrated. | Prove absent-device state disappears without resetting unrelated recovery. |
+| Static dial references, address protection, and both DHTs | Wired cleanup removes absent overlay peers, owned address/legacy values, and scoped provider records. | Preserve returning roster members, public infrastructure, and bounded control-only owners; migration-era scopes remain part of migration review. |
+| Recovery queries, dial backoff, and LAN-first state | Wired cleanup cancels owned queries and removes absent-peer backoff and LAN-first state; unrelated queries survive. | Extend fixture evidence to cold reconnect and deployed convergence. |
 | Connection, request, and rate-limit owners | Existing disconnect, completion, and timeout cleanup applies. | Verify checkpoint removal and pending-reply expiry across all owners. |
 | Pairing transcripts, receipts, and completion state | Counts are bounded, but receipt retention does not prove device erasure. | Compact obsolete identity-bearing artifacts while preserving pending transaction recovery. |
 | Android profiles and presentation | Revoked rows are filtered; checkpoint enrollment and sync/loss UI remain incomplete. | Verify protected restart, profile cleanup, and discarded-change presentation. |

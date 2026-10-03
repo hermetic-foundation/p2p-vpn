@@ -157,6 +157,7 @@ use super::recovery_queries::{
     QUERY_TIMEOUT as RECOVERY_DISCOVERY_QUERY_TIMEOUT,
 };
 
+mod checkpoint_discovery;
 mod checkpoint_pairing;
 mod control_connection_retention;
 use control_connection_retention::should_retain_control_connection;
@@ -1839,6 +1840,8 @@ where
     );
     tokio::pin!(shutdown);
 
+    let mut checkpoint_discovery_retention =
+        checkpoint_discovery::CheckpointDiscoveryRetention::default();
     let mut packet_authorization_revision = None;
     let mut runtime_data_priority = RuntimeDataPriority::default();
     let mut tun_reader_open = true;
@@ -1848,6 +1851,14 @@ where
     let mut next_checkpoint_sync_capabilities = Instant::now();
     loop {
         membership_record_syncs.reconcile_authorization(&forwarder, &metrics);
+        checkpoint_discovery_retention.reconcile(
+            checkpoint_runtime.as_ref(),
+            &forwarder,
+            &membership,
+            &mut node,
+            &mut queue_runtime.discovered_peer_addresses,
+            Instant::now(),
+        )?;
         if packet_authorization_revision != Some(forwarder.authorization_revision()) {
             reconcile_recovery_query_authorization(
                 &forwarder,
