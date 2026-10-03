@@ -14,10 +14,10 @@ use libp2p::{
 use crate::{
     identity::NodeIdentity,
     membership::checkpoint::{
-        BranchSelection, CheckpointError, CooperativeMembershipState, MembershipChange,
-        MembershipSyncState, NetworkAnchor, OfferOutcome, SignedHostnameClaim,
-        SignedMembershipMutation, SignedSnapshotOffer, SnapshotChallenge, SnapshotPolicy,
-        SnapshotRank,
+        BranchSelection, CheckpointError, CheckpointMember, CooperativeMembershipState,
+        MAX_CAPABILITY_BYTES, MembershipChange, MembershipSyncState, NetworkAnchor, OfferOutcome,
+        SignedHostnameClaim, SignedMembershipMutation, SignedSnapshotOffer, SnapshotChallenge,
+        SnapshotPolicy, SnapshotRank,
     },
     pairing::{PairingCheckpointGrant, PairingOffer, PairingResponse},
 };
@@ -39,7 +39,7 @@ use super::{
     forward::{ForwardError, Forwarder},
     membership_store::{
         MembershipStateStore, MembershipStateStoreError,
-        checkpoint::{CheckpointCredentials, LoadedCheckpointAuthority},
+        checkpoint::{CheckpointCredentials, LoadedCheckpointAuthority, PersistedAuthority},
     },
     p2p::Behaviour,
     runner::RunnerError,
@@ -95,6 +95,98 @@ impl std::fmt::Debug for CheckpointRuntime {
 }
 
 impl CheckpointRuntime {
+    /// Only explicit PairOpen authorization may create a scope from fresh solo authority.
+    /// Saved checkpoints are restored without regenerating credentials or bypassing resync.
+    pub(crate) fn form_new_network(
+        config: &crate::config::Config,
+        identity: &NodeIdentity,
+        store: &MembershipStateStore,
+        wall_now: u64,
+    ) -> Result<Self, RunnerError> {
+        validate_local_checkpoint_identity(config, identity)?;
+        let configured_secret = configured_checkpoint_secret(config)?;
+        let previous = store.load_authority(
+            &config.network.name,
+            &identity.peer_id,
+            None,
+            configured_secret.as_deref(),
+        )?;
+        let legacy = match previous {
+            Some(PersistedAuthority::Checkpoint(loaded)) => {
+                return Self::restore(config.network.name.clone(), &identity.peer_id, *loaded);
+            }
+            Some(PersistedAuthority::Legacy(legacy)) => Some(legacy),
+            None => None,
+        };
+        validate_fresh_solo_authority(config, identity, legacy.as_ref(), wall_now)?;
+        config.validate_runtime()?;
+
+        let generated = CheckpointCredentials::generate()?;
+        let credentials = match configured_secret {
+            Some(secret) => CheckpointCredentials::new(generated.anchor().clone(), secret)?,
+            None => generated,
+        };
+        let mut member = CheckpointMember::new(identity).map_err(core_error)?;
+        member.route_grants = config.network.routes.clone();
+        if let Some(vpn_ip) = &config.network.vpn_ip {
+            member.route_grants.push(crate::config::RouteConfig {
+                prefix: crate::config::vpn_ip_host_route(vpn_ip)?.to_string(),
+                metric: 0,
+            });
+        }
+        for route in &mut member.route_grants {
+            route.prefix = route.prefix()?.to_string();
+        }
+        member
+            .route_grants
+            .sort_by(|left, right| (&left.prefix, left.metric).cmp(&(&right.prefix, right.metric)));
+        member.route_grants.dedup();
+        if !member.route_grants.is_empty() {
+            member
+                .roles
+                .push(crate::membership::MembershipRole::RouteAuthority);
+        }
+        let incarnation = member.incarnation;
+        let mut state = CooperativeMembershipState::bootstrap_at(
+            credentials.capability()?,
+            identity.peer_id.clone(),
+            vec![member],
+            SnapshotPolicy::default(),
+            wall_now,
+        )
+        .map_err(core_error)?;
+        if let Some(hostname) = config.network.dns.hostname.as_deref() {
+            let claim = SignedHostnameClaim::issue(
+                credentials.anchor().clone(),
+                identity,
+                incarnation,
+                1,
+                hostname,
+            )
+            .map_err(core_error)?;
+            state.merge_hostname_claims(&[claim]).map_err(core_error)?;
+        }
+        // Validate local grants while participating, before making the new scope durable.
+        Forwarder::from_checkpoint_config(config, &state, credentials.anchor(), wall_now)?;
+        let retained = state.retained();
+        let owner = Self::restore(
+            config.network.name.clone(),
+            &identity.peer_id,
+            LoadedCheckpointAuthority {
+                credentials,
+                retained,
+                enrollment_floor: None,
+            },
+        )?;
+        store.save_checkpoint(
+            &config.network.name,
+            &identity.peer_id,
+            &owner.credentials,
+            &owner.state.retained(),
+        )?;
+        Ok(owner)
+    }
+
     /// Caller-approved signed enrollment installs credentials, never a partial roster's grants.
     pub(crate) fn stage_pairing_enrollment(
         config: &crate::config::Config,
@@ -104,10 +196,37 @@ impl CheckpointRuntime {
         store: &MembershipStateStore,
         wall_now: u64,
     ) -> Result<Self, RunnerError> {
+        Self::stage_pairing_enrollment_inner(
+            config, identity, offer, response, store, wall_now, false,
+        )
+    }
+
+    /// Explicit accepted PairJoin may replace only validated fresh solo legacy state.
+    /// Existing checkpoint scope and minimum-rank pins remain authoritative.
+    pub(crate) fn stage_pairing_enrollment_from_solo(
+        config: &crate::config::Config,
+        identity: &NodeIdentity,
+        offer: &PairingOffer,
+        response: &PairingResponse,
+        store: &MembershipStateStore,
+        wall_now: u64,
+    ) -> Result<Self, RunnerError> {
+        Self::stage_pairing_enrollment_inner(
+            config, identity, offer, response, store, wall_now, true,
+        )
+    }
+
+    fn stage_pairing_enrollment_inner(
+        config: &crate::config::Config,
+        identity: &NodeIdentity,
+        offer: &PairingOffer,
+        response: &PairingResponse,
+        store: &MembershipStateStore,
+        wall_now: u64,
+        allow_fresh_solo: bool,
+    ) -> Result<Self, RunnerError> {
         let network_name = config.network.name.clone();
-        if config.identity()?.peer_id != identity.peer_id {
-            return Err(crate::pairing::PairingError::OfferConfigMismatch.into());
-        }
+        validate_local_checkpoint_identity(config, identity)?;
         response.verify_for_offer_at(offer, identity, wall_now)?;
         if response.payload.network_name != network_name {
             return Err(crate::pairing::PairingError::OfferConfigMismatch.into());
@@ -131,8 +250,7 @@ impl CheckpointRuntime {
                 .secret_bytes()
                 .map_err(crate::pairing::PairingError::from)?,
         )?;
-        if config
-            .membership_key_bytes()?
+        if configured_checkpoint_secret(config)?
             .as_deref()
             .is_some_and(|configured| configured != credentials.secret())
         {
@@ -144,13 +262,26 @@ impl CheckpointRuntime {
             Some(credentials.anchor()),
             Some(credentials.secret()),
         )?;
-        let (seed, floor) = match previous {
-            Some(super::membership_store::checkpoint::PersistedAuthority::Legacy(_)) => {
-                return Err(core_error(CheckpointError::Invalid(
-                    "legacy authority requires explicit checkpoint migration",
-                )));
+        let previous = match previous {
+            Some(PersistedAuthority::Legacy(legacy)) => {
+                if !allow_fresh_solo {
+                    return Err(core_error(CheckpointError::Invalid(
+                        "legacy authority requires explicit checkpoint migration",
+                    )));
+                }
+                validate_fresh_solo_authority(config, identity, Some(&legacy), wall_now)?;
+                None
             }
-            Some(super::membership_store::checkpoint::PersistedAuthority::Checkpoint(loaded)) => {
+            Some(PersistedAuthority::Checkpoint(loaded)) => Some(loaded),
+            None => {
+                if allow_fresh_solo {
+                    validate_fresh_solo_authority(config, identity, None, wall_now)?;
+                }
+                None
+            }
+        };
+        let (seed, floor) = match previous {
+            Some(loaded) => {
                 let floor = loaded
                     .enrollment_floor
                     .map_or(grant.minimum, |old| old.max(grant.minimum));
@@ -1336,6 +1467,106 @@ fn core_error(error: CheckpointError) -> RunnerError {
     ForwardError::Checkpoint(error).into()
 }
 
+fn validate_local_checkpoint_identity(
+    config: &crate::config::Config,
+    identity: &NodeIdentity,
+) -> Result<(), RunnerError> {
+    if config.network.name.is_empty()
+        || config.identity()?.peer_id != identity.peer_id
+        || identity
+            .public_key()
+            .map_err(crate::pairing::PairingError::from)?
+            .to_peer_id()
+            .to_string()
+            != identity.peer_id
+    {
+        return Err(crate::pairing::PairingError::OfferConfigMismatch.into());
+    }
+    Ok(())
+}
+
+fn configured_checkpoint_secret(
+    config: &crate::config::Config,
+) -> Result<Option<Vec<u8>>, RunnerError> {
+    if config
+        .network
+        .membership_key
+        .as_ref()
+        .is_some_and(|secret| secret.len() > MAX_CAPABILITY_BYTES.div_ceil(3) * 4)
+    {
+        return Err(core_error(CheckpointError::Invalid(
+            "checkpoint capability exceeds limit",
+        )));
+    }
+    let secret = config.membership_key_bytes()?;
+    if secret
+        .as_ref()
+        .is_some_and(|secret| secret.len() > MAX_CAPABILITY_BYTES)
+    {
+        return Err(core_error(CheckpointError::Invalid(
+            "checkpoint capability exceeds limit",
+        )));
+    }
+    Ok(secret)
+}
+
+fn validate_fresh_solo_authority(
+    config: &crate::config::Config,
+    identity: &NodeIdentity,
+    legacy: Option<&super::membership_store::PersistedMembershipStateData>,
+    wall_now: u64,
+) -> Result<(), RunnerError> {
+    if !config.peers.is_empty() {
+        return Err(core_error(CheckpointError::Invalid(
+            "configured peers require explicit migration",
+        )));
+    }
+    crate::membership::validate_membership_record_history(
+        &config.network.member_records,
+        &config.network.name,
+    )
+    .map_err(MembershipStateStoreError::from)?;
+    let mut records = config.network.member_records.clone();
+    if let Some(legacy) = legacy {
+        for record in &legacy.records {
+            if !records.contains(record) {
+                records.push(record.clone());
+            }
+        }
+        crate::hostname::validate_hostname_record_history(
+            &legacy.hostname_records,
+            &config.network.name,
+        )
+        .map_err(MembershipStateStoreError::from)?;
+        if legacy.hostname_records.iter().any(|record| {
+            record.payload.peer != identity.peer_id
+                || record.payload.issued_at_unix_seconds > wall_now
+        }) {
+            return Err(core_error(CheckpointError::Invalid(
+                "foreign or future solo hostname history",
+            )));
+        }
+    }
+    crate::membership::validate_membership_record_history(&records, &config.network.name)
+        .map_err(MembershipStateStoreError::from)?;
+    for record in &records {
+        record
+            .verify_at(wall_now)
+            .map_err(MembershipStateStoreError::from)?;
+        if record.payload.issuer_peer != identity.peer_id
+            || record.payload.member_peer != identity.peer_id
+            || record.payload.revoked
+            || record.payload.issued_at_unix_seconds > wall_now
+            || record.is_expired_at(wall_now)
+        {
+            return Err(core_error(CheckpointError::Invalid(
+                "non-fresh solo membership history",
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn wire_error(error: CheckpointSyncError) -> RunnerError {
     std::io::Error::other(error.to_string()).into()
 }
@@ -1466,6 +1697,808 @@ mod tests {
     impl Drop for Fixture {
         fn drop(&mut self) {
             fs::remove_dir_all(&self.directory).unwrap();
+        }
+    }
+
+    fn solo_config(fixture: &Fixture) -> Config {
+        let mut config = fixture.config.clone();
+        config.peers.clear();
+        config
+    }
+
+    fn solo_legacy_record(
+        issuer: &NodeIdentity,
+        member: &NodeIdentity,
+        revoked: bool,
+        issued: u64,
+        expires: Option<u64>,
+    ) -> crate::membership::SignedMembershipRecord {
+        use crate::membership::{
+            MembershipRecordIssueOptions, MembershipRecordSubject, MembershipRole,
+        };
+        crate::membership::issue_membership_record_for_subject_at(
+            issuer,
+            MembershipRecordIssueOptions {
+                network_name: "lab".into(),
+                member: MembershipRecordSubject::from_identity(member).unwrap(),
+                membership_epoch: 1,
+                sequence: 1,
+                revoked,
+                roles: if revoked {
+                    vec![]
+                } else {
+                    vec![MembershipRole::OverlayMember]
+                },
+                route_grants: vec![],
+                expires_at_unix_seconds: expires,
+            },
+            issued,
+        )
+        .unwrap()
+    }
+
+    fn write_solo_legacy(
+        fixture: &Fixture,
+        version: u8,
+        records: &[crate::membership::SignedMembershipRecord],
+        names: &[crate::hostname::SignedHostnameRecord],
+    ) {
+        let mut envelope = serde_json::json!({
+            "version": version,
+            "network_name": "lab",
+            "local_peer": fixture.local.peer_id,
+            "records": records,
+        });
+        if version != 1 {
+            envelope["hostname_records"] = serde_json::to_value(names).unwrap();
+        }
+        fs::write(fixture.path(), serde_json::to_vec(&envelope).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn fresh_formation_accepts_empty_or_self_only_startup_history_and_returns_gated() {
+        for version in [1, 2] {
+            for self_only in [false, true] {
+                let fixture = Fixture::new(&format!("fresh-formation-{version}-{self_only}"));
+                let mut config = solo_config(&fixture);
+                config.network.dns.hostname = Some("new-local-name".into());
+                let records = if self_only {
+                    vec![solo_legacy_record(
+                        &fixture.local,
+                        &fixture.local,
+                        false,
+                        WALL_NOW - 1,
+                        None,
+                    )]
+                } else {
+                    vec![]
+                };
+                config.network.member_records = records.clone();
+                let names = vec![
+                    crate::hostname::issue_hostname_record_at(
+                        &fixture.local,
+                        "lab",
+                        "old-local-name",
+                        1,
+                        WALL_NOW - 1,
+                    )
+                    .unwrap(),
+                ];
+                write_solo_legacy(&fixture, version, &records, &names);
+                let mut runtime = CheckpointRuntime::form_new_network(
+                    &config,
+                    &fixture.local,
+                    &fixture.store,
+                    WALL_NOW,
+                )
+                .unwrap();
+                assert_eq!(
+                    runtime.state().sync_state(),
+                    MembershipSyncState::ResyncRequired
+                );
+                assert!(!runtime.can_accept_pairing());
+                assert!(!runtime.enrollment_pending());
+                assert_eq!(runtime.credentials.secret().len(), 32);
+                assert_ne!(runtime.credentials.secret(), &[0; 32]);
+                assert_eq!(runtime.state().snapshot().payload.members.len(), 1);
+                assert_eq!(runtime.state().snapshot().payload.authority_revision, 0);
+                assert_eq!(
+                    runtime.state().snapshot().payload.policy,
+                    SnapshotPolicy::default()
+                );
+                assert!(
+                    runtime
+                        .state()
+                        .snapshot()
+                        .payload
+                        .member(&fixture.local.peer_id)
+                        .is_some()
+                );
+                assert_eq!(
+                    runtime.state().hostname_claims()[0].payload.hostname,
+                    "new-local-name"
+                );
+                let saved: serde_json::Value =
+                    serde_json::from_slice(&fs::read(fixture.path()).unwrap()).unwrap();
+                assert_eq!(saved["version"], 3);
+                assert!(saved.get("records").is_none());
+                assert!(saved.get("hostname_records").is_none());
+                assert!(
+                    !serde_json::to_string(&saved)
+                        .unwrap()
+                        .contains("old-local-name")
+                );
+                assert_eq!(
+                    fs::metadata(fixture.path()).unwrap().permissions().mode() & 0o777,
+                    0o600
+                );
+
+                let mut forwarder = Forwarder::from_checkpoint_config(
+                    &config,
+                    runtime.state(),
+                    runtime.anchor(),
+                    WALL_NOW,
+                )
+                .unwrap();
+                assert!(
+                    forwarder
+                        .effective_membership()
+                        .overlay_members()
+                        .next()
+                        .is_none()
+                );
+                let now = Instant::now();
+                runtime.begin_resync(now).unwrap();
+                runtime
+                    .finish_due(
+                        &fixture.store,
+                        &mut forwarder,
+                        now + RESYNC_WINDOW,
+                        WALL_NOW,
+                    )
+                    .unwrap();
+                assert!(runtime.can_accept_pairing());
+            }
+        }
+    }
+
+    #[test]
+    fn fresh_formation_preserves_secret_pins_and_canonical_local_route_grants() {
+        use crate::{config::RouteConfig, membership::MembershipRole};
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        for size in [32, MAX_CAPABILITY_BYTES] {
+            let fixture = Fixture::new(&format!("fresh-formation-grants-{size}"));
+            let mut config = solo_config(&fixture);
+            let secret = vec![37; size];
+            config.network.membership_key = Some(STANDARD.encode(&secret));
+            config.network.vpn_ip = Some("10.77.0.9".into());
+            config.network.routes = vec![
+                RouteConfig {
+                    prefix: "172.22.3.99/24".into(),
+                    metric: 11,
+                },
+                RouteConfig {
+                    prefix: "172.22.3.0/24".into(),
+                    metric: 11,
+                },
+                RouteConfig {
+                    prefix: "fd77::4/128".into(),
+                    metric: 0,
+                },
+            ];
+            write_solo_legacy(&fixture, 2, &[], &[]);
+            let mut runtime = CheckpointRuntime::form_new_network(
+                &config,
+                &fixture.local,
+                &fixture.store,
+                WALL_NOW,
+            )
+            .unwrap();
+            assert_eq!(runtime.credentials.secret(), secret);
+            let grants = vec![
+                RouteConfig {
+                    prefix: "10.77.0.9/32".into(),
+                    metric: 0,
+                },
+                RouteConfig {
+                    prefix: "172.22.3.0/24".into(),
+                    metric: 11,
+                },
+                RouteConfig {
+                    prefix: "fd77::4/128".into(),
+                    metric: 0,
+                },
+            ];
+            let member = runtime
+                .state()
+                .snapshot()
+                .payload
+                .member(&fixture.local.peer_id)
+                .unwrap();
+            assert_eq!(
+                member.roles,
+                [
+                    MembershipRole::OverlayMember,
+                    MembershipRole::RouteAuthority
+                ]
+            );
+            assert_eq!(member.route_grants, grants);
+            let mut forwarder = Forwarder::from_checkpoint_config(
+                &config,
+                runtime.state(),
+                runtime.anchor(),
+                WALL_NOW,
+            )
+            .unwrap();
+            let now = Instant::now();
+            runtime.begin_resync(now).unwrap();
+            runtime
+                .finish_due(
+                    &fixture.store,
+                    &mut forwarder,
+                    now + RESYNC_WINDOW,
+                    WALL_NOW,
+                )
+                .unwrap();
+            assert_eq!(forwarder.config().network.routes, grants);
+            let Some(PersistedAuthority::Checkpoint(saved)) = fixture
+                .store
+                .load_authority(
+                    "lab",
+                    &fixture.local.peer_id,
+                    Some(runtime.anchor()),
+                    Some(&secret),
+                )
+                .unwrap()
+            else {
+                panic!("formed checkpoint authority")
+            };
+            assert_eq!(
+                saved
+                    .retained
+                    .snapshot
+                    .payload
+                    .member(&fixture.local.peer_id)
+                    .unwrap()
+                    .route_grants,
+                grants
+            );
+        }
+    }
+
+    #[test]
+    fn solo_conversion_rejects_configured_foreign_revoked_future_or_invalid_history() {
+        for case in [
+            "configured-peer",
+            "configured-foreign",
+            "foreign-member",
+            "foreign-issuer",
+            "revoked",
+            "future",
+            "expired",
+            "foreign-hostname",
+            "future-hostname",
+            "invalid-config-signature",
+            "invalid-store-signature",
+            "conflicting-self-history",
+        ] {
+            let fixture = Fixture::new(&format!("solo-reject-{case}"));
+            let (offer, response, _) = checkpoint_pairing(&fixture);
+            let mut config = solo_config(&fixture);
+            let self_record =
+                solo_legacy_record(&fixture.local, &fixture.local, false, WALL_NOW - 10, None);
+            let mut records = vec![self_record.clone()];
+            let mut names = vec![];
+            match case {
+                "configured-peer" => config.peers = fixture.config.peers.clone(),
+                "configured-foreign" => {
+                    config.network.member_records = vec![solo_legacy_record(
+                        &fixture.local,
+                        &fixture.member,
+                        false,
+                        WALL_NOW - 10,
+                        None,
+                    )]
+                }
+                "foreign-member" => {
+                    records = vec![solo_legacy_record(
+                        &fixture.local,
+                        &fixture.member,
+                        false,
+                        WALL_NOW - 10,
+                        None,
+                    )]
+                }
+                "foreign-issuer" => {
+                    records = vec![solo_legacy_record(
+                        &fixture.member,
+                        &fixture.local,
+                        false,
+                        WALL_NOW - 10,
+                        None,
+                    )]
+                }
+                "revoked" => {
+                    records = vec![solo_legacy_record(
+                        &fixture.local,
+                        &fixture.local,
+                        true,
+                        WALL_NOW - 10,
+                        None,
+                    )]
+                }
+                "future" => {
+                    records = vec![solo_legacy_record(
+                        &fixture.local,
+                        &fixture.local,
+                        false,
+                        WALL_NOW + 1,
+                        None,
+                    )]
+                }
+                "expired" => {
+                    records = vec![solo_legacy_record(
+                        &fixture.local,
+                        &fixture.local,
+                        false,
+                        WALL_NOW - 10,
+                        Some(WALL_NOW - 1),
+                    )]
+                }
+                "foreign-hostname" => names.push(
+                    crate::hostname::issue_hostname_record_at(
+                        &fixture.member,
+                        "lab",
+                        "foreign",
+                        1,
+                        WALL_NOW - 1,
+                    )
+                    .unwrap(),
+                ),
+                "future-hostname" => names.push(
+                    crate::hostname::issue_hostname_record_at(
+                        &fixture.local,
+                        "lab",
+                        "future",
+                        1,
+                        WALL_NOW + 1,
+                    )
+                    .unwrap(),
+                ),
+                "invalid-config-signature" => {
+                    let mut tampered = self_record.clone();
+                    tampered.payload.sequence += 1;
+                    config.network.member_records.push(tampered);
+                }
+                "invalid-store-signature" => records[0].payload.sequence += 1,
+                "conflicting-self-history" => {
+                    config.network.member_records = vec![solo_legacy_record(
+                        &fixture.local,
+                        &fixture.local,
+                        false,
+                        WALL_NOW - 9,
+                        None,
+                    )]
+                }
+                _ => unreachable!(),
+            }
+            write_solo_legacy(&fixture, 2, &records, &names);
+            let before = fs::read(fixture.path()).unwrap();
+            assert!(
+                CheckpointRuntime::form_new_network(
+                    &config,
+                    &fixture.local,
+                    &fixture.store,
+                    WALL_NOW
+                )
+                .is_err(),
+                "{case}"
+            );
+            assert_eq!(fs::read(fixture.path()).unwrap(), before, "{case}");
+            assert!(
+                CheckpointRuntime::stage_pairing_enrollment_from_solo(
+                    &config,
+                    &fixture.local,
+                    &offer,
+                    &response,
+                    &fixture.store,
+                    WALL_NOW
+                )
+                .is_err(),
+                "{case}"
+            );
+            assert_eq!(fs::read(fixture.path()).unwrap(), before, "{case}");
+        }
+    }
+
+    #[test]
+    fn solo_conversion_rejects_wrong_actual_key_scope_or_unknown_store_version() {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        for case in [
+            "claimed-key",
+            "configured-key",
+            "network",
+            "local-peer",
+            "version",
+            "oversized-secret",
+            "decoded-secret-limit",
+        ] {
+            let fixture = Fixture::new(&format!("solo-identity-{case}"));
+            let (offer, response, _) = checkpoint_pairing(&fixture);
+            let mut config = solo_config(&fixture);
+            let mut identity = fixture.local.clone();
+            write_solo_legacy(&fixture, 2, &[], &[]);
+            match case {
+                "claimed-key" => identity.private_key = fixture.member.private_key.clone(),
+                "configured-key" => {
+                    config.network.private_key = Some(fixture.member.private_key.clone())
+                }
+                "network" => config.network.name = "different".into(),
+                "local-peer" => config.network.local_peer = fixture.member.peer_id.clone(),
+                "version" => write_solo_legacy(&fixture, 99, &[], &[]),
+                "oversized-secret" => {
+                    config.network.membership_key =
+                        Some(STANDARD.encode(vec![0; MAX_CAPABILITY_BYTES + 4]))
+                }
+                "decoded-secret-limit" => {
+                    config.network.membership_key =
+                        Some(STANDARD.encode(vec![0; MAX_CAPABILITY_BYTES + 1]))
+                }
+                _ => unreachable!(),
+            }
+            let before = fs::read(fixture.path()).unwrap();
+            assert!(
+                CheckpointRuntime::form_new_network(&config, &identity, &fixture.store, WALL_NOW)
+                    .is_err(),
+                "{case}"
+            );
+            assert!(
+                CheckpointRuntime::stage_pairing_enrollment_from_solo(
+                    &config,
+                    &identity,
+                    &offer,
+                    &response,
+                    &fixture.store,
+                    WALL_NOW
+                )
+                .is_err(),
+                "{case}"
+            );
+            assert_eq!(fs::read(fixture.path()).unwrap(), before, "{case}");
+        }
+    }
+
+    #[test]
+    fn accepted_solo_enrollment_keeps_strict_legacy_rejection_and_remote_floor_gate() {
+        for version in [1, 2] {
+            for self_only in [false, true] {
+                let fixture = Fixture::new(&format!("solo-enrollment-{version}-{self_only}"));
+                let (offer, response, _) = checkpoint_pairing(&fixture);
+                let mut config = solo_config(&fixture);
+                let records = if self_only {
+                    vec![solo_legacy_record(
+                        &fixture.local,
+                        &fixture.local,
+                        false,
+                        WALL_NOW - 1,
+                        None,
+                    )]
+                } else {
+                    vec![]
+                };
+                config.network.member_records = records.clone();
+                write_solo_legacy(&fixture, version, &records, &[]);
+                let before = fs::read(fixture.path()).unwrap();
+                assert!(
+                    CheckpointRuntime::stage_pairing_enrollment(
+                        &config,
+                        &fixture.local,
+                        &offer,
+                        &response,
+                        &fixture.store,
+                        WALL_NOW
+                    )
+                    .is_err()
+                );
+                assert_eq!(fs::read(fixture.path()).unwrap(), before);
+                let mut runtime = CheckpointRuntime::stage_pairing_enrollment_from_solo(
+                    &config,
+                    &fixture.local,
+                    &offer,
+                    &response,
+                    &fixture.store,
+                    WALL_NOW,
+                )
+                .unwrap();
+                assert_eq!(
+                    runtime.enrollment_floor,
+                    Some(response.payload.checkpoint.as_ref().unwrap().minimum)
+                );
+                assert_eq!(
+                    runtime.state().sync_state(),
+                    MembershipSyncState::ResyncRequired
+                );
+                assert!(!runtime.can_accept_pairing());
+                let mut forwarder = Forwarder::from_checkpoint_config(
+                    &config,
+                    runtime.state(),
+                    runtime.anchor(),
+                    WALL_NOW,
+                )
+                .unwrap();
+                assert!(
+                    forwarder
+                        .effective_membership()
+                        .overlay_members()
+                        .next()
+                        .is_none()
+                );
+                let now = Instant::now();
+                runtime.begin_resync(now).unwrap();
+                assert!(
+                    runtime
+                        .finish_due(
+                            &fixture.store,
+                            &mut forwarder,
+                            now + RESYNC_WINDOW,
+                            WALL_NOW
+                        )
+                        .unwrap()
+                        .is_none()
+                );
+                assert!(runtime.enrollment_pending());
+                assert!(
+                    !forwarder
+                        .is_configured_transport_peer(fixture.member.peer_id.parse().unwrap())
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn formation_and_accepted_solo_replay_preserve_established_scope_and_exclusion() {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        let fixture = Fixture::new("solo-established");
+        let (offer, response, mut selected) = checkpoint_pairing(&fixture);
+        let removal = selected
+            .sign_mutation_at(
+                &fixture.member,
+                MembershipChange::RemoveMember(fixture.local.peer_id.clone()),
+                WALL_NOW,
+            )
+            .unwrap();
+        selected.apply_mutation_at(&removal, WALL_NOW).unwrap();
+        fixture
+            .store
+            .save_checkpoint(
+                "lab",
+                &fixture.local.peer_id,
+                &fixture.credentials,
+                &selected.retained(),
+            )
+            .unwrap();
+        let before = fs::read(fixture.path()).unwrap();
+        let config = solo_config(&fixture);
+        let restored =
+            CheckpointRuntime::form_new_network(&config, &fixture.local, &fixture.store, WALL_NOW)
+                .unwrap();
+        assert_eq!(restored.anchor(), fixture.credentials.anchor());
+        assert_eq!(restored.credentials.secret(), fixture.credentials.secret());
+        assert_eq!(restored.state().retained(), selected.retained());
+        assert_eq!(
+            restored.state().sync_state(),
+            MembershipSyncState::ResyncRequired
+        );
+        let replayed = CheckpointRuntime::stage_pairing_enrollment_from_solo(
+            &config,
+            &fixture.local,
+            &offer,
+            &response,
+            &fixture.store,
+            WALL_NOW,
+        )
+        .unwrap();
+        assert_eq!(replayed.state().retained(), selected.retained());
+        assert!(
+            replayed
+                .state()
+                .snapshot()
+                .payload
+                .member(&fixture.local.peer_id)
+                .is_none()
+        );
+        assert_eq!(fs::read(fixture.path()).unwrap(), before);
+
+        let different = CheckpointCredentials::new(
+            NetworkAnchor::new([46; 32]).unwrap(),
+            fixture.credentials.secret().to_vec(),
+        )
+        .unwrap();
+        let foreign = CooperativeMembershipState::bootstrap_at(
+            different.capability().unwrap(),
+            fixture.local.peer_id.clone(),
+            vec![CheckpointMember::new(&fixture.local).unwrap()],
+            SnapshotPolicy::default(),
+            WALL_NOW,
+        )
+        .unwrap();
+        fixture
+            .store
+            .save_checkpoint(
+                "lab",
+                &fixture.local.peer_id,
+                &different,
+                &foreign.retained(),
+            )
+            .unwrap_err();
+        let mut mismatched = config.clone();
+        mismatched.network.membership_key = Some(STANDARD.encode([90; 32]));
+        assert!(
+            CheckpointRuntime::form_new_network(
+                &mismatched,
+                &fixture.local,
+                &fixture.store,
+                WALL_NOW
+            )
+            .is_err()
+        );
+        assert!(
+            CheckpointRuntime::stage_pairing_enrollment_from_solo(
+                &mismatched,
+                &fixture.local,
+                &offer,
+                &response,
+                &fixture.store,
+                WALL_NOW
+            )
+            .is_err()
+        );
+        assert_eq!(fs::read(fixture.path()).unwrap(), before);
+    }
+
+    #[test]
+    fn solo_conversion_prewrite_failures_preserve_legacy_and_signed_approval() {
+        let fixture = Fixture::new("solo-prewrite");
+        let (offer, response, _) = checkpoint_pairing(&fixture);
+        let config = solo_config(&fixture);
+        write_solo_legacy(&fixture, 2, &[], &[]);
+        let before = fs::read(fixture.path()).unwrap();
+        fs::set_permissions(&fixture.directory, fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(
+            CheckpointRuntime::form_new_network(&config, &fixture.local, &fixture.store, WALL_NOW)
+                .is_err()
+        );
+        assert_eq!(fs::read(fixture.path()).unwrap(), before);
+        assert!(
+            CheckpointRuntime::stage_pairing_enrollment_from_solo(
+                &config,
+                &fixture.local,
+                &offer,
+                &response,
+                &fixture.store,
+                WALL_NOW
+            )
+            .is_err()
+        );
+        assert_eq!(fs::read(fixture.path()).unwrap(), before);
+        fs::set_permissions(&fixture.directory, fs::Permissions::from_mode(0o700)).unwrap();
+        let mut bad_response = response.clone();
+        bad_response
+            .payload
+            .checkpoint
+            .as_mut()
+            .unwrap()
+            .minimum
+            .authority_revision += 1;
+        assert!(
+            CheckpointRuntime::stage_pairing_enrollment_from_solo(
+                &config,
+                &fixture.local,
+                &offer,
+                &bad_response,
+                &fixture.store,
+                WALL_NOW
+            )
+            .is_err()
+        );
+        assert!(
+            CheckpointRuntime::stage_pairing_enrollment_from_solo(
+                &config,
+                &fixture.local,
+                &offer,
+                &response,
+                &fixture.store,
+                WALL_NOW + 301
+            )
+            .is_err()
+        );
+        assert_eq!(fs::read(fixture.path()).unwrap(), before);
+        assert!(
+            CheckpointRuntime::stage_pairing_enrollment_from_solo(
+                &config,
+                &fixture.local,
+                &offer,
+                &response,
+                &fixture.store,
+                WALL_NOW
+            )
+            .unwrap()
+            .enrollment_pending()
+        );
+    }
+
+    #[test]
+    fn solo_conversion_postrename_failures_preserve_visible_scope_and_pending_floor() {
+        for pending in [false, true] {
+            let fixture = Fixture::new(&format!("solo-postrename-{pending}"));
+            let (offer, response, _) = checkpoint_pairing(&fixture);
+            let config = solo_config(&fixture);
+            write_solo_legacy(&fixture, 2, &[], &[]);
+            let grant = response.payload.checkpoint.as_ref().unwrap();
+            let credentials = if pending {
+                fixture.credentials.clone()
+            } else {
+                CheckpointCredentials::generate().unwrap()
+            };
+            let seed = CooperativeMembershipState::bootstrap_at(
+                credentials.capability().unwrap(),
+                fixture.local.peer_id.clone(),
+                if pending {
+                    vec![grant.inviter.clone(), grant.joiner.clone()]
+                } else {
+                    vec![CheckpointMember::new(&fixture.local).unwrap()]
+                },
+                SnapshotPolicy::default(),
+                WALL_NOW,
+            )
+            .unwrap();
+            assert!(matches!(
+                fixture
+                    .store
+                    .save_checkpoint_with_parent_sync_failure_for_test(
+                        "lab",
+                        &fixture.local.peer_id,
+                        &credentials,
+                        &seed.retained(),
+                        pending.then_some(grant.minimum),
+                    ),
+                Err(MembershipStateStoreError::CheckpointDurabilityUncertain(_))
+            ));
+            let visible = fs::read(fixture.path()).unwrap();
+            let restored = CheckpointRuntime::form_new_network(
+                &config,
+                &fixture.local,
+                &fixture.store,
+                WALL_NOW,
+            )
+            .unwrap();
+            assert_eq!(restored.credentials.anchor(), credentials.anchor());
+            assert_eq!(restored.credentials.secret(), credentials.secret());
+            assert_eq!(restored.state().retained(), seed.retained());
+            assert_eq!(restored.enrollment_pending(), pending);
+            assert_eq!(
+                restored.state().sync_state(),
+                MembershipSyncState::ResyncRequired
+            );
+            assert_eq!(fs::read(fixture.path()).unwrap(), visible);
+            if pending {
+                let replay = CheckpointRuntime::stage_pairing_enrollment_from_solo(
+                    &config,
+                    &fixture.local,
+                    &offer,
+                    &response,
+                    &fixture.store,
+                    WALL_NOW,
+                )
+                .unwrap();
+                assert_eq!(replay.enrollment_floor, Some(grant.minimum));
+                assert_eq!(replay.state().retained(), seed.retained());
+                assert_eq!(
+                    replay.state().sync_state(),
+                    MembershipSyncState::ResyncRequired
+                );
+                assert_eq!(fs::read(fixture.path()).unwrap(), visible);
+            }
         }
     }
 

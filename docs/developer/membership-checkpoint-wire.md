@@ -106,9 +106,13 @@ transaction; uncertain removal durability must keep cleanup ownership pending.
 3. Fetch the complete authenticated snapshot through paged checkpoint transfer.
 4. Require an observed remote offer at or above the pinned rank before activation.
 
-Protected staging is implemented; this sequence is not yet activated by the
-ordinary joiner `Accepted` handler. Cancellation and startup finalization must be
-integrated before that handler can safely enable packet authority.
+Protected staging and validated fresh-solo replacement are implemented. The
+ordinary joiner `Accepted` handler does not activate this sequence yet;
+cancellation and startup finalization must precede packet authority.
+
+Empty or self-only legacy startup state can be replaced only through the explicit
+approved-solo API. Foreign, revoked, invalid, or future history requires migration;
+an existing version-3 scope and secret remain pinned across retries.
 
 Descriptors are provisional discovery/sync seeds, not packet or mutation grants.
 An isolated timeout cannot activate this seed; a restart retains the pending gate.

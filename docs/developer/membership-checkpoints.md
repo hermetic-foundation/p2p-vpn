@@ -6,9 +6,9 @@ Core, protected storage, bounded snapshot/mutation transfer, version-3 daemon
 restoration, and ordinary checkpoint inviter approval are implemented. Inviter
 approval requires an existing participating checkpoint instance.
 
-Ordinary joiner activation, fresh formation, legacy migration, and export/artifacts
-remain incomplete. Existing deployments use the legacy ledger; this iteration
-does not establish a deployed checkpoint network.
+Fresh solo formation and accepted solo enrollment APIs are implemented. Ordinary
+`PairOpen` formation, joiner activation, legacy migration, and export/artifacts
+remain incomplete; existing deployments still use the legacy ledger.
 
 No new configuration switch enables checkpoints yet. Full retained-artifact
 cleanup and deployed multi-node evidence remain required.
@@ -192,6 +192,27 @@ retain inviter identity, old admission proofs, or per-device revocation markers.
 
 Normal authorization uses the active snapshot as a closed namespace. Absent
 static peers receive no implicit permission even after their tombstones are gone.
+
+## Fresh Solo Formation
+
+These APIs require explicit pairing authorization. They are not yet called by the
+ordinary `PairOpen` or joiner `Accepted` workflow; startup alone does not create
+a new network anchor or convert legacy authority.
+
+| Input / Boundary | API Behavior |
+| --- | --- |
+| Empty state or version-1/2 self-only history | Permit explicit solo formation or approved solo enrollment. |
+| Foreign members, configured peers, revocations, invalid/future history | Reject; require explicit migration instead of inventing a trust root. |
+| New solo scope | Generate a random anchor; use a pinned configured secret or generate a protected secret. |
+| Local routes and VPN alias | Canonicalize signed grants; preserve configured grants before gating removes static authority. |
+| Existing version-3 state | Restore the same credentials and selected state, gated for resync. |
+| Approved joiner | Validate signatures, actual key, scope and secret pins before replacing fresh solo state. |
+| Approved seed | Preserve the remote minimum rank; an isolated timeout cannot activate provisional membership. |
+| Failed write | Preserve pre-write legacy state or restore a visible replacement gated after an uncertain write. |
+
+Formation writes version-3 state before returning an owner. Unknown state versions
+fail closed; retries cannot regenerate an established scope, lower an enrollment
+floor, or replay an old approval to reinstall removed membership.
 
 ## Inviter Pairing Approval
 

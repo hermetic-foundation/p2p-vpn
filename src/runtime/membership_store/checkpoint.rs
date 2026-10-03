@@ -205,6 +205,29 @@ impl MembershipStateStore {
         )
     }
 
+    #[cfg(test)]
+    pub(crate) fn save_checkpoint_with_parent_sync_failure_for_test(
+        &self,
+        network_name: &str,
+        local_peer: &str,
+        credentials: &CheckpointCredentials,
+        retained: &RetainedCheckpointState,
+        enrollment_floor: Option<SnapshotRank>,
+    ) -> Result<(), MembershipStateStoreError> {
+        self.save_checkpoint_with_floor_and_sync(
+            network_name,
+            local_peer,
+            credentials,
+            retained,
+            enrollment_floor,
+            |_| {
+                Err(std::io::Error::other(
+                    "injected initial checkpoint directory sync failure",
+                ))
+            },
+        )
+    }
+
     fn save_checkpoint_with_floor_and_sync(
         &self,
         network_name: &str,
