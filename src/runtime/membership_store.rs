@@ -17,13 +17,21 @@ use crate::membership::{
     SignedMembershipRecord, validate_membership_record_history,
 };
 
+pub(crate) mod checkpoint;
+
 const MEMBERSHIP_STATE_VERSION: u8 = 2;
 const LEGACY_MEMBERSHIP_STATE_VERSION: u8 = 1;
 const MEMBERSHIP_STATE_ENVELOPE_BYTES: usize = 64 * 1024;
-pub const MAX_MEMBERSHIP_STATE_BYTES: usize = MAX_MEMBERSHIP_RECORDS
+const MAX_LEGACY_MEMBERSHIP_STATE_BYTES: usize = MAX_MEMBERSHIP_RECORDS
     * (MAX_MEMBERSHIP_RECORD_ENCODED_LEN + 1)
     + MAX_HOSTNAME_RECORDS * (MAX_HOSTNAME_RECORD_ENCODED_LEN + 1)
     + MEMBERSHIP_STATE_ENVELOPE_BYTES;
+pub const MAX_MEMBERSHIP_STATE_BYTES: usize =
+    if MAX_LEGACY_MEMBERSHIP_STATE_BYTES > checkpoint::MAX_CHECKPOINT_STATE_BYTES {
+        MAX_LEGACY_MEMBERSHIP_STATE_BYTES
+    } else {
+        checkpoint::MAX_CHECKPOINT_STATE_BYTES
+    };
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct PersistedMembershipStateData {
@@ -47,6 +55,12 @@ impl MembershipStateStore {
         expected_network_name: &str,
         expected_local_peer: &str,
     ) -> Result<Option<PersistedMembershipStateData>, MembershipStateStoreError> {
+        self.read_bytes()?
+            .map(|bytes| decode_legacy(&bytes, expected_network_name, expected_local_peer))
+            .transpose()
+    }
+
+    fn read_bytes(&self) -> Result<Option<Vec<u8>>, MembershipStateStoreError> {
         let metadata = match fs::symlink_metadata(&self.path) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -70,30 +84,7 @@ impl MembershipStateStore {
         file.take((MAX_MEMBERSHIP_STATE_BYTES + 1) as u64)
             .read_to_end(&mut bytes)?;
         validate_length(bytes.len())?;
-        let state: OwnedPersistedMembershipState = serde_json::from_slice(&bytes)?;
-        if state.version != MEMBERSHIP_STATE_VERSION
-            && state.version != LEGACY_MEMBERSHIP_STATE_VERSION
-        {
-            return Err(MembershipStateStoreError::UnsupportedVersion(state.version));
-        }
-        if state.network_name != expected_network_name {
-            return Err(MembershipStateStoreError::NetworkMismatch {
-                expected: expected_network_name.to_owned(),
-                actual: state.network_name,
-            });
-        }
-        if state.local_peer != expected_local_peer {
-            return Err(MembershipStateStoreError::LocalPeerMismatch {
-                expected: expected_local_peer.to_owned(),
-                actual: state.local_peer,
-            });
-        }
-        validate_membership_record_history(&state.records, expected_network_name)?;
-        validate_hostname_record_history(&state.hostname_records, expected_network_name)?;
-        Ok(Some(PersistedMembershipStateData {
-            records: state.records,
-            hostname_records: state.hostname_records,
-        }))
+        Ok(Some(bytes))
     }
 
     pub(crate) fn save(
@@ -113,6 +104,8 @@ impl MembershipStateStore {
             hostname_records,
         })?;
         validate_length(bytes.len())?;
+        // A legacy writer must never erase a checkpoint or an unknown authority.
+        self.load(network_name, local_peer)?;
         self.save_with_parent_sync(&bytes, sync_parent_directory)
     }
 
@@ -169,6 +162,64 @@ impl MembershipStateStore {
         sync_parent(parent)?;
         Ok(())
     }
+}
+
+#[derive(Deserialize)]
+struct StateVersion {
+    version: u8,
+}
+
+fn state_version(bytes: &[u8]) -> Result<u8, MembershipStateStoreError> {
+    Ok(serde_json::from_slice::<StateVersion>(bytes)?.version)
+}
+
+fn validate_scope(
+    network_name: &str,
+    local_peer: &str,
+    expected_network_name: &str,
+    expected_local_peer: &str,
+) -> Result<(), MembershipStateStoreError> {
+    if network_name != expected_network_name {
+        return Err(MembershipStateStoreError::NetworkMismatch {
+            expected: expected_network_name.to_owned(),
+            actual: network_name.to_owned(),
+        });
+    }
+    if local_peer != expected_local_peer {
+        return Err(MembershipStateStoreError::LocalPeerMismatch {
+            expected: expected_local_peer.to_owned(),
+            actual: local_peer.to_owned(),
+        });
+    }
+    Ok(())
+}
+
+fn decode_legacy(
+    bytes: &[u8],
+    expected_network_name: &str,
+    expected_local_peer: &str,
+) -> Result<PersistedMembershipStateData, MembershipStateStoreError> {
+    let version = state_version(bytes)?;
+    if !matches!(
+        version,
+        MEMBERSHIP_STATE_VERSION | LEGACY_MEMBERSHIP_STATE_VERSION
+    ) {
+        return Err(MembershipStateStoreError::UnsupportedVersion(version));
+    }
+    let state: OwnedPersistedMembershipState = serde_json::from_slice(bytes)?;
+    debug_assert_eq!(state.version, version);
+    validate_scope(
+        &state.network_name,
+        &state.local_peer,
+        expected_network_name,
+        expected_local_peer,
+    )?;
+    validate_membership_record_history(&state.records, expected_network_name)?;
+    validate_hostname_record_history(&state.hostname_records, expected_network_name)?;
+    Ok(PersistedMembershipStateData {
+        records: state.records,
+        hostname_records: state.hostname_records,
+    })
 }
 
 #[derive(Serialize)]
@@ -241,6 +292,12 @@ pub enum MembershipStateStoreError {
     Json(serde_json::Error),
     Membership(MembershipRecordError),
     Hostname(HostnameRecordError),
+    Checkpoint(crate::membership::checkpoint::CheckpointError),
+    InvalidCapability,
+    CapabilityMismatch,
+    CheckpointRollback,
+    HostnameRollback,
+    CheckpointDurabilityUncertain(io::Error),
     MissingParent,
     UnsafeParent(PathBuf),
     UnsafeFile(PathBuf),
@@ -270,10 +327,26 @@ impl std::fmt::Display for MembershipStateStoreError {
                     "membership state contains an invalid hostname record: {error:?}"
                 )
             }
+            Self::Checkpoint(error) => write!(formatter, "invalid membership checkpoint: {error}"),
+            Self::InvalidCapability => {
+                formatter.write_str("invalid checkpoint capability encoding")
+            }
+            Self::CapabilityMismatch => formatter
+                .write_str("checkpoint capability does not match pinned or configured authority"),
+            Self::CheckpointRollback => {
+                formatter.write_str("checkpoint replacement would lower committed authority")
+            }
+            Self::HostnameRollback => formatter.write_str(
+                "checkpoint replacement would discard a surviving member's current hostname",
+            ),
+            Self::CheckpointDurabilityUncertain(error) => write!(
+                formatter,
+                "checkpoint replacement is visible but directory durability is unconfirmed; preserve the selected authority and retry: {error}",
+            ),
             Self::MissingParent => formatter.write_str("membership state path has no parent"),
             Self::UnsafeParent(path) => write!(
                 formatter,
-                "membership state parent must be a real directory: {}",
+                "membership state parent must be a real directory with safe write permissions: {}",
                 path.display()
             ),
             Self::UnsafeFile(path) => write!(
@@ -335,6 +408,12 @@ impl From<MembershipRecordError> for MembershipStateStoreError {
 impl From<HostnameRecordError> for MembershipStateStoreError {
     fn from(error: HostnameRecordError) -> Self {
         Self::Hostname(error)
+    }
+}
+
+impl From<crate::membership::checkpoint::CheckpointError> for MembershipStateStoreError {
+    fn from(error: crate::membership::checkpoint::CheckpointError) -> Self {
+        Self::Checkpoint(error)
     }
 }
 

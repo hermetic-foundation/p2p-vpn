@@ -167,7 +167,7 @@ before it can support a completion claim.
 | Workstream | Required Deliverables | Status |
 | --- | --- | --- |
 | Cooperative core | Singleton snapshots, canonical rank, scoped authentication, resync gate, active-only authorization, bounded churn tests. | Implemented; 30 core tests pass. |
-| Durable state | Atomic snapshot/capability persistence, crash boundaries, migration, retired metadata cleanup, bounded disk retention. | Not implemented. |
+| Durable state | Atomic snapshot/capability persistence, crash boundaries, migration, retired metadata cleanup, bounded disk retention. | Version-3 store and durable churn tests implemented; runtime migration/activation and full crash campaign remain. |
 | Runtime and wire | Capability/version negotiation, bounded sync window, branch selection, pairing handoff, stale-record rejection, route/DNS/discovery cleanup. | Not implemented. |
 | User surfaces | Linux/Android sync state, visible discarded changes, no retained inviter history, structured user/developer instructions. | Partial inventory cleanup only. |
 | End-to-end proof | Multi-node forks/offline return, restart, churn measurements, CLI/Android/NixOS contracts, practical formal invariants. | Not established. |

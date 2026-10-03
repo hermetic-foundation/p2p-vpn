@@ -413,12 +413,51 @@ Its top-level schema is strict so unsupported authority cannot be silently ignor
 | --- | --- |
 | Version `1` | Read the legacy membership ledger; hostname records may be absent. |
 | Version `2` | Read membership and hostname records. |
+| Version `3` | Checkpoint-aware loader validates active-only snapshot and protected capability. The legacy runtime loader rejects it. |
 | Unsupported version | Fail closed without rewriting the file. |
 | Unknown top-level field | Fail closed without falling back to legacy authority. |
 
-Checkpoint persistence requires its own explicitly supported storage version.
 Do not add checkpoint authority to a version-1 or version-2 envelope, or strip
-unknown authority fields to make an older binary accept the file.
+unknown authority fields to make an older binary accept the file. Legacy writers
+also reject unsupported saved authority rather than overwriting it.
+
+### Active-Only Storage
+
+Version `3` stores the selected snapshot, compatible current hostname claims,
+pinned anchor, and private capability in one atomic file. It contains no old
+admissions, inviter chain, removed-device profile, or revocation archive.
+
+| Boundary | Contract |
+| --- | --- |
+| Permissions | Owner-only regular file; parent is real and not group/other writable. |
+| Scope | Expected network name and local identity must match. |
+| Explicit authority | Configured secret or pairing anchor must match saved authority. |
+| Validation | Verify snapshot MAC, canonical roster, bounds, and subject-signed names. |
+| Replacement | Validate first; sync temporary file, rename, then sync directory. |
+| Late sync failure | Report visible replacement with uncertain durability; preserve selected authority and retry. |
+| Rank rollback | Refuse a lower-ranked replacement. |
+| Name rollback | Refuse older/missing names for surviving admission incarnations. |
+| Restart | Restore as `ResyncRequired`, not immediately participating. |
+| Credential rotation | Never silently replace a committed anchor or capability. |
+
+The private capability is not user configuration and must not appear in public
+config exports, debug output, peer inventories, or logs. Authenticated formation
+and migration provision this authority; absence is not permission to invent it.
+
+Checkpoint saves do not silently accept unsupported directory synchronization.
+Each instance must have one serialized state writer; atomic rename alone does
+not serialize multiple independent daemon processes.
+
+The checkpoint-aware store is tested but runtime activation is not enabled yet.
+Do not manually rewrite an operational ledger into this format.
+
+```sh
+nix develop -c cargo test --locked --lib runtime::membership_store
+```
+
+Storage tests cover legacy dispatch/downgrade rejection, scope and credential
+pins, corrupt input, rollback, atomic directory-sync failure/retry, re-admission,
+self-resignation, and 128 durable churn cycles without retained device history.
 
 ## Restart Order
 
