@@ -553,6 +553,9 @@ fn network_peer_inventory_from_source<'a>(
         }
     }
 
+    // Membership audit state is not a list of devices still in the network.
+    peers.retain(|_, entry| entry.membership_state != Some(NetworkPeerMembershipState::Revoked));
+
     let inviter_hostnames = peers
         .values()
         .filter_map(|entry| {
@@ -859,7 +862,7 @@ mod tests {
     }
 
     #[test]
-    fn inventory_retains_revoked_member_as_an_audit_entry_without_routes() {
+    fn inventory_omits_revoked_members_even_with_static_metadata() {
         let local = NodeIdentity::generate_ed25519().expect("local identity");
         let member = NodeIdentity::generate_ed25519().expect("member identity");
         let mut config: Config = serde_json::from_value(serde_json::json!({
@@ -932,28 +935,113 @@ mod tests {
         .expect("member revocation");
         config.network.member_records = vec![root, grant, revocation];
 
+        let hostname_records = HashMap::from([(
+            member.peer_id.parse::<PeerId>().expect("member peer"),
+            "departed-node".to_owned(),
+        )]);
+        for with_static_metadata in [true, false] {
+            if !with_static_metadata {
+                config.peers.clear();
+            }
+            let inventory = NetworkPeerList::from_config_with_hostname_records_at(
+                &config,
+                &config.network.member_records,
+                &hostname_records,
+                1_003,
+            )
+            .expect("peer inventory");
+            assert_eq!(inventory.peers.len(), 1);
+            assert_eq!(inventory.peers[0].peer_id, local.peer_id);
+            let encoded = serde_json::to_string(&inventory).expect("peer list JSON");
+            assert!(!encoded.contains(&member.peer_id));
+            assert!(!encoded.contains("departed-node"));
+            assert!(!encoded.contains("10.42.0.9"));
+
+            let snapshot = NetworkPeerSnapshot::from_config_with_hostname_records_at(
+                &config,
+                &config.network.member_records,
+                &hostname_records,
+                1_003,
+                |_, _| panic!("revoked member must not be queried for runtime state"),
+            )
+            .expect("peer snapshot");
+            assert_eq!(snapshot.total_peers, 1);
+            assert_eq!(snapshot.returned_peers, 1);
+            assert_eq!(snapshot.peers[0].peer_id, local.peer_id);
+            assert!(!snapshot.truncated);
+            let encoded = serde_json::to_string(&snapshot).expect("snapshot JSON");
+            assert!(!encoded.contains(&member.peer_id));
+            assert!(!encoded.contains("departed-node"));
+        }
+
+        // Re-pairing, not an old configuration entry, restores the member.
+        config.network.member_records.push(
+            issue_named_membership_record_for_subject_at(
+                &local,
+                MembershipRecordIssueOptions {
+                    network_name: "lab".to_owned(),
+                    member: MembershipRecordSubject::from_identity(&member)
+                        .expect("member subject"),
+                    membership_epoch: 2,
+                    sequence: 1,
+                    revoked: false,
+                    roles: vec![MembershipRole::OverlayMember],
+                    route_grants: Vec::new(),
+                    expires_at_unix_seconds: None,
+                },
+                Some("returned-node"),
+                1_004,
+            )
+            .expect("new admission"),
+        );
         let inventory =
-            NetworkPeerList::from_config_at(&config, &config.network.member_records, 1_003)
-                .expect("peer inventory");
-        assert_eq!(inventory.peers[0].peer_id, local.peer_id);
-        let revoked = inventory
+            NetworkPeerList::from_config_at(&config, &config.network.member_records, 1_005)
+                .expect("peer inventory after re-admission");
+        let returned = inventory
             .peers
             .iter()
             .find(|peer| peer.peer_id == member.peer_id)
-            .expect("revoked audit entry");
-        let membership = revoked.membership.as_ref().expect("membership details");
-
-        assert_eq!(membership.state, NetworkPeerMembershipState::Revoked);
+            .expect("re-admitted member");
+        assert_eq!(returned.hostnames, ["returned-node"]);
         assert_eq!(
-            membership
-                .effective_inviter
-                .as_ref()
-                .and_then(|inviter| inviter.hostname.as_deref()),
-            Some("local-node")
+            returned.membership.as_ref().expect("membership").state,
+            NetworkPeerMembershipState::Active
         );
-        assert_eq!(revoked.hostnames, ["departed-node"]);
-        assert!(revoked.ipv4.is_empty());
-        assert!(revoked.ipv6.is_empty());
+
+        config.network.member_records.push(
+            issue_named_membership_record_for_subject_at(
+                &local,
+                MembershipRecordIssueOptions {
+                    network_name: "lab".to_owned(),
+                    member: MembershipRecordSubject::from_identity(&local).expect("local subject"),
+                    membership_epoch: 1,
+                    sequence: 4,
+                    revoked: true,
+                    roles: Vec::new(),
+                    route_grants: Vec::new(),
+                    expires_at_unix_seconds: None,
+                },
+                None,
+                1_006,
+            )
+            .expect("local resignation"),
+        );
+        let inventory =
+            NetworkPeerList::from_config_at(&config, &config.network.member_records, 1_007)
+                .expect("peer inventory after resignation");
+        assert_eq!(inventory.peers.len(), 1);
+        assert_eq!(inventory.peers[0].peer_id, member.peer_id);
+        assert!(!inventory.peers[0].local);
+        let snapshot = NetworkPeerSnapshot::from_config_at(
+            &config,
+            &config.network.member_records,
+            1_007,
+            |_, _| NetworkPeerRuntimeState::disconnected(),
+        )
+        .expect("peer snapshot after resignation");
+        assert_eq!(snapshot.total_peers, 1);
+        assert_eq!(snapshot.peers[0].peer_id, member.peer_id);
+        assert!(!snapshot.peers[0].local);
     }
 
     #[test]

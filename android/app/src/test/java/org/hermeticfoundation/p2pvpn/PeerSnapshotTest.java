@@ -110,6 +110,30 @@ public final class PeerSnapshotTest {
     }
 
     @Test
+    public void revokedLocalIdentityIsNotACurrentMember() throws Exception {
+        JSONObject resigned = withMembershipState(localPeer("localPeer", "local"), "revoked");
+        JSONArray peers = new JSONArray().put(resigned).put(
+                withMembershipState(disconnectedPeer("remainingPeer", "remaining"), "active"));
+
+        List<PeerSnapshot.Peer> current = parse(snapshot(peers, 2, 2, false)).currentPeers();
+
+        assertEquals(1, current.size());
+        assertEquals("remainingPeer", current.get(0).peerId);
+    }
+
+    @Test
+    public void acceptsInventoryWithoutRevokedLocalIdentity() throws Exception {
+        JSONArray peers = new JSONArray().put(
+                withMembershipState(disconnectedPeer("remainingPeer", "remaining"), "active"));
+        PeerSnapshot parsed = parse(snapshot(peers, 1, 1, false));
+
+        assertEquals(1, parsed.currentPeers().size());
+        assertEquals("remainingPeer", parsed.currentPeers().get(0).peerId);
+        assertFalse(parsed.currentPeers().get(0).local);
+        assertTrue(parse(snapshot(new JSONArray(), 0, 0, false)).currentPeers().isEmpty());
+    }
+
+    @Test
     public void acceptsMaximumPeerAndPerPeerCollectionBounds() throws Exception {
         JSONArray peers = new JSONArray();
         for (int index = 0; index < PeerSnapshot.MAX_PEERS; index++) {

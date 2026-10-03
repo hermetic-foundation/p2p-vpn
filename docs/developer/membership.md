@@ -248,10 +248,14 @@ effective-only constructors remain available and preserve their behavior.
 | `original_admitted_at_unix_seconds` | First admission record time. |
 | `state_changed_at_unix_seconds` | Effective grant, expiry, or tombstone record time. |
 
-Revoked, expired, and inactive members remain in the inventory for audit.
+Revoked members are omitted from the shared peer inventory used by the CLI and
+Android snapshots. Static metadata and cached hostnames do not restore a row.
 
-Their signed history overrides static configuration, so they have no derived
+Expired and inactive members remain diagnostic inventory entries without derived
 remote routes. Operationally authorized rows sort before inactive history.
+
+The internal signed ledger still enforces revocation independently of peer-list
+visibility. A higher-epoch admission restores a revoked identity to the inventory.
 
 ## Pairing Admission
 

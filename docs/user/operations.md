@@ -80,6 +80,9 @@ sudo p2p-vpn peers --instance monarchic-runners
 
 Both views include local, explicitly configured, and transitive signed members.
 
+Revoked identities are omitted, including identities still present in static
+configuration. Re-pairing with a new admission makes them visible again.
+
 Use JSON for an all-instance inventory:
 
 ```sh

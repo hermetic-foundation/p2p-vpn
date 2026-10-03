@@ -67,7 +67,7 @@ fn authorization_consumers_agree_on_remote_revocation_and_local_resignation() {
             DnsZone::from_config_at(&config, &config.network.member_records, 2_000).expect("DNS");
         let inventory =
             NetworkPeerList::from_config_at(&config, &config.network.member_records, 2_000)
-                .expect("audit inventory");
+                .expect("current peer inventory");
 
         for (identity, hostname, allowed) in [
             (&remote, "remote", remote_allowed),
@@ -102,19 +102,35 @@ fn authorization_consumers_agree_on_remote_revocation_and_local_resignation() {
             );
         }
         assert!(dns.record(&dns.qualify("local").expect("name")).is_some());
-        let remote_audit = inventory
+        let remote_entry = inventory
             .peers
             .iter()
-            .find(|peer| peer.peer_id == remote.peer_id)
-            .expect("remote audit retained");
+            .find(|peer| peer.peer_id == remote.peer_id);
+        if departed.is_some_and(|peer| peer.peer_id == remote.peer_id) {
+            assert!(
+                remote_entry.is_none(),
+                "revoked member must leave peer inventory"
+            );
+        } else {
+            assert_eq!(
+                remote_entry
+                    .expect("surviving member")
+                    .membership
+                    .as_ref()
+                    .expect("membership")
+                    .state,
+                NetworkPeerMembershipState::Active,
+                "local departure must not erase surviving network members",
+            );
+        }
+        let local_present = inventory
+            .peers
+            .iter()
+            .any(|peer| peer.peer_id == local.peer_id);
         assert_eq!(
-            remote_audit.membership.as_ref().expect("membership").state,
-            if departed.is_some_and(|peer| peer.peer_id == remote.peer_id) {
-                NetworkPeerMembershipState::Revoked
-            } else {
-                NetworkPeerMembershipState::Active
-            },
-            "local departure must not erase surviving network members",
+            local_present,
+            !departed.is_some_and(|peer| peer.peer_id == local.peer_id),
+            "local resignation must remove the local peer row",
         );
     }
 }

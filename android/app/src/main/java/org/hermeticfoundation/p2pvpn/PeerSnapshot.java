@@ -512,6 +512,10 @@ final class PeerSnapshot {
         }
 
         private boolean isCurrentMember() {
+            if (membership.isPresent()
+                    && membership.get().state == MembershipState.REVOKED) {
+                return false;
+            }
             if (local) {
                 return true;
             }

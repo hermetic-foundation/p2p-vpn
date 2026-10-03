@@ -253,6 +253,8 @@ pkgs.testers.nixosTest {
         expression = (
             '.peers[] | select(.peer_id == $peer and .membership.state == $state)'
         )
+        if expected_state == "revoked":
+            expression = 'all(.peers[]; .peer_id != $peer)'
         arguments = (
             " --arg peer " + shlex.quote(peer_id)
             + " --arg state " + shlex.quote(expected_state)
