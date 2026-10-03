@@ -18,6 +18,7 @@ use crate::{
 };
 
 pub mod checkpoint;
+pub mod checkpoint_mutation;
 
 pub const CONTROL_PROTOCOL: &str = "/p2p-vpn/control/1";
 const MAX_CONTROL_MESSAGE_LEN: usize = 16_384;

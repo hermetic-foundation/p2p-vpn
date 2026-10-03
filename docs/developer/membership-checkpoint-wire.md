@@ -70,6 +70,67 @@ revocation records. Paging never extends a transfer's deadline.
 | Busy or failed transfer | Retire affected resources; retry under a fresh resync challenge. |
 | Legacy daemon | No checkpoint authority is inferred from its control fields. |
 
+## Mutation Handoff
+
+| Surface | Contract |
+| --- | --- |
+| Separate protocol | `/p2p-vpn/checkpoint-mutation/1` |
+| Request | Wire version `1`, complete core `SignedMembershipMutation`. |
+| Response | Wire version, command digest, applied boundary or bounded rejection. |
+| Request timeout | Fixed 5 seconds; no per-request extension. |
+| Concurrent streams | At most 32; caller limit is clamped to `1..=32`. |
+| JSON body | At most 16 KiB, with a two-byte big-endian length prefix. |
+| Command/retry retention | Ephemeral only; one monotonic handoff deadline, at most 60 seconds. |
+
+Outgoing requests carry a sender-local monotonic deadline that is neither signed
+nor serialized. The codec rejects expired queued writes before emitting bytes
+and bounds header, body, and close writes by the same deadline.
+
+Reattaching a deadline may shorten it, never extend it. The current daemon uses
+a 15-second connected-only handoff; this wire contract adds no automatic redial
+or persistent command outbox.
+
+### Receiver Contract
+
+1. Decode a bounded frame and validate the core signing/shape contract.
+2. Bind the signed issuer to the authenticated libp2p sender and pinned anchor.
+3. Apply to a clone of the currently selected state using core `apply_mutation_at`.
+4. Persist and install successfully before replying `Applied(current_boundary)`.
+5. Otherwise return a bounded rejection; never treat signature validity as admission.
+
+Wire validation does not establish current membership or global freshness.
+Existing control and snapshot-transfer messages remain unchanged. Runtime
+persistence and command scheduling are separate from this codec.
+
+### Rejections And Replies
+
+| Outcome | Meaning |
+| --- | --- |
+| `applied` | Receiver durably committed and installed the reported boundary. |
+| `stale_base` | Exact base no longer matches; optionally report current boundary. |
+| `resync_required` | Receiver is gated until authenticated synchronization finishes. |
+| `unauthorized` / `invalid` | Transport, scope, admission, signature, or command rejected. |
+| `busy` / `persistence_failed` | No successful durable application is acknowledged. |
+
+Replies bind the complete signed command digest. The caller must also match the
+libp2p request ID and authenticated target peer. A different boundary, even with
+the same authority revision, does not acknowledge the expected result.
+
+### Departure And Lost Acknowledgments
+
+- Capture the signed command and bounded recipients before local self-removal.
+- After exclusion, deliver only that final exact-base command within its deadline.
+- Recipients authorize against their old exact base; stale recipients resync normally.
+- No general excluded-publisher snapshot privilege or permanent replay log is added.
+
+Successful application advances the exact base, so duplicate application is
+rejected. After a lost reply, an authenticated response reporting the exact
+expected resulting boundary can confirm synchronization without command history.
+
+Competing branches still follow cooperative fork selection. Losing decisions,
+including revocations, may be discarded; this protocol adds no irreversible
+revocation or Byzantine consensus guarantee.
+
 ## Verification
 
 ```sh
@@ -79,3 +140,9 @@ nix develop -c cargo test --locked --lib runtime::control
 Coverage includes authenticated multi-page transfer over TCP/Noise, codec bounds,
 spoofed requesters, corrupted offers, mixed pages, monotonic expiry, cancellation,
 replay slots, scope validation, and legacy descriptor decoding.
+
+Mutation coverage includes every core change variant, transport issuer binding,
+signature and scope rejection, strict bounded codecs, exact-base replay, lost
+acknowledgments, conflicting replies, and TCP/Noise self-departure delivery.
+Deadline tests verify expired queues, stalled writes, unchanged signatures/digests,
+rejected injected deadline fields, and the non-extending lifetime cap.

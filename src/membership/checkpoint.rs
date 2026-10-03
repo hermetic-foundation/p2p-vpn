@@ -424,6 +424,43 @@ pub struct SignedMembershipMutation {
     pub signature: String,
 }
 
+impl SignedMembershipMutation {
+    /// Authenticate a bounded command, not its current membership authority.
+    /// Callers must still apply it against the selected exact checkpoint base.
+    pub fn authenticate_for(
+        &self,
+        expected_anchor: &NetworkAnchor,
+        transport_sender: libp2p::PeerId,
+    ) -> Result<(), CheckpointError> {
+        let payload = &self.payload;
+        if payload.version != 1 {
+            return Err(CheckpointError::Invalid("unsupported mutation version"));
+        }
+        payload.anchor.validate()?;
+        if &payload.anchor != expected_anchor {
+            return Err(CheckpointError::WrongAnchor);
+        }
+        portable(payload.base.authority_revision)?;
+        if payload.base.digest == [0; 32] {
+            return Err(CheckpointError::Invalid("empty mutation base"));
+        }
+        let key = payload.issuer.validate()?;
+        if key.to_peer_id() != transport_sender {
+            return Err(CheckpointError::Invalid(
+                "mutation transport issuer mismatch",
+            ));
+        }
+        match &payload.change {
+            MembershipChange::UpsertMember(member) => member.validate()?,
+            MembershipChange::RemoveMember(peer) => validate_local_peer(peer)?,
+            MembershipChange::SetPolicy(policy) => policy.validate(0)?,
+            MembershipChange::PruneExpired => (),
+        }
+        encoded_bound(self, MAX_MUTATION_BYTES)?;
+        verify_signature(&payload.issuer, MUTATION_DOMAIN, payload, &self.signature)
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct HostnameClaimPayload {
@@ -1018,6 +1055,49 @@ impl CooperativeMembershipState {
         round.names = names;
         round.observed_offer = true;
         Ok(outcome)
+    }
+
+    /// Advance a live refresh after a separately authorized, durably installed
+    /// command. Preserve collected higher branches and the original sync window.
+    pub(crate) fn rebase_live_resync_on_installed(
+        &mut self,
+        installed: &Self,
+    ) -> Result<(), CheckpointError> {
+        if self.local_peer != installed.local_peer
+            || self.capability.anchor != installed.capability.anchor
+            || !matches!(
+                installed.sync_state,
+                MembershipSyncState::Participating | MembershipSyncState::Excluded
+            )
+        {
+            return Err(CheckpointError::NoParticipation);
+        }
+        self.capability.verify(&installed.current)?;
+        validate_names(&installed.current.payload, &installed.names)?;
+        let previous = self.current.payload.boundary()?;
+        if previous.authority_revision.checked_add(1)
+            != Some(installed.current.payload.authority_revision)
+            || installed.current.payload.parent_digest != Some(previous.digest)
+        {
+            return Err(CheckpointError::StaleMutation);
+        }
+        let round = self.round.as_ref().ok_or(CheckpointError::NoSyncRound)?;
+        let best = if installed.current.payload.rank()? > round.best.payload.rank()? {
+            installed.current.clone()
+        } else {
+            round.best.clone()
+        };
+        let names = merge_names(
+            &best.payload,
+            &compatible_names(&best.payload, &round.names),
+            &compatible_names(&best.payload, &installed.names),
+        )?;
+        self.current = installed.current.clone();
+        self.names = installed.names.clone();
+        let round = self.round.as_mut().expect("checked sync round");
+        round.best = best;
+        round.names = names;
+        Ok(())
     }
 
     pub fn finish_resync(
