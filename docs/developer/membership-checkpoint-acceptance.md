@@ -7,9 +7,9 @@ Implementation in progress. This is an acceptance map, not a completion report.
 The peer-inventory cleanup is independent of durable checkpoint compaction.
 Neither hidden rows nor a fixed history limit proves that compaction is complete.
 
-Core, storage, wire transfer, and version-3 daemon restoration are implemented;
-the rejected fixed-quorum prototype is gone. Automatic migration and pairing
-activation remain incomplete; current deployments still use the legacy ledger.
+Core, storage, wire transfer, version-3 restoration, and protected enrollment
+staging are implemented; the fixed-quorum prototype is gone. Automatic migration
+and ordinary pairing activation remain incomplete; deployments use the legacy ledger.
 
 ## Current Evidence
 
@@ -19,10 +19,11 @@ activation remain incomplete; current deployments still use the legacy ledger.
 | Runtime paths | `df78cfb3` erases unauthorized stream/datagram/relay path history and pending probes. | Other retained device state must follow checkpoint installation. |
 | Forwarding projection | Checkpoint prepare/commit rejects stale contexts, seals static fallback, and erases legacy metadata. | Full discovery/cache/artifact cleanup remains. |
 | Snapshot/mutation transfer | 21 snapshot and 19 mutation tests cover authenticated TCP/Noise, scope, replay, deadlines, correlated replies, and frame/session bounds. | Pairing integration remains pending. |
-| Daemon coordinator | 17 tests cover restart, bounded resync, removal, DNS, publisher catch-up, authenticated handoff, and retained-state erasure. | Ordinary networks lack automatic provisioning/migration. |
+| Daemon coordinator | 26 tests cover restart, bounded resync, removal, DNS, catch-up, handoff, enrollment gates, and retained-state erasure. | Ordinary networks lack automatic provisioning/migration. |
+| Pairing enrollment | Signed grants, protected minimum-rank staging, restart, replay, and a 102-member TCP/Noise paged fetch pass. | Normal pairing RPC and config-export integration remain. |
 | Creator departure | Three real daemon loops deliver removal to two survivors; later survivor governance and injected route-cleanup retry pass. | Packet/route adapters are fixtures, not real TUN or deployed-node evidence. |
 | Handoff scheduling | Five tests verify recipient/in-flight bounds, fairness, fixed deadlines, retry limits, and forgotten payloads. | No deployed checkpoint-network completion claim. |
-| Rust workspace | 1,686 tests pass; 47 opt-in tests excluded, including 30 core, 23 storage, and 11 checkpoint-forwarder tests. | Full VM/package/device checks remain. |
+| Rust workspace | 1,720 tests pass; 47 opt-in tests excluded. Core, protected storage, checkpoint forwarding, and enrollment are covered. | Full VM/package/device checks remain. |
 | Durable checkpoint state | Version-3 authentication, legacy dispatch, rollback, failure/retry, and 128 durable churn cycles pass. | Automatic migration and a full crash campaign remain. |
 | Static analysis | Formatting and required correctness/suspicious/performance Clippy groups pass. | Existing non-fatal lint warnings remain. |
 | Android consumer | JVM unit tests and debug lint pass for revoked-local filtering and missing-local snapshots. | No new APK or physical-device checkpoint test. |
@@ -39,6 +40,10 @@ Regression coverage verifies no empty packet is queued or counted after EOF.
 A live-refresh ordering regression is covered explicitly: an authenticated
 exact-base departure can advance installed authority without losing an already
 collected higher offer, extending the deadline, or bypassing startup gates.
+
+An initial full-suite run failed the three-daemon departure acknowledgment check.
+The isolated replay and full-suite rerun passed. Keep that intermittent failure
+open; a passing rerun alone does not establish departure reliability.
 
 ## Required Behavior
 
@@ -183,6 +188,6 @@ before it can support a completion claim.
 | --- | --- | --- |
 | Cooperative core | Singleton snapshots, canonical rank, scoped authentication, resync gate, active-only authorization, bounded churn tests. | Implemented; 30 core tests pass. |
 | Durable state | Atomic persistence, crash boundaries, migration, metadata cleanup, bounded retention. | Store and churn tests pass; automatic migration and full crash campaign remain. |
-| Runtime and wire | Version negotiation, sync, branch selection, pairing/departure, route/DNS/discovery cleanup. | Version-3 restoration and bounded transfer are wired; provisioning, pairing/departure, and full cleanup remain. |
+| Runtime and wire | Version negotiation, sync, branch selection, pairing/departure, route/DNS/discovery cleanup. | Restoration, bounded departures, and enrollment staging are wired; ordinary pairing activation, provisioning, and full cleanup remain. |
 | User surfaces | Linux/Android sync and loss status, minimal provenance, structured instructions. | Linux aggregate status and inventories tested; Android sync/loss UI and activation workflow remain. |
-| End-to-end proof | Multi-daemon forks/offline return, restart, churn, CLI/Android/NixOS contracts. | Real two-swarm paging and one-daemon restart/revoke pass; deployed multi-node evidence remains. |
+| End-to-end proof | Multi-daemon forks/offline return, restart, churn, CLI/Android/NixOS contracts. | Real paging and three-daemon fixtures pass; departure intermittency and deployed multi-node evidence remain. |

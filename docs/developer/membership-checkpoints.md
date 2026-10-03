@@ -165,6 +165,32 @@ retain inviter identity, old admission proofs, or per-device revocation markers.
 Normal authorization uses the active snapshot as a closed namespace. Absent
 static peers receive no implicit permission even after their tombstones are gone.
 
+## Pending Pairing Enrollment
+
+Signed checkpoint pairing installs a protected capability and minimum rank,
+not an authoritative two-member network. The staging API is implemented and
+tested; ordinary pairing RPC activation and legacy migration remain pending.
+
+| Surface | Required Behavior |
+| --- | --- |
+| Approval | Validate the signed transcript and actual local key before any write. |
+| Existing scope | Preserve configured secrets and saved anchor/capability pins. |
+| Provisional seed | Retain only inviter/joiner descriptors; gate packet and mutation authority. |
+| Persistence | Version-3 envelope adds optional `enrollment_floor`; absent for ready state. |
+| Empty/insufficient resync | Remain gated; do not lower or discard the enrollment floor. |
+| Activation | Observe a remote authenticated snapshot meeting the complete pinned rank. |
+| Newer exclusion | Install current exclusion instead of honoring a superseded approval. |
+| Write/commit failure | Preserve visible selected authority, gate participation, and retry. |
+| Replay | Reuse newer retained state; do not reinstall an old seed or lower a pending floor. |
+| Legacy state | Require explicit migration; staging does not silently replace the ledger. |
+
+An older strict version-3 reader rejects pending state with the unknown floor
+field. The generic core restoration API also rejects pending enrollment, so
+consumers cannot accidentally drop its gate. Ready state remains byte-compatible.
+
+One local node may still resume a previously established snapshot after a bounded
+empty resync. That availability rule does not apply to an incomplete enrollment.
+
 ## Verification
 
 ### Forwarding Projection
@@ -199,6 +225,8 @@ per-device revocation archive.
 | Field | Meaning |
 | --- | --- |
 | `checkpoint_sync_state` | `resync_required`, `resyncing`, `participating`, or `excluded`. |
+| `checkpoint_enrollment_pending` | Credentials are installed, but a qualifying remote snapshot is still required. |
+| `checkpoint_enrollment_minimum_revision` | Minimum approved revision; emitted only while enrollment is pending. |
 | `checkpoint_authority_revision` | Installed authority revision. |
 | `checkpoint_active_members` | Retained roster population, including offline members. |
 | `checkpoint_pending_requests` | Owned outbound page requests. |
@@ -230,6 +258,11 @@ creator departure, route policy, migration, and thousands of churn cycles.
 Runtime tests cover real TCP/Noise catch-up, an excluded requester, a publisher
 missing from the stale roster, isolated recovery, durable revocation, DNS gating,
 bounded candidates, failed-transfer retirement, and the existing daemon control API.
+
+Enrollment tests cover restart, insufficient offers, configured-secret pins,
+legacy rejection, superseded approvals, and initial/replacement write failures.
+A 102-member roster crosses real TCP/Noise paging without enlarging pairing frames;
+a joiner removed after approval receives exclusion instead of packet authority.
 Handoff tests cover deadlines, scheduling fairness, local exclusion, persistence
 failure, duplicate rejection, and removal without retained per-device history.
 Three in-process daemons exchange authenticated commands over TCP/Noise; creator

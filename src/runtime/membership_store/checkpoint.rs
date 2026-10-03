@@ -1,4 +1,4 @@
-//! Versioned active-only storage. Runtime activation/migration is a separate step.
+//! Versioned active-only storage. Ordinary provisioning/migration is a separate step.
 //! Credentials and the selected snapshot share one owner-only atomic replacement.
 
 use std::fmt;
@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::membership::checkpoint::{
     CooperativeMembershipState, MAX_CAPABILITY_BYTES, MAX_SNAPSHOT_OFFER_BYTES, NetworkAnchor,
-    NetworkCapability, RetainedCheckpointState,
+    NetworkCapability, RetainedCheckpointState, SnapshotRank,
 };
 
 use super::{
@@ -77,6 +77,7 @@ impl CheckpointCredentials {
 pub(crate) struct LoadedCheckpointAuthority {
     pub(crate) credentials: CheckpointCredentials,
     pub(crate) retained: RetainedCheckpointState,
+    pub(crate) enrollment_floor: Option<SnapshotRank>,
 }
 
 impl LoadedCheckpointAuthority {
@@ -84,6 +85,9 @@ impl LoadedCheckpointAuthority {
         self,
         local_peer: &str,
     ) -> Result<CooperativeMembershipState, MembershipStateStoreError> {
+        if self.enrollment_floor.is_some() {
+            return Err(MembershipStateStoreError::CheckpointEnrollmentIncomplete);
+        }
         Ok(CooperativeMembershipState::restore(
             self.credentials.capability()?,
             local_peer.to_owned(),
@@ -95,7 +99,7 @@ impl LoadedCheckpointAuthority {
 #[derive(Debug)]
 pub(crate) enum PersistedAuthority {
     Legacy(PersistedMembershipStateData),
-    Checkpoint(LoadedCheckpointAuthority),
+    Checkpoint(Box<LoadedCheckpointAuthority>),
 }
 
 // This DTO is private: its secret may only be encoded into the protected state file.
@@ -108,6 +112,8 @@ struct CheckpointEnvelope {
     anchor: NetworkAnchor,
     capability_secret: String,
     retained: RetainedCheckpointState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    enrollment_floor: Option<SnapshotRank>,
 }
 
 impl MembershipStateStore {
@@ -127,13 +133,13 @@ impl MembershipStateStore {
                 ),
                 CHECKPOINT_STATE_VERSION => {
                     self.validate_checkpoint_parent()?;
-                    Ok(PersistedAuthority::Checkpoint(decode_checkpoint(
+                    Ok(PersistedAuthority::Checkpoint(Box::new(decode_checkpoint(
                         &bytes,
                         network_name,
                         local_peer,
                         expected_anchor,
                         configured_secret,
-                    )?))
+                    )?)))
                 }
                 version => Err(MembershipStateStoreError::UnsupportedVersion(version)),
             })
@@ -164,6 +170,50 @@ impl MembershipStateStore {
         retained: &RetainedCheckpointState,
         sync_parent: impl FnOnce(&std::path::Path) -> std::io::Result<()>,
     ) -> Result<(), MembershipStateStoreError> {
+        self.save_checkpoint_with_floor_and_sync(
+            network_name,
+            local_peer,
+            credentials,
+            retained,
+            None,
+            sync_parent,
+        )
+    }
+
+    pub(crate) fn save_pending_checkpoint_enrollment(
+        &self,
+        network_name: &str,
+        local_peer: &str,
+        credentials: &CheckpointCredentials,
+        seed: &RetainedCheckpointState,
+        floor: SnapshotRank,
+    ) -> Result<(), MembershipStateStoreError> {
+        floor.validate()?;
+        if floor.authority_revision == 0
+            || floor.active_member_count < 2
+            || seed.snapshot.payload.rank()? >= floor
+        {
+            return Err(MembershipStateStoreError::CheckpointEnrollmentIncomplete);
+        }
+        self.save_checkpoint_with_floor_and_sync(
+            network_name,
+            local_peer,
+            credentials,
+            seed,
+            Some(floor),
+            sync_checkpoint_parent,
+        )
+    }
+
+    fn save_checkpoint_with_floor_and_sync(
+        &self,
+        network_name: &str,
+        local_peer: &str,
+        credentials: &CheckpointCredentials,
+        retained: &RetainedCheckpointState,
+        enrollment_floor: Option<SnapshotRank>,
+        sync_parent: impl FnOnce(&std::path::Path) -> std::io::Result<()>,
+    ) -> Result<(), MembershipStateStoreError> {
         self.validate_checkpoint_parent()?;
         validate_retained(retained, local_peer, &credentials.capability()?)?;
         let bytes = serde_json::to_vec(&CheckpointEnvelope {
@@ -173,6 +223,7 @@ impl MembershipStateStore {
             anchor: credentials.anchor.clone(),
             capability_secret: STANDARD.encode(&credentials.secret),
             retained: retained.clone(),
+            enrollment_floor,
         })?;
         validate_checkpoint_length(bytes.len())?;
 
@@ -182,6 +233,15 @@ impl MembershipStateStore {
             Some(&credentials.anchor),
             Some(&credentials.secret),
         )? {
+            if let Some(previous_floor) = previous.enrollment_floor {
+                let lowered = match enrollment_floor {
+                    Some(next_floor) => next_floor < previous_floor,
+                    None => retained.snapshot.payload.rank()? < previous_floor,
+                };
+                if lowered {
+                    return Err(MembershipStateStoreError::CheckpointEnrollmentIncomplete);
+                }
+            }
             if retained.snapshot.payload.rank()? < previous.retained.snapshot.payload.rank()? {
                 return Err(MembershipStateStoreError::CheckpointRollback);
             }
@@ -255,6 +315,15 @@ fn decode_checkpoint(
     let credentials = CheckpointCredentials::new(envelope.anchor, secret)?;
     let capability = credentials.capability()?;
     validate_retained(&envelope.retained, local_peer, &capability)?;
+    if let Some(floor) = envelope.enrollment_floor {
+        floor.validate()?;
+        if floor.authority_revision == 0
+            || floor.active_member_count < 2
+            || envelope.retained.snapshot.payload.rank()? >= floor
+        {
+            return Err(MembershipStateStoreError::CheckpointEnrollmentIncomplete);
+        }
+    }
     if let Some(configured) = configured_secret {
         let configured =
             NetworkCapability::from_secret(credentials.anchor.clone(), Some(configured))?;
@@ -265,6 +334,7 @@ fn decode_checkpoint(
     Ok(LoadedCheckpointAuthority {
         credentials,
         retained: envelope.retained,
+        enrollment_floor: envelope.enrollment_floor,
     })
 }
 
@@ -412,7 +482,7 @@ mod tests {
                 .unwrap()
                 .unwrap()
             {
-                PersistedAuthority::Checkpoint(state) => state,
+                PersistedAuthority::Checkpoint(state) => *state,
                 PersistedAuthority::Legacy(_) => panic!("expected checkpoint"),
             }
         }
@@ -495,6 +565,233 @@ mod tests {
                 .count(),
             2
         );
+        assert_eq!(fs::read_dir(&fixture.directory).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn pending_enrollment_pins_floor_across_restart_and_cannot_activate_seed() {
+        let mut fixture = Fixture::new("enrollment-floor");
+        let seed = fixture.state.retained();
+        fixture.mutate(MembershipChange::RemoveMember(
+            fixture.member.peer_id.clone(),
+        ));
+        fixture.mutate(MembershipChange::UpsertMember(
+            CheckpointMember::new(&fixture.member).unwrap(),
+        ));
+        let floor = fixture.state.snapshot().payload.rank().unwrap();
+        fixture
+            .store
+            .save_pending_checkpoint_enrollment(
+                "lab",
+                &fixture.local.peer_id,
+                &fixture.credentials,
+                &seed,
+                floor,
+            )
+            .unwrap();
+        let before = fs::read(&fixture.path).unwrap();
+        assert_eq!(fixture.load().enrollment_floor, Some(floor));
+        assert_eq!(fixture.load().retained, seed);
+        assert!(matches!(
+            fixture.load().restore(&fixture.local.peer_id),
+            Err(MembershipStateStoreError::CheckpointEnrollmentIncomplete)
+        ));
+        assert_eq!(
+            fs::metadata(&fixture.path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert!(matches!(
+            fixture.store.save_checkpoint(
+                "lab",
+                &fixture.local.peer_id,
+                &fixture.credentials,
+                &seed,
+            ),
+            Err(MembershipStateStoreError::CheckpointEnrollmentIncomplete)
+        ));
+        let lower = SnapshotRank {
+            authority_revision: 1,
+            ..floor
+        };
+        assert!(matches!(
+            fixture.store.save_pending_checkpoint_enrollment(
+                "lab",
+                &fixture.local.peer_id,
+                &fixture.credentials,
+                &seed,
+                lower,
+            ),
+            Err(MembershipStateStoreError::CheckpointEnrollmentIncomplete)
+        ));
+        assert_eq!(fs::read(&fixture.path).unwrap(), before);
+        fixture.save();
+        assert_eq!(fixture.load().enrollment_floor, None);
+        assert_eq!(fixture.load().retained, fixture.state.retained());
+        let ready: serde_json::Value =
+            serde_json::from_slice(&fs::read(&fixture.path).unwrap()).unwrap();
+        assert!(ready.get("enrollment_floor").is_none());
+        assert!(fixture.load().restore(&fixture.local.peer_id).is_ok());
+        assert_eq!(fs::read_dir(&fixture.directory).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn enrollment_floor_rejects_invalid_inputs_and_corruption_without_rewriting() {
+        let fixture = Fixture::new("invalid-enrollment-floor");
+        fixture.save();
+        let seed = fixture.state.retained();
+        let valid_floor = SnapshotRank {
+            authority_revision: 1,
+            active_member_count: 2,
+            digest: [1; 32],
+        };
+        let before = fs::read(&fixture.path).unwrap();
+        let invalid = [
+            SnapshotRank {
+                authority_revision: 0,
+                ..valid_floor
+            },
+            SnapshotRank {
+                authority_revision: u64::MAX,
+                ..valid_floor
+            },
+            SnapshotRank {
+                active_member_count: 1,
+                ..valid_floor
+            },
+            SnapshotRank {
+                active_member_count: crate::membership::checkpoint::MAX_CHECKPOINT_MEMBERS + 1,
+                ..valid_floor
+            },
+            SnapshotRank {
+                digest: [0; 32],
+                ..valid_floor
+            },
+            seed.snapshot.payload.rank().unwrap(),
+        ];
+        for floor in invalid {
+            assert!(
+                fixture
+                    .store
+                    .save_pending_checkpoint_enrollment(
+                        "lab",
+                        &fixture.local.peer_id,
+                        &fixture.credentials,
+                        &seed,
+                        floor,
+                    )
+                    .is_err()
+            );
+            assert_eq!(fs::read(&fixture.path).unwrap(), before);
+            let mut corrupt: serde_json::Value = serde_json::from_slice(&before).unwrap();
+            corrupt["enrollment_floor"] = serde_json::to_value(floor).unwrap();
+            let bytes = serde_json::to_vec(&corrupt).unwrap();
+            fs::write(&fixture.path, &bytes).unwrap();
+            assert!(
+                fixture
+                    .store
+                    .load_authority("lab", &fixture.local.peer_id, None, None)
+                    .is_err()
+            );
+            assert!(
+                fixture
+                    .store
+                    .save_checkpoint("lab", &fixture.local.peer_id, &fixture.credentials, &seed)
+                    .is_err()
+            );
+            assert_eq!(fs::read(&fixture.path).unwrap(), bytes);
+            fs::write(&fixture.path, &before).unwrap();
+        }
+    }
+
+    #[test]
+    fn visible_qualifying_enrollment_replacement_clears_floor_even_when_sync_fails() {
+        let mut fixture = Fixture::new("enrollment-visible-write");
+        let seed = fixture.state.retained();
+        fixture.mutate(MembershipChange::RemoveMember(
+            fixture.member.peer_id.clone(),
+        ));
+        fixture.mutate(MembershipChange::UpsertMember(
+            CheckpointMember::new(&fixture.member).unwrap(),
+        ));
+        let floor = fixture.state.snapshot().payload.rank().unwrap();
+        fixture
+            .store
+            .save_pending_checkpoint_enrollment(
+                "lab",
+                &fixture.local.peer_id,
+                &fixture.credentials,
+                &seed,
+                floor,
+            )
+            .unwrap();
+        assert!(matches!(
+            fixture.store.save_checkpoint_with_parent_sync(
+                "lab",
+                &fixture.local.peer_id,
+                &fixture.credentials,
+                &fixture.state.retained(),
+                |_| Err(std::io::Error::other("injected directory sync failure")),
+            ),
+            Err(MembershipStateStoreError::CheckpointDurabilityUncertain(_))
+        ));
+        let loaded = fixture.load();
+        assert!(loaded.enrollment_floor.is_none());
+        assert_eq!(loaded.retained, fixture.state.retained());
+        assert_eq!(
+            loaded.restore(&fixture.local.peer_id).unwrap().sync_state(),
+            MembershipSyncState::ResyncRequired
+        );
+        fixture.save();
+        assert_eq!(fs::read_dir(&fixture.directory).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn initial_enrollment_write_failures_preserve_pending_gate_and_allow_retry() {
+        let fixture = Fixture::new("enrollment-initial-write");
+        let floor = SnapshotRank {
+            authority_revision: 1,
+            active_member_count: 2,
+            digest: [1; 32],
+        };
+        fs::set_permissions(&fixture.directory, fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(matches!(
+            fixture.store.save_pending_checkpoint_enrollment(
+                "lab",
+                &fixture.local.peer_id,
+                &fixture.credentials,
+                &fixture.state.retained(),
+                floor,
+            ),
+            Err(MembershipStateStoreError::UnsafeParent(_))
+        ));
+        assert!(!fixture.path.exists());
+        fs::set_permissions(&fixture.directory, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(matches!(
+            fixture.store.save_checkpoint_with_floor_and_sync(
+                "lab",
+                &fixture.local.peer_id,
+                &fixture.credentials,
+                &fixture.state.retained(),
+                Some(floor),
+                |_| Err(std::io::Error::other(
+                    "injected initial directory sync failure"
+                )),
+            ),
+            Err(MembershipStateStoreError::CheckpointDurabilityUncertain(_))
+        ));
+        assert_eq!(fixture.load().enrollment_floor, Some(floor));
+        assert!(fixture.load().restore(&fixture.local.peer_id).is_err());
+        fixture
+            .store
+            .save_pending_checkpoint_enrollment(
+                "lab",
+                &fixture.local.peer_id,
+                &fixture.credentials,
+                &fixture.state.retained(),
+                floor,
+            )
+            .unwrap();
+        assert_eq!(fixture.load().enrollment_floor, Some(floor));
         assert_eq!(fs::read_dir(&fixture.directory).unwrap().count(), 1);
     }
 

@@ -296,6 +296,7 @@ pub enum MembershipStateStoreError {
     InvalidCapability,
     CapabilityMismatch,
     CheckpointRollback,
+    CheckpointEnrollmentIncomplete,
     HostnameRollback,
     CheckpointDurabilityUncertain(io::Error),
     MissingParent,
@@ -336,6 +337,9 @@ impl std::fmt::Display for MembershipStateStoreError {
             Self::CheckpointRollback => {
                 formatter.write_str("checkpoint replacement would lower committed authority")
             }
+            Self::CheckpointEnrollmentIncomplete => formatter.write_str(
+                "checkpoint enrollment requires an authenticated snapshot at or above its pinned rank",
+            ),
             Self::HostnameRollback => formatter.write_str(
                 "checkpoint replacement would discard a surviving member's current hostname",
             ),

@@ -15,8 +15,10 @@ use crate::{
     membership::checkpoint::{
         BranchSelection, CheckpointError, CooperativeMembershipState, MembershipChange,
         MembershipSyncState, NetworkAnchor, OfferOutcome, SignedHostnameClaim,
-        SignedMembershipMutation, SignedSnapshotOffer, SnapshotChallenge,
+        SignedMembershipMutation, SignedSnapshotOffer, SnapshotChallenge, SnapshotPolicy,
+        SnapshotRank,
     },
+    pairing::{PairingOffer, PairingResponse},
 };
 
 use super::{
@@ -69,6 +71,7 @@ pub(crate) struct CheckpointRuntime {
     mutation_requests: HashMap<request_response::OutboundRequestId, PeerId>,
     last_handoff: HandoffReport,
     route_cleanup_pending: bool,
+    enrollment_floor: Option<SnapshotRank>,
 }
 
 impl std::fmt::Debug for CheckpointRuntime {
@@ -83,13 +86,126 @@ impl std::fmt::Debug for CheckpointRuntime {
 }
 
 impl CheckpointRuntime {
+    /// Caller-approved signed enrollment installs credentials, never a partial roster's grants.
+    pub(crate) fn stage_pairing_enrollment(
+        config: &crate::config::Config,
+        identity: &NodeIdentity,
+        offer: &PairingOffer,
+        response: &PairingResponse,
+        store: &MembershipStateStore,
+        wall_now: u64,
+    ) -> Result<Self, RunnerError> {
+        let network_name = config.network.name.clone();
+        if config.identity()?.peer_id != identity.peer_id {
+            return Err(crate::pairing::PairingError::OfferConfigMismatch.into());
+        }
+        response.verify_for_offer_at(offer, identity, wall_now)?;
+        if response.payload.network_name != network_name {
+            return Err(crate::pairing::PairingError::OfferConfigMismatch.into());
+        }
+        let grant = response.payload.checkpoint.as_ref().ok_or_else(|| {
+            core_error(CheckpointError::Invalid(
+                "checkpoint enrollment grant required",
+            ))
+        })?;
+        let capability = grant
+            .validate_for(
+                &response.payload.inviter_peer,
+                &response.payload.inviter_public_key,
+                &identity.peer_id,
+                wall_now,
+            )
+            .map_err(crate::pairing::PairingError::from)?;
+        let credentials = CheckpointCredentials::new(
+            grant.anchor.clone(),
+            grant
+                .secret_bytes()
+                .map_err(crate::pairing::PairingError::from)?,
+        )?;
+        if config
+            .membership_key_bytes()?
+            .as_deref()
+            .is_some_and(|configured| configured != credentials.secret())
+        {
+            return Err(MembershipStateStoreError::CapabilityMismatch.into());
+        }
+        let previous = store.load_authority(
+            &network_name,
+            &identity.peer_id,
+            Some(credentials.anchor()),
+            Some(credentials.secret()),
+        )?;
+        let (seed, floor) = match previous {
+            Some(super::membership_store::checkpoint::PersistedAuthority::Legacy(_)) => {
+                return Err(core_error(CheckpointError::Invalid(
+                    "legacy authority requires explicit checkpoint migration",
+                )));
+            }
+            Some(super::membership_store::checkpoint::PersistedAuthority::Checkpoint(loaded)) => {
+                let floor = loaded
+                    .enrollment_floor
+                    .map_or(grant.minimum, |old| old.max(grant.minimum));
+                if loaded
+                    .retained
+                    .snapshot
+                    .payload
+                    .rank()
+                    .map_err(core_error)?
+                    >= floor
+                {
+                    // An old approval cannot reinstall a removed member or an old roster.
+                    return Self::restore(network_name, &identity.peer_id, *loaded);
+                }
+                (loaded.retained, floor)
+            }
+            None => {
+                let seed = CooperativeMembershipState::bootstrap_at(
+                    capability,
+                    identity.peer_id.clone(),
+                    vec![grant.inviter.clone(), grant.joiner.clone()],
+                    SnapshotPolicy::default(),
+                    wall_now,
+                )
+                .map_err(core_error)?
+                .retained();
+                (seed, grant.minimum)
+            }
+        };
+        store.save_pending_checkpoint_enrollment(
+            &network_name,
+            &identity.peer_id,
+            &credentials,
+            &seed,
+            floor,
+        )?;
+        Self::restore(
+            network_name,
+            &identity.peer_id,
+            LoadedCheckpointAuthority {
+                credentials,
+                retained: seed,
+                enrollment_floor: Some(floor),
+            },
+        )
+    }
+
     pub(crate) fn restore(
         network_name: String,
         local_peer: &str,
         loaded: LoadedCheckpointAuthority,
     ) -> Result<Self, RunnerError> {
         let credentials = loaded.credentials.clone();
-        let state = loaded.restore(local_peer)?;
+        let enrollment_floor = loaded.enrollment_floor;
+        let state = if enrollment_floor.is_some() {
+            CooperativeMembershipState::restore(
+                credentials.capability()?,
+                local_peer.to_owned(),
+                loaded.retained,
+            )
+            .map_err(core_error)?
+        } else {
+            loaded.restore(local_peer)?
+        };
         let transfer = CheckpointSync::new(
             local_peer
                 .parse()
@@ -116,6 +232,7 @@ impl CheckpointRuntime {
             mutation_requests: HashMap::new(),
             last_handoff: HandoffReport::default(),
             route_cleanup_pending: false,
+            enrollment_floor,
         })
     }
 
@@ -137,6 +254,16 @@ impl CheckpointRuntime {
     }
 
     pub(crate) fn extend_status_lines(&self, lines: &mut Vec<String>) {
+        lines.push(format!(
+            "checkpoint_enrollment_pending {}",
+            usize::from(self.enrollment_floor.is_some())
+        ));
+        if let Some(floor) = self.enrollment_floor {
+            lines.push(format!(
+                "checkpoint_enrollment_minimum_revision {}",
+                floor.authority_revision
+            ));
+        }
         lines.push(format!(
             "checkpoint_route_cleanup_pending {}",
             usize::from(self.route_cleanup_pending)
@@ -542,6 +669,14 @@ impl CheckpointRuntime {
         }
         let mut candidate = pending.candidate.clone();
         let selection = candidate.finish_resync(now, wall_now).map_err(core_error)?;
+        if let Some(floor) = self.enrollment_floor
+            && (!selection.observed_remote_offer
+                || candidate.snapshot().payload.rank().map_err(core_error)? < floor)
+        {
+            self.pending = None;
+            self.retire_resync(now);
+            return Ok(None);
+        }
         self.persist_then_install(candidate, store, forwarder, wall_now)?;
         self.pending = None;
         self.last_selection = Some(selection.clone());
@@ -922,6 +1057,7 @@ impl CheckpointRuntime {
             return Err(error.into());
         }
         self.state = candidate;
+        self.enrollment_floor = None;
         if self.handoff.as_ref().is_some_and(|handoff| {
             self.state
                 .snapshot()
@@ -940,6 +1076,16 @@ impl CheckpointRuntime {
         forwarder: &mut Forwarder,
         wall_now: u64,
     ) -> Result<(), RunnerError> {
+        if self.enrollment_floor.is_some_and(|floor| {
+            candidate
+                .snapshot()
+                .payload
+                .rank()
+                .is_ok_and(|rank| rank >= floor)
+        }) {
+            // A qualifying replacement is already visible on disk; retry it, not the seed.
+            self.enrollment_floor = None;
+        }
         self.state = CooperativeMembershipState::restore(
             self.credentials.capability()?,
             candidate.local_peer().to_owned(),
@@ -1094,7 +1240,7 @@ mod tests {
                 panic!("checkpoint authority")
             };
             let runtime =
-                CheckpointRuntime::restore("lab".into(), &self.local.peer_id, loaded).unwrap();
+                CheckpointRuntime::restore("lab".into(), &self.local.peer_id, *loaded).unwrap();
             let forwarder = Forwarder::from_checkpoint_config(
                 &self.config,
                 runtime.state(),
@@ -1152,7 +1298,7 @@ mod tests {
             panic!("survivor authority");
         };
         let mut runtime =
-            CheckpointRuntime::restore("lab".into(), &fixture.member.peer_id, loaded).unwrap();
+            CheckpointRuntime::restore("lab".into(), &fixture.member.peer_id, *loaded).unwrap();
         let mut config = fixture.config.clone();
         config.network.local_peer = fixture.member.peer_id.clone();
         config.network.private_key = Some(fixture.member.private_key.clone());
@@ -1166,6 +1312,501 @@ mod tests {
             .finish_due(&store, &mut forwarder, now + RESYNC_WINDOW, WALL_NOW)
             .unwrap();
         (runtime, forwarder, store)
+    }
+
+    fn checkpoint_pairing(
+        fixture: &Fixture,
+    ) -> (PairingOffer, PairingResponse, CooperativeMembershipState) {
+        use crate::pairing::{
+            PairingCheckpointGrant, PairingOfferOptions, PairingResponseOptions,
+            build_checkpoint_pairing_response_at, export_code_pairing_offer_at,
+        };
+        let mut config = fixture.config.clone();
+        config.network.local_peer = fixture.member.peer_id.clone();
+        config.network.private_key = Some(fixture.member.private_key.clone());
+        config.peers.clear();
+        let mut state = CooperativeMembershipState::bootstrap_at(
+            fixture.credentials.capability().unwrap(),
+            fixture.member.peer_id.clone(),
+            vec![CheckpointMember::new(&fixture.member).unwrap()],
+            SnapshotPolicy::default(),
+            WALL_NOW,
+        )
+        .unwrap();
+        let admission = state
+            .sign_mutation_at(
+                &fixture.member,
+                MembershipChange::UpsertMember(CheckpointMember::new(&fixture.local).unwrap()),
+                WALL_NOW,
+            )
+            .unwrap();
+        state.apply_mutation_at(&admission, WALL_NOW).unwrap();
+        let grant = PairingCheckpointGrant::from_state_at(
+            &state,
+            fixture.credentials.secret(),
+            &fixture.local.peer_id,
+            WALL_NOW,
+        )
+        .unwrap();
+        let offer = export_code_pairing_offer_at(&config, PairingOfferOptions::default(), WALL_NOW)
+            .unwrap();
+        let response = build_checkpoint_pairing_response_at(
+            &config,
+            &offer,
+            PairingResponseOptions {
+                joiner_peer: fixture.local.peer_id.clone(),
+                assigned_vpn_ip: None,
+                membership_key: None,
+                member_records: vec![],
+                expires_in_seconds: 300,
+            },
+            grant,
+            WALL_NOW,
+        )
+        .unwrap();
+        (offer, response, state)
+    }
+
+    #[test]
+    fn signed_enrollment_remains_gated_without_a_qualifying_offer_across_restart() {
+        let fixture = Fixture::new("signed-enrollment");
+        let (offer, response, selected) = checkpoint_pairing(&fixture);
+        fs::remove_file(fixture.path()).unwrap();
+        let runtime = CheckpointRuntime::stage_pairing_enrollment(
+            &fixture.config,
+            &fixture.local,
+            &offer,
+            &response,
+            &fixture.store,
+            WALL_NOW,
+        )
+        .unwrap();
+        assert_eq!(
+            runtime.enrollment_floor,
+            Some(selected.snapshot().payload.rank().unwrap())
+        );
+        assert_eq!(
+            runtime.state().sync_state(),
+            MembershipSyncState::ResyncRequired
+        );
+        let before = fs::read(fixture.path()).unwrap();
+        for _ in 0..3 {
+            let (mut runtime, mut forwarder) = fixture.restored();
+            let peer = fixture.member.peer_id.parse().unwrap();
+            assert!(!forwarder.is_configured_transport_peer(peer));
+            assert!(
+                runtime
+                    .apply_change(
+                        MembershipChange::RemoveMember(fixture.member.peer_id.clone()),
+                        &fixture.local,
+                        &fixture.store,
+                        &mut forwarder,
+                        WALL_NOW
+                    )
+                    .is_err()
+            );
+            let now = Instant::now();
+            runtime.begin_resync(now).unwrap();
+            assert!(
+                runtime
+                    .state()
+                    .make_offer_at(
+                        runtime.challenge().unwrap().clone(),
+                        &fixture.local,
+                        WALL_NOW
+                    )
+                    .is_err()
+            );
+            assert!(
+                runtime
+                    .finish_due(
+                        &fixture.store,
+                        &mut forwarder,
+                        now + RESYNC_WINDOW,
+                        WALL_NOW
+                    )
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(
+                runtime.state().sync_state(),
+                MembershipSyncState::ResyncRequired
+            );
+            assert!(!forwarder.is_configured_transport_peer(peer));
+            assert!(runtime.requests.is_empty());
+            assert_eq!(runtime.transfer.stats().buffered_bytes, 0);
+            let mut lines = Vec::new();
+            runtime.extend_status_lines(&mut lines);
+            assert!(lines.contains(&"checkpoint_enrollment_pending 1".to_owned()));
+            assert!(lines.contains(&"checkpoint_enrollment_minimum_revision 1".to_owned()));
+            assert_eq!(fs::read(fixture.path()).unwrap(), before);
+        }
+    }
+
+    #[test]
+    fn enrollment_rejects_signed_but_insufficient_snapshot_then_accepts_current_state() {
+        let fixture = Fixture::new("enrollment-stale-offer");
+        let (offer, response, selected) = checkpoint_pairing(&fixture);
+        let mut runtime = CheckpointRuntime::stage_pairing_enrollment(
+            &fixture.config,
+            &fixture.local,
+            &offer,
+            &response,
+            &fixture.store,
+            WALL_NOW,
+        )
+        .unwrap();
+        let mut forwarder = Forwarder::from_checkpoint_config(
+            &fixture.config,
+            runtime.state(),
+            runtime.anchor(),
+            WALL_NOW,
+        )
+        .unwrap();
+        let mut stale = CooperativeMembershipState::restore(
+            fixture.credentials.capability().unwrap(),
+            fixture.member.peer_id.clone(),
+            runtime.state().retained(),
+        )
+        .unwrap();
+        let stale_round = Instant::now();
+        stale.begin_resync(stale_round, RESYNC_WINDOW).unwrap();
+        stale
+            .finish_resync(stale_round + RESYNC_WINDOW, WALL_NOW)
+            .unwrap();
+        let before = fs::read(fixture.path()).unwrap();
+        let now = Instant::now();
+        runtime.begin_resync(now).unwrap();
+        let stale_offer = stale
+            .make_offer_at(
+                runtime.challenge().unwrap().clone(),
+                &fixture.member,
+                WALL_NOW,
+            )
+            .unwrap();
+        runtime
+            .collect_offer(&stale_offer, fixture.member.peer_id.parse().unwrap(), now)
+            .unwrap();
+        assert!(
+            runtime
+                .finish_due(
+                    &fixture.store,
+                    &mut forwarder,
+                    now + RESYNC_WINDOW,
+                    WALL_NOW
+                )
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(fs::read(fixture.path()).unwrap(), before);
+        assert!(runtime.enrollment_floor.is_some());
+        assert_eq!(
+            runtime.state().sync_state(),
+            MembershipSyncState::ResyncRequired
+        );
+        let later = now + Duration::from_secs(60);
+        runtime.begin_resync(later).unwrap();
+        let current = selected
+            .make_offer_at(
+                runtime.challenge().unwrap().clone(),
+                &fixture.member,
+                WALL_NOW,
+            )
+            .unwrap();
+        runtime
+            .collect_offer(&current, fixture.member.peer_id.parse().unwrap(), later)
+            .unwrap();
+        let selection = runtime
+            .finish_due(
+                &fixture.store,
+                &mut forwarder,
+                later + RESYNC_WINDOW,
+                WALL_NOW,
+            )
+            .unwrap()
+            .unwrap();
+        assert!(selection.observed_remote_offer);
+        assert_eq!(runtime.enrollment_floor, None);
+        assert!(forwarder.is_configured_transport_peer(fixture.member.peer_id.parse().unwrap()));
+        assert_eq!(fixture.restored().0.enrollment_floor, None);
+    }
+
+    #[test]
+    fn enrollment_validates_signature_scope_and_pins_before_writing() {
+        let fixture = Fixture::new("enrollment-validation");
+        let (offer, response, _) = checkpoint_pairing(&fixture);
+        let before = fs::read(fixture.path()).unwrap();
+        let mut tampered = response.clone();
+        tampered
+            .payload
+            .checkpoint
+            .as_mut()
+            .unwrap()
+            .minimum
+            .authority_revision += 1;
+        assert!(
+            CheckpointRuntime::stage_pairing_enrollment(
+                &fixture.config,
+                &fixture.local,
+                &offer,
+                &tampered,
+                &fixture.store,
+                WALL_NOW
+            )
+            .is_err()
+        );
+        assert!(
+            CheckpointRuntime::stage_pairing_enrollment(
+                &crate::config::Config {
+                    network: crate::config::NetworkConfig {
+                        name: "other".into(),
+                        ..fixture.config.network.clone()
+                    },
+                    ..fixture.config.clone()
+                },
+                &fixture.local,
+                &offer,
+                &response,
+                &fixture.store,
+                WALL_NOW
+            )
+            .is_err()
+        );
+        assert!(
+            CheckpointRuntime::stage_pairing_enrollment(
+                &fixture.config,
+                &fixture.member,
+                &offer,
+                &response,
+                &fixture.store,
+                WALL_NOW
+            )
+            .is_err()
+        );
+        assert!(
+            CheckpointRuntime::stage_pairing_enrollment(
+                &fixture.config,
+                &fixture.local,
+                &offer,
+                &response,
+                &fixture.store,
+                WALL_NOW + 301
+            )
+            .is_err()
+        );
+        assert_eq!(fs::read(fixture.path()).unwrap(), before);
+        let mut foreign = Fixture::new("enrollment-foreign-anchor");
+        foreign.credentials =
+            CheckpointCredentials::new(NetworkAnchor::new([46; 32]).unwrap(), vec![90; 32])
+                .unwrap();
+        let (foreign_offer, foreign_response, _) = checkpoint_pairing(&foreign);
+        assert!(
+            CheckpointRuntime::stage_pairing_enrollment(
+                &foreign.config,
+                &foreign.local,
+                &foreign_offer,
+                &foreign_response,
+                &foreign.store,
+                WALL_NOW
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn enrollment_cannot_replace_legacy_authority_or_a_newer_pending_floor() {
+        let fixture = Fixture::new("enrollment-preserve");
+        let (offer, response, _) = checkpoint_pairing(&fixture);
+        let high_floor = SnapshotRank {
+            authority_revision: 10,
+            ..response.payload.checkpoint.as_ref().unwrap().minimum
+        };
+        fixture
+            .store
+            .save_pending_checkpoint_enrollment(
+                "lab",
+                &fixture.local.peer_id,
+                &fixture.credentials,
+                &fixture.state.retained(),
+                high_floor,
+            )
+            .unwrap();
+        let runtime = CheckpointRuntime::stage_pairing_enrollment(
+            &fixture.config,
+            &fixture.local,
+            &offer,
+            &response,
+            &fixture.store,
+            WALL_NOW,
+        )
+        .unwrap();
+        assert_eq!(runtime.enrollment_floor, Some(high_floor));
+        assert_eq!(fixture.restored().0.enrollment_floor, Some(high_floor));
+        let legacy = serde_json::to_vec(&serde_json::json!({
+            "version": 2, "network_name": "lab", "local_peer": fixture.local.peer_id,
+            "records": [], "hostname_records": [],
+        }))
+        .unwrap();
+        fs::write(fixture.path(), &legacy).unwrap();
+        assert!(
+            CheckpointRuntime::stage_pairing_enrollment(
+                &fixture.config,
+                &fixture.local,
+                &offer,
+                &response,
+                &fixture.store,
+                WALL_NOW
+            )
+            .is_err()
+        );
+        assert_eq!(fs::read(fixture.path()).unwrap(), legacy);
+    }
+
+    #[test]
+    fn fresh_enrollment_cannot_replace_an_explicit_configured_secret() {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+
+        let fixture = Fixture::new("enrollment-configured-secret");
+        let (offer, response, _) = checkpoint_pairing(&fixture);
+        fs::remove_file(fixture.path()).unwrap();
+        let mut config = fixture.config.clone();
+        config.network.membership_key = Some(STANDARD.encode([90; 32]));
+        assert!(matches!(
+            CheckpointRuntime::stage_pairing_enrollment(
+                &config,
+                &fixture.local,
+                &offer,
+                &response,
+                &fixture.store,
+                WALL_NOW
+            ),
+            Err(RunnerError::MembershipStateStore(
+                MembershipStateStoreError::CapabilityMismatch
+            ))
+        ));
+        assert!(!fixture.path().exists());
+        config.network.membership_key = Some(STANDARD.encode(fixture.credentials.secret()));
+        let staged = CheckpointRuntime::stage_pairing_enrollment(
+            &config,
+            &fixture.local,
+            &offer,
+            &response,
+            &fixture.store,
+            WALL_NOW,
+        )
+        .unwrap();
+        assert!(staged.enrollment_floor.is_some());
+        assert_eq!(
+            staged.state().sync_state(),
+            MembershipSyncState::ResyncRequired
+        );
+    }
+
+    #[test]
+    fn replayed_approval_preserves_newer_removal_instead_of_reinstalling_joiner() {
+        let fixture = Fixture::new("enrollment-replay");
+        let (offer, response, mut selected) = checkpoint_pairing(&fixture);
+        let remove = selected
+            .sign_mutation_at(
+                &fixture.member,
+                MembershipChange::RemoveMember(fixture.local.peer_id.clone()),
+                WALL_NOW,
+            )
+            .unwrap();
+        selected.apply_mutation_at(&remove, WALL_NOW).unwrap();
+        fixture
+            .store
+            .save_checkpoint(
+                "lab",
+                &fixture.local.peer_id,
+                &fixture.credentials,
+                &selected.retained(),
+            )
+            .unwrap();
+        let before = fs::read(fixture.path()).unwrap();
+        let runtime = CheckpointRuntime::stage_pairing_enrollment(
+            &fixture.config,
+            &fixture.local,
+            &offer,
+            &response,
+            &fixture.store,
+            WALL_NOW,
+        )
+        .unwrap();
+        assert!(runtime.enrollment_floor.is_none());
+        assert!(
+            runtime
+                .state()
+                .snapshot()
+                .payload
+                .member(&fixture.local.peer_id)
+                .is_none()
+        );
+        assert_eq!(fs::read(fixture.path()).unwrap(), before);
+    }
+
+    #[test]
+    fn qualifying_visible_replacement_retries_gated_without_fetching_enrollment_again() {
+        let fixture = Fixture::new("enrollment-retry");
+        let (offer, response, selected) = checkpoint_pairing(&fixture);
+        let mut runtime = CheckpointRuntime::stage_pairing_enrollment(
+            &fixture.config,
+            &fixture.local,
+            &offer,
+            &response,
+            &fixture.store,
+            WALL_NOW,
+        )
+        .unwrap();
+        let mut forwarder = Forwarder::from_checkpoint_config(
+            &fixture.config,
+            runtime.state(),
+            runtime.anchor(),
+            WALL_NOW,
+        )
+        .unwrap();
+        fixture
+            .store
+            .save_checkpoint(
+                "lab",
+                &fixture.local.peer_id,
+                &fixture.credentials,
+                &selected.retained(),
+            )
+            .unwrap();
+        let candidate = CooperativeMembershipState::restore(
+            fixture.credentials.capability().unwrap(),
+            fixture.local.peer_id.clone(),
+            selected.retained(),
+        )
+        .unwrap();
+        runtime
+            .install_gated(candidate, &mut forwarder, WALL_NOW)
+            .unwrap();
+        assert_eq!(runtime.enrollment_floor, None);
+        assert_eq!(
+            runtime.state().sync_state(),
+            MembershipSyncState::ResyncRequired
+        );
+        let now = Instant::now();
+        runtime.begin_resync(now).unwrap();
+        runtime
+            .finish_due(
+                &fixture.store,
+                &mut forwarder,
+                now + RESYNC_WINDOW,
+                WALL_NOW,
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            runtime.state().sync_state(),
+            MembershipSyncState::Participating
+        );
+        assert_eq!(
+            runtime.state().snapshot().payload,
+            selected.snapshot().payload
+        );
     }
 
     #[test]
@@ -1847,7 +2488,7 @@ mod tests {
             panic!("remote authority")
         };
         let mut remote =
-            CheckpointRuntime::restore("lab".into(), &publisher.peer_id, loaded).unwrap();
+            CheckpointRuntime::restore("lab".into(), &publisher.peer_id, *loaded).unwrap();
         let mut remote_config = fixture.config.clone();
         remote_config.network.local_peer = publisher.peer_id.clone();
         remote_config.network.private_key = Some(publisher.private_key.clone());
@@ -1979,6 +2620,90 @@ mod tests {
             fixture.restored().0.state().snapshot().payload,
             local.state().snapshot().payload
         );
+    }
+
+    #[tokio::test]
+    async fn signed_enrollment_fetches_large_roster_through_existing_paged_transport() {
+        let fixture = Fixture::new("enrollment-paged-roster");
+        let (offer, response, mut selected) = checkpoint_pairing(&fixture);
+        CheckpointRuntime::stage_pairing_enrollment(
+            &fixture.config,
+            &fixture.local,
+            &offer,
+            &response,
+            &fixture.store,
+            WALL_NOW,
+        )
+        .unwrap();
+        for _ in 0..100 {
+            let member = NodeIdentity::generate_ed25519().unwrap();
+            let admission = selected
+                .sign_mutation_at(
+                    &fixture.member,
+                    MembershipChange::UpsertMember(CheckpointMember::new(&member).unwrap()),
+                    WALL_NOW,
+                )
+                .unwrap();
+            selected.apply_mutation_at(&admission, WALL_NOW).unwrap();
+        }
+        assert!(
+            serde_json::to_vec(&selected.retained()).unwrap().len()
+                > crate::pairing::MAX_PAIRING_MESSAGE_LEN
+        );
+        assert!(
+            serde_json::to_vec(&response).unwrap().len() < crate::pairing::MAX_PAIRING_MESSAGE_LEN
+        );
+        let (local, forwarder, selection) =
+            catch_up_over_tcp(&fixture, &fixture.member, &selected).await;
+        assert_eq!(selection.sync_state, MembershipSyncState::Participating);
+        assert_eq!(local.enrollment_floor, None);
+        assert_eq!(local.state().snapshot().payload.members.len(), 102);
+        assert!(forwarder.is_configured_transport_peer(fixture.member.peer_id.parse().unwrap()));
+        assert_eq!(fixture.restored().0.enrollment_floor, None);
+    }
+
+    #[tokio::test]
+    async fn revoked_joiner_fetches_current_state_without_using_old_pairing_approval() {
+        let fixture = Fixture::new("enrollment-removed-joiner");
+        let (offer, response, mut selected) = checkpoint_pairing(&fixture);
+        CheckpointRuntime::stage_pairing_enrollment(
+            &fixture.config,
+            &fixture.local,
+            &offer,
+            &response,
+            &fixture.store,
+            WALL_NOW,
+        )
+        .unwrap();
+        let remove = selected
+            .sign_mutation_at(
+                &fixture.member,
+                MembershipChange::RemoveMember(fixture.local.peer_id.clone()),
+                WALL_NOW,
+            )
+            .unwrap();
+        selected.apply_mutation_at(&remove, WALL_NOW).unwrap();
+        let (local, forwarder, selection) =
+            catch_up_over_tcp(&fixture, &fixture.member, &selected).await;
+        assert_eq!(selection.sync_state, MembershipSyncState::Excluded);
+        assert_eq!(local.enrollment_floor, None);
+        assert!(!forwarder.is_configured_transport_peer(fixture.member.peer_id.parse().unwrap()));
+        assert!(
+            local
+                .state()
+                .snapshot()
+                .payload
+                .member(&fixture.local.peer_id)
+                .is_none()
+        );
+        let retained: serde_json::Value =
+            serde_json::from_slice(&fs::read(fixture.path()).unwrap()).unwrap();
+        assert!(
+            !retained["retained"]
+                .to_string()
+                .contains(&fixture.local.peer_id)
+        );
+        assert!(retained.get("enrollment_floor").is_none());
     }
 
     #[tokio::test]

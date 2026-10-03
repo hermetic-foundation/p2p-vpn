@@ -3139,7 +3139,7 @@ fn load_checkpoint_runtime(
         return Ok(None);
     };
     let mut runtime =
-        CheckpointRuntime::restore(forwarder.config().network.name.clone(), local_peer, loaded)?;
+        CheckpointRuntime::restore(forwarder.config().network.name.clone(), local_peer, *loaded)?;
     let replacement = Forwarder::from_checkpoint_config(
         forwarder.config(),
         runtime.state(),
