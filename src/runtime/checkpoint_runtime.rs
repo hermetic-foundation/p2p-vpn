@@ -4741,7 +4741,13 @@ mod tests {
                 .enumerate()
                 .filter(|(peer_index, _)| *peer_index != index)
                 .map(|(peer_index, peer)| {
-                    serde_json::json!({"id": peer.peer_id, "addresses": [addresses[peer_index]]})
+                    // Dial each undirected edge once; both ends still authorize the full roster.
+                    let addresses = if index < peer_index {
+                        vec![addresses[peer_index].clone()]
+                    } else {
+                        vec![]
+                    };
+                    serde_json::json!({"id": peer.peer_id, "addresses": addresses})
                 })
                 .collect::<Vec<_>>();
             let mut config: Config = serde_json::from_value(serde_json::json!({
@@ -4810,12 +4816,14 @@ mod tests {
                             .iter()
                             .filter(|line| {
                                 line.starts_with("checkpoint_sync_state ")
+                                    || line.starts_with("connected_overlay_peers ")
                                     || line.starts_with("peer path state: ")
                             })
                             .cloned()
                             .collect::<Vec<_>>(),
                     );
                     ready &= state.contains(&"checkpoint_sync_state participating".to_owned());
+                    ready &= state.contains(&"connected_overlay_peers 2".to_owned());
                     for (peer_index, peer) in identities.iter().enumerate() {
                         if peer_index == index {
                             continue;
@@ -4848,6 +4856,10 @@ mod tests {
             loop {
                 let state = controls[0].state().await.unwrap();
                 if state.contains(&"checkpoint_handoff_active 0".to_owned()) {
+                    assert!(
+                        state.contains(&"checkpoint_handoff_recipients 2".to_owned()),
+                        "{state:?}"
+                    );
                     assert!(
                         state.contains(&"checkpoint_handoff_acknowledged 2".to_owned()),
                         "{state:?}"

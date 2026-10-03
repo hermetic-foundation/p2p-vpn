@@ -41,7 +41,7 @@ resync. RPC and TCP/Noise regressions pass; this is not deployed-network evidenc
 | Runtime paths | `df78cfb3` erases unauthorized stream/datagram/relay path history and pending probes. | Other retained device state must follow checkpoint installation. |
 | Forwarding projection | Seal static fallback; restore signed local aliases after restart; strip ungranted routes/aliases; preserve signed metrics and route policy. | Full discovery/cache/artifact cleanup and kernel integration remain. |
 | Snapshot/mutation transfer | 21 snapshot and 19 mutation tests cover authenticated TCP/Noise, scope, replay, deadlines, correlated replies, and frame/session bounds. | Ordinary joiner activation remains. |
-| Daemon coordinator | 29 tests cover restart, resync, removal, DNS, catch-up, handoff, enrollment gates, ACK/Identify ownership, and retained-state erasure. | Ordinary networks lack automatic provisioning/migration; departure intermittency remains. |
+| Daemon coordinator | 37 tests cover restart, resync, solo APIs, removal, DNS, catch-up, handoff, enrollment gates, ACK/Identify ownership, and retained-state erasure. | Ordinary networks lack automatic provisioning/migration; departure intermittency remains. |
 | Pairing enrollment | Signed grants, protected minimum-rank staging, restart, replay, and a 102-member TCP/Noise paged fetch pass. | Inviter RPC is wired; joiner activation, formation, migration, and export/artifacts remain. |
 | Inviter pairing RPC | 11 tests cover signed grants, TCP/Noise delivery, retry, resync gates, cancellation ownership, and fail-closed artifacts. | No complete joiner or deployed pairing workflow yet. |
 | Creator departure | Three real daemon loops deliver removal to two survivors; later survivor governance and injected route-cleanup retry pass. | Packet/route adapters are fixtures, not real TUN or deployed-node evidence. |
@@ -75,11 +75,24 @@ collected higher offer, extending the deadline, or bypassing startup gates.
 | --- | --- |
 | Earlier full-suite run: no ACKs after all retries | Cause remains unproven; a passing isolated replay does not resolve it. |
 | Latest focused run: zero recipients, attempts, ACKs, and failures | Departure occurred without captured connections; investigate transport readiness. |
-| Full-suite reruns pass | Useful evidence, not proof that either intermittent case is resolved. |
+| Formation/projection validation: one recipient and one ACK | Only one connection was captured; this does not establish an ACK-delivery failure or prove stale path counters. |
+| Full-suite reruns pass | Useful evidence, not proof that the historical failures are resolved. |
 
 The connected-only test must establish real transport readiness before expecting
 two deliveries. Keep the two-ACK requirement; do not weaken it to accept an empty
 recipient set or infer connectivity from membership participation alone.
+
+The fixture now initiates each mesh edge once and checks live eligible-peer count
+in addition to path readiness. It requires two captured recipients and two ACKs;
+this test change does not claim to fix production connection churn or lost ACKs.
+
+`connected_overlay_peers` in daemon status/state uses the same live swarm and
+authorization filter as departure recipient capture. Sequential readiness samples
+are not an atomic guarantee that a later command still has every connection.
+
+The updated fixture passes the full workspace run and three additional isolated
+runs. Packet and route devices remain fixtures; no production dial-churn or
+deployed checkpoint-network claim follows from those passes.
 
 ### Cancellation Evidence
 

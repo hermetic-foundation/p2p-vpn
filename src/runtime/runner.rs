@@ -2590,6 +2590,7 @@ where
                 );
                 let control_context = RuntimeControlContext {
                     checkpoint: checkpoint_runtime.as_ref(),
+                    connected_overlay_peers: node.swarm.connected_peers().filter(|peer| forwarder.is_configured_transport_peer(**peer)).count(),
                     packet_plane_retiring_sessions: packet_plane.retiring_session_count(),
                     kademlia: diagnostics.then(|| super::kademlia_resources::KademliaResources::capture(node.swarm.behaviour())),
                     application_recovery: diagnostics.then(|| ApplicationRecoverySnapshot::capture(
@@ -5955,6 +5956,7 @@ fn handle_runtime_network_change(
 }
 
 struct RuntimeControlContext<'a> {
+    connected_overlay_peers: usize,
     checkpoint: Option<&'a CheckpointRuntime>,
     packet_plane_retiring_sessions: usize,
     kademlia: Option<super::kademlia_resources::KademliaResources>,
@@ -6008,6 +6010,10 @@ fn handle_runtime_control_request(
             if let Some(checkpoint) = context.checkpoint {
                 checkpoint.extend_status_lines(&mut lines);
             }
+            lines.push(format!(
+                "connected_overlay_peers {}",
+                context.connected_overlay_peers
+            ));
             if respond_to.send(lines).is_err() {
                 eprintln!("control socket status response receiver dropped");
             }
@@ -6044,6 +6050,10 @@ fn handle_runtime_control_request(
             if let Some(checkpoint) = context.checkpoint {
                 checkpoint.extend_status_lines(&mut lines);
             }
+            lines.push(format!(
+                "connected_overlay_peers {}",
+                context.connected_overlay_peers
+            ));
             if respond_to.send(lines).is_err() {
                 eprintln!("control socket state response receiver dropped");
             }
@@ -29922,6 +29932,7 @@ mod tests {
             RuntimeControlRequest::Shutdown { respond_to },
             &RuntimeControlContext {
                 checkpoint: None,
+                connected_overlay_peers: 0,
                 packet_plane_retiring_sessions: 0,
                 kademlia: None,
                 application_recovery: None,
@@ -29983,6 +29994,7 @@ mod tests {
             application_recovery.extend_lines(&mut expected_application_lines);
             let context = RuntimeControlContext {
                 checkpoint: None,
+                connected_overlay_peers: 2,
                 packet_plane_retiring_sessions: 1,
                 kademlia: Some(
                     super::super::kademlia_resources::KademliaResources::capture(
@@ -30018,6 +30030,7 @@ mod tests {
                 assert_eq!(handle_runtime_control_request(request, &context), None);
                 let lines = response.try_recv().unwrap();
                 assert!(lines.contains(&"packet_plane_retiring_sessions 1".to_owned()));
+                assert!(lines.contains(&"connected_overlay_peers 2".to_owned()));
                 assert!(lines.iter().any(|line| !line.starts_with("kad_")));
                 let application_lines = lines
                     .iter()
@@ -30190,6 +30203,7 @@ mod tests {
             RuntimeControlRequest::NetworkPeers { respond_to },
             &RuntimeControlContext {
                 checkpoint: None,
+                connected_overlay_peers: 0,
                 packet_plane_retiring_sessions: 0,
                 kademlia: None,
                 application_recovery: None,
@@ -30365,6 +30379,7 @@ mod tests {
             RuntimeControlRequest::PeerSnapshot { respond_to },
             &RuntimeControlContext {
                 checkpoint: None,
+                connected_overlay_peers: 0,
                 packet_plane_retiring_sessions: 0,
                 kademlia: None,
                 application_recovery: None,

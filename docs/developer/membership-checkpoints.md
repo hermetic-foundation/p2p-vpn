@@ -154,6 +154,10 @@ The control API reports local durable application, not network-wide delivery.
 An isolated creator leaving cannot guarantee that an offline survivor has learned
 the removal; cooperative reconciliation may discard a losing branch's decision.
 
+Status/state expose `connected_overlay_peers` from live eligible swarm connections,
+not cached path counters. This is a diagnostic snapshot, not a guarantee of future
+handoff recipients or successful network-wide delivery.
+
 ### Reply Delivery
 
 Inbound ACK ownership binds request ID, authenticated peer, and connection ID.
