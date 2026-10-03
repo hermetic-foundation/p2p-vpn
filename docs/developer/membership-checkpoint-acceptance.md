@@ -245,6 +245,31 @@ before it can support a completion claim.
 
 ## Remaining Integration
 
+### Cleanup Ownership
+
+A capacity limit is not identity erasure. Checkpoint cleanup must remove obsolete
+device references from each owner, not just hide a peer-list row or replace the
+membership file.
+
+| Owner | Current Boundary | Remaining Check |
+| --- | --- | --- |
+| Selected snapshot and names | Retain the current roster and compatible claims, without inviter history or tombstones. | Exercise complete normal pairing, migration, restart, and churn. |
+| Forwarding config, queues, paths, and sessions | Closed checkpoint namespace and authorization pruning are covered. | Combine these effects with one ordinary membership change. |
+| Static dial references, address protection, and both DHTs | Address-retirement API is tested; runner integration remains pending. | Preserve returning roster members, public infrastructure, and bounded control-only owners. |
+| Recovery queries, dial backoff, and LAN-first state | Query authorization pruning exists; broader address retirement is being integrated. | Prove absent-device state disappears without resetting unrelated recovery. |
+| Connection, request, and rate-limit owners | Existing disconnect, completion, and timeout cleanup applies. | Verify checkpoint removal and pending-reply expiry across all owners. |
+| Pairing transcripts, receipts, and completion state | Counts are bounded, but receipt retention does not prove device erasure. | Compact obsolete identity-bearing artifacts while preserving pending transaction recovery. |
+| Android profiles and presentation | Revoked rows are filtered; checkpoint enrollment and sync/loss UI remain incomplete. | Verify protected restart, profile cleanup, and discarded-change presentation. |
+
+Temporary catch-up, reply, and departure ownership is not permanent revocation
+history. Its deadline and scope must be bounded, and it must not authorize packets.
+
+External Nix/Git configuration and system journals are separate owners. Runtime
+compaction must not silently edit those files or delete unrelated system logs;
+stale declarative peers must still remain unauthorized.
+
+### Deliverables
+
 | Workstream | Required Deliverables | Status |
 | --- | --- | --- |
 | Cooperative core | Singleton snapshots, canonical rank, scoped authentication, resync gate, active-only authorization, bounded churn tests. | Implemented; 30 core tests pass. |
