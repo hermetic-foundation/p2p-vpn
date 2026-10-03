@@ -357,7 +357,8 @@ final class NetworkDetailScreen {
                         activity.getString(
                                 R.string.peer_membership_state,
                                 membershipStateName(membership.state)));
-        if (membership.state != PeerSnapshot.MembershipState.CONFIGURED) {
+        if (membership.state != PeerSnapshot.MembershipState.CONFIGURED
+                && membership.hasInvitationProvenance()) {
             details.append("\n")
                     .append(
                             activity.getString(

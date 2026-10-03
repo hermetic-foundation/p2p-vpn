@@ -68,7 +68,7 @@ partial inventory when one instance is unavailable.
 | `HOSTNAMES` | Authenticated short names; `-` when unnamed |
 | `IPV4` | Identity-derived and explicit IPv4 host addresses |
 | `STATE` | Signed-ledger state, or `configured` for a static-only peer |
-| `INVITED_BY` | First admission inviter hostname or peer ID; `genesis` for a root |
+| `INVITED_BY` | Known first inviter; `genesis` for a recorded root, `-` when provenance is unavailable |
 | `LOCAL` | Whether the row is local to that instance |
 | `PEER_ID` | libp2p public identity |
 

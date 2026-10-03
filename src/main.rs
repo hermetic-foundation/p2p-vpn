@@ -8514,7 +8514,15 @@ fn network_peer_inviter(peer: &NetworkPeer) -> String {
                 .as_ref()
                 .or(membership.effective_inviter.as_ref())
                 .map_or_else(
-                    || "genesis".to_owned(),
+                    || {
+                        if membership.admitted_at_unix_seconds.is_some()
+                            || membership.original_admitted_at_unix_seconds.is_some()
+                        {
+                            "genesis".to_owned()
+                        } else {
+                            "-".to_owned()
+                        }
+                    },
                     |inviter| {
                         inviter
                             .hostname
@@ -11469,6 +11477,34 @@ mod tests {
             output["peers"][0]["membership"]["effective_inviter"]["peer_id"],
             "12D3KooWInviter"
         );
+    }
+
+    #[test]
+    fn checkpoint_peer_text_does_not_invent_genesis_when_provenance_is_compacted() {
+        let mut peer = NetworkPeer {
+            peer_id: "12D3KooWCheckpointMember".to_owned(),
+            hostnames: vec!["survivor".to_owned()],
+            ipv4: vec!["100.64.0.1".parse().unwrap()],
+            ipv6: Vec::new(),
+            local: false,
+            membership: Some(p2p_vpn::network_peer::NetworkPeerMembership {
+                state: p2p_vpn::network_peer::NetworkPeerMembershipState::Active,
+                effective_inviter: None,
+                original_inviter: None,
+                admitted_at_unix_seconds: None,
+                original_admitted_at_unix_seconds: None,
+                state_changed_at_unix_seconds: None,
+            }),
+        };
+        assert_eq!(network_peer_inviter(&peer), "-");
+        let peers = NetworkPeerList {
+            schema_version: 1,
+            network: "lab".to_owned(),
+            peers: vec![peer.clone()],
+        };
+        assert!(!network_peer_list_text(&peers).contains("genesis"));
+        peer.membership.as_mut().unwrap().admitted_at_unix_seconds = Some(1_000);
+        assert_eq!(network_peer_inviter(&peer), "genesis");
     }
 
     #[tokio::test]

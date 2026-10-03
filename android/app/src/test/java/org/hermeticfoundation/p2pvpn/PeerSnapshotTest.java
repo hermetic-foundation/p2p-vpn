@@ -134,6 +134,26 @@ public final class PeerSnapshotTest {
     }
 
     @Test
+    public void compactedMembershipDoesNotInventAnInvitationHistory() throws Exception {
+        JSONObject peer = withMembershipState(disconnectedPeer("survivor", "device"), "active");
+        PeerSnapshot.Membership compacted =
+                parse(snapshot(new JSONArray().put(peer), 1, 1, false)).peers.get(0).membership.get();
+        assertFalse(compacted.hasInvitationProvenance());
+
+        peer.getJSONObject("membership").put("admitted_at_unix_seconds", 1_000L);
+        PeerSnapshot.Membership legacyGenesis =
+                parse(snapshot(new JSONArray().put(peer), 1, 1, false)).peers.get(0).membership.get();
+        assertTrue(legacyGenesis.hasInvitationProvenance());
+
+        peer.getJSONObject("membership").remove("admitted_at_unix_seconds");
+        peer.getJSONObject("membership")
+                .put("effective_inviter", new JSONObject().put("peer_id", "knownInviter"));
+        PeerSnapshot.Membership legacyInvite =
+                parse(snapshot(new JSONArray().put(peer), 1, 1, false)).peers.get(0).membership.get();
+        assertTrue(legacyInvite.hasInvitationProvenance());
+    }
+
+    @Test
     public void acceptsMaximumPeerAndPerPeerCollectionBounds() throws Exception {
         JSONArray peers = new JSONArray();
         for (int index = 0; index < PeerSnapshot.MAX_PEERS; index++) {

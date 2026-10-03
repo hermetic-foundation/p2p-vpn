@@ -383,6 +383,13 @@ final class PeerSnapshot {
                     parseOptionalLong(value, "state_changed_at_unix_seconds"));
         }
 
+        boolean hasInvitationProvenance() {
+            return effectiveInviter.isPresent()
+                    || originalInviter.isPresent()
+                    || admittedAtUnixSeconds.isPresent()
+                    || originalAdmittedAtUnixSeconds.isPresent();
+        }
+
         private static Inviter parseOptionalInviter(JSONObject value, String key)
                 throws P2pVpnException {
             if (!value.has(key) || value.isNull(key)) {
