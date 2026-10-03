@@ -18,9 +18,11 @@ activation remain incomplete; current deployments still use the legacy ledger.
 | Peer inventory | `25243a3c` omits revoked rows from shared Linux/Android snapshots, including stale static metadata. | Existing legacy networks still retain enforcement history. |
 | Runtime paths | `df78cfb3` erases unauthorized stream/datagram/relay path history and pending probes. | Other retained device state must follow checkpoint installation. |
 | Forwarding projection | Checkpoint prepare/commit rejects stale contexts, seals static fallback, and erases legacy metadata. | Full discovery/cache/artifact cleanup remains. |
-| Snapshot transfer | 21 new control tests cover authenticated multi-page TCP/Noise transfer, scope, replay, expiry, and byte/session bounds. | Pairing and self-departure messages are not integrated. |
-| Daemon coordinator | 11 tests cover version-3 restart, bounded resync, durable removal, DNS gating, new publishers, and failed-transfer cleanup. | Ordinary networks lack automatic provisioning/migration. |
-| Rust workspace | 1,655 tests pass; 47 opt-in tests excluded, including 30 core, 23 storage, and 11 checkpoint-forwarder tests. | No deployed checkpoint-network completion claim. |
+| Snapshot/mutation transfer | 21 snapshot and 19 mutation tests cover authenticated TCP/Noise, scope, replay, deadlines, correlated replies, and frame/session bounds. | Pairing integration remains pending. |
+| Daemon coordinator | 17 tests cover restart, bounded resync, removal, DNS, publisher catch-up, authenticated handoff, and retained-state erasure. | Ordinary networks lack automatic provisioning/migration. |
+| Creator departure | Three real daemon loops deliver removal to two survivors; later survivor governance and injected route-cleanup retry pass. | Packet/route adapters are fixtures, not real TUN or deployed-node evidence. |
+| Handoff scheduling | Five tests verify recipient/in-flight bounds, fairness, fixed deadlines, retry limits, and forgotten payloads. | No deployed checkpoint-network completion claim. |
+| Rust workspace | 1,686 tests pass; 47 opt-in tests excluded, including 30 core, 23 storage, and 11 checkpoint-forwarder tests. | Full VM/package/device checks remain. |
 | Durable checkpoint state | Version-3 authentication, legacy dispatch, rollback, failure/retry, and 128 durable churn cycles pass. | Automatic migration and a full crash campaign remain. |
 | Static analysis | Formatting and required correctness/suspicious/performance Clippy groups pass. | Existing non-fatal lint warnings remain. |
 | Android consumer | JVM unit tests and debug lint pass for revoked-local filtering and missing-local snapshots. | No new APK or physical-device checkpoint test. |
@@ -30,6 +32,13 @@ activation remain incomplete; current deployments still use the legacy ledger.
 Core, store, and coordinator tests verify those individual layers. They do not
 prove automatic migration, complete cleanup, or deployed multi-daemon convergence;
 those require the integration and evidence below.
+
+The daemon test also exposed and fixed zero-byte packet-reader EOF spinning.
+Regression coverage verifies no empty packet is queued or counted after EOF.
+
+A live-refresh ordering regression is covered explicitly: an authenticated
+exact-base departure can advance installed authority without losing an already
+collected higher offer, extending the deadline, or bypassing startup gates.
 
 ## Required Behavior
 

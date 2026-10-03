@@ -20,12 +20,17 @@ use crate::{
 };
 
 use super::{
+    checkpoint_handoff::{DeliveryOutcome, HandoffReport, MutationHandoff},
     control::{
         ControlCapabilities, PeerCapabilities,
         checkpoint::{
             CheckpointCapabilities, CheckpointPageRequest, CheckpointPageResponse,
             CheckpointProgress, CheckpointRejection, CheckpointSync, CheckpointSyncError,
             CheckpointSyncLimits, MAX_TRANSFER_SESSIONS,
+        },
+        checkpoint_mutation::{
+            CheckpointMutationRequest, CheckpointMutationResponse, MutationOutcome,
+            MutationRejection,
         },
     },
     forward::{ForwardError, Forwarder},
@@ -60,6 +65,10 @@ pub(crate) struct CheckpointRuntime {
     offers_accepted: u64,
     transfer_failures: u64,
     candidates: HashMap<PeerId, (CheckpointCapabilities, Instant)>,
+    handoff: Option<MutationHandoff>,
+    mutation_requests: HashMap<request_response::OutboundRequestId, PeerId>,
+    last_handoff: HandoffReport,
+    route_cleanup_pending: bool,
 }
 
 impl std::fmt::Debug for CheckpointRuntime {
@@ -103,6 +112,10 @@ impl CheckpointRuntime {
             offers_accepted: 0,
             transfer_failures: 0,
             candidates: HashMap::new(),
+            handoff: None,
+            mutation_requests: HashMap::new(),
+            last_handoff: HandoffReport::default(),
+            route_cleanup_pending: false,
         })
     }
 
@@ -124,6 +137,10 @@ impl CheckpointRuntime {
     }
 
     pub(crate) fn extend_status_lines(&self, lines: &mut Vec<String>) {
+        lines.push(format!(
+            "checkpoint_route_cleanup_pending {}",
+            usize::from(self.route_cleanup_pending)
+        ));
         let buffers = self.transfer.stats();
         let state = if self.pending.is_some() {
             "resyncing"
@@ -160,6 +177,21 @@ impl CheckpointRuntime {
         ] {
             lines.push(format!("checkpoint_{name} {value}"));
         }
+        let handoff = self
+            .handoff
+            .as_ref()
+            .map_or(self.last_handoff, MutationHandoff::report);
+        for (name, value) in [
+            ("active", usize::from(self.handoff.is_some())),
+            ("pending_requests", self.mutation_requests.len()),
+            ("recipients", handoff.recipients),
+            ("acknowledged", handoff.acknowledged),
+            ("failed", handoff.failed),
+            ("pending", handoff.pending),
+            ("attempts", handoff.attempts),
+        ] {
+            lines.push(format!("checkpoint_handoff_{name} {value}"));
+        }
     }
 
     /// Catch-up gates a restored node. A live node keeps its already installed
@@ -191,6 +223,10 @@ impl CheckpointRuntime {
         }
         capabilities.checkpoint = Some(descriptor);
         Ok(())
+    }
+
+    pub(crate) fn record_route_cleanup(&mut self, pending: bool) -> bool {
+        std::mem::replace(&mut self.route_cleanup_pending, pending) != pending
     }
 
     /// Matching advertisements permit bounded catch-up only, never packet access.
@@ -536,6 +572,277 @@ impl CheckpointRuntime {
         Ok(mutation)
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn apply_change_with_handoff(
+        &mut self,
+        change: MembershipChange,
+        identity: &NodeIdentity,
+        store: &MembershipStateStore,
+        forwarder: &mut Forwarder,
+        recipients: &[PeerId],
+        now: Instant,
+        wall_now: u64,
+    ) -> Result<(), RunnerError> {
+        self.finish_handoff_if_due(now);
+        if self.pending.is_some() || self.handoff.is_some() {
+            return Err(std::io::Error::other(
+                "checkpoint synchronization or mutation handoff is still pending",
+            )
+            .into());
+        }
+        let mutation = self
+            .state
+            .sign_mutation_at(identity, change, wall_now)
+            .map_err(core_error)?;
+        CheckpointMutationRequest::new(mutation.clone())
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        let authorized = recipients
+            .iter()
+            .copied()
+            .filter(|peer| {
+                peer.to_string() != identity.peer_id
+                    && self
+                        .state
+                        .snapshot()
+                        .payload
+                        .member(&peer.to_string())
+                        .is_some_and(|member| member.active_at(wall_now))
+            })
+            .collect::<Vec<_>>();
+        let mut candidate = self.state.clone();
+        candidate
+            .apply_mutation_at(&mutation, wall_now)
+            .map_err(core_error)?;
+        let handoff = MutationHandoff::new(
+            mutation,
+            candidate
+                .snapshot()
+                .payload
+                .boundary()
+                .map_err(core_error)?,
+            authorized,
+            now,
+        )
+        .map_err(std::io::Error::other)?;
+        self.persist_then_install(candidate, store, forwarder, wall_now)?;
+        self.handoff = Some(handoff);
+        self.finish_handoff_if_due(now);
+        Ok(())
+    }
+
+    fn finish_handoff_if_due(&mut self, now: Instant) {
+        let Some(handoff) = &mut self.handoff else {
+            return;
+        };
+        handoff.advance_clock(now);
+        self.mutation_requests
+            .retain(|_, peer| handoff.is_in_flight(*peer));
+        let report = handoff.report();
+        if report.pending == 0 {
+            self.last_handoff = report;
+            self.handoff = None;
+            self.mutation_requests.clear();
+        }
+    }
+
+    pub(crate) fn drive_mutations(
+        &mut self,
+        swarm: &mut Swarm<Behaviour>,
+        now: Instant,
+    ) -> Result<(), RunnerError> {
+        self.finish_handoff_if_due(now);
+        let Some(handoff) = &mut self.handoff else {
+            return Ok(());
+        };
+        while let Some(peer) = handoff.next_ready(now) {
+            if !swarm.is_connected(&peer) {
+                handoff.resolve(peer, DeliveryOutcome::RetryableFailure, now);
+                continue;
+            }
+            let request = CheckpointMutationRequest::new(handoff.mutation().clone())
+                .map_err(|error| std::io::Error::other(error.to_string()))?
+                .with_deadline(handoff.deadline());
+            let id = swarm
+                .behaviour_mut()
+                .checkpoint_mutation
+                .send_request(&peer, request);
+            self.mutation_requests.insert(id, peer);
+        }
+        Ok(())
+    }
+
+    fn incoming_mutation_outcome(
+        &mut self,
+        request: &CheckpointMutationRequest,
+        peer: PeerId,
+        store: &MembershipStateStore,
+        forwarder: &mut Forwarder,
+        wall_now: u64,
+    ) -> MutationOutcome {
+        let reject = |reason, current| MutationOutcome::Rejected { reason, current };
+        let Ok(mutation) = request.validate_for(peer, self.anchor()) else {
+            return reject(MutationRejection::Unauthorized, None);
+        };
+        if self.state.sync_state() != MembershipSyncState::Participating {
+            return reject(MutationRejection::ResyncRequired, None);
+        }
+        let mut candidate = self.state.clone();
+        if let Err(error) = candidate.apply_mutation_at(mutation, wall_now) {
+            return match error {
+                CheckpointError::StaleMutation => reject(
+                    MutationRejection::StaleBase,
+                    self.state.snapshot().payload.boundary().ok(),
+                ),
+                CheckpointError::NoParticipation => reject(MutationRejection::ResyncRequired, None),
+                _ => reject(MutationRejection::Invalid, None),
+            };
+        }
+        let rebased = if let Some(pending) = &self.pending {
+            let mut refresh = pending.candidate.clone();
+            if refresh.rebase_live_resync_on_installed(&candidate).is_err() {
+                return reject(MutationRejection::Invalid, None);
+            }
+            Some(refresh)
+        } else {
+            None
+        };
+        if self
+            .persist_then_install(candidate, store, forwarder, wall_now)
+            .is_err()
+        {
+            return reject(MutationRejection::PersistenceFailed, None);
+        }
+        if let Some(refresh) = rebased
+            && let Some(pending) = &mut self.pending
+        {
+            pending.candidate = refresh;
+        }
+        match self.state.snapshot().payload.boundary() {
+            Ok(boundary) => MutationOutcome::Applied(boundary),
+            Err(_) => reject(MutationRejection::Invalid, None),
+        }
+    }
+
+    pub(crate) fn handle_mutation_event(
+        &mut self,
+        swarm: &mut Swarm<Behaviour>,
+        event: request_response::Event<CheckpointMutationRequest, CheckpointMutationResponse>,
+        store: &MembershipStateStore,
+        forwarder: &mut Forwarder,
+        now: Instant,
+        wall_now: u64,
+    ) -> bool {
+        self.finish_handoff_if_due(now);
+        match event {
+            request_response::Event::Message {
+                peer,
+                message:
+                    Message::Request {
+                        request, channel, ..
+                    },
+                ..
+            } => {
+                let revision = forwarder.membership_revision();
+                let outcome =
+                    self.incoming_mutation_outcome(&request, peer, store, forwarder, wall_now);
+                if let Ok(response) = CheckpointMutationResponse::for_request(&request, outcome) {
+                    let _ = swarm
+                        .behaviour_mut()
+                        .checkpoint_mutation
+                        .send_response(channel, response);
+                }
+                return forwarder.membership_revision() != revision;
+            }
+            request_response::Event::Message {
+                peer,
+                message:
+                    Message::Response {
+                        request_id,
+                        response,
+                    },
+                ..
+            } => {
+                if let Some(expected_peer) = self.mutation_requests.remove(&request_id)
+                    && let Some(handoff) = &mut self.handoff
+                {
+                    let outcome = CheckpointMutationRequest::new(handoff.mutation().clone())
+                        .and_then(|request| response.validate_for(&request));
+                    let delivery = if peer != expected_peer {
+                        DeliveryOutcome::DefiniteFailure
+                    } else {
+                        match outcome {
+                            Ok(MutationOutcome::Applied(boundary))
+                                if handoff.acknowledges(boundary) =>
+                            {
+                                DeliveryOutcome::Acknowledged
+                            }
+                            Ok(MutationOutcome::Rejected {
+                                reason: MutationRejection::StaleBase,
+                                current: Some(boundary),
+                            }) if handoff.acknowledges(boundary) => DeliveryOutcome::Acknowledged,
+                            Ok(MutationOutcome::Rejected {
+                                reason:
+                                    MutationRejection::Busy
+                                    | MutationRejection::ResyncRequired
+                                    | MutationRejection::PersistenceFailed,
+                                ..
+                            }) => DeliveryOutcome::RetryableFailure,
+                            _ => DeliveryOutcome::DefiniteFailure,
+                        }
+                    };
+                    handoff.resolve(expected_peer, delivery, now);
+                }
+            }
+            request_response::Event::OutboundFailure {
+                request_id, error, ..
+            } => {
+                if matches!(
+                    error,
+                    request_response::OutboundFailure::UnsupportedProtocols
+                ) {
+                    if let Some(peer) = self.mutation_requests.remove(&request_id)
+                        && let Some(handoff) = &mut self.handoff
+                    {
+                        handoff.resolve(peer, DeliveryOutcome::DefiniteFailure, now);
+                    }
+                } else {
+                    self.fail_mutation_request(request_id, now);
+                }
+            }
+            request_response::Event::InboundFailure { .. }
+            | request_response::Event::ResponseSent { .. } => (),
+        }
+        self.finish_handoff_if_due(now);
+        false
+    }
+
+    pub(crate) fn discard_mutation_event(
+        &mut self,
+        event: request_response::Event<CheckpointMutationRequest, CheckpointMutationResponse>,
+        now: Instant,
+    ) {
+        if let request_response::Event::Message {
+            message: Message::Response { request_id, .. },
+            ..
+        } = event
+        {
+            self.fail_mutation_request(request_id, now);
+        }
+        self.finish_handoff_if_due(now);
+    }
+
+    fn fail_mutation_request(
+        &mut self,
+        request_id: request_response::OutboundRequestId,
+        now: Instant,
+    ) {
+        if let Some(peer) = self.mutation_requests.remove(&request_id)
+            && let Some(handoff) = &mut self.handoff
+        {
+            handoff.resolve(peer, DeliveryOutcome::RetryableFailure, now);
+        }
+    }
+
     pub(crate) fn reconcile_local_hostname(
         &mut self,
         identity: &NodeIdentity,
@@ -615,6 +922,15 @@ impl CheckpointRuntime {
             return Err(error.into());
         }
         self.state = candidate;
+        if self.handoff.as_ref().is_some_and(|handoff| {
+            self.state
+                .snapshot()
+                .payload
+                .boundary()
+                .map_or(true, |boundary| !handoff.acknowledges(boundary))
+        }) {
+            self.cancel_handoff();
+        }
         Ok(())
     }
 
@@ -632,9 +948,19 @@ impl CheckpointRuntime {
         .map_err(core_error)?;
         self.pending = None;
         self.retire_resync(Instant::now());
+        self.cancel_handoff();
         let update = forwarder.prepare_checkpoint_update(&self.state, self.anchor(), wall_now)?;
         forwarder.commit_checkpoint_update(update)?;
         Ok(())
+    }
+
+    fn cancel_handoff(&mut self) {
+        if let Some(handoff) = self.handoff.take() {
+            self.last_handoff = handoff.report();
+            self.last_handoff.failed += self.last_handoff.pending;
+            self.last_handoff.pending = 0;
+        }
+        self.mutation_requests.clear();
     }
 
     pub(crate) fn prune_expired(
@@ -645,6 +971,7 @@ impl CheckpointRuntime {
         wall_now: u64,
     ) -> Result<bool, RunnerError> {
         if self.pending.is_some()
+            || self.handoff.is_some()
             || self.state.sync_state() != MembershipSyncState::Participating
             || self
                 .state
@@ -797,6 +1124,370 @@ mod tests {
         fn drop(&mut self) {
             fs::remove_dir_all(&self.directory).unwrap();
         }
+    }
+
+    fn surviving_owner(fixture: &Fixture) -> (CheckpointRuntime, Forwarder, MembershipStateStore) {
+        let directory = fixture.directory.join("survivor");
+        fs::create_dir(&directory).unwrap();
+        let store = MembershipStateStore::new(directory.join("membership-state.json"));
+        store
+            .save_checkpoint(
+                "lab",
+                &fixture.member.peer_id,
+                &fixture.credentials,
+                &fixture.state.retained(),
+            )
+            .unwrap();
+        let Some(super::super::membership_store::checkpoint::PersistedAuthority::Checkpoint(
+            loaded,
+        )) = store
+            .load_authority(
+                "lab",
+                &fixture.member.peer_id,
+                Some(fixture.credentials.anchor()),
+                None,
+            )
+            .unwrap()
+        else {
+            panic!("survivor authority");
+        };
+        let mut runtime =
+            CheckpointRuntime::restore("lab".into(), &fixture.member.peer_id, loaded).unwrap();
+        let mut config = fixture.config.clone();
+        config.network.local_peer = fixture.member.peer_id.clone();
+        config.network.private_key = Some(fixture.member.private_key.clone());
+        config.peers.clear();
+        let mut forwarder =
+            Forwarder::from_checkpoint_config(&config, runtime.state(), runtime.anchor(), WALL_NOW)
+                .unwrap();
+        let now = Instant::now();
+        runtime.begin_resync(now).unwrap();
+        runtime
+            .finish_due(&store, &mut forwarder, now + RESYNC_WINDOW, WALL_NOW)
+            .unwrap();
+        (runtime, forwarder, store)
+    }
+
+    #[test]
+    fn final_departure_revokes_local_authority_and_survivor_persists_without_tombstones() {
+        let fixture = Fixture::new("departure");
+        let (mut creator, mut creator_forwarder) = fixture.participating();
+        let (mut survivor, mut survivor_forwarder, survivor_store) = surviving_owner(&fixture);
+        let recipient = fixture.member.peer_id.parse().unwrap();
+        let now = Instant::now();
+        creator
+            .apply_change_with_handoff(
+                MembershipChange::RemoveMember(fixture.local.peer_id.clone()),
+                &fixture.local,
+                &fixture.store,
+                &mut creator_forwarder,
+                &[recipient],
+                now,
+                WALL_NOW,
+            )
+            .unwrap();
+        assert_eq!(creator.state().sync_state(), MembershipSyncState::Excluded);
+        assert!(!creator_forwarder.is_configured_transport_peer(recipient));
+        let request =
+            CheckpointMutationRequest::new(creator.handoff.as_ref().unwrap().mutation().clone())
+                .unwrap();
+        assert!(
+            creator
+                .state()
+                .make_offer_at(
+                    SnapshotChallenge {
+                        anchor: creator.anchor().clone(),
+                        nonce: [8; 32]
+                    },
+                    &fixture.local,
+                    WALL_NOW
+                )
+                .is_err()
+        );
+        let MutationOutcome::Applied(boundary) = survivor.incoming_mutation_outcome(
+            &request,
+            fixture.local.peer_id.parse().unwrap(),
+            &survivor_store,
+            &mut survivor_forwarder,
+            WALL_NOW,
+        ) else {
+            panic!("active survivor must install final exact-base departure");
+        };
+        assert!(creator.handoff.as_ref().unwrap().acknowledges(boundary));
+        assert_eq!(
+            survivor.state().sync_state(),
+            MembershipSyncState::Participating
+        );
+        assert!(
+            survivor
+                .state()
+                .snapshot()
+                .payload
+                .member(&fixture.member.peer_id)
+                .is_some()
+        );
+        assert!(
+            !survivor_forwarder
+                .is_configured_transport_peer(fixture.local.peer_id.parse().unwrap())
+        );
+        let bytes =
+            fs::read_to_string(fixture.directory.join("survivor/membership-state.json")).unwrap();
+        assert!(!bytes.contains(&fixture.local.peer_id));
+        assert!(!bytes.contains("tombstone"));
+        assert!(!bytes.contains("inviter"));
+        assert_eq!(
+            survivor.incoming_mutation_outcome(
+                &request,
+                fixture.local.peer_id.parse().unwrap(),
+                &survivor_store,
+                &mut survivor_forwarder,
+                WALL_NOW,
+            ),
+            MutationOutcome::Rejected {
+                reason: MutationRejection::StaleBase,
+                current: Some(boundary)
+            }
+        );
+        assert_eq!(
+            fs::read_to_string(fixture.directory.join("survivor/membership-state.json")).unwrap(),
+            bytes
+        );
+        let creator_bytes: serde_json::Value =
+            serde_json::from_slice(&fs::read(fixture.path()).unwrap()).unwrap();
+        assert!(
+            !creator_bytes["retained"]
+                .to_string()
+                .contains(&fixture.local.peer_id)
+        );
+        creator.finish_handoff_if_due(now + super::super::checkpoint_handoff::HANDOFF_WINDOW);
+        assert!(creator.handoff.is_none());
+        assert!(creator.mutation_requests.is_empty());
+        assert_eq!(creator.last_handoff.failed, 1);
+    }
+
+    #[test]
+    fn rejected_or_unpersisted_remote_command_cannot_acknowledge_or_change_authority() {
+        let fixture = Fixture::new("departure-failure");
+        let (mut sender, mut sender_forwarder) = fixture.participating();
+        let (mut receiver, mut receiver_forwarder, store) = surviving_owner(&fixture);
+        sender
+            .apply_change_with_handoff(
+                MembershipChange::RemoveMember(fixture.local.peer_id.clone()),
+                &fixture.local,
+                &fixture.store,
+                &mut sender_forwarder,
+                &[fixture.member.peer_id.parse().unwrap()],
+                Instant::now(),
+                WALL_NOW,
+            )
+            .unwrap();
+        let request =
+            CheckpointMutationRequest::new(sender.handoff.as_ref().unwrap().mutation().clone())
+                .unwrap();
+        let before = receiver.state().retained();
+        let path = fixture.directory.join("survivor/membership-state.json");
+        let bytes = fs::read(&path).unwrap();
+        assert_eq!(
+            receiver.incoming_mutation_outcome(
+                &request,
+                fixture.member.peer_id.parse().unwrap(),
+                &store,
+                &mut receiver_forwarder,
+                WALL_NOW
+            ),
+            MutationOutcome::Rejected {
+                reason: MutationRejection::Unauthorized,
+                current: None
+            }
+        );
+        let directory = fixture.directory.join("survivor");
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o777)).unwrap();
+        assert_eq!(
+            receiver.incoming_mutation_outcome(
+                &request,
+                fixture.local.peer_id.parse().unwrap(),
+                &store,
+                &mut receiver_forwarder,
+                WALL_NOW
+            ),
+            MutationOutcome::Rejected {
+                reason: MutationRejection::PersistenceFailed,
+                current: None
+            }
+        );
+        assert_eq!(receiver.state().retained(), before);
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        assert!(
+            receiver_forwarder.is_configured_transport_peer(fixture.local.peer_id.parse().unwrap())
+        );
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
+    #[test]
+    fn live_refresh_accepts_exact_base_departure_without_losing_higher_offer_or_extending_deadline()
+    {
+        for higher_offer in [false, true] {
+            let fixture = Fixture::new(if higher_offer {
+                "refresh-higher"
+            } else {
+                "refresh-departure"
+            });
+            let request = CheckpointMutationRequest::new(
+                fixture
+                    .state
+                    .sign_mutation_at(
+                        &fixture.local,
+                        MembershipChange::RemoveMember(fixture.local.peer_id.clone()),
+                        WALL_NOW,
+                    )
+                    .unwrap(),
+            )
+            .unwrap();
+            let now = Instant::now();
+            let sender = fixture.local.peer_id.parse().unwrap();
+            let (mut gated, mut gated_forwarder) = fixture.restored();
+            gated.begin_resync(now).unwrap();
+            assert_eq!(
+                gated.incoming_mutation_outcome(
+                    &request,
+                    sender,
+                    &fixture.store,
+                    &mut gated_forwarder,
+                    WALL_NOW
+                ),
+                MutationOutcome::Rejected {
+                    reason: MutationRejection::ResyncRequired,
+                    current: None
+                }
+            );
+
+            let (mut receiver, mut forwarder, store) = surviving_owner(&fixture);
+            receiver.begin_resync(now).unwrap();
+            let challenge = receiver.challenge().unwrap().clone();
+            let mut wrong_context = receiver.pending.as_ref().unwrap().candidate.clone();
+            assert!(
+                wrong_context
+                    .rebase_live_resync_on_installed(&fixture.state)
+                    .is_err()
+            );
+            assert!(
+                wrong_context
+                    .rebase_live_resync_on_installed(receiver.state())
+                    .is_err()
+            );
+            let mut other = fixture.state.clone();
+            if higher_offer {
+                for maximum in [255, 254] {
+                    let mutation = other
+                        .sign_mutation_at(
+                            &fixture.local,
+                            MembershipChange::SetPolicy(SnapshotPolicy {
+                                max_active_members: maximum,
+                                ..SnapshotPolicy::default()
+                            }),
+                            WALL_NOW,
+                        )
+                        .unwrap();
+                    other.apply_mutation_at(&mutation, WALL_NOW).unwrap();
+                }
+                let offer = other
+                    .make_offer_at(challenge.clone(), &fixture.local, WALL_NOW)
+                    .unwrap();
+                receiver.collect_offer(&offer, sender, now).unwrap();
+            }
+            let MutationOutcome::Applied(boundary) = receiver.incoming_mutation_outcome(
+                &request,
+                sender,
+                &store,
+                &mut forwarder,
+                WALL_NOW,
+            ) else {
+                panic!("installed live authority must process an exact-base removal");
+            };
+            assert_eq!(boundary.authority_revision, 1);
+            assert!(!forwarder.is_configured_transport_peer(sender));
+            assert_eq!(receiver.challenge(), Some(&challenge));
+            assert_eq!(
+                receiver.pending.as_ref().unwrap().deadline,
+                now + RESYNC_WINDOW
+            );
+            assert!(
+                receiver
+                    .finish_due(
+                        &store,
+                        &mut forwarder,
+                        now + RESYNC_WINDOW - Duration::from_millis(1),
+                        WALL_NOW
+                    )
+                    .unwrap()
+                    .is_none()
+            );
+            let selection = receiver
+                .finish_due(&store, &mut forwarder, now + RESYNC_WINDOW, WALL_NOW)
+                .unwrap()
+                .unwrap();
+            if higher_offer {
+                assert_eq!(
+                    receiver.state().snapshot().payload,
+                    other.snapshot().payload
+                );
+                assert!(selection.decisions_may_have_been_discarded);
+            } else {
+                assert_eq!(selection.selected, boundary);
+                assert!(!forwarder.is_configured_transport_peer(sender));
+            }
+        }
+    }
+
+    #[test]
+    fn concurrent_local_commands_are_rejected_without_overwriting_bounded_handoff() {
+        let fixture = Fixture::new("serialized-handoff");
+        let (mut runtime, mut forwarder) = fixture.participating();
+        let now = Instant::now();
+        let peer = fixture.member.peer_id.parse().unwrap();
+        let mut policy = runtime.state().snapshot().payload.policy.clone();
+        policy.route_grants_enabled = false;
+        runtime
+            .apply_change_with_handoff(
+                MembershipChange::SetPolicy(policy),
+                &fixture.local,
+                &fixture.store,
+                &mut forwarder,
+                &[peer, PeerId::random()],
+                now,
+                WALL_NOW,
+            )
+            .unwrap();
+        let retained = runtime.state().retained();
+        let bytes = fs::read(fixture.path()).unwrap();
+        assert_eq!(runtime.handoff.as_ref().unwrap().report().recipients, 1);
+        assert!(
+            runtime
+                .apply_change_with_handoff(
+                    MembershipChange::RemoveMember(fixture.member.peer_id.clone()),
+                    &fixture.local,
+                    &fixture.store,
+                    &mut forwarder,
+                    &[peer],
+                    now,
+                    WALL_NOW
+                )
+                .is_err()
+        );
+        assert_eq!(runtime.state().retained(), retained);
+        assert_eq!(fs::read(fixture.path()).unwrap(), bytes);
+        runtime.finish_handoff_if_due(now + super::super::checkpoint_handoff::HANDOFF_WINDOW);
+        assert!(runtime.handoff.is_none());
+        assert!(runtime.mutation_requests.is_empty());
+        let mut lines = Vec::new();
+        runtime.extend_status_lines(&mut lines);
+        assert!(lines.contains(&"checkpoint_handoff_failed 1".to_owned()));
+        assert!(
+            lines
+                .iter()
+                .all(|line| !line.contains(&fixture.local.peer_id)
+                    && !line.contains(&fixture.member.peer_id))
+        );
     }
 
     #[test]
@@ -1002,6 +1693,122 @@ mod tests {
             },
         })
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn handoff_acknowledgments_bind_request_peer_command_and_result_boundary() {
+        use libp2p::swarm::ConnectionId;
+
+        for case in [
+            "applied",
+            "duplicate",
+            "wrong-peer",
+            "wrong-command",
+            "wrong-boundary",
+            "late-request",
+        ] {
+            let fixture = Fixture::new(&format!("ack-{case}"));
+            let (mut runtime, mut forwarder) = fixture.participating();
+            let mut node = test_node(&fixture.local);
+            let peer = fixture.member.peer_id.parse().unwrap();
+            let now = Instant::now();
+            runtime
+                .apply_change_with_handoff(
+                    MembershipChange::RemoveMember(fixture.local.peer_id.clone()),
+                    &fixture.local,
+                    &fixture.store,
+                    &mut forwarder,
+                    &[peer],
+                    now,
+                    WALL_NOW,
+                )
+                .unwrap();
+            assert_eq!(
+                runtime.handoff.as_mut().unwrap().next_ready(now),
+                Some(peer)
+            );
+            let request = CheckpointMutationRequest::new(
+                runtime.handoff.as_ref().unwrap().mutation().clone(),
+            )
+            .unwrap();
+            let id = node
+                .swarm
+                .behaviour_mut()
+                .checkpoint_mutation
+                .send_request(&peer, request.clone());
+            runtime.mutation_requests.insert(id, peer);
+            let expected = runtime.state().snapshot().payload.boundary().unwrap();
+            let outcome = if case == "duplicate" {
+                MutationOutcome::Rejected {
+                    reason: MutationRejection::StaleBase,
+                    current: Some(expected),
+                }
+            } else {
+                let mut boundary = expected;
+                if case == "wrong-boundary" {
+                    boundary.digest[0] ^= 1;
+                }
+                MutationOutcome::Applied(boundary)
+            };
+            let mut response = CheckpointMutationResponse::for_request(&request, outcome).unwrap();
+            if case == "wrong-command" {
+                response.mutation_digest[0] ^= 1;
+            }
+            let response_peer = if case == "wrong-peer" {
+                PeerId::random()
+            } else {
+                peer
+            };
+            let event_now = if case == "late-request" {
+                runtime
+                    .finish_handoff_if_due(now + super::super::checkpoint_handoff::ATTEMPT_WINDOW);
+                let retry =
+                    now + super::super::checkpoint_handoff::ATTEMPT_WINDOW + Duration::from_secs(1);
+                assert_eq!(
+                    runtime.handoff.as_mut().unwrap().next_ready(retry),
+                    Some(peer)
+                );
+                let fresh_id = node
+                    .swarm
+                    .behaviour_mut()
+                    .checkpoint_mutation
+                    .send_request(&peer, request.clone());
+                runtime.mutation_requests.insert(fresh_id, peer);
+                retry
+            } else {
+                now
+            };
+            let event = request_response::Event::Message {
+                peer: response_peer,
+                connection_id: ConnectionId::new_unchecked(1),
+                message: Message::Response {
+                    request_id: id,
+                    response,
+                },
+            };
+            assert!(!runtime.handle_mutation_event(
+                &mut node.swarm,
+                event,
+                &fixture.store,
+                &mut forwarder,
+                event_now,
+                WALL_NOW,
+            ));
+            if case == "late-request" {
+                assert_eq!(runtime.handoff.as_ref().unwrap().report().acknowledged, 0);
+                assert_eq!(runtime.handoff.as_ref().unwrap().report().pending, 1);
+                assert_eq!(runtime.mutation_requests.len(), 1);
+                runtime
+                    .finish_handoff_if_due(now + super::super::checkpoint_handoff::HANDOFF_WINDOW);
+            } else {
+                assert!(runtime.handoff.is_none());
+                assert_eq!(
+                    runtime.last_handoff.acknowledged,
+                    usize::from(matches!(case, "applied" | "duplicate"))
+                );
+                assert!(runtime.mutation_requests.is_empty());
+            }
+        }
     }
 
     async fn catch_up_over_tcp(
@@ -1374,6 +2181,283 @@ mod tests {
         })
         .await
         .expect("checkpoint startup must complete without operator intervention");
+    }
+
+    #[tokio::test]
+    async fn three_daemons_deliver_creator_departure_and_keep_survivor_governance() {
+        use super::super::{
+            control_socket::runtime_control_channel,
+            runner::{RuntimePlatform, run_config_until_with_runtime_platform},
+            tun::{PacketIo, PacketRead, PacketWrite},
+        };
+
+        struct EmptyPacketDevice;
+        impl PacketRead for EmptyPacketDevice {
+            fn read_packet(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Ok(0)
+            }
+        }
+        impl PacketWrite for EmptyPacketDevice {
+            fn write_packet(&mut self, packet: &[u8]) -> std::io::Result<usize> {
+                Ok(packet.len())
+            }
+        }
+
+        struct RoutesWithOneFailure {
+            creator: bool,
+            armed: std::sync::Arc<std::sync::atomic::AtomicBool>,
+            failures: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        }
+        impl super::super::runner::TunRouteController for RoutesWithOneFailure {
+            fn reconcile(
+                &mut self,
+                _: &super::super::tun::TunRuntimeConfig,
+                _: &super::super::tun::TunRuntimeConfig,
+                _: &super::super::tun::TunRouteUpdate,
+            ) -> Result<(), RunnerError> {
+                if self.creator && self.armed.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                    self.failures
+                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    return Err(std::io::Error::other("injected route cleanup failure").into());
+                }
+                Ok(())
+            }
+        }
+        let armed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let failures = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut fixture = Fixture::new("three-daemon-departure");
+        let third = NodeIdentity::generate_ed25519().unwrap();
+        let admission = fixture
+            .state
+            .sign_mutation_at(
+                &fixture.local,
+                MembershipChange::UpsertMember(CheckpointMember::new(&third).unwrap()),
+                WALL_NOW,
+            )
+            .unwrap();
+        fixture
+            .state
+            .apply_mutation_at(&admission, WALL_NOW)
+            .unwrap();
+        let identities = [fixture.local.clone(), fixture.member.clone(), third];
+        let listeners = identities
+            .iter()
+            .map(|_| std::net::TcpListener::bind("127.0.0.1:0").unwrap())
+            .collect::<Vec<_>>();
+        let addresses = listeners
+            .iter()
+            .map(|listener| {
+                format!(
+                    "/ip4/127.0.0.1/tcp/{}",
+                    listener.local_addr().unwrap().port()
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut setups = Vec::new();
+        let mut controls = Vec::new();
+        let mut paths = Vec::new();
+        for (index, identity) in identities.iter().enumerate() {
+            let directory = fixture.directory.join(format!("node-{index}"));
+            fs::create_dir(&directory).unwrap();
+            fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+            let path = directory.join("membership-state.json");
+            MembershipStateStore::new(path.clone())
+                .save_checkpoint(
+                    "lab",
+                    &identity.peer_id,
+                    &fixture.credentials,
+                    &fixture.state.retained(),
+                )
+                .unwrap();
+            let peers = identities
+                .iter()
+                .enumerate()
+                .filter(|(peer_index, _)| *peer_index != index)
+                .map(|(peer_index, peer)| {
+                    serde_json::json!({"id": peer.peer_id, "addresses": [addresses[peer_index]]})
+                })
+                .collect::<Vec<_>>();
+            let mut config: Config = serde_json::from_value(serde_json::json!({
+                "network": {
+                    "name": "lab", "local_peer": identity.peer_id,
+                    "private_key": identity.private_key,
+                    "listen_addresses": [addresses[index]],
+                },
+                "peers": peers,
+            }))
+            .unwrap();
+            config.network.discovery = crate::config::DiscoveryConfig {
+                mdns: false,
+                kademlia: false,
+                autonat: false,
+                dcutr: false,
+                kademlia_provider_advertisement: false,
+                ..crate::config::DiscoveryConfig::default()
+            };
+            config.network.relay.auto.max_reservations = 0;
+            config.network.packet_plane.listen.clear();
+            config.network.packet_plane.quic_listen.clear();
+            let (control, receiver) = runtime_control_channel();
+            let platform = RuntimePlatform::new(
+                PacketIo::new(EmptyPacketDevice, EmptyPacketDevice),
+                RoutesWithOneFailure {
+                    creator: index == 0,
+                    armed: std::sync::Arc::clone(&armed),
+                    failures: std::sync::Arc::clone(&failures),
+                },
+            )
+            .with_control(receiver);
+            setups.push((config, platform, path.clone()));
+            controls.push(control);
+            paths.push(path);
+        }
+        drop(listeners);
+        let mut daemons = Vec::new();
+        let mut shutdowns = Vec::new();
+        for (config, platform, path) in setups {
+            let (shutdown, receiver) = tokio::sync::oneshot::channel();
+            shutdowns.push(shutdown);
+            daemons.push(tokio::spawn(run_config_until_with_runtime_platform(
+                config,
+                platform,
+                None,
+                None,
+                None,
+                Some(path),
+                async {
+                    let _ = receiver.await;
+                    super::super::runner::ShutdownReason::ControlSocket
+                },
+            )));
+        }
+
+        let mut scenario = tokio::spawn(async move {
+            let started = Instant::now();
+            loop {
+                let mut ready = true;
+                let mut diagnostics = Vec::new();
+                for (index, control) in controls.iter().enumerate() {
+                    let state = control.state().await.unwrap();
+                    diagnostics.push(
+                        state
+                            .iter()
+                            .filter(|line| {
+                                line.starts_with("checkpoint_sync_state ")
+                                    || line.starts_with("peer path state: ")
+                            })
+                            .cloned()
+                            .collect::<Vec<_>>(),
+                    );
+                    ready &= state.contains(&"checkpoint_sync_state participating".to_owned());
+                    for (peer_index, peer) in identities.iter().enumerate() {
+                        if peer_index == index {
+                            continue;
+                        }
+                        ready &= state.iter().any(|line| {
+                            line.starts_with(&format!(
+                                "peer path state: {} ",
+                                crate::PeerId::from_libp2p(peer.peer_id.parse().unwrap())
+                            )) && line.contains("healthy true ")
+                                && !line.contains("established_connections 0 ")
+                        });
+                    }
+                }
+                if ready {
+                    break;
+                }
+                assert!(
+                    started.elapsed() < Duration::from_secs(30),
+                    "daemon readiness: {diagnostics:?}"
+                );
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+
+            armed.store(true, std::sync::atomic::Ordering::SeqCst);
+            let departure = controls[0].revoke_member(None).await.unwrap();
+            assert!(departure.resigned);
+            assert_eq!(failures.load(std::sync::atomic::Ordering::SeqCst), 1);
+            assert_eq!(departure.membership_epoch, 2);
+            assert!(controls[0].network_peers().await.unwrap().peers.is_empty());
+            loop {
+                let state = controls[0].state().await.unwrap();
+                if state.contains(&"checkpoint_handoff_active 0".to_owned()) {
+                    assert!(
+                        state.contains(&"checkpoint_handoff_acknowledged 2".to_owned()),
+                        "{state:?}"
+                    );
+                    assert!(state.contains(&"checkpoint_handoff_failed 0".to_owned()));
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            for (index, control) in controls.iter().enumerate().skip(1) {
+                let peers = control.network_peers().await.unwrap().peers;
+                assert_eq!(peers.len(), 2);
+                assert!(
+                    peers
+                        .iter()
+                        .all(|peer| peer.peer_id != identities[0].peer_id)
+                );
+                let retained = fs::read_to_string(&paths[index]).unwrap();
+                assert!(!retained.contains(&identities[0].peer_id));
+                assert!(!retained.contains("revocation"));
+                assert!(!retained.contains("inviter"));
+            }
+            loop {
+                if controls[0]
+                    .state()
+                    .await
+                    .unwrap()
+                    .contains(&"checkpoint_route_cleanup_pending 0".to_owned())
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+
+            let removal = controls[1]
+                .revoke_member(Some(identities[2].peer_id.clone()))
+                .await
+                .unwrap();
+            assert!(!removal.resigned);
+            assert_eq!(removal.membership_epoch, 3);
+            assert_eq!(controls[1].network_peers().await.unwrap().peers.len(), 1);
+            let retained = fs::read_to_string(&paths[1]).unwrap();
+            assert!(!retained.contains(&identities[0].peer_id));
+            assert!(!retained.contains(&identities[2].peer_id));
+        });
+        // Always stop daemons before removing fixture files, including failed assertions.
+        let result = match tokio::time::timeout(Duration::from_secs(60), &mut scenario).await {
+            Ok(result) => Ok(result),
+            Err(error) => {
+                scenario.abort();
+                let _ = scenario.await;
+                Err(error)
+            }
+        };
+        for shutdown in shutdowns {
+            let _ = shutdown.send(());
+        }
+        let mut outcomes = Vec::new();
+        for mut daemon in daemons {
+            match tokio::time::timeout(Duration::from_secs(5), &mut daemon).await {
+                Ok(outcome) => outcomes.push(Some(outcome)),
+                Err(_) => {
+                    daemon.abort();
+                    let _ = daemon.await;
+                    outcomes.push(None);
+                }
+            }
+        }
+        for outcome in outcomes {
+            outcome
+                .expect("checkpoint daemon failed to shut down")
+                .unwrap()
+                .unwrap();
+        }
+        result
+            .expect("three-node checkpoint handoff must converge")
+            .unwrap();
     }
 
     #[test]

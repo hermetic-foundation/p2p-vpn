@@ -1814,6 +1814,7 @@ where
     let mut tun_reader_open = true;
     let mut checkpoint_tick = tokio::time::interval(Duration::from_secs(1));
     checkpoint_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut checkpoint_mutation_rate_limiter = GlobalRateLimiter::new(64, Instant::now());
     loop {
         membership_record_syncs.reconcile_authorization(&forwarder, &metrics);
         if packet_authorization_revision != Some(forwarder.authorization_revision()) {
@@ -1850,8 +1851,9 @@ where
             _ = checkpoint_tick.tick(), if checkpoint_runtime.is_some() => {
                 let checkpoint = checkpoint_runtime.as_mut().expect("checkpoint owner exists");
                 let store = membership_state_store.as_ref().expect("checkpoint authority is durable");
-                sync_live_tun_routes(&forwarder, &mut tun_runtime, route_controller.as_mut())?;
+                retry_checkpoint_tun_routes(checkpoint, &forwarder, &mut tun_runtime, route_controller.as_mut());
                 checkpoint.drive_sync(&mut node.swarm, &peer_capabilities, Instant::now())?;
+                checkpoint.drive_mutations(&mut node.swarm, Instant::now())?;
                 membership.replace_checkpoint_sync_peers(checkpoint)?;
                 let selection = checkpoint.finish_due(
                     store, &mut forwarder, Instant::now(), current_unix_seconds_lossy(),
@@ -1863,7 +1865,7 @@ where
                 if selection.is_some() || pruned || renamed {
                     membership.replace_from_forwarder(&forwarder)?;
                     membership.replace_checkpoint_sync_peers(checkpoint)?;
-                    sync_live_tun_routes(&forwarder, &mut tun_runtime, route_controller.as_mut())?;
+                    retry_checkpoint_tun_routes(checkpoint, &forwarder, &mut tun_runtime, route_controller.as_mut());
                     local_capabilities = refreshed_local_capabilities(&local_capabilities, &forwarder);
                     checkpoint.decorate_capabilities(&mut local_capabilities)?;
                     refresh_dns_zone_if_needed(dns_runtime.as_ref(), &forwarder, &mut dns_membership_revision, true);
@@ -2361,7 +2363,7 @@ where
                                 membership_state_store.as_ref().expect("checkpoint authority is durable"),
                                 &mut forwarder, &mut membership, &mut tun_runtime,
                                 route_controller.as_mut(), &mut local_capabilities,
-                                &node.identity, member_peer.as_deref(),
+                                &node.identity, member_peer.as_deref(), &membership_mutation_recipients,
                             )
                         } else {
                             apply_local_membership_revocation(
@@ -2375,7 +2377,10 @@ where
                             )
                         };
                         if let Ok(result) = &response {
-                            let advertised_to = if result.resigned {
+                            let advertised_to = if let Some(checkpoint) = &mut checkpoint_runtime {
+                                checkpoint.drive_mutations(&mut node.swarm, Instant::now())?;
+                                membership_mutation_recipients.len()
+                            } else if result.resigned {
                                 send_membership_departure_to_connected_members(
                                     &mut node.swarm,
                                     &forwarder,
@@ -2630,6 +2635,48 @@ where
                 }
             }
             event = node.swarm.select_next_some() => {
+                if let SwarmEvent::Behaviour(BehaviourEvent::CheckpointMutation(event)) = event {
+                    if !request_response_message_is_usable(&connection_epochs, &event, "checkpoint_mutation") {
+                        if let Some(checkpoint) = &mut checkpoint_runtime {
+                            checkpoint.discard_mutation_event(event, Instant::now());
+                        }
+                        continue;
+                    }
+                    let rate_limited = if let request_response::Event::Message {
+                        peer, message: Message::Request { .. }, ..
+                    } = &event {
+                        !checkpoint_mutation_rate_limiter.allow(Instant::now())
+                            || !membership_page_rate_limiters.allow(*peer, Instant::now())
+                    } else { false };
+                    if rate_limited || checkpoint_runtime.is_none() {
+                        if let request_response::Event::Message {
+                            message: Message::Request { request, channel, .. }, ..
+                        } = event {
+                            use crate::runtime::control::checkpoint_mutation::{CheckpointMutationResponse, MutationOutcome, MutationRejection};
+                            if let Ok(response) = CheckpointMutationResponse::for_request(&request, MutationOutcome::Rejected {
+                                reason: if rate_limited { MutationRejection::Busy } else { MutationRejection::ResyncRequired },
+                                current: None,
+                            }) {
+                                let _ = node.swarm.behaviour_mut().checkpoint_mutation.send_response(channel, response);
+                            }
+                        }
+                        continue;
+                    }
+                    let checkpoint = checkpoint_runtime.as_mut().expect("checkpoint owner exists");
+                    if checkpoint.handle_mutation_event(
+                        &mut node.swarm, event, membership_state_store.as_ref().expect("checkpoint authority is durable"),
+                        &mut forwarder, Instant::now(), current_unix_seconds_lossy(),
+                    ) {
+                        membership.replace_from_forwarder(&forwarder)?;
+                        membership.replace_checkpoint_sync_peers(checkpoint)?;
+                        retry_checkpoint_tun_routes(checkpoint, &forwarder, &mut tun_runtime, route_controller.as_mut());
+                        local_capabilities = refreshed_local_capabilities(&local_capabilities, &forwarder);
+                        checkpoint.decorate_capabilities(&mut local_capabilities)?;
+                        refresh_dns_zone_if_needed(dns_runtime.as_ref(), &forwarder, &mut dns_membership_revision, true);
+                        send_control_capabilities_to_connected_peers(&mut node.swarm, &forwarder, &local_capabilities, &metrics);
+                    }
+                    continue;
+                }
                 if let Some(checkpoint) = &mut checkpoint_runtime
                     && let SwarmEvent::Behaviour(BehaviourEvent::Control(request_response::Event::Message {
                         peer, connection_id, message,
@@ -10682,6 +10729,7 @@ fn spawn_tun_reader(
         let mut buffer = vec![0; usize::from(mtu)];
         loop {
             match reader.read_packet(&mut buffer) {
+                Ok(0) => return,
                 Ok(length) => {
                     metrics.record_tun_read(length);
                     if tx.blocking_send(buffer[..length].to_vec()).is_err() {
@@ -16633,6 +16681,26 @@ fn sync_live_tun_routes(
     })
 }
 
+fn retry_checkpoint_tun_routes(
+    checkpoint: &mut CheckpointRuntime,
+    forwarder: &Forwarder,
+    installed: &mut TunRuntimeConfig,
+    route_controller: &mut dyn TunRouteController,
+) {
+    // Packet authorization is already committed; stale kernel routes grant no access.
+    let result = sync_live_tun_routes(forwarder, installed, route_controller);
+    if checkpoint.record_route_cleanup(result.is_err()) {
+        match result {
+            Err(error) => log_runtime_event(
+                LogLevel::Warn,
+                "checkpoint_route_cleanup_pending",
+                &[("error", &format!("{error:?}"))],
+            ),
+            Ok(()) => log_runtime_event(LogLevel::Info, "checkpoint_route_cleanup_completed", &[]),
+        }
+    }
+}
+
 #[cfg(test)]
 fn sync_live_tun_routes_with(
     forwarder: &Forwarder,
@@ -17171,19 +17239,17 @@ fn apply_checkpoint_membership_revocation(
     local_capabilities: &mut ControlCapabilities,
     identity: &NodeIdentity,
     member_peer: Option<&str>,
+    recipients: &[Libp2pPeerId],
 ) -> Result<MembershipMutationResult, String> {
     let target = member_peer.unwrap_or(&identity.peer_id);
-    // Snapshot publication requires current admission. A final exact-base
-    // departure handoff must be wired before exposing resignation in this mode.
-    if target == identity.peer_id {
-        return Err("checkpoint resignation handoff is not yet supported".to_owned());
-    }
     checkpoint
-        .apply_change(
+        .apply_change_with_handoff(
             crate::membership::checkpoint::MembershipChange::RemoveMember(target.to_owned()),
             identity,
             store,
             forwarder,
+            recipients,
+            Instant::now(),
             current_unix_seconds_lossy(),
         )
         .map_err(|error| format!("checkpoint revocation was not fully installed: {error:?}"))?;
@@ -17197,14 +17263,13 @@ fn apply_checkpoint_membership_revocation(
     checkpoint
         .decorate_capabilities(local_capabilities)
         .map_err(|error| format!("checkpoint saved; capability refresh pending: {error:?}"))?;
-    sync_live_tun_routes(forwarder, tun_runtime, route_controller)
-        .map_err(|error| format!("checkpoint saved; route cleanup pending: {error:?}"))?;
+    retry_checkpoint_tun_routes(checkpoint, forwarder, tun_runtime, route_controller);
     Ok(MembershipMutationResult {
         member_peer: target.to_owned(),
         issuer_peer: identity.peer_id.clone(),
         membership_epoch: checkpoint.state().snapshot().payload.authority_revision,
         sequence: 0,
-        resigned: false,
+        resigned: target == identity.peer_id,
     })
 }
 
@@ -37368,6 +37433,57 @@ mod tests {
         let current = ConnectionId::new_unchecked(3);
         epochs.record_started(current);
         assert!(epochs.record_established(current));
+    }
+
+    #[tokio::test]
+    async fn tun_reader_eof_closes_without_enqueuing_empty_packets_or_spinning() {
+        struct EndsAtEof {
+            packet_first: bool,
+            calls: usize,
+        }
+        impl crate::runtime::tun::PacketRead for EndsAtEof {
+            fn read_packet(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+                self.calls += 1;
+                if self.packet_first && self.calls == 1 {
+                    buffer[..3].copy_from_slice(&[1, 2, 3]);
+                    return Ok(3);
+                }
+                assert_eq!(self.calls, if self.packet_first { 2 } else { 1 });
+                Ok(0)
+            }
+        }
+        impl crate::runtime::tun::PacketWrite for EndsAtEof {
+            fn write_packet(&mut self, _: &[u8]) -> io::Result<usize> {
+                panic!("EOF test must not write packets");
+            }
+        }
+        for packet_first in [false, true] {
+            let (reader, _) = PacketIo::new(
+                EndsAtEof {
+                    packet_first,
+                    calls: 0,
+                },
+                EndsAtEof {
+                    packet_first: false,
+                    calls: 0,
+                },
+            )
+            .split();
+            let metrics = Arc::new(RuntimeMetrics::default());
+            let mut worker = spawn_tun_reader(reader, Arc::clone(&metrics), 1280);
+            tokio::time::timeout(Duration::from_secs(1), async {
+                if packet_first {
+                    assert_eq!(worker.recv().await, Some(vec![1, 2, 3]));
+                }
+                assert!(worker.recv().await.is_none());
+            })
+            .await
+            .unwrap();
+            worker.worker.take().unwrap().join().unwrap();
+            let snapshot = metrics.snapshot(Default::default());
+            assert_eq!(snapshot.tun_read_packets, u64::from(packet_first));
+            assert_eq!(snapshot.tun_read_bytes, if packet_first { 3 } else { 0 });
+        }
     }
 
     #[tokio::test]
