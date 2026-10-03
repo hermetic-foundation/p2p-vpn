@@ -4205,6 +4205,7 @@ mod tests {
                 relay_reservations: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 protocols: PairingProtocols::default(),
+                checkpoint: None,
             },
             signature: "response-signature".to_owned(),
         }

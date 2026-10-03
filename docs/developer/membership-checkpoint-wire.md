@@ -70,6 +70,46 @@ revocation records. Paging never extends a transfer's deadline.
 | Busy or failed transfer | Retire affected resources; retry under a fresh resync challenge. |
 | Legacy daemon | No checkpoint authority is inferred from its control fields. |
 
+## Pairing Credentials
+
+The signed pairing response can carry an optional `checkpoint` grant. This
+contract is implemented, but ordinary pairing approval and migration do not
+activate checkpoint networks yet. It is not a new user configuration format.
+
+| Field | Contract |
+| --- | --- |
+| Grant version | `1`; reject unknown versions. |
+| Anchor | Immutable network identity and supported policy/rank versions. |
+| Capability | Canonical base64 secret, 32-4,096 decoded bytes; redact diagnostics. |
+| Minimum | Approved snapshot rank: revision, roster population, canonical digest. |
+| Participants | Current inviter and admitted joiner descriptors, with keys and incarnations. |
+| Grant size | At most 16 KiB. |
+| Complete response | Existing 32 KiB pairing limit; no full roster in this frame. |
+
+1. Persist the inviter's admission before issuing the signed response.
+2. Validate the approved offer, complete response signature, scope, and joiner key.
+3. Persist credentials and the minimum rank in owner-only pending state.
+4. Fetch the complete authenticated snapshot through paged checkpoint transfer.
+5. Require an observed remote offer at or above the pinned rank before activation.
+
+Descriptors are provisional discovery/sync seeds, not packet or mutation grants.
+An isolated timeout cannot activate this seed; a restart retains the pending gate.
+The selected newer snapshot may already exclude the joiner.
+
+### Pairing Compatibility
+
+| Case | Result |
+| --- | --- |
+| Legacy response | Omit `checkpoint` entirely; preserve existing signed JSON bytes. |
+| Checkpoint plus legacy key/records | Reject mixed authority. |
+| Generic JSON/Nix config import | Reject checkpoint enrollment instead of exporting its capability. |
+| Old response decoder | Ignoring the new signed field changes signing bytes; verification fails. |
+| Superseded approval | Preserve newer pinned authority; do not reinstall its old roster. |
+
+Checkpoint credentials belong in protected runtime state, not Nix store paths,
+plain configuration exports, or public snapshot offers. Ordinary pairing RPC and
+export integration remain separate acceptance work.
+
 ## Mutation Handoff
 
 | Surface | Contract |

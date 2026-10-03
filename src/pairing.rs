@@ -28,6 +28,9 @@ use crate::{
     wire::{HEADER_LEN, WIRE_VERSION},
 };
 
+pub mod checkpoint_grant;
+pub use checkpoint_grant::PairingCheckpointGrant;
+
 pub const PAIRING_OFFER_VERSION: u8 = 1;
 pub const DEFAULT_PAIRING_EXPIRES_IN_SECONDS: u64 = 600;
 pub const MAX_PAIRING_MEMBERSHIP_RECORDS: usize = 16;
@@ -273,6 +276,8 @@ pub struct PairingResponsePayload {
     pub relay_reservations: Vec<String>,
     pub discovery: DiscoveryConfig,
     pub protocols: PairingProtocols,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkpoint: Option<PairingCheckpointGrant>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -478,6 +483,32 @@ pub fn build_pairing_response_at(
     options: PairingResponseOptions,
     issued_at_unix_seconds: u64,
 ) -> Result<PairingResponse, PairingError> {
+    build_pairing_response_internal_at(config, offer, options, None, issued_at_unix_seconds)
+}
+
+/// Delivers protected enrollment credentials and a floor, never packet authority.
+pub fn build_checkpoint_pairing_response_at(
+    config: &Config,
+    offer: &PairingOffer,
+    options: PairingResponseOptions,
+    grant: PairingCheckpointGrant,
+    issued_at_unix_seconds: u64,
+) -> Result<PairingResponse, PairingError> {
+    build_pairing_response_internal_at(config, offer, options, Some(grant), issued_at_unix_seconds)
+}
+
+fn build_pairing_response_internal_at(
+    config: &Config,
+    offer: &PairingOffer,
+    options: PairingResponseOptions,
+    checkpoint: Option<PairingCheckpointGrant>,
+    issued_at_unix_seconds: u64,
+) -> Result<PairingResponse, PairingError> {
+    if checkpoint.is_some()
+        && (options.membership_key.is_some() || !options.member_records.is_empty())
+    {
+        return Err(PairingError::MixedCheckpointAuthority);
+    }
     config.validate_runtime()?;
     offer.verify_at(issued_at_unix_seconds)?;
     if options.expires_in_seconds == 0 {
@@ -517,6 +548,7 @@ pub fn build_pairing_response_at(
         relay_reservations: config.network.relay.reservations.clone(),
         discovery: config.network.discovery.clone(),
         protocols: PairingProtocols::default(),
+        checkpoint,
     };
     let signature = STANDARD.encode(identity.sign(&response_signing_message(&payload)?)?);
     let response = PairingResponse { payload, signature };
@@ -529,6 +561,7 @@ pub fn build_pairing_response_at(
         },
         issued_at_unix_seconds,
     )?;
+    validate_encoded_pairing_message("response", &response)?;
 
     Ok(response)
 }
@@ -540,6 +573,9 @@ pub fn import_pairing_response_config_at(
     now_unix_seconds: u64,
 ) -> Result<Config, PairingError> {
     response.verify_for_offer_at(offer, &options.identity, now_unix_seconds)?;
+    if response.payload.checkpoint.is_some() {
+        return Err(PairingError::CheckpointEnrollmentRequired);
+    }
     let config = Config {
         network: crate::config::NetworkConfig {
             dns: crate::dns::DnsConfig::default(),
@@ -610,6 +646,9 @@ pub fn apply_pairing_response_to_config_at(
         });
     };
     response.verify_for_offer_at(offer, &joiner_identity, now_unix_seconds)?;
+    if response.payload.checkpoint.is_some() {
+        return Err(PairingError::CheckpointEnrollmentRequired);
+    }
     validate_pairing_membership_record_count(&response.payload.member_records)?;
     validate_response_trust_root_against_existing_config(base, offer, response, now_unix_seconds)?;
     let mut next = base.clone();
@@ -686,23 +725,28 @@ fn validate_code_pairing_membership_records(
         return Err(PairingError::MissingMembershipGrant);
     };
 
+    validate_assigned_vpn_ip(
+        payload,
+        &joiner_record.payload.roles,
+        &joiner_record.payload.route_grants,
+    )
+}
+
+fn validate_assigned_vpn_ip(
+    payload: &PairingResponsePayload,
+    roles: &[MembershipRole],
+    routes: &[RouteConfig],
+) -> Result<(), PairingError> {
     if let Some(assigned_vpn_ip) = payload.assigned_vpn_ip.as_deref() {
         let assigned_vpn_ip = assigned_vpn_ip.parse::<IpAddr>()?;
         let joiner_peer = payload.joiner_peer.parse::<Libp2pPeerId>()?;
         let joiner_overlay = PeerId::from_libp2p(joiner_peer);
         let is_builtin = assigned_vpn_ip == IpAddr::V4(builtin_ipv4(joiner_overlay))
             || assigned_vpn_ip == IpAddr::V6(builtin_ipv6(joiner_overlay));
-        let is_granted = joiner_record
-            .payload
-            .roles
-            .contains(&MembershipRole::RouteAuthority)
-            && joiner_record
-                .payload
-                .route_grants
-                .iter()
-                .try_fold(false, |authorized, route| {
-                    Ok::<_, PairingError>(authorized || route.prefix()?.contains(assigned_vpn_ip))
-                })?;
+        let is_granted = roles.contains(&MembershipRole::RouteAuthority)
+            && routes.iter().try_fold(false, |authorized, route| {
+                Ok::<_, PairingError>(authorized || route.prefix()?.contains(assigned_vpn_ip))
+            })?;
         if !is_builtin && !is_granted {
             return Err(PairingError::AssignedVpnIpNotAuthorized {
                 assigned: assigned_vpn_ip.to_string(),
@@ -988,6 +1032,22 @@ fn validate_response_payload(
         &payload.relay_reservations,
     )?;
     validate_protocols(&payload.protocols)?;
+    if let Some(grant) = &payload.checkpoint {
+        if payload.membership_key.is_some() || !payload.member_records.is_empty() {
+            return Err(PairingError::MixedCheckpointAuthority);
+        }
+        grant.validate_for(
+            &payload.inviter_peer,
+            &payload.inviter_public_key,
+            &payload.joiner_peer,
+            now_unix_seconds,
+        )?;
+        if !joiner_identity.private_key.is_empty() {
+            grant.validate_joiner_identity(joiner_identity)?;
+        }
+        validate_assigned_vpn_ip(payload, &grant.joiner.roles, &grant.joiner.route_grants)?;
+        return Ok(());
+    }
     validate_membership_records_at(
         &payload.member_records,
         &payload.network_name,
@@ -1220,6 +1280,7 @@ pub enum PairingError {
     IpAddr(std::net::AddrParseError),
     RoutePrefix(crate::config::RoutePrefixError),
     MembershipRecord(crate::membership::MembershipRecordError),
+    CheckpointGrant(checkpoint_grant::CheckpointGrantError),
     InvalidHostname(DnsNameError),
     UnsupportedVersion(u8),
     EmptyNetworkName,
@@ -1231,6 +1292,8 @@ pub enum PairingError {
     TransportPeerMismatch { expected: String, actual: String },
     RendezvousTokenMismatch,
     MissingMembershipGrant,
+    MixedCheckpointAuthority,
+    CheckpointEnrollmentRequired,
     MissingInviterTrustRoot,
     UnexpectedInviterTrustRoot { expected: String, actual: String },
     LegacyMembershipMigrationRequired { inviter: String },
@@ -1318,6 +1381,12 @@ impl From<crate::config::RoutePrefixError> for PairingError {
 impl From<crate::membership::MembershipRecordError> for PairingError {
     fn from(error: crate::membership::MembershipRecordError) -> Self {
         Self::MembershipRecord(error)
+    }
+}
+
+impl From<checkpoint_grant::CheckpointGrantError> for PairingError {
+    fn from(error: checkpoint_grant::CheckpointGrantError) -> Self {
+        Self::CheckpointGrant(error)
     }
 }
 
@@ -2293,6 +2362,395 @@ mod tests {
                 1_010,
             ),
             Err(PairingError::MissingMembershipGrant)
+        ));
+    }
+
+    fn checkpoint_pairing_fixture() -> (Config, NodeIdentity, PairingOffer, PairingResponse) {
+        use crate::membership::checkpoint::{
+            CheckpointMember, CooperativeMembershipState, MembershipChange, NetworkAnchor,
+            NetworkCapability, SnapshotPolicy,
+        };
+
+        let inviter_config = config();
+        let inviter = NodeIdentity::from_private_key(
+            inviter_config
+                .network
+                .private_key
+                .as_deref()
+                .expect("private key"),
+        )
+        .expect("inviter");
+        let joiner = NodeIdentity::generate_ed25519().expect("joiner");
+        let mut state = CooperativeMembershipState::bootstrap_at(
+            NetworkCapability::from_secret(
+                NetworkAnchor::new([3; 32]).expect("anchor"),
+                Some(&[5; 32]),
+            )
+            .expect("capability"),
+            inviter.peer_id.clone(),
+            vec![CheckpointMember::new(&inviter).expect("inviter member")],
+            SnapshotPolicy::default(),
+            1_000,
+        )
+        .expect("network");
+        let admission = state
+            .sign_mutation_at(
+                &inviter,
+                MembershipChange::UpsertMember(
+                    CheckpointMember::new(&joiner).expect("joiner member"),
+                ),
+                1_001,
+            )
+            .expect("admission");
+        state.apply_mutation_at(&admission, 1_001).expect("apply");
+        let grant = PairingCheckpointGrant::from_state_at(&state, &[5; 32], &joiner.peer_id, 1_001)
+            .expect("grant");
+        let offer =
+            export_code_pairing_offer_at(&inviter_config, PairingOfferOptions::default(), 1_000)
+                .expect("offer");
+        let response = build_checkpoint_pairing_response_at(
+            &inviter_config,
+            &offer,
+            checkpoint_response_options(&joiner),
+            grant,
+            1_010,
+        )
+        .expect("checkpoint response");
+        (inviter_config, joiner, offer, response)
+    }
+
+    fn checkpoint_response_options(joiner: &NodeIdentity) -> PairingResponseOptions {
+        PairingResponseOptions {
+            joiner_peer: joiner.peer_id.clone(),
+            assigned_vpn_ip: None,
+            membership_key: None,
+            member_records: Vec::new(),
+            expires_in_seconds: 300,
+        }
+    }
+
+    #[test]
+    fn checkpoint_pairing_response_round_trips_and_verifies_without_legacy_authority() {
+        let (_, joiner, offer, response) = checkpoint_pairing_fixture();
+        response
+            .verify_for_offer_at(&offer, &joiner, 1_011)
+            .expect("verify");
+        assert!(response.payload.member_records.is_empty());
+        assert!(response.payload.membership_key.is_none());
+        assert!(response.payload.checkpoint.is_some());
+        let bytes = serde_json::to_vec(&response).expect("JSON");
+        assert!(bytes.len() <= MAX_PAIRING_MESSAGE_LEN);
+        let parsed: PairingResponse = serde_json::from_slice(&bytes).expect("decode");
+        assert_eq!(parsed, response);
+        parsed
+            .verify_for_offer_at(&offer, &joiner, 1_011)
+            .expect("verify parsed");
+        assert!(matches!(
+            response.verify_for_offer_at(&offer, &joiner, 1_311),
+            Err(PairingError::Expired { .. })
+        ));
+    }
+
+    #[test]
+    fn checkpoint_pairing_cannot_import_or_apply_a_legacy_config() {
+        let (inviter_config, joiner, offer, response) = checkpoint_pairing_fixture();
+        assert!(matches!(
+            import_pairing_response_config_at(
+                &offer,
+                &response,
+                PairingConfigOptions {
+                    identity: joiner.clone(),
+                    interface_name: "pv0".to_owned(),
+                    mtu: 1280,
+                    local_routes: vec![],
+                    peer_name: None,
+                },
+                1_011,
+            ),
+            Err(PairingError::CheckpointEnrollmentRequired)
+        ));
+        let joiner_config = code_pairing_joiner_config(inviter_config.clone(), &joiner);
+        let before = joiner_config.clone();
+        assert!(matches!(
+            apply_pairing_response_to_config_at(&joiner_config, &offer, &response, &joiner, 1_011),
+            Err(PairingError::CheckpointEnrollmentRequired)
+        ));
+        assert_eq!(joiner_config, before);
+        let inviter = NodeIdentity::from_private_key(
+            inviter_config.network.private_key.as_deref().expect("key"),
+        )
+        .expect("inviter");
+        assert!(matches!(
+            apply_pairing_response_to_config_at(
+                &inviter_config,
+                &offer,
+                &response,
+                &inviter,
+                1_011
+            ),
+            Err(PairingError::CheckpointEnrollmentRequired)
+        ));
+    }
+
+    #[test]
+    fn checkpoint_pairing_rejects_mixed_authority_at_build_and_validation() {
+        let (inviter_config, joiner, offer, response) = checkpoint_pairing_fixture();
+        let (_, _, _, legacy) = code_pairing_response_fixture();
+        for (key, records) in [
+            (Some(STANDARD.encode([9; 32])), vec![]),
+            (None, legacy.payload.member_records),
+        ] {
+            let mut options = checkpoint_response_options(&joiner);
+            options.membership_key = key.clone();
+            options.member_records = records.clone();
+            assert!(matches!(
+                build_checkpoint_pairing_response_at(
+                    &inviter_config,
+                    &offer,
+                    options,
+                    response.payload.checkpoint.clone().expect("grant"),
+                    1_010,
+                ),
+                Err(PairingError::MixedCheckpointAuthority)
+            ));
+            let mut mixed = response.clone();
+            mixed.payload.membership_key = key;
+            mixed.payload.member_records = records;
+            resign_code_pairing_response(&inviter_config, &mut mixed);
+            assert!(matches!(
+                mixed.verify_for_offer_at(&offer, &joiner, 1_011),
+                Err(PairingError::MixedCheckpointAuthority)
+            ));
+        }
+    }
+
+    #[test]
+    fn signed_checkpoint_grant_detects_secret_anchor_and_floor_tampering() {
+        let (_, joiner, offer, response) = checkpoint_pairing_fixture();
+        let changes: &[fn(&mut PairingCheckpointGrant)] = &[
+            |grant| grant.capability_secret = STANDARD.encode([6; 32]),
+            |grant| grant.anchor.network_id = [4; 32],
+            |grant| grant.minimum.authority_revision += 1,
+            |grant| grant.minimum.active_member_count += 1,
+            |grant| grant.minimum.digest = [8; 32],
+            |grant| grant.joiner.incarnation = [2; 32],
+        ];
+        for change in changes {
+            let mut tampered = response.clone();
+            change(tampered.payload.checkpoint.as_mut().expect("grant"));
+            assert!(matches!(
+                tampered.verify_for_offer_at(&offer, &joiner, 1_011),
+                Err(PairingError::InvalidSignature)
+            ));
+        }
+    }
+
+    #[test]
+    fn checkpoint_response_rejects_signed_invalid_grant_or_wrong_joiner_key() {
+        let (inviter_config, joiner, offer, response) = checkpoint_pairing_fixture();
+        let changes: &[fn(&mut PairingCheckpointGrant)] = &[
+            |grant| grant.version = 2,
+            |grant| grant.capability_secret = STANDARD.encode([6; 31]),
+            |grant| grant.minimum.authority_revision = 0,
+            |grant| grant.joiner.expires_at_unix_seconds = Some(1_011),
+            |grant| grant.inviter.subject.public_key = grant.joiner.subject.public_key.clone(),
+            |grant| grant.inviter = grant.joiner.clone(),
+            |grant| grant.joiner = grant.inviter.clone(),
+        ];
+        for change in changes {
+            let mut invalid = response.clone();
+            change(invalid.payload.checkpoint.as_mut().expect("grant"));
+            resign_code_pairing_response(&inviter_config, &mut invalid);
+            assert!(matches!(
+                invalid.verify_for_offer_at(&offer, &joiner, 1_011),
+                Err(PairingError::CheckpointGrant(_))
+            ));
+        }
+        let impostor = NodeIdentity {
+            peer_id: joiner.peer_id,
+            private_key: NodeIdentity::generate_ed25519()
+                .expect("stranger")
+                .private_key,
+        };
+        assert!(matches!(
+            response.verify_for_offer_at(&offer, &impostor, 1_011),
+            Err(PairingError::CheckpointGrant(_))
+        ));
+    }
+
+    #[test]
+    fn checkpoint_grant_is_bound_to_response_participants_and_offer_scope() {
+        let (inviter_config, joiner, offer, response) = checkpoint_pairing_fixture();
+        let stranger = NodeIdentity::generate_ed25519().expect("stranger");
+        let mut mismatched = response.clone();
+        mismatched.payload.joiner_peer.clone_from(&stranger.peer_id);
+        resign_code_pairing_response(&inviter_config, &mut mismatched);
+        assert!(matches!(
+            mismatched.verify_for_offer_at(&offer, &stranger, 1_011),
+            Err(PairingError::CheckpointGrant(_))
+        ));
+        let mut different_network = inviter_config;
+        different_network.network.name = "other".to_owned();
+        let other_offer =
+            export_code_pairing_offer_at(&different_network, PairingOfferOptions::default(), 1_000)
+                .expect("other offer");
+        assert!(matches!(
+            response.verify_for_offer_at(&other_offer, &joiner, 1_011),
+            Err(PairingError::NetworkMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn checkpoint_response_redacts_nested_grant_secret() {
+        let (_, _, _, response) = checkpoint_pairing_fixture();
+        let secret = &response
+            .payload
+            .checkpoint
+            .as_ref()
+            .expect("grant")
+            .capability_secret;
+        for debug in [format!("{response:?}"), format!("{:?}", response.payload)] {
+            assert!(debug.contains("[REDACTED]"));
+            assert!(!debug.contains(secret));
+        }
+    }
+
+    #[test]
+    fn checkpoint_response_rejects_ungranted_assigned_ip() {
+        let (inviter_config, joiner, offer, mut response) = checkpoint_pairing_fixture();
+        response.payload.assigned_vpn_ip = Some("10.42.0.222".to_owned());
+        resign_code_pairing_response(&inviter_config, &mut response);
+        assert!(matches!(
+            response.verify_for_offer_at(&offer, &joiner, 1_011),
+            Err(PairingError::AssignedVpnIpNotAuthorized { .. })
+        ));
+        let builtin =
+            builtin_ipv4(PeerId::from_libp2p(joiner.peer_id.parse().expect("peer"))).to_string();
+        response.payload.assigned_vpn_ip = Some(builtin);
+        resign_code_pairing_response(&inviter_config, &mut response);
+        response
+            .verify_for_offer_at(&offer, &joiner, 1_011)
+            .expect("builtin address");
+    }
+
+    #[test]
+    fn checkpoint_response_builder_enforces_existing_transport_frame_limit() {
+        let (mut config, joiner, offer, response) = checkpoint_pairing_fixture();
+        config.network.external_addresses = (1..=2_048)
+            .map(|port| format!("/ip4/127.0.0.1/tcp/{port}"))
+            .collect();
+        assert!(matches!(
+            build_checkpoint_pairing_response_at(
+                &config,
+                &offer,
+                checkpoint_response_options(&joiner),
+                response.payload.checkpoint.expect("grant"),
+                1_010,
+            ),
+            Err(PairingError::EncodedMessageTooLarge(
+                "response",
+                _,
+                MAX_PAIRING_MESSAGE_LEN
+            ))
+        ));
+    }
+
+    #[test]
+    fn legacy_response_json_and_signatures_are_byte_compatible() {
+        let identity = |seed| {
+            let keypair =
+                libp2p::identity::Keypair::ed25519_from_bytes([seed; 32]).expect("keypair");
+            NodeIdentity::from_private_key(
+                &STANDARD.encode(keypair.to_protobuf_encoding().expect("protobuf")),
+            )
+            .expect("identity")
+        };
+        let inviter = identity(1);
+        let joiner = identity(2);
+        let mut config = config();
+        config.network.local_peer = inviter.peer_id.clone();
+        config.network.private_key = Some(inviter.private_key.clone());
+        let offer = export_pairing_offer_at(
+            &config,
+            PairingOfferOptions {
+                expires_in_seconds: 600,
+                rendezvous_token: Some(URL_SAFE_NO_PAD.encode([7; RENDEZVOUS_TOKEN_LEN])),
+            },
+            1_000,
+        )
+        .expect("legacy offer");
+        let response = build_pairing_response_at(
+            &config,
+            &offer,
+            PairingResponseOptions {
+                joiner_peer: joiner.peer_id.clone(),
+                assigned_vpn_ip: Some("10.42.0.2".to_owned()),
+                membership_key: Some(STANDARD.encode([9; 32])),
+                member_records: vec![],
+                expires_in_seconds: 300,
+            },
+            1_010,
+        )
+        .expect("legacy response");
+        let golden = format!(
+            concat!(
+                "{{\"version\":1,\"network_name\":\"lab\",\"inviter_peer\":\"{inviter}\",",
+                "\"inviter_public_key\":\"{public_key}\",\"joiner_peer\":\"{joiner}\",",
+                "\"rendezvous_token\":\"BwcHBwcHBwcHBwcHBwcHBw\",",
+                "\"issued_at_unix_seconds\":1010,\"expires_at_unix_seconds\":1310,",
+                "\"assigned_vpn_ip\":\"10.42.0.2\",\"membership_key\":\"CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk=\",",
+                "\"member_records\":[],\"inviter_addresses\":[\"/ip4/127.0.0.1/tcp/0\"],",
+                "\"inviter_routes\":[{{\"prefix\":\"10.42.0.1/32\",\"metric\":0}}],",
+                "\"bootstrap_peers\":[],\"relay_reservations\":[],",
+                "\"discovery\":{{\"mdns\":true,\"kademlia\":true,\"kademlia_provider_advertisement\":true,",
+                "\"kademlia_protocol\":\"/ipfs/kad/1.0.0\",\"dcutr\":true,\"autonat\":true}},",
+                "\"protocols\":{{\"control\":\"/p2p-vpn/control/1\",\"packet\":\"/p2p-vpn/packet/1\",",
+                "\"service\":\"/p2p-vpn/service/1\",\"wire_version\":1,\"packet_header_len\":17}}}}"
+            ),
+            inviter = inviter.peer_id,
+            public_key = STANDARD.encode(inviter.public_key_protobuf().expect("public key")),
+            joiner = joiner.peer_id
+        );
+        assert_eq!(
+            serde_json::to_vec(&response.payload).expect("bytes"),
+            golden.as_bytes()
+        );
+        let mut legacy_message = RESPONSE_SIGNING_DOMAIN.to_vec();
+        legacy_message.extend(golden.as_bytes());
+        assert_eq!(
+            response_signing_message(&response.payload).expect("message"),
+            legacy_message
+        );
+        let legacy_signature = inviter.sign(&legacy_message).expect("legacy signature");
+        assert_eq!(response.signature, STANDARD.encode(&legacy_signature));
+        assert!(inviter.public_key().expect("key").verify(
+            &legacy_message,
+            &STANDARD.decode(&response.signature).expect("signature")
+        ));
+        let parsed: PairingResponsePayload =
+            serde_json::from_str(&golden).expect("old response decode");
+        assert!(parsed.checkpoint.is_none());
+        assert_eq!(parsed, response.payload);
+        PairingResponse {
+            payload: parsed,
+            signature: STANDARD.encode(legacy_signature),
+        }
+        .verify_for_offer_at(&offer, &joiner, 1_011)
+        .expect("old signed bytes accepted");
+    }
+
+    #[test]
+    fn legacy_response_verifier_cannot_accept_stripped_checkpoint_authority() {
+        let (_, joiner, offer, mut response) = checkpoint_pairing_fixture();
+        let original_signature = STANDARD.decode(&response.signature).expect("signature");
+        let inviter_key = decode_public_key(&response.payload.inviter_public_key).expect("key");
+        response.payload.checkpoint = None;
+        let legacy_message =
+            response_signing_message(&response.payload).expect("old signing bytes");
+        assert!(!inviter_key.verify(&legacy_message, &original_signature));
+        assert!(matches!(
+            response.verify_for_offer_at(&offer, &joiner, 1_011),
+            Err(PairingError::MissingInviterTrustRoot)
         ));
     }
 }

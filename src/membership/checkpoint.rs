@@ -1,4 +1,4 @@
-//! Cooperative, active-only membership snapshots. Not yet integrated into storage/runtime.
+//! Cooperative, active-only membership snapshots. Ordinary provisioning/migration is pending.
 //!
 //! Any participating survivor can publish a genuine roster/policy change. A bounded
 //! resync window selects `(authority_revision, member_count, canonical_digest)`;
@@ -256,7 +256,7 @@ impl CheckpointMember {
             .is_none_or(|expiry| now < expiry)
     }
 
-    fn validate(&self) -> Result<(), CheckpointError> {
+    pub(crate) fn validate(&self) -> Result<(), CheckpointError> {
         self.subject.validate()?;
         if self.incarnation == [0; 32] {
             return Err(CheckpointError::Invalid("empty member incarnation"));
@@ -313,13 +313,24 @@ pub struct CheckpointBoundary {
     pub digest: [u8; 32],
 }
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct SnapshotRank {
     pub authority_revision: u64,
     /// Canonical roster population, not locally observed online population.
     /// Expiry is enforced on access; `PruneExpired` removes expired roster entries.
     pub active_member_count: usize,
     pub digest: [u8; 32],
+}
+
+impl SnapshotRank {
+    pub fn validate(&self) -> Result<(), CheckpointError> {
+        portable(self.authority_revision)?;
+        if self.active_member_count > MAX_CHECKPOINT_MEMBERS || self.digest == [0; 32] {
+            return Err(CheckpointError::Invalid("invalid checkpoint rank"));
+        }
+        Ok(())
+    }
 }
 
 impl CheckpointSnapshot {
