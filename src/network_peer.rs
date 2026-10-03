@@ -555,6 +555,17 @@ fn network_peer_inventory_from_source<'a>(
 
     // Membership audit state is not a list of devices still in the network.
     peers.retain(|_, entry| entry.membership_state != Some(NetworkPeerMembershipState::Revoked));
+    if effective.is_checkpoint_authoritative() {
+        // Compaction removes tombstones, so omission from the snapshot is authoritative.
+        peers.retain(|peer, _| effective.authorizes_configured_peer(*peer));
+        for entry in peers.values_mut() {
+            entry.effective_inviter_peer_id = None;
+            entry.original_inviter_peer_id = None;
+            entry.admitted_at_unix_seconds = None;
+            entry.original_admitted_at_unix_seconds = None;
+            entry.membership_state_changed_at_unix_seconds = None;
+        }
+    }
 
     let inviter_hostnames = peers
         .values()
@@ -675,6 +686,119 @@ mod tests {
             issue_named_membership_record_for_subject_at,
         },
     };
+
+    #[test]
+    fn checkpoint_inventory_cannot_resurrect_static_metadata_without_tombstones() {
+        use crate::membership::checkpoint::{
+            CheckpointMember, CooperativeMembershipState, MembershipChange, NetworkAnchor,
+            NetworkCapability, SnapshotPolicy,
+        };
+
+        let local = NodeIdentity::generate_ed25519().unwrap();
+        let removed = NodeIdentity::generate_ed25519().unwrap();
+        let survivor = NodeIdentity::generate_ed25519().unwrap();
+        let config: Config = serde_json::from_value(serde_json::json!({
+            "network": {"name": "lab", "private_key": local.private_key,
+                "dns": {"hostname": "local-device"}},
+            "peers": [{"id": removed.peer_id, "name": "removed-device", "vpn_ip": "10.42.0.2"},
+                {"id": survivor.peer_id, "name": "survivor", "vpn_ip": "10.42.0.3"}]
+        }))
+        .unwrap();
+        let capability =
+            NetworkCapability::from_secret(NetworkAnchor::new([41; 32]).unwrap(), Some(&[29; 32]))
+                .unwrap();
+        let mut state = CooperativeMembershipState::bootstrap_at(
+            capability.clone(),
+            local.peer_id.clone(),
+            vec![
+                CheckpointMember::new(&local).unwrap(),
+                CheckpointMember::new(&removed).unwrap(),
+                CheckpointMember::new(&survivor).unwrap(),
+            ],
+            SnapshotPolicy::default(),
+            1_000,
+        )
+        .unwrap();
+        let mutation = state
+            .sign_mutation_at(
+                &local,
+                MembershipChange::RemoveMember(removed.peer_id.clone()),
+                1_000,
+            )
+            .unwrap();
+        state.apply_mutation_at(&mutation, 1_000).unwrap();
+        let effective = state.effective_membership_at(1_000).unwrap();
+        let cached_names =
+            HashMap::from([(removed.peer_id.parse().unwrap(), "stale-name".to_owned())]);
+        let old_audit = MembershipAuditMember {
+            peer: survivor.peer_id.parse().unwrap(),
+            transport_peer: survivor.peer_id.parse().unwrap(),
+            state: MembershipState::Active,
+            effective_inviter_peer: Some(removed.peer_id.parse().unwrap()),
+            original_inviter_peer: Some(removed.peer_id.parse().unwrap()),
+            admitted_at_unix_seconds: Some(1_000),
+            original_admitted_at_unix_seconds: Some(1_000),
+            state_changed_at_unix_seconds: 1_000,
+            hostname: Some("survivor".to_owned()),
+        };
+        let inventory = network_peer_inventory_with_membership(
+            &config,
+            &cached_names,
+            &effective,
+            vec![old_audit],
+        )
+        .unwrap();
+        let list = NetworkPeerList::from_inventory("lab", inventory);
+        assert_eq!(list.peers.len(), 2);
+        let encoded = serde_json::to_string(&list).unwrap();
+        for stale in [
+            &removed.peer_id,
+            "removed-device",
+            "stale-name",
+            "10.42.0.2",
+        ] {
+            assert!(!encoded.contains(stale));
+        }
+        assert!(encoded.contains(&survivor.peer_id));
+        assert!(!encoded.contains("inviter"));
+        assert!(!encoded.contains("admitted_at"));
+
+        let mutation = state
+            .sign_mutation_at(
+                &local,
+                MembershipChange::RemoveMember(local.peer_id.clone()),
+                1_000,
+            )
+            .unwrap();
+        state.apply_mutation_at(&mutation, 1_000).unwrap();
+        let effective = state.effective_membership_at(1_000).unwrap();
+        let inventory =
+            network_peer_inventory_with_membership(&config, &cached_names, &effective, vec![])
+                .unwrap();
+        assert!(
+            NetworkPeerList::from_inventory("lab", inventory)
+                .peers
+                .is_empty()
+        );
+
+        let returning = CooperativeMembershipState::restore(
+            capability,
+            survivor.peer_id.clone(),
+            state.retained(),
+        )
+        .unwrap();
+        let effective = returning.effective_membership_at(1_000).unwrap();
+        let inventory =
+            network_peer_inventory_with_membership(&config, &cached_names, &effective, vec![])
+                .unwrap();
+        assert!(
+            NetworkPeerSnapshot::from_inventory_at(inventory, 1_000, |_, _| {
+                NetworkPeerRuntimeState::disconnected()
+            })
+            .peers
+            .is_empty()
+        );
+    }
 
     #[test]
     fn inventory_includes_local_static_and_signed_members() {

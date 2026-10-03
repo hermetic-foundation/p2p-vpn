@@ -18,8 +18,13 @@ use crate::{
     identity::NodeIdentity,
     membership::{
         EffectiveMembership, MAX_MEMBERSHIP_RECORDS, MembershipAuditMember, MembershipRecordError,
-        MembershipRecordMergeStats, SignedMembershipRecord, effective_membership_at,
-        membership_audit_at, membership_trust_anchors, merge_membership_records_at,
+        MembershipRecordMergeStats, MembershipState, SignedMembershipRecord,
+        checkpoint::{
+            CheckpointBoundary, CheckpointError, CooperativeMembershipState, MembershipSyncState,
+            NetworkAnchor, SnapshotRank,
+        },
+        effective_membership_at, membership_audit_at, membership_trust_anchors,
+        merge_membership_records_at,
     },
     queue::{EnqueueError, Packet, PeerQueues},
     route::{IpCidr, Route, RouteError, RouteTable},
@@ -39,9 +44,11 @@ pub struct Forwarder {
     hostname_records: Vec<SignedHostnameRecord>,
     authorization: ForwardingAuthorization,
     effective_membership: EffectiveMembership,
+    checkpoint: Option<CheckpointProjection>,
     membership_refresh_window: MembershipRefreshWindow,
     membership_revision: u64,
     authorization_revision: u64,
+    commit_generation: u64,
     membership_effective_refresh_pending: bool,
     replay_windows: HashMap<(PeerId, SessionId), ReplayWindow>,
     replay_session_ttl: Duration,
@@ -57,6 +64,11 @@ pub struct ForwarderUpdate {
     member_records: Vec<SignedMembershipRecord>,
     authorization: ForwardingAuthorization,
     effective_membership: EffectiveMembership,
+    checkpoint: Option<CheckpointProjection>,
+    base_membership_revision: u64,
+    base_authorization_revision: u64,
+    base_commit_generation: u64,
+    source_network_name: String,
     membership_refresh_window: MembershipRefreshWindow,
     mtu: usize,
 }
@@ -67,6 +79,124 @@ pub struct ForwarderUpdate {
 struct MembershipRefreshWindow {
     evaluated_at: u64,
     next_transition: Option<u64>,
+}
+
+// Public, already authenticated projection data only; never retain the capability
+// or a second membership history. The runner owns the authoritative core state.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct CheckpointProjection {
+    anchor: NetworkAnchor,
+    boundary: CheckpointBoundary,
+    rank: SnapshotRank,
+    sync_state: MembershipSyncState,
+    members: EffectiveMembership,
+    incarnations: HashMap<PeerId, [u8; 32]>,
+    expiries: HashMap<PeerId, u64>,
+    audit: Vec<MembershipAuditMember>,
+}
+
+impl CheckpointProjection {
+    fn from_state(
+        state: &CooperativeMembershipState,
+        expected_local: PeerId,
+        expected_anchor: &NetworkAnchor,
+    ) -> Result<Self, ForwardError> {
+        let actual_local = PeerId::from_libp2p(state.local_peer().parse()?);
+        if expected_local != actual_local {
+            return Err(ForwardError::LocalPeerChanged {
+                expected: expected_local,
+                actual: actual_local,
+            });
+        }
+        let snapshot = &state.snapshot().payload;
+        if &snapshot.anchor != expected_anchor {
+            return Err(ForwardError::Checkpoint(CheckpointError::WrongAnchor));
+        }
+        let mut incarnations = HashMap::new();
+        let mut expiries = HashMap::new();
+        let mut audit = Vec::new();
+        for member in &snapshot.members {
+            let transport_peer = member.subject.peer_id.parse::<Libp2pPeerId>()?;
+            let peer = PeerId::from_libp2p(transport_peer);
+            incarnations.insert(peer, member.incarnation);
+            if let Some(expiry) = member.expires_at_unix_seconds {
+                expiries.insert(peer, expiry);
+            }
+            audit.push(MembershipAuditMember {
+                peer,
+                transport_peer,
+                state: MembershipState::Active,
+                effective_inviter_peer: None,
+                original_inviter_peer: None,
+                admitted_at_unix_seconds: None,
+                original_admitted_at_unix_seconds: None,
+                state_changed_at_unix_seconds: 0,
+                hostname: state
+                    .hostname_claims()
+                    .iter()
+                    .find(|claim| {
+                        claim.payload.subject == member.subject
+                            && claim.payload.incarnation == member.incarnation
+                    })
+                    .map(|claim| claim.payload.hostname.clone()),
+            });
+        }
+        Ok(Self {
+            anchor: snapshot.anchor.clone(),
+            boundary: snapshot.boundary()?,
+            rank: snapshot.rank()?,
+            sync_state: state.sync_state(),
+            members: state.effective_membership_at(0)?,
+            incarnations,
+            expiries,
+            audit,
+        })
+    }
+
+    fn active_at(&self, peer: PeerId, now: u64) -> bool {
+        self.incarnations.contains_key(&peer)
+            && self.expiries.get(&peer).is_none_or(|expiry| now < *expiry)
+    }
+
+    fn membership_at(&self, local_peer: PeerId, now: u64) -> EffectiveMembership {
+        let mut members = self.members.clone();
+        let local_active = self.sync_state == MembershipSyncState::Participating
+            && self.active_at(local_peer, now);
+        members.retain_members(|member| local_active && self.active_at(member.peer, now));
+        members
+    }
+
+    fn audit_at(&self, now: u64) -> Vec<MembershipAuditMember> {
+        self.audit
+            .iter()
+            .filter(|member| self.active_at(member.peer, now))
+            .cloned()
+            .collect()
+    }
+
+    fn refresh_window(&self, now: u64) -> MembershipRefreshWindow {
+        MembershipRefreshWindow {
+            evaluated_at: now,
+            next_transition: self
+                .expiries
+                .values()
+                .copied()
+                .filter(|expiry| *expiry > now)
+                .min(),
+        }
+    }
+
+    fn sanitize_config(&self, config: &mut Config, now: u64) -> Result<(), ForwardError> {
+        config.network.member_records.clear();
+        let mut peers = Vec::new();
+        for peer in std::mem::take(&mut config.peers) {
+            if self.active_at(peer.peer_id()?, now) {
+                peers.push(peer);
+            }
+        }
+        config.peers = peers;
+        Ok(())
+    }
 }
 
 impl MembershipRefreshWindow {
@@ -133,6 +263,24 @@ impl ForwardingAuthorization {
             },
             membership,
         ))
+    }
+
+    fn from_checkpoint(
+        config: &Config,
+        membership: &EffectiveMembership,
+    ) -> Result<Self, ConfigError> {
+        let routes = if membership.authorizes_configured_peer(config.local_peer_id()?) {
+            config.compile_routes_with_membership(membership)?
+        } else {
+            RouteTable::new()
+        };
+        let peers = transport_peers_from_membership(config, membership)?;
+        let authorized_peers = authorized_peers_from_transport_peers(&peers);
+        Ok(Self {
+            routes,
+            peers,
+            authorized_peers,
+        })
     }
 }
 
@@ -204,33 +352,67 @@ impl ReplayWindow {
 
 impl Forwarder {
     pub fn from_config(config: &Config) -> Result<Self, ForwardError> {
-        let member_records = config.network.member_records.clone();
-        let now_unix_seconds = current_unix_seconds_lossy();
+        Self::from_authority(config.clone(), None, current_unix_seconds_lossy())
+    }
 
+    /// Restart with a verified checkpoint without first opening static/ledger
+    /// authority. Expected scope must come from protected, pinned credentials.
+    pub fn from_checkpoint_config(
+        config: &Config,
+        state: &CooperativeMembershipState,
+        expected_anchor: &NetworkAnchor,
+        now_unix_seconds: u64,
+    ) -> Result<Self, ForwardError> {
+        let checkpoint =
+            CheckpointProjection::from_state(state, config.local_peer_id()?, expected_anchor)?;
+        Self::from_authority(config.clone(), Some(checkpoint), now_unix_seconds)
+    }
+
+    fn from_authority(
+        mut config: Config,
+        checkpoint: Option<CheckpointProjection>,
+        now_unix_seconds: u64,
+    ) -> Result<Self, ForwardError> {
         let local_peer = config.local_peer_id()?;
-        let (authorization, effective_membership) =
-            ForwardingAuthorization::from_records(config, &member_records, now_unix_seconds)?;
+        let (member_records, authorization, effective_membership, membership_refresh_window) =
+            if let Some(checkpoint) = &checkpoint {
+                checkpoint.sanitize_config(&mut config, now_unix_seconds)?;
+                let membership = checkpoint.membership_at(local_peer, now_unix_seconds);
+                let authorization = ForwardingAuthorization::from_checkpoint(&config, &membership)?;
+                (
+                    Vec::new(),
+                    authorization,
+                    membership,
+                    checkpoint.refresh_window(now_unix_seconds),
+                )
+            } else {
+                let records = config.network.member_records.clone();
+                let (authorization, membership) =
+                    ForwardingAuthorization::from_records(&config, &records, now_unix_seconds)?;
+                let refresh = MembershipRefreshWindow::from_records(&records, now_unix_seconds);
+                (records, authorization, membership, refresh)
+            };
 
+        let mtu = usize::from(config.effective_packet_mtu());
         Ok(Self {
             local_peer,
-            config: config.clone(),
-            membership_refresh_window: MembershipRefreshWindow::from_records(
-                &member_records,
-                now_unix_seconds,
-            ),
+            config,
+            membership_refresh_window,
             member_records,
             hostname_records: Vec::new(),
             authorization,
             effective_membership,
+            checkpoint,
             membership_revision: 0,
             authorization_revision: 0,
+            commit_generation: 0,
             membership_effective_refresh_pending: false,
             replay_windows: HashMap::new(),
             replay_session_ttl: DEFAULT_REPLAY_SESSION_TTL,
             max_replay_windows: MAX_REPLAY_WINDOWS,
             session_id: fresh_session_id(),
             next_sequence: 0,
-            mtu: usize::from(config.effective_packet_mtu()),
+            mtu,
         })
     }
 
@@ -342,6 +524,13 @@ impl Forwarder {
         records: &[SignedMembershipRecord],
         now_unix_seconds: u64,
     ) -> Result<MembershipRecordMergeStats, ForwardError> {
+        if self.checkpoint.is_some() {
+            if !records.is_empty() {
+                return Err(ForwardError::LegacyAuthorityDisabled);
+            }
+            self.refresh_checkpoint_projection(now_unix_seconds)?;
+            return Ok(MembershipRecordMergeStats::default());
+        }
         // Exact retained records are already validated; time-dependent authority must still refresh.
         if self.membership_refresh_window.contains(now_unix_seconds)
             && records
@@ -381,6 +570,9 @@ impl Forwarder {
         records: &[SignedMembershipRecord],
         now_unix_seconds: u64,
     ) -> Result<(ForwarderUpdate, MembershipRecordMergeStats), ForwardError> {
+        if self.checkpoint.is_some() {
+            return Err(ForwardError::LegacyAuthorityDisabled);
+        }
         let mut member_records = self.member_records.clone();
         let stats = merge_membership_records_at(
             &mut member_records,
@@ -402,6 +594,11 @@ impl Forwarder {
                 member_records,
                 authorization,
                 effective_membership,
+                checkpoint: None,
+                base_membership_revision: self.membership_revision,
+                base_authorization_revision: self.authorization_revision,
+                base_commit_generation: self.commit_generation,
+                source_network_name: self.config.network.name.clone(),
                 mtu: self.mtu,
             },
             stats,
@@ -409,6 +606,9 @@ impl Forwarder {
     }
 
     pub(crate) fn commit_pairing_membership_merge(&mut self, update: ForwarderUpdate) {
+        if self.checkpoint.is_some() {
+            return;
+        }
         let refresh_pending =
             self.membership_effective_refresh_pending || self.authorization != update.authorization;
         self.commit_reconfigure(update);
@@ -420,6 +620,9 @@ impl Forwarder {
         records: &[SignedMembershipRecord],
         now_unix_seconds: u64,
     ) -> Result<MembershipRecordMergeStats, ForwardError> {
+        if self.checkpoint.is_some() {
+            return Err(ForwardError::LegacyAuthorityDisabled);
+        }
         let mut anchor_records = self.member_records.clone();
         anchor_records.extend(
             records
@@ -445,6 +648,9 @@ impl Forwarder {
         now_unix_seconds: u64,
         trusted_issuers: &crate::membership::TrustedMembershipIssuers,
     ) -> Result<MembershipRecordMergeStats, ForwardError> {
+        if self.checkpoint.is_some() {
+            return Err(ForwardError::LegacyAuthorityDisabled);
+        }
         let mut member_records = self.member_records.clone();
         let stats = merge_membership_records_at(
             &mut member_records,
@@ -478,6 +684,9 @@ impl Forwarder {
         &mut self,
         records: &[SignedHostnameRecord],
     ) -> Result<HostnameRecordMergeStats, ForwardError> {
+        if self.checkpoint.is_some() {
+            return Err(ForwardError::LegacyAuthorityDisabled);
+        }
         let stats = merge_hostname_records(
             &mut self.hostname_records,
             records,
@@ -495,6 +704,9 @@ impl Forwarder {
         identity: &NodeIdentity,
         now_unix_seconds: u64,
     ) -> Result<bool, ForwardError> {
+        if self.checkpoint.is_some() {
+            return Err(ForwardError::LegacyAuthorityDisabled);
+        }
         let local_peer = PeerId::from_libp2p(identity.peer_id.parse()?);
         if local_peer != self.local_peer {
             return Err(ForwardError::LocalPeerChanged {
@@ -540,6 +752,14 @@ impl Forwarder {
             });
         }
 
+        if let Some(checkpoint) = &self.checkpoint {
+            return self.prepare_checkpoint_projection(
+                config,
+                checkpoint.clone(),
+                now_unix_seconds,
+            );
+        }
+
         let member_records = config.network.member_records.clone();
         let (authorization, effective_membership) =
             ForwardingAuthorization::from_records(&config, &member_records, now_unix_seconds)?;
@@ -554,26 +774,198 @@ impl Forwarder {
             member_records,
             authorization,
             effective_membership,
+            checkpoint: None,
+            base_membership_revision: self.membership_revision,
+            base_authorization_revision: self.authorization_revision,
+            base_commit_generation: self.commit_generation,
+            source_network_name: self.config.network.name.clone(),
             mtu,
         })
     }
 
     pub fn commit_reconfigure(&mut self, update: ForwarderUpdate) {
-        if self.authorization != update.authorization {
+        // Compatibility wrapper for legacy callers. Checkpoint integration must
+        // use the fallible method to observe stale transaction failures.
+        let _ = self.try_commit_reconfigure(update);
+    }
+
+    pub fn try_commit_reconfigure(&mut self, update: ForwarderUpdate) -> Result<(), ForwardError> {
+        if self.checkpoint.is_some() && update.checkpoint.is_none() {
+            return Err(ForwardError::LegacyAuthorityDisabled);
+        }
+        if self.checkpoint.is_some() || update.checkpoint.is_some() {
+            let actual_local = update.config.local_peer_id()?;
+            if actual_local != self.local_peer {
+                return Err(ForwardError::LocalPeerChanged {
+                    expected: self.local_peer,
+                    actual: actual_local,
+                });
+            }
+            if update.source_network_name != self.config.network.name {
+                return Err(ForwardError::Checkpoint(CheckpointError::WrongAnchor));
+            }
+            if let (Some(old), Some(new)) = (&self.checkpoint, &update.checkpoint)
+                && old.anchor != new.anchor
+            {
+                return Err(ForwardError::Checkpoint(CheckpointError::WrongAnchor));
+            }
+        }
+        if (self.checkpoint.is_some() || update.checkpoint.is_some())
+            && (update.base_membership_revision != self.membership_revision
+                || update.base_authorization_revision != self.authorization_revision
+                || update.base_commit_generation != self.commit_generation)
+        {
+            return Err(ForwardError::StalePreparedUpdate);
+        }
+        let incarnations_changed = self
+            .checkpoint
+            .as_ref()
+            .zip(update.checkpoint.as_ref())
+            .is_some_and(|(old, new)| old.incarnations != new.incarnations);
+        if self.authorization != update.authorization || incarnations_changed {
             self.authorization_revision = self.authorization_revision.wrapping_add(1);
         }
         if self.member_records != update.member_records
             || self.effective_membership != update.effective_membership
+            || self.checkpoint != update.checkpoint
         {
             self.membership_revision = self.membership_revision.wrapping_add(1);
+        }
+        if let Some(checkpoint) = &update.checkpoint {
+            let now = update.membership_refresh_window.evaluated_at;
+            let local_active = checkpoint.sync_state != MembershipSyncState::Excluded
+                && checkpoint.active_at(self.local_peer, now);
+            self.replay_windows.retain(|(peer, _), _| {
+                local_active
+                    && checkpoint.active_at(*peer, now)
+                    && self.checkpoint.as_ref().is_none_or(|old| {
+                        old.incarnations.get(peer) == checkpoint.incarnations.get(peer)
+                    })
+            });
+            self.hostname_records.clear();
         }
         self.config = update.config;
         self.member_records = update.member_records;
         self.authorization = update.authorization;
         self.effective_membership = update.effective_membership;
+        self.checkpoint = update.checkpoint;
         self.membership_refresh_window = update.membership_refresh_window;
         self.membership_effective_refresh_pending = false;
         self.mtu = update.mtu;
+        self.commit_generation = self.commit_generation.wrapping_add(1);
+        Ok(())
+    }
+
+    pub fn prepare_checkpoint_update(
+        &self,
+        state: &CooperativeMembershipState,
+        expected_anchor: &NetworkAnchor,
+        now_unix_seconds: u64,
+    ) -> Result<ForwarderUpdate, ForwardError> {
+        self.prepare_checkpoint_reconfigure(
+            self.config.clone(),
+            state,
+            expected_anchor,
+            now_unix_seconds,
+        )
+    }
+
+    pub fn prepare_checkpoint_reconfigure(
+        &self,
+        config: Config,
+        state: &CooperativeMembershipState,
+        expected_anchor: &NetworkAnchor,
+        now_unix_seconds: u64,
+    ) -> Result<ForwarderUpdate, ForwardError> {
+        let checkpoint = CheckpointProjection::from_state(state, self.local_peer, expected_anchor)?;
+        if let Some(old) = &self.checkpoint {
+            if checkpoint.anchor != old.anchor {
+                return Err(ForwardError::Checkpoint(CheckpointError::WrongAnchor));
+            }
+            if checkpoint.rank < old.rank {
+                return Err(ForwardError::Checkpoint(CheckpointError::StaleSnapshot));
+            }
+        }
+        self.prepare_checkpoint_projection(config, checkpoint, now_unix_seconds)
+    }
+
+    fn prepare_checkpoint_projection(
+        &self,
+        mut config: Config,
+        checkpoint: CheckpointProjection,
+        now: u64,
+    ) -> Result<ForwarderUpdate, ForwardError> {
+        let local_peer = config.local_peer_id()?;
+        if local_peer != self.local_peer {
+            return Err(ForwardError::LocalPeerChanged {
+                expected: self.local_peer,
+                actual: local_peer,
+            });
+        }
+        checkpoint.sanitize_config(&mut config, now)?;
+        let effective_membership = checkpoint.membership_at(self.local_peer, now);
+        let authorization =
+            ForwardingAuthorization::from_checkpoint(&config, &effective_membership)?;
+        Ok(ForwarderUpdate {
+            mtu: usize::from(config.effective_packet_mtu()),
+            config,
+            member_records: Vec::new(),
+            effective_membership,
+            authorization,
+            membership_refresh_window: checkpoint.refresh_window(now),
+            checkpoint: Some(checkpoint),
+            base_membership_revision: self.membership_revision,
+            base_authorization_revision: self.authorization_revision,
+            base_commit_generation: self.commit_generation,
+            source_network_name: self.config.network.name.clone(),
+        })
+    }
+
+    pub fn commit_checkpoint_update(
+        &mut self,
+        update: ForwarderUpdate,
+    ) -> Result<(), ForwardError> {
+        if update.checkpoint.is_none() {
+            return Err(ForwardError::LegacyAuthorityDisabled);
+        }
+        let incarnations_changed = self
+            .checkpoint
+            .as_ref()
+            .zip(update.checkpoint.as_ref())
+            .is_some_and(|(old, new)| old.incarnations != new.incarnations);
+        let pending = self.membership_effective_refresh_pending
+            || self.authorization != update.authorization
+            || incarnations_changed;
+        self.try_commit_reconfigure(update)?;
+        self.membership_effective_refresh_pending = pending;
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn checkpoint_sync_state(&self) -> Option<MembershipSyncState> {
+        self.checkpoint.as_ref().map(|checkpoint| {
+            if checkpoint.sync_state == MembershipSyncState::Participating
+                && !checkpoint
+                    .active_at(self.local_peer, self.membership_refresh_window.evaluated_at)
+            {
+                MembershipSyncState::Excluded
+            } else {
+                checkpoint.sync_state
+            }
+        })
+    }
+
+    fn refresh_checkpoint_projection(&mut self, now: u64) -> Result<(), ForwardError> {
+        if self.membership_refresh_window.contains(now) {
+            return Ok(());
+        }
+        let checkpoint = self
+            .checkpoint
+            .as_ref()
+            .expect("checkpoint refresh only")
+            .clone();
+        let update = self.prepare_checkpoint_projection(self.config.clone(), checkpoint, now)?;
+        self.commit_checkpoint_update(update)
     }
 
     pub fn prune_membership_records(
@@ -599,6 +991,9 @@ impl Forwarder {
     pub(crate) fn membership_audit(
         &self,
     ) -> Result<Vec<MembershipAuditMember>, MembershipRecordError> {
+        if let Some(checkpoint) = &self.checkpoint {
+            return Ok(checkpoint.audit_at(self.membership_refresh_window.evaluated_at));
+        }
         membership_audit_at(
             &self.member_records,
             &self.config.network.name,
@@ -643,6 +1038,18 @@ impl Forwarder {
     }
 
     pub fn effective_hostname_records(&self) -> Result<HashMap<PeerId, String>, ForwardError> {
+        if self.checkpoint.is_some() {
+            return Ok(self
+                .effective_membership
+                .overlay_members()
+                .filter_map(|member| {
+                    member
+                        .hostnames
+                        .first()
+                        .map(|hostname| (member.peer, hostname.clone()))
+                })
+                .collect());
+        }
         Ok(effective_hostname_records(
             &self.hostname_records,
             &self.config.network.name,
@@ -1086,6 +1493,9 @@ pub enum ForwardError {
     Config(ConfigError),
     HostnameRecord(HostnameRecordError),
     MembershipRecord(MembershipRecordError),
+    Checkpoint(CheckpointError),
+    LegacyAuthorityDisabled,
+    StalePreparedUpdate,
     Route(RouteError),
     Frame(FrameError),
     Enqueue(EnqueueError),
@@ -1153,6 +1563,12 @@ impl From<MembershipRecordError> for ForwardError {
     }
 }
 
+impl From<CheckpointError> for ForwardError {
+    fn from(error: CheckpointError) -> Self {
+        Self::Checkpoint(error)
+    }
+}
+
 impl From<RouteError> for ForwardError {
     fn from(error: RouteError) -> Self {
         Self::Route(error)
@@ -1192,6 +1608,694 @@ mod tests {
     };
 
     use super::*;
+
+    use crate::membership::checkpoint::{
+        CheckpointMember, MembershipChange, NetworkCapability, SignedHostnameClaim, SnapshotPolicy,
+    };
+
+    fn checkpoint_fixture() -> (
+        NodeIdentity,
+        NodeIdentity,
+        NodeIdentity,
+        Config,
+        CooperativeMembershipState,
+    ) {
+        let a = NodeIdentity::generate_ed25519().unwrap();
+        let a_peer = a.peer_id.parse().unwrap();
+        let b = loop {
+            let candidate = NodeIdentity::generate_ed25519().unwrap();
+            let overlay = PeerId::from_libp2p(candidate.peer_id.parse().unwrap());
+            if builtin_ipv4(overlay) != builtin_ipv4(PeerId::from_libp2p(a_peer)) {
+                break candidate;
+            }
+        };
+        let b_peer = b.peer_id.parse().unwrap();
+        let c = loop {
+            let candidate = NodeIdentity::generate_ed25519().unwrap();
+            let overlay = PeerId::from_libp2p(candidate.peer_id.parse().unwrap());
+            if [a_peer, b_peer]
+                .iter()
+                .all(|peer| builtin_ipv4(PeerId::from_libp2p(*peer)) != builtin_ipv4(overlay))
+            {
+                break candidate;
+            }
+        };
+        let mut config = config_for(b_peer);
+        config.network.local_peer = a.peer_id.clone();
+        config.peers[0].name = Some("legacy-b".into());
+        config.peers[0].vpn_ip = Some("10.42.0.2".into());
+        config.peers[0].routes.push(RouteConfig {
+            prefix: "10.55.0.0/24".into(),
+            metric: 10,
+        });
+        let mut c_config = config.peers[0].clone();
+        c_config.id = c.peer_id.clone();
+        c_config.name = Some("legacy-c".into());
+        c_config.vpn_ip = None;
+        c_config.routes = vec![RouteConfig {
+            prefix: "10.56.0.0/24".into(),
+            metric: 10,
+        }];
+        config.peers.push(c_config);
+        for member in [&a, &b, &c] {
+            config.network.member_records.push(
+                issue_membership_record_at(
+                    &a,
+                    MembershipRecordOptions {
+                        network_name: "lab".into(),
+                        member: member.clone(),
+                        membership_epoch: 1,
+                        sequence: 1,
+                        roles: vec![MembershipRole::OverlayMember],
+                        route_grants: vec![],
+                        expires_at_unix_seconds: None,
+                    },
+                    1_000,
+                )
+                .unwrap(),
+            );
+        }
+        let capability = checkpoint_capability([7; 32]);
+        let state = CooperativeMembershipState::bootstrap_at(
+            capability,
+            a.peer_id.clone(),
+            [&a, &b, &c]
+                .into_iter()
+                .map(|identity| CheckpointMember::new(identity).unwrap())
+                .collect(),
+            SnapshotPolicy::default(),
+            1_000,
+        )
+        .unwrap();
+        (a, b, c, config, state)
+    }
+
+    fn checkpoint_capability(network_id: [u8; 32]) -> NetworkCapability {
+        NetworkCapability::from_secret(NetworkAnchor::new(network_id).unwrap(), Some(&[8; 32]))
+            .unwrap()
+    }
+
+    fn checkpoint_anchor() -> NetworkAnchor {
+        NetworkAnchor::new([7; 32]).unwrap()
+    }
+
+    fn checkpoint_mutate(
+        state: &mut CooperativeMembershipState,
+        local: &NodeIdentity,
+        change: MembershipChange,
+    ) {
+        let mutation = state.sign_mutation_at(local, change, 1_000).unwrap();
+        state.apply_mutation_at(&mutation, 1_000).unwrap();
+    }
+
+    fn checkpoint_name(
+        state: &mut CooperativeMembershipState,
+        subject: &NodeIdentity,
+        sequence: u64,
+        hostname: &str,
+    ) {
+        let incarnation = state
+            .snapshot()
+            .payload
+            .member(&subject.peer_id)
+            .unwrap()
+            .incarnation;
+        let claim = SignedHostnameClaim::issue(
+            checkpoint_anchor(),
+            subject,
+            incarnation,
+            sequence,
+            hostname,
+        )
+        .unwrap();
+        state.merge_hostname_claims(&[claim]).unwrap();
+    }
+
+    #[test]
+    fn checkpoint_commit_atomically_erases_legacy_records_removed_metadata_routes_and_replay() {
+        let (a, b, c, config, mut state) = checkpoint_fixture();
+        let b_peer = b.peer_id.parse().unwrap();
+        let c_peer = c.peer_id.parse().unwrap();
+        let b_overlay = PeerId::from_libp2p(b_peer);
+        let c_overlay = PeerId::from_libp2p(c_peer);
+        let mut forwarder = Forwarder::from_config(&config).unwrap();
+        let old_name = issue_hostname_record_at(&b, "lab", "legacy-b", 1, 1_000).unwrap();
+        forwarder.merge_hostname_records(&[old_name]).unwrap();
+        for peer in [b_overlay, c_overlay] {
+            forwarder
+                .replay_windows
+                .insert((peer, 1), ReplayWindow::new(Instant::now()));
+        }
+        checkpoint_name(&mut state, &c, 1, "current-c");
+        checkpoint_mutate(
+            &mut state,
+            &a,
+            MembershipChange::RemoveMember(b.peer_id.clone()),
+        );
+        let old_revision = forwarder.membership_revision();
+        let update = forwarder
+            .prepare_checkpoint_update(&state, &checkpoint_anchor(), 1_000)
+            .unwrap();
+        assert!(forwarder.is_configured_transport_peer(b_peer));
+        assert_eq!(forwarder.member_record_count(), 3);
+        assert_eq!(forwarder.hostname_records().len(), 1);
+        assert_eq!(forwarder.replay_window_count(), 2);
+        assert_eq!(forwarder.membership_revision(), old_revision);
+        assert!(
+            !update
+                .config()
+                .peers
+                .iter()
+                .any(|peer| peer.id == b.peer_id)
+        );
+        forwarder.commit_checkpoint_update(update).unwrap();
+        assert!(forwarder.member_records().is_empty());
+        assert!(forwarder.hostname_records().is_empty());
+        assert!(forwarder.config().network.member_records.is_empty());
+        assert!(
+            !forwarder
+                .config()
+                .peers
+                .iter()
+                .any(|peer| peer.id == b.peer_id)
+        );
+        assert!(!forwarder.is_configured_transport_peer(b_peer));
+        assert!(!forwarder.authorizes_membership_sync(b_peer));
+        assert!(forwarder.is_configured_transport_peer(c_peer));
+        assert!(!forwarder.replay_windows.contains_key(&(b_overlay, 1)));
+        assert!(forwarder.replay_windows.contains_key(&(c_overlay, 1)));
+        assert!(
+            forwarder
+                .authorization
+                .routes
+                .resolve("10.42.0.2".parse().unwrap())
+                .is_none()
+        );
+        assert!(
+            forwarder
+                .authorization
+                .routes
+                .resolve("10.55.0.1".parse().unwrap())
+                .is_none()
+        );
+        assert_eq!(
+            forwarder
+                .effective_hostname_records()
+                .unwrap()
+                .get(&c_overlay)
+                .unwrap(),
+            "current-c"
+        );
+        let audit = forwarder.membership_audit().unwrap();
+        assert!(!audit.iter().any(|member| member.transport_peer == b_peer));
+        assert!(
+            audit
+                .iter()
+                .all(|member| member.original_inviter_peer.is_none()
+                    && member.effective_inviter_peer.is_none())
+        );
+    }
+
+    #[test]
+    fn checkpoint_reload_and_legacy_merges_cannot_restore_removed_members_or_metadata() {
+        let (a, b, _, config, mut state) = checkpoint_fixture();
+        let b_peer = b.peer_id.parse().unwrap();
+        let b_record = config.network.member_records[1].clone();
+        let old_name = issue_hostname_record_at(&b, "lab", "legacy-b", 1, 1_000).unwrap();
+        let mut forwarder = Forwarder::from_config(&config).unwrap();
+        let old_update = forwarder
+            .prepare_reconfigure(config.clone(), 1_000)
+            .unwrap();
+        let (old_pairing_update, _) = forwarder
+            .prepare_pairing_membership_merge(&[], 1_000)
+            .unwrap();
+        checkpoint_mutate(
+            &mut state,
+            &a,
+            MembershipChange::RemoveMember(b.peer_id.clone()),
+        );
+        let update = forwarder
+            .prepare_checkpoint_update(&state, &checkpoint_anchor(), 1_000)
+            .unwrap();
+        forwarder.commit_checkpoint_update(update).unwrap();
+        assert!(matches!(
+            forwarder.try_commit_reconfigure(old_update),
+            Err(ForwardError::LegacyAuthorityDisabled)
+        ));
+        forwarder.commit_pairing_membership_merge(old_pairing_update);
+        assert!(matches!(
+            forwarder.merge_membership_records(std::slice::from_ref(&b_record), 1_001),
+            Err(ForwardError::LegacyAuthorityDisabled)
+        ));
+        assert!(matches!(
+            forwarder.restore_persisted_membership_records(std::slice::from_ref(&b_record), 1_001),
+            Err(ForwardError::LegacyAuthorityDisabled)
+        ));
+        assert!(matches!(
+            forwarder.prepare_pairing_membership_merge(&[b_record], 1_001),
+            Err(ForwardError::LegacyAuthorityDisabled)
+        ));
+        assert!(matches!(
+            forwarder.merge_hostname_records(&[old_name]),
+            Err(ForwardError::LegacyAuthorityDisabled)
+        ));
+        let mut reload = config;
+        reload.interface.mtu = 1_250;
+        let update = forwarder.prepare_reconfigure(reload, 1_001).unwrap();
+        forwarder.try_commit_reconfigure(update).unwrap();
+        assert!(
+            !forwarder
+                .config()
+                .peers
+                .iter()
+                .any(|peer| peer.id == b.peer_id)
+        );
+        assert!(forwarder.member_records().is_empty());
+        assert!(!forwarder.is_configured_transport_peer(b_peer));
+        forwarder.refresh_membership_records(u64::MAX).unwrap();
+        assert!(!forwarder.is_configured_transport_peer(b_peer));
+        assert!(forwarder.member_records().is_empty());
+    }
+
+    #[test]
+    fn checkpoint_preparation_failure_and_stale_commit_preserve_live_authority() {
+        let (a, b, _, config, mut state) = checkpoint_fixture();
+        let b_peer = b.peer_id.parse().unwrap();
+        let mut forwarder = Forwarder::from_config(&config).unwrap();
+        let obsolete_update = forwarder
+            .prepare_checkpoint_update(&state, &checkpoint_anchor(), 1_000)
+            .unwrap();
+        let mut conflict = config.clone();
+        conflict.network.routes.push(RouteConfig {
+            prefix: "10.55.0.0/24".into(),
+            metric: 10,
+        });
+        assert!(
+            forwarder
+                .prepare_checkpoint_reconfigure(conflict, &state, &checkpoint_anchor(), 1_000)
+                .is_err()
+        );
+        assert!(forwarder.checkpoint.is_none());
+        assert_eq!(forwarder.membership_revision(), 0);
+        assert!(forwarder.is_configured_transport_peer(b_peer));
+        checkpoint_mutate(
+            &mut state,
+            &a,
+            MembershipChange::RemoveMember(b.peer_id.clone()),
+        );
+        let update = forwarder
+            .prepare_checkpoint_update(&state, &checkpoint_anchor(), 1_000)
+            .unwrap();
+        forwarder.commit_checkpoint_update(update).unwrap();
+        let revision = forwarder.membership_revision();
+        let packet_revision = forwarder.authorization_revision();
+        assert!(matches!(
+            forwarder.commit_checkpoint_update(obsolete_update),
+            Err(ForwardError::StalePreparedUpdate)
+        ));
+        assert_eq!(forwarder.membership_revision(), revision);
+        assert_eq!(forwarder.authorization_revision(), packet_revision);
+        assert!(!forwarder.is_configured_transport_peer(b_peer));
+    }
+
+    #[test]
+    fn checkpoint_install_rejects_wrong_identity_scope_and_older_selected_branch() {
+        let (a, b, c, config, mut state) = checkpoint_fixture();
+        let mut forwarder = Forwarder::from_config(&config).unwrap();
+        let wrong_local = CooperativeMembershipState::bootstrap_at(
+            checkpoint_capability([7; 32]),
+            b.peer_id.clone(),
+            [&a, &b, &c]
+                .into_iter()
+                .map(|member| CheckpointMember::new(member).unwrap())
+                .collect(),
+            SnapshotPolicy::default(),
+            1_000,
+        )
+        .unwrap();
+        assert!(matches!(
+            forwarder.prepare_checkpoint_update(&wrong_local, &checkpoint_anchor(), 1_000),
+            Err(ForwardError::LocalPeerChanged { .. })
+        ));
+        let wrong_network = CooperativeMembershipState::bootstrap_at(
+            checkpoint_capability([9; 32]),
+            a.peer_id.clone(),
+            [&a, &b]
+                .into_iter()
+                .map(|member| CheckpointMember::new(member).unwrap())
+                .collect(),
+            SnapshotPolicy::default(),
+            1_000,
+        )
+        .unwrap();
+        assert!(matches!(
+            forwarder.prepare_checkpoint_update(&wrong_network, &checkpoint_anchor(), 1_000),
+            Err(ForwardError::Checkpoint(CheckpointError::WrongAnchor))
+        ));
+        let old_state = state.clone();
+        checkpoint_mutate(
+            &mut state,
+            &a,
+            MembershipChange::RemoveMember(b.peer_id.clone()),
+        );
+        forwarder
+            .commit_checkpoint_update(
+                forwarder
+                    .prepare_checkpoint_update(&state, &checkpoint_anchor(), 1_000)
+                    .unwrap(),
+            )
+            .unwrap();
+        assert!(matches!(
+            forwarder.prepare_checkpoint_update(&old_state, &checkpoint_anchor(), 1_000),
+            Err(ForwardError::Checkpoint(CheckpointError::StaleSnapshot))
+        ));
+        assert!(matches!(
+            forwarder.prepare_checkpoint_update(
+                &wrong_network,
+                &NetworkAnchor::new([9; 32]).unwrap(),
+                1_000
+            ),
+            Err(ForwardError::Checkpoint(CheckpointError::WrongAnchor))
+        ));
+    }
+
+    #[test]
+    fn checkpoint_commit_rejects_updates_prepared_for_another_forwarder_context() {
+        let (a, b, _, config, state) = checkpoint_fixture();
+        let original = Forwarder::from_config(&config).unwrap();
+        let update = original
+            .prepare_checkpoint_update(&state, &checkpoint_anchor(), 1_000)
+            .unwrap();
+        let mut other_config = config.clone();
+        other_config.network.local_peer = b.peer_id.clone();
+        let mut other_local = Forwarder::from_config(&other_config).unwrap();
+        assert!(matches!(
+            other_local.commit_checkpoint_update(update),
+            Err(ForwardError::LocalPeerChanged { .. })
+        ));
+        assert!(other_local.checkpoint.is_none());
+        let update = original
+            .prepare_checkpoint_update(&state, &checkpoint_anchor(), 1_000)
+            .unwrap();
+        other_config.network.local_peer = a.peer_id;
+        other_config.network.name = "other-network".into();
+        other_config.network.member_records.clear();
+        let mut other_network = Forwarder::from_config(&other_config).unwrap();
+        assert!(matches!(
+            other_network.commit_checkpoint_update(update),
+            Err(ForwardError::Checkpoint(CheckpointError::WrongAnchor))
+        ));
+        assert!(other_network.checkpoint.is_none());
+        assert_eq!(other_network.membership_revision(), 0);
+    }
+
+    #[test]
+    fn checkpoint_config_only_reload_invalidates_older_prepared_updates() {
+        let (_, _, _, config, state) = checkpoint_fixture();
+        let mut forwarder =
+            Forwarder::from_checkpoint_config(&config, &state, &checkpoint_anchor(), 1_000)
+                .unwrap();
+        let obsolete_update = forwarder
+            .prepare_checkpoint_update(&state, &checkpoint_anchor(), 1_000)
+            .unwrap();
+        let mut reload = config;
+        reload.interface.mtu = 1_250;
+        let revision = forwarder.membership_revision();
+        let packet_revision = forwarder.authorization_revision();
+        forwarder
+            .try_commit_reconfigure(forwarder.prepare_reconfigure(reload, 1_000).unwrap())
+            .unwrap();
+        assert_eq!(forwarder.membership_revision(), revision);
+        assert_eq!(forwarder.authorization_revision(), packet_revision);
+        assert_eq!(forwarder.mtu(), 1_250);
+        assert!(matches!(
+            forwarder.commit_checkpoint_update(obsolete_update),
+            Err(ForwardError::StalePreparedUpdate)
+        ));
+        assert_eq!(forwarder.mtu(), 1_250);
+    }
+
+    #[test]
+    fn checkpoint_restart_and_resync_gate_packets_routes_and_legacy_sync_until_completion() {
+        let (a, b, c, config, state) = checkpoint_fixture();
+        let capability = checkpoint_capability([7; 32]);
+        let mut returning =
+            CooperativeMembershipState::restore(capability, a.peer_id.clone(), state.retained())
+                .unwrap();
+        let mut forwarder =
+            Forwarder::from_checkpoint_config(&config, &returning, &checkpoint_anchor(), 1_000)
+                .unwrap();
+        assert_eq!(
+            forwarder.checkpoint_sync_state(),
+            Some(MembershipSyncState::ResyncRequired)
+        );
+        assert!(forwarder.authorized_routes().is_empty());
+        assert_eq!(forwarder.configured_transport_peers().count(), 0);
+        assert!(!forwarder.authorizes_membership_sync(b.peer_id.parse().unwrap()));
+        assert!(forwarder.effective_hostname_records().unwrap().is_empty());
+        let source = builtin_ipv4(PeerId::from_libp2p(b.peer_id.parse().unwrap()));
+        let destination = builtin_ipv4(PeerId::from_libp2p(a.peer_id.parse().unwrap()));
+        let frame = Frame::packet(1, 1, ipv4_packet(source, destination)).unwrap();
+        assert!(
+            forwarder
+                .accept_inbound_packet(b.peer_id.parse().unwrap(), &frame)
+                .is_err()
+        );
+        assert!(
+            forwarder
+                .prepare_tun_packet(ipv4_packet(destination, source))
+                .is_err()
+        );
+        let now = Instant::now();
+        returning.begin_resync(now, Duration::from_secs(1)).unwrap();
+        let update = forwarder
+            .prepare_checkpoint_update(&returning, &checkpoint_anchor(), 1_000)
+            .unwrap();
+        forwarder.commit_checkpoint_update(update).unwrap();
+        assert_eq!(
+            forwarder.checkpoint_sync_state(),
+            Some(MembershipSyncState::Resyncing)
+        );
+        forwarder.refresh_membership_records(u64::MAX).unwrap();
+        assert!(forwarder.authorized_routes().is_empty());
+        returning
+            .finish_resync(now + Duration::from_secs(1), 1_000)
+            .unwrap();
+        forwarder
+            .commit_checkpoint_update(
+                forwarder
+                    .prepare_checkpoint_update(&returning, &checkpoint_anchor(), 1_000)
+                    .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(
+            forwarder.checkpoint_sync_state(),
+            Some(MembershipSyncState::Participating)
+        );
+        assert!(forwarder.is_configured_transport_peer(b.peer_id.parse().unwrap()));
+        assert!(forwarder.is_configured_transport_peer(c.peer_id.parse().unwrap()));
+        forwarder
+            .accept_inbound_packet(b.peer_id.parse().unwrap(), &frame)
+            .unwrap();
+    }
+
+    #[test]
+    fn checkpoint_expiry_refresh_uses_sealed_projection_not_empty_legacy_records() {
+        let (a, b, c, config, mut state) = checkpoint_fixture();
+        checkpoint_name(&mut state, &b, 1, "expiring-b");
+        for (identity, expiry) in [(&b, 1_100), (&a, 1_200)] {
+            let mut member = state
+                .snapshot()
+                .payload
+                .member(&identity.peer_id)
+                .unwrap()
+                .clone();
+            member.expires_at_unix_seconds = Some(expiry);
+            checkpoint_mutate(&mut state, &a, MembershipChange::UpsertMember(member));
+        }
+        let mut forwarder =
+            Forwarder::from_checkpoint_config(&config, &state, &checkpoint_anchor(), 1_000)
+                .unwrap();
+        let b_peer = b.peer_id.parse().unwrap();
+        let c_peer = c.peer_id.parse().unwrap();
+        let b_overlay = PeerId::from_libp2p(b_peer);
+        forwarder
+            .replay_windows
+            .insert((b_overlay, 1), ReplayWindow::new(Instant::now()));
+        assert!(!forwarder.refresh_membership_records(1_099).unwrap().1);
+        assert!(forwarder.refresh_membership_records(1_100).unwrap().1);
+        assert!(!forwarder.is_configured_transport_peer(b_peer));
+        assert!(forwarder.is_configured_transport_peer(c_peer));
+        assert!(
+            !forwarder
+                .effective_hostname_records()
+                .unwrap()
+                .contains_key(&b_overlay)
+        );
+        assert!(
+            !forwarder
+                .membership_audit()
+                .unwrap()
+                .iter()
+                .any(|member| member.transport_peer == b_peer)
+        );
+        assert!(!forwarder.replay_windows.contains_key(&(b_overlay, 1)));
+        assert!(
+            !forwarder
+                .config()
+                .peers
+                .iter()
+                .any(|peer| peer.id == b.peer_id)
+        );
+        assert!(forwarder.refresh_membership_records(1_200).unwrap().1);
+        assert!(forwarder.authorized_routes().is_empty());
+        assert_eq!(
+            forwarder.checkpoint_sync_state(),
+            Some(MembershipSyncState::Excluded)
+        );
+        assert_eq!(forwarder.configured_transport_peers().count(), 0);
+        assert!(!forwarder.authorizes_membership_sync(c_peer));
+        assert!(forwarder.member_records().is_empty());
+        forwarder.refresh_membership_records(u64::MAX).unwrap();
+        assert_eq!(forwarder.configured_transport_peers().count(), 0);
+    }
+
+    #[test]
+    fn checkpoint_hostname_only_update_changes_inventory_revision_not_packet_authority() {
+        let (a, _, c, config, mut state) = checkpoint_fixture();
+        checkpoint_name(&mut state, &a, 1, "current-a");
+        checkpoint_name(&mut state, &c, 1, "current-c");
+        let mut forwarder =
+            Forwarder::from_checkpoint_config(&config, &state, &checkpoint_anchor(), 1_000)
+                .unwrap();
+        let revision = forwarder.membership_revision();
+        let packet_revision = forwarder.authorization_revision();
+        checkpoint_name(&mut state, &c, 2, "renamed-c");
+        let update = forwarder
+            .prepare_checkpoint_update(&state, &checkpoint_anchor(), 1_000)
+            .unwrap();
+        forwarder.commit_checkpoint_update(update).unwrap();
+        assert_eq!(forwarder.membership_revision(), revision + 1);
+        assert_eq!(forwarder.authorization_revision(), packet_revision);
+        assert_eq!(
+            forwarder
+                .effective_hostname_records()
+                .unwrap()
+                .get(&PeerId::from_libp2p(c.peer_id.parse().unwrap()))
+                .unwrap(),
+            "renamed-c"
+        );
+        let audit = forwarder.membership_audit().unwrap();
+        assert_eq!(
+            audit
+                .iter()
+                .find(|member| member.transport_peer.to_string() == c.peer_id)
+                .unwrap()
+                .hostname
+                .as_deref(),
+            Some("renamed-c")
+        );
+        assert!(
+            audit
+                .iter()
+                .all(|member| member.original_inviter_peer.is_none()
+                    && member.effective_inviter_peer.is_none())
+        );
+        assert!(forwarder.hostname_records().is_empty());
+        assert!(forwarder.member_records().is_empty());
+    }
+
+    #[test]
+    fn checkpoint_creator_resignation_closes_local_forwarder_without_recording_inviter_lineage() {
+        let (a, b, c, config, mut state) = checkpoint_fixture();
+        let mut forwarder =
+            Forwarder::from_checkpoint_config(&config, &state, &checkpoint_anchor(), 1_000)
+                .unwrap();
+        checkpoint_mutate(
+            &mut state,
+            &a,
+            MembershipChange::RemoveMember(a.peer_id.clone()),
+        );
+        let update = forwarder
+            .prepare_checkpoint_update(&state, &checkpoint_anchor(), 1_000)
+            .unwrap();
+        forwarder.commit_checkpoint_update(update).unwrap();
+        assert_eq!(
+            forwarder.checkpoint_sync_state(),
+            Some(MembershipSyncState::Excluded)
+        );
+        assert!(forwarder.authorized_routes().is_empty());
+        assert_eq!(forwarder.configured_transport_peers().count(), 0);
+        let audit = forwarder.membership_audit().unwrap();
+        assert_eq!(audit.len(), 2);
+        assert!(audit.iter().all(|member| {
+            [b.peer_id.as_str(), c.peer_id.as_str()]
+                .contains(&member.transport_peer.to_string().as_str())
+        }));
+        assert!(
+            audit
+                .iter()
+                .all(|member| member.original_inviter_peer.is_none()
+                    && member.effective_inviter_peer.is_none())
+        );
+        assert!(forwarder.member_records().is_empty());
+        assert!(forwarder.effective_hostname_records().unwrap().is_empty());
+    }
+
+    #[test]
+    fn checkpoint_resync_preserves_survivor_replay_windows_but_readmission_erases_old_sessions() {
+        let (a, b, _, config, mut state) = checkpoint_fixture();
+        let mut forwarder =
+            Forwarder::from_checkpoint_config(&config, &state, &checkpoint_anchor(), 1_000)
+                .unwrap();
+        let b_overlay = PeerId::from_libp2p(b.peer_id.parse().unwrap());
+        forwarder
+            .replay_windows
+            .insert((b_overlay, 1), ReplayWindow::new(Instant::now()));
+        let now = Instant::now();
+        state.begin_resync(now, Duration::from_secs(1)).unwrap();
+        forwarder
+            .commit_checkpoint_update(
+                forwarder
+                    .prepare_checkpoint_update(&state, &checkpoint_anchor(), 1_000)
+                    .unwrap(),
+            )
+            .unwrap();
+        assert!(forwarder.replay_windows.contains_key(&(b_overlay, 1)));
+        state
+            .finish_resync(now + Duration::from_secs(1), 1_000)
+            .unwrap();
+        forwarder
+            .commit_checkpoint_update(
+                forwarder
+                    .prepare_checkpoint_update(&state, &checkpoint_anchor(), 1_000)
+                    .unwrap(),
+            )
+            .unwrap();
+        assert!(forwarder.replay_windows.contains_key(&(b_overlay, 1)));
+        let packet_revision = forwarder.authorization_revision();
+        checkpoint_mutate(
+            &mut state,
+            &a,
+            MembershipChange::RemoveMember(b.peer_id.clone()),
+        );
+        checkpoint_mutate(
+            &mut state,
+            &a,
+            MembershipChange::UpsertMember(CheckpointMember::new(&b).unwrap()),
+        );
+        forwarder
+            .commit_checkpoint_update(
+                forwarder
+                    .prepare_checkpoint_update(&state, &checkpoint_anchor(), 1_000)
+                    .unwrap(),
+            )
+            .unwrap();
+        assert!(!forwarder.replay_windows.contains_key(&(b_overlay, 1)));
+        assert_eq!(forwarder.authorization_revision(), packet_revision + 1);
+        assert!(forwarder.take_membership_effective_refresh_pending());
+        assert!(forwarder.is_configured_transport_peer(b.peer_id.parse().unwrap()));
+    }
 
     #[test]
     fn fresh_session_ids_do_not_repeat_for_a_fixed_peer() {

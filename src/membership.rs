@@ -871,6 +871,17 @@ pub struct EffectiveMembership {
 }
 
 impl EffectiveMembership {
+    #[must_use]
+    pub(crate) const fn is_checkpoint_authoritative(&self) -> bool {
+        self.checkpoint_authoritative
+    }
+
+    /// Remove projected grants without reopening the namespace or forgetting
+    /// legacy governance. Used for checkpoint expiry and lifecycle gating.
+    pub(crate) fn retain_members(&mut self, mut keep: impl FnMut(&EffectiveMember) -> bool) {
+        self.members.retain(|_, member| keep(member));
+    }
+
     /// Operational policy for one local identity, distinct from network-wide audit state.
     #[must_use]
     pub(crate) fn authorization_for(&self, local_peer: PeerId) -> EffectiveAuthorization<'_> {
@@ -1283,6 +1294,51 @@ mod tests {
     use serde::Serialize;
 
     use super::*;
+
+    #[test]
+    fn retaining_members_preserves_a_sealed_namespace_and_local_eligibility_gate() {
+        let a = NodeIdentity::generate_ed25519().unwrap();
+        let b = NodeIdentity::generate_ed25519().unwrap();
+        let unknown = NodeIdentity::generate_ed25519().unwrap();
+        let records = vec![
+            overlay_record(&a, &a, 1, 1_000, None),
+            overlay_record(&a, &b, 1, 1_000, None),
+        ];
+        let mut effective = effective_membership_at(&records, "lab", 1_000).unwrap();
+        effective.checkpoint_authoritative = true;
+        let a_peer = PeerId::from_libp2p(a.peer_id.parse().unwrap());
+        let b_peer = PeerId::from_libp2p(b.peer_id.parse().unwrap());
+        let unknown_peer = PeerId::from_libp2p(unknown.peer_id.parse().unwrap());
+        effective.retain_members(|member| member.peer == a_peer);
+        assert!(effective.authorizes_configured_peer(a_peer));
+        assert!(!effective.authorizes_configured_peer(b_peer));
+        assert!(!effective.authorizes_configured_peer(unknown_peer));
+        effective.retain_members(|_| false);
+        assert!(
+            !effective
+                .authorization_for(a_peer)
+                .allows_peer(b_peer, true)
+        );
+        assert!(!effective.authorizes_configured_peer(unknown_peer));
+    }
+
+    #[test]
+    fn retaining_legacy_members_does_not_forget_governance_or_change_static_compatibility() {
+        let a = NodeIdentity::generate_ed25519().unwrap();
+        let b = NodeIdentity::generate_ed25519().unwrap();
+        let unknown = NodeIdentity::generate_ed25519().unwrap();
+        let mut effective =
+            effective_membership_at(&[overlay_record(&a, &b, 1, 1_000, None)], "lab", 1_000)
+                .unwrap();
+        effective.retain_members(|_| false);
+        assert!(
+            !effective.authorizes_configured_peer(PeerId::from_libp2p(b.peer_id.parse().unwrap()))
+        );
+        assert!(
+            effective
+                .authorizes_configured_peer(PeerId::from_libp2p(unknown.peer_id.parse().unwrap()))
+        );
+    }
 
     fn test_record() -> (NodeIdentity, NodeIdentity, SignedMembershipRecord) {
         let issuer = NodeIdentity::generate_ed25519().expect("issuer");

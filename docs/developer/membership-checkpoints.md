@@ -113,6 +113,30 @@ static peers receive no implicit permission even after their tombstones are gone
 
 ## Verification
 
+### Forwarding Projection
+
+The forwarder accepts authenticated core state through a scoped prepare/commit
+update. This API is implemented; normal daemon startup does not activate it yet.
+
+| Surface | Checkpoint Behavior |
+| --- | --- |
+| Prepare | Bind local identity and pinned anchor; reject older selected rank. |
+| Commit | Reject stale or wrong-context prepared updates. |
+| Authority | Replace routes, peer permissions, and effective membership together. |
+| Retention | Clear legacy records and removed-device metadata/replay windows. |
+| Resync | Keep the namespace sealed while packet authority is gated. |
+| Re-admission | Forget replay sessions from the previous incarnation. |
+| Reload | Cannot restore removed peers from stale declarative configuration. |
+| Expiry | Refresh from checkpoint projection, not an empty legacy ledger. |
+| Inventory | Omit absent identities, including local self-removal, without tombstones. |
+| Provenance | No invented admission time or inviter identity after compaction. |
+
+Runtime integration must persist the selected core state before announcing it.
+After a visible checkpoint replacement, route/commit failures must fail closed
+or retry the selected authority; they must not restore stale grants as a fallback.
+
+### Commands
+
 ```sh
 nix develop -c cargo test --locked --lib membership::checkpoint
 ```
@@ -122,5 +146,6 @@ accepted losing-branch rollback, stale replay, hostname conflicts, re-admission,
 creator departure, route policy, migration, and thousands of churn cycles.
 
 These tests establish core behavior, not a deployed checkpoint network. Durable
-storage, wire/runtime integration, CLI/Android status, and multi-node end-to-end
-evidence remain required before goal completion.
+storage and forwarder projection have additional focused tests. Wire/runtime
+activation, CLI/Android sync status, and multi-node end-to-end evidence remain
+required before goal completion.

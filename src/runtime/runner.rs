@@ -22701,6 +22701,9 @@ const fn initial_path_mtu(kind: PathKind, local_mtu: u16) -> u16 {
 
 fn outbound_drop_reason(error: &ForwardError) -> PacketDropReason {
     match error {
+        ForwardError::Checkpoint(_)
+        | ForwardError::LegacyAuthorityDisabled
+        | ForwardError::StalePreparedUpdate => PacketDropReason::UnauthorizedPeer,
         ForwardError::NoRoute(_) => PacketDropReason::NoRoute,
         ForwardError::NoTransportPeer(_) => PacketDropReason::NoTransportPeer,
         ForwardError::PacketTooLarge { .. } => PacketDropReason::PacketTooLarge,
@@ -22905,6 +22908,9 @@ fn packet_plane_send_error_demotes_path(error: &PacketPlaneSendError) -> bool {
 
 fn inbound_drop_reason(error: &ForwardError) -> PacketDropReason {
     match error {
+        ForwardError::Checkpoint(_)
+        | ForwardError::LegacyAuthorityDisabled
+        | ForwardError::StalePreparedUpdate => PacketDropReason::UnauthorizedPeer,
         ForwardError::UnauthorizedPeer(_) => PacketDropReason::UnauthorizedPeer,
         ForwardError::Route(RouteError::UnauthorizedSource { .. }) => {
             PacketDropReason::UnauthorizedSource
@@ -23024,6 +23030,9 @@ fn packet_base_audit_fields(peer: Libp2pPeerId, frame: &Frame, reason: &str) -> 
 
 fn packet_rejection_error_name(error: &ForwardError) -> &'static str {
     match error {
+        ForwardError::Checkpoint(_) => "checkpoint_error",
+        ForwardError::LegacyAuthorityDisabled => "legacy_authority_disabled",
+        ForwardError::StalePreparedUpdate => "stale_prepared_update",
         ForwardError::UnauthorizedPeer(_) => "unauthorized_peer",
         ForwardError::Route(RouteError::UnauthorizedSource { .. })
         | ForwardError::UnauthorizedLocalSource { .. } => "unauthorized_source",
@@ -37611,6 +37620,34 @@ mod tests {
             )),
             PacketDropReason::NoTransportPeer,
         );
+    }
+
+    #[test]
+    fn checkpoint_authority_failures_have_stable_drop_reasons_without_secret_details() {
+        let cases = [
+            (
+                ForwardError::Checkpoint(
+                    crate::membership::checkpoint::CheckpointError::StaleSnapshot,
+                ),
+                "checkpoint_error",
+            ),
+            (
+                ForwardError::LegacyAuthorityDisabled,
+                "legacy_authority_disabled",
+            ),
+            (ForwardError::StalePreparedUpdate, "stale_prepared_update"),
+        ];
+        for (error, name) in cases {
+            assert_eq!(
+                outbound_drop_reason(&error),
+                PacketDropReason::UnauthorizedPeer
+            );
+            assert_eq!(
+                inbound_drop_reason(&error),
+                PacketDropReason::UnauthorizedPeer
+            );
+            assert_eq!(packet_rejection_error_name(&error), name);
+        }
     }
 
     #[test]

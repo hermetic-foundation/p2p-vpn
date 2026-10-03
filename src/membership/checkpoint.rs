@@ -712,6 +712,10 @@ impl CooperativeMembershipState {
         &self.current
     }
     #[must_use]
+    pub(crate) fn local_peer(&self) -> &str {
+        &self.local_peer
+    }
+    #[must_use]
     pub fn hostname_claims(&self) -> &[SignedHostnameClaim] {
         &self.names
     }
