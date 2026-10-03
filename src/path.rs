@@ -423,6 +423,16 @@ impl PathSet {
             .filter(move |candidate| candidate.peer == peer)
     }
 
+    pub(crate) fn peer_ids(&self) -> impl Iterator<Item = PeerId> + '_ {
+        self.candidates.iter().map(|candidate| candidate.peer)
+    }
+
+    pub(crate) fn forget_peer(&mut self, peer: PeerId) {
+        self.candidates.retain(|candidate| candidate.peer != peer);
+        self.connection_inventories
+            .retain(|inventory| inventory.peer != peer);
+    }
+
     /// Invalidates connection-backed paths without discarding path history.
     pub fn invalidate_connections(&mut self) -> usize {
         let mut invalidated = 0;
@@ -1028,6 +1038,49 @@ mod tests {
 
         paths.record_closed(peer(1), PathKind::DirectTcpStream);
         assert!(!paths.has_healthy_path(peer(1)));
+    }
+
+    #[test]
+    fn forgetting_peer_removes_all_paths_and_connection_history() {
+        let mut paths = PathSet::new();
+        for kind in [
+            PathKind::DirectUdpDatagram,
+            PathKind::DirectQuicDatagram,
+            PathKind::DirectQuicStream,
+            PathKind::DirectTcpStream,
+            PathKind::CircuitRelay,
+        ] {
+            paths.record_established(peer(1), kind);
+            paths.record_established(peer(2), kind);
+        }
+        let survivor_paths = paths.candidates_for(peer(2)).collect::<Vec<_>>();
+        let survivor_connections = paths
+            .connection_inventories
+            .iter()
+            .filter(|inventory| inventory.peer == peer(2))
+            .copied()
+            .collect::<Vec<_>>();
+
+        paths.forget_peer(peer(1));
+        paths.forget_peer(peer(1));
+
+        assert_eq!(paths.candidates_for(peer(1)).count(), 0);
+        assert!(paths.peer_ids().all(|id| id == peer(2)));
+        assert_eq!(paths.connection_inventories, survivor_connections);
+        assert_eq!(
+            paths.candidates_for(peer(2)).collect::<Vec<_>>(),
+            survivor_paths
+        );
+        assert_eq!(
+            paths.record_closed(peer(1), PathKind::DirectTcpStream),
+            None
+        );
+        assert_eq!(paths.candidates_for(peer(1)).count(), 0);
+
+        paths.record_established(peer(1), PathKind::DirectTcpStream);
+        let returned = paths.best_for(peer(1)).expect("newly established path");
+        assert_eq!(returned.established_connections, 1);
+        assert_eq!(returned.failure_penalty, 0);
     }
 
     #[test]

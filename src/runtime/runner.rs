@@ -4041,6 +4041,10 @@ impl PathProbeTracker {
             .retain(|_, probe| probe.peer != peer || probe.path != path);
     }
 
+    fn clear_peer(&mut self, peer: PeerId) {
+        self.pending.retain(|_, probe| probe.peer != peer);
+    }
+
     fn clear(&mut self) {
         self.pending.clear();
     }
@@ -18956,6 +18960,8 @@ fn reconcile_packet_plane_authorization(
     if let Some(quic) = packet_plane_quic.as_deref() {
         peers.extend(quic.peers());
     }
+    peers.extend(paths.peer_ids());
+    peers.extend(probes.pending.values().map(|probe| probe.peer));
     peers.extend(negotiator.pending.keys().copied());
     peers.extend(negotiator.next_quic_attempt.keys().copied());
     peers.extend(negotiator.next_capability_refresh.keys().copied());
@@ -18974,10 +18980,8 @@ fn reconcile_packet_plane_authorization(
         if let Some(quic) = packet_plane_quic.as_deref_mut() {
             quic.forget_peer(peer);
         }
-        for kind in [PathKind::DirectUdpDatagram, PathKind::DirectQuicDatagram] {
-            paths.mark_unhealthy(peer, kind);
-            probes.clear_path(peer, kind);
-        }
+        paths.forget_peer(peer);
+        probes.clear_peer(peer);
     }
     if removed > 0 {
         log_runtime_event(
@@ -44659,6 +44663,66 @@ mod tests {
                 .is_ok()
         );
         assert!(queues.dequeue().is_none());
+    }
+
+    #[test]
+    fn authorization_cleanup_forgets_stream_paths_and_probe_only_peers() {
+        let identity = NodeIdentity::generate_ed25519().unwrap();
+        let allowed_transport = peer_id();
+        let forwarder =
+            Forwarder::from_config(&config_with_peer(&identity, allowed_transport)).unwrap();
+        let allowed = PeerId::from_libp2p(allowed_transport);
+        let denied = PeerId::from_libp2p(peer_id());
+        let probe_only = PeerId::from_libp2p(peer_id());
+        let mut paths = PathSet::new();
+        for peer in [allowed, denied] {
+            paths.record_established(peer, PathKind::DirectTcpStream);
+            paths.record_established(peer, PathKind::CircuitRelay);
+        }
+        let surviving_paths = paths.candidates_for(allowed).collect::<Vec<_>>();
+        let mut probes = PathProbeTracker::default();
+        let now = Instant::now();
+        probes.record(allowed, PathKind::DirectTcpStream, 1, now);
+        probes.record(denied, PathKind::DirectTcpStream, 2, now);
+        probes.record(probe_only, PathKind::DirectQuicStream, 3, now);
+        let mut packet_plane = PacketPlaneRuntime::disabled();
+        let mut negotiator = PacketPlaneNegotiator::default();
+
+        assert_eq!(
+            reconcile_packet_plane_authorization(
+                &forwarder,
+                &mut packet_plane,
+                None,
+                &mut negotiator,
+                &mut paths,
+                &mut probes,
+            ),
+            2
+        );
+        assert_eq!(paths.candidates_for(denied).count(), 0);
+        assert_eq!(
+            paths.candidates_for(allowed).collect::<Vec<_>>(),
+            surviving_paths
+        );
+        assert_eq!(probes.pending.len(), 1);
+        assert_eq!(probes.confirm(denied, 2, now), None);
+        assert_eq!(probes.confirm(probe_only, 3, now), None);
+        assert_eq!(
+            probes.confirm(allowed, 1, now),
+            Some((PathKind::DirectTcpStream, 0))
+        );
+        assert_eq!(paths.record_closed(denied, PathKind::DirectTcpStream), None);
+        assert_eq!(
+            reconcile_packet_plane_authorization(
+                &forwarder,
+                &mut packet_plane,
+                None,
+                &mut negotiator,
+                &mut paths,
+                &mut probes,
+            ),
+            0
+        );
     }
 
     #[tokio::test]
