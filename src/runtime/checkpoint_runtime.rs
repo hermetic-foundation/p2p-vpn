@@ -19,7 +19,7 @@ use crate::{
         SignedMembershipMutation, SignedSnapshotOffer, SnapshotChallenge, SnapshotPolicy,
         SnapshotRank,
     },
-    pairing::{PairingOffer, PairingResponse},
+    pairing::{PairingCheckpointGrant, PairingOffer, PairingResponse},
 };
 
 use super::{
@@ -252,6 +252,41 @@ impl CheckpointRuntime {
 
     pub(crate) fn anchor(&self) -> &NetworkAnchor {
         self.credentials.anchor()
+    }
+
+    pub(crate) fn can_accept_pairing(&self) -> bool {
+        self.state.sync_state() == MembershipSyncState::Participating
+            && self.pending.is_none()
+            && self.handoff.is_none()
+            && !self.enrollment_pending()
+    }
+
+    pub(crate) fn enrollment_pending(&self) -> bool {
+        self.enrollment_floor.is_some()
+    }
+
+    pub(crate) fn pairing_grant_for(
+        &self,
+        candidate: &CooperativeMembershipState,
+        joiner: &str,
+        wall_now: u64,
+    ) -> Result<PairingCheckpointGrant, RunnerError> {
+        if !self.can_accept_pairing()
+            || &candidate.snapshot().payload.anchor != self.anchor()
+            || candidate.local_peer() != self.state.local_peer()
+        {
+            return Err(core_error(CheckpointError::Invalid(
+                "checkpoint pairing scope or participation",
+            )));
+        }
+        PairingCheckpointGrant::from_state_at(
+            candidate,
+            self.credentials.secret(),
+            joiner,
+            wall_now,
+        )
+        .map_err(crate::pairing::PairingError::from)
+        .map_err(RunnerError::from)
     }
 
     #[cfg(test)]
@@ -1474,6 +1509,87 @@ mod tests {
             .finish_due(&store, &mut forwarder, now + RESYNC_WINDOW, WALL_NOW)
             .unwrap();
         (runtime, forwarder, store)
+    }
+
+    #[test]
+    fn pairing_grants_require_ready_owner_matching_identity_anchor_and_capability() {
+        let fixture = Fixture::new("owner-pairing-grant");
+        let (mut runtime, _) = fixture.participating();
+        let joiner = NodeIdentity::generate_ed25519().unwrap();
+        let mut candidate = runtime.state().clone();
+        let admission = candidate
+            .sign_mutation_at(
+                &fixture.local,
+                MembershipChange::UpsertMember(CheckpointMember::new(&joiner).unwrap()),
+                WALL_NOW,
+            )
+            .unwrap();
+        candidate.apply_mutation_at(&admission, WALL_NOW).unwrap();
+        assert!(runtime.can_accept_pairing());
+        let grant = runtime
+            .pairing_grant_for(&candidate, &joiner.peer_id, WALL_NOW)
+            .unwrap();
+        assert_eq!(grant.inviter.subject.peer_id, fixture.local.peer_id);
+        assert_eq!(grant.joiner.subject.peer_id, joiner.peer_id);
+        assert_eq!(grant.minimum, candidate.snapshot().payload.rank().unwrap());
+        let mut wrong_identity = CooperativeMembershipState::restore(
+            fixture.credentials.capability().unwrap(),
+            fixture.member.peer_id.clone(),
+            candidate.retained(),
+        )
+        .unwrap();
+        let now = Instant::now();
+        wrong_identity.begin_resync(now, RESYNC_WINDOW).unwrap();
+        wrong_identity
+            .finish_resync(now + RESYNC_WINDOW, WALL_NOW)
+            .unwrap();
+        assert!(
+            runtime
+                .pairing_grant_for(&wrong_identity, &joiner.peer_id, WALL_NOW)
+                .is_err()
+        );
+        for (anchor, secret) in [
+            (NetworkAnchor::new([11; 32]).unwrap(), vec![89; 32]),
+            (fixture.credentials.anchor().clone(), vec![90; 32]),
+        ] {
+            let capability = crate::membership::checkpoint::NetworkCapability::from_secret(
+                anchor,
+                Some(&secret),
+            )
+            .unwrap();
+            let mut wrong_capability = CooperativeMembershipState::bootstrap_at(
+                capability,
+                fixture.local.peer_id.clone(),
+                candidate.snapshot().payload.members.clone(),
+                SnapshotPolicy::default(),
+                WALL_NOW,
+            )
+            .unwrap();
+            let change = wrong_capability
+                .sign_mutation_at(
+                    &fixture.local,
+                    MembershipChange::RemoveMember(fixture.member.peer_id.clone()),
+                    WALL_NOW,
+                )
+                .unwrap();
+            wrong_capability
+                .apply_mutation_at(&change, WALL_NOW)
+                .unwrap();
+            assert!(
+                runtime
+                    .pairing_grant_for(&wrong_capability, &joiner.peer_id, WALL_NOW)
+                    .is_err()
+            );
+        }
+        runtime.begin_resync(Instant::now()).unwrap();
+        assert!(!runtime.can_accept_pairing());
+        assert!(
+            runtime
+                .pairing_grant_for(&candidate, &joiner.peer_id, WALL_NOW)
+                .is_err()
+        );
+        let (restored, _) = fixture.restored();
+        assert!(!restored.can_accept_pairing());
     }
 
     fn checkpoint_pairing(

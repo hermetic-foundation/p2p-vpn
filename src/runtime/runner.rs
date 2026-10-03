@@ -2199,11 +2199,18 @@ where
                 let actions = code_pairing_sessions.expire(now_unix_seconds, now);
                 if now >= next_pairing_abort_retry {
                     next_pairing_abort_retry = now + Duration::from_secs(10);
-                    if let Err(error) = cleanup_pending_pairing_aborts_with(
+                    let checkpoint_cleanup = cleanup_checkpoint_pairing_aborts(
+                        &mut node.swarm, &mut code_pairing_sessions, pairing_state_store.as_ref(),
+                        checkpoint_runtime.as_mut(), membership_state_store.as_ref(),
+                        &mut forwarder, &mut membership, &mut tun_runtime, route_controller.as_mut(),
+                        &mut local_capabilities, &node.identity,
+                    );
+                    let cleanup = checkpoint_cleanup.and_then(|()| cleanup_pending_pairing_aborts_with(
                         &mut code_pairing_sessions, pairing_state_store.as_ref(), &node.network_name,
                         &node.identity.peer_id, &tun_runtime,
                         |installed, next, update| route_controller.reconcile(installed, next, update),
-                    ) {
+                    ));
+                    if let Err(error) = cleanup {
                         log_runtime_event(LogLevel::Warn, "pairing_abort_cleanup_pending",
                             &[("reason", &format!("{error:?}")), ("action", "retry_automatically")]);
                     }
@@ -2473,6 +2480,10 @@ where
                             &mut pairing_replay_tokens.code_approval,
                             &mut promote_peer,
                             &metrics,
+                            membership_state_store.as_ref().map(|store| CheckpointPairingContext {
+                                runtime: &mut checkpoint_runtime,
+                                store,
+                            }),
                         );
                         if let Some(peer) = promote_peer {
                             let mut context = SwarmEventContext {
@@ -3040,6 +3051,101 @@ fn persist_code_pairing_sessions(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
+fn cleanup_checkpoint_pairing_aborts(
+    swarm: &mut Swarm<Behaviour>,
+    sessions: &mut CodePairingSessions,
+    pairing_store: Option<&PairingStateStore>,
+    mut checkpoint: Option<&mut CheckpointRuntime>,
+    checkpoint_store: Option<&MembershipStateStore>,
+    forwarder: &mut Forwarder,
+    membership: &mut OverlayMembership,
+    tun_runtime: &mut TunRuntimeConfig,
+    route_controller: &mut dyn TunRouteController,
+    capabilities: &mut ControlCapabilities,
+    identity: &NodeIdentity,
+) -> Result<(), RunnerError> {
+    use crate::membership::checkpoint::{MembershipChange, MembershipSyncState};
+    let aborted = sessions
+        .enrollments()
+        .filter(|entry| {
+            entry.state == PairingEnrollmentState::Aborting
+                && entry.response.payload.checkpoint.is_some()
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if aborted.is_empty() {
+        return Ok(());
+    }
+    persist_code_pairing_sessions(pairing_store, sessions, &forwarder.config().network.name)?;
+    for enrollment in aborted {
+        let owned = enrollment.checkpoint_admission_owned.ok_or_else(|| io::Error::other("checkpoint cancellation lacks admission ownership; synchronize and revoke explicitly"))?;
+        if !owned {
+            continue;
+        }
+        let checkpoint = checkpoint.as_deref_mut().ok_or_else(|| {
+            io::Error::other("checkpoint cancellation requires restored authority")
+        })?;
+        let store = checkpoint_store.ok_or_else(|| {
+            io::Error::other("checkpoint cancellation requires durable authority")
+        })?;
+        let grant = enrollment
+            .response
+            .payload
+            .checkpoint
+            .as_ref()
+            .expect("filtered checkpoint abort");
+        if enrollment.role != PairingEnrollmentRole::Inviter
+            || enrollment.response.payload.inviter_peer != identity.peer_id
+            || &grant.anchor != checkpoint.anchor()
+        {
+            return Err(io::Error::other("checkpoint cancellation scope mismatch").into());
+        }
+        // Gated absence can follow an unconfirmed replacement; retain ownership until durable resync.
+        if checkpoint.enrollment_pending()
+            || !matches!(
+                checkpoint.state().sync_state(),
+                MembershipSyncState::Participating | MembershipSyncState::Excluded
+            )
+        {
+            return Err(io::Error::other(
+                "checkpoint cancellation requires completed durable resync",
+            )
+            .into());
+        }
+        let installed = &checkpoint.state().snapshot().payload;
+        let matching_admission = installed.rank().map_err(ForwardError::Checkpoint)?
+            >= grant.minimum
+            && installed
+                .member(&grant.joiner.subject.peer_id)
+                .is_some_and(|member| member.incarnation == grant.joiner.incarnation);
+        if matching_admission {
+            let recipients = swarm.connected_peers().copied().collect::<Vec<_>>();
+            checkpoint.apply_change_with_handoff(
+                MembershipChange::RemoveMember(grant.joiner.subject.peer_id.clone()),
+                identity,
+                store,
+                forwarder,
+                &recipients,
+                Instant::now(),
+                current_unix_seconds_lossy(),
+            )?;
+            membership.replace_from_forwarder(forwarder)?;
+            membership.replace_checkpoint_sync_peers(checkpoint)?;
+            *capabilities = refreshed_local_capabilities(capabilities, forwarder);
+            checkpoint.decorate_capabilities(capabilities)?;
+            retry_checkpoint_tun_routes(checkpoint, forwarder, tun_runtime, route_controller);
+        }
+        sessions.record_checkpoint_admission_ownership(&enrollment.operation_id, false)?;
+        persist_code_pairing_sessions(
+            pairing_store,
+            sessions,
+            &enrollment.response.payload.network_name,
+        )?;
+    }
+    Ok(())
+}
+
 fn cleanup_pending_pairing_aborts_with(
     sessions: &mut CodePairingSessions,
     store: Option<&PairingStateStore>,
@@ -3063,6 +3169,15 @@ fn cleanup_pending_pairing_aborts_with(
     // A failed cancellation save must be retried before any kernel cleanup.
     persist_code_pairing_sessions(store, sessions, network_name)?;
     for enrollment in aborted {
+        if enrollment.response.payload.checkpoint.is_some()
+            && enrollment.checkpoint_admission_owned != Some(false)
+        {
+            return Err(CodePairingSessionError::InvalidPersistedState(
+                "checkpoint abort authority must be reconciled before discarding its transaction"
+                    .into(),
+            )
+            .into());
+        }
         let expected_local = match enrollment.role {
             PairingEnrollmentRole::Inviter => &enrollment.response.payload.inviter_peer,
             PairingEnrollmentRole::Joiner => &enrollment.response.payload.joiner_peer,
@@ -4297,9 +4412,11 @@ fn handle_pair_rpc_request(
     consumed_code_pairing_tokens: &mut HashSet<String>,
     promote_peer: &mut Option<Libp2pPeerId>,
     metrics: &RuntimeMetrics,
+    mut checkpoint_context: Option<CheckpointPairingContext<'_>>,
 ) -> PairRpcResponseEnvelope {
     let network_name = local_capabilities.network_name.clone();
     let local_peer = identity.peer_id.clone();
+    let checkpoint_store = checkpoint_context.as_ref().map(|context| context.store);
     if store.is_none() && pair_rpc_requires_durable_state(&request) {
         return pair_rpc_error(
             PairRpcErrorCode::Unavailable,
@@ -4414,6 +4531,33 @@ fn handle_pair_rpc_request(
                 .pending_approval(&operation_id, &approval_id)
                 .map_err(code_session_pair_rpc)?;
             let now = current_unix_seconds_lossy();
+            if let Some(checkpoints) = checkpoint_context.as_mut()
+                && let Some(checkpoint) = checkpoints.runtime.as_mut()
+            {
+                approve_checkpoint_pairing(
+                    swarm,
+                    sessions,
+                    store,
+                    checkpoint,
+                    checkpoints.store,
+                    forwarder,
+                    membership,
+                    tun_runtime,
+                    route_controller,
+                    local_capabilities,
+                    identity,
+                    consumed_code_pairing_tokens,
+                    &approval,
+                    assigned_hostname,
+                    assigned_vpn_ip,
+                    granted_routes,
+                    now,
+                )?;
+                *promote_peer = Some(approval.peer);
+                metrics.record_code_pairing_completed();
+                return pairing_rpc_status(sessions, &operation_id, &network_name, &local_peer)
+                    .map(|status| PairRpcResult::ActionAccepted(Box::new(status)));
+            }
             let (offer, response) = if let Some(enrollment) = sessions.enrollment(&operation_id) {
                 if enrollment.role != PairingEnrollmentRole::Inviter
                     || enrollment.approval_id.as_deref() != Some(approval_id.as_str())
@@ -4521,6 +4665,22 @@ fn handle_pair_rpc_request(
                 stop_code_pairing_providers(swarm, &actions);
                 persist_code_pairing_sessions(store, sessions, &network_name)
                     .map_err(runner_error_pair_rpc)?;
+                cleanup_checkpoint_pairing_aborts(
+                    swarm,
+                    sessions,
+                    store,
+                    checkpoint_context
+                        .as_mut()
+                        .and_then(|context| context.runtime.as_mut()),
+                    checkpoint_store,
+                    forwarder,
+                    membership,
+                    tun_runtime,
+                    route_controller,
+                    local_capabilities,
+                    identity,
+                )
+                .map_err(runner_error_pair_rpc)?;
                 cleanup_pending_pairing_aborts_with(
                     sessions,
                     store,
@@ -4540,6 +4700,22 @@ fn handle_pair_rpc_request(
                 stop_code_pairing_providers(swarm, &actions);
                 persist_code_pairing_sessions(store, sessions, &network_name)
                     .map_err(runner_error_pair_rpc)?;
+                cleanup_checkpoint_pairing_aborts(
+                    swarm,
+                    sessions,
+                    store,
+                    checkpoint_context
+                        .as_mut()
+                        .and_then(|context| context.runtime.as_mut()),
+                    checkpoint_store,
+                    forwarder,
+                    membership,
+                    tun_runtime,
+                    route_controller,
+                    local_capabilities,
+                    identity,
+                )
+                .map_err(runner_error_pair_rpc)?;
                 cleanup_pending_pairing_aborts_with(
                     sessions,
                     store,
@@ -4609,6 +4785,312 @@ fn pair_rpc_requires_durable_state(request: &PairRpcRequest) -> bool {
     )
 }
 
+#[allow(clippy::too_many_arguments)]
+fn approve_checkpoint_pairing(
+    swarm: &mut Swarm<Behaviour>,
+    sessions: &mut CodePairingSessions,
+    pairing_store: Option<&PairingStateStore>,
+    checkpoint: &mut CheckpointRuntime,
+    checkpoint_store: &MembershipStateStore,
+    forwarder: &mut Forwarder,
+    membership: &mut OverlayMembership,
+    tun_runtime: &mut TunRuntimeConfig,
+    route_controller: &mut dyn TunRouteController,
+    capabilities: &mut ControlCapabilities,
+    identity: &NodeIdentity,
+    consumed_tokens: &mut HashSet<String>,
+    approval: &PendingApproval,
+    assigned_hostname: Option<String>,
+    assigned_vpn_ip: Option<String>,
+    granted_routes: Vec<RouteConfig>,
+    wall_now: u64,
+) -> Result<(), PairRpcResponseEnvelope> {
+    use crate::membership::checkpoint::{CheckpointMember, MembershipChange, SnapshotPublisher};
+
+    if !checkpoint.can_accept_pairing() {
+        return Err(pair_rpc_error(
+            PairRpcErrorCode::Unavailable,
+            "checkpoint resynchronization or mutation delivery is pending; retry after synchronization",
+            true,
+        ));
+    }
+    let config = forwarder.config();
+    let network = config.network.name.clone();
+    let offer = validated_pairing_offer_for_request(
+        config,
+        consumed_tokens,
+        approval.peer,
+        &approval.request,
+        wall_now,
+        crate::pairing::PairingAcceptanceMode::CodeApproval,
+    )
+    .map_err(|error| runner_error_pair_rpc(error.into()))?;
+    let requested_hostname = approval.request.payload.requested_hostname.as_deref();
+    if assigned_hostname
+        .as_deref()
+        .is_some_and(|name| Some(name) != requested_hostname)
+    {
+        return Err(pair_rpc_error(
+            PairRpcErrorCode::InvalidRequest,
+            "checkpoint hostnames are self-signed; change the hostname on the joining device",
+            false,
+        ));
+    }
+    validate_pairing_hostname_available(
+        config,
+        &[],
+        &forwarder
+            .effective_hostname_records()
+            .map_err(|error| runner_error_pair_rpc(error.into()))?,
+        &approval.request.payload.joiner_peer,
+        requested_hostname,
+        wall_now,
+    )
+    .map_err(|error| runner_error_pair_rpc(error.into()))?;
+    let (response, change, admission_owned) = if let Some(enrollment) =
+        sessions.enrollment(&approval.operation_id)
+    {
+        if enrollment.role != PairingEnrollmentRole::Inviter
+            || enrollment.approval_id.as_deref() != Some(approval.approval_id.as_str())
+            || enrollment.offer.as_ref() != Some(&offer)
+            || enrollment.state != PairingEnrollmentState::Prepared
+        {
+            return Err(pair_rpc_error(
+                PairRpcErrorCode::InvalidState,
+                "checkpoint enrollment conflicts with this approval",
+                false,
+            ));
+        }
+        let response = enrollment.response.clone();
+        let grant = response.payload.checkpoint.as_ref().ok_or_else(|| {
+            pair_rpc_error(
+                PairRpcErrorCode::InvalidState,
+                "legacy enrollment cannot be replayed into checkpoint authority",
+                false,
+            )
+        })?;
+        let current = checkpoint.state();
+        let rank =
+            current.snapshot().payload.rank().map_err(|error| {
+                runner_error_pair_rpc(io::Error::other(error.to_string()).into())
+            })?;
+        if rank >= grant.minimum {
+            let expected = checkpoint
+                .pairing_grant_for(current, &approval.request.payload.joiner_peer, wall_now)
+                .map_err(runner_error_pair_rpc)?;
+            if expected.joiner != grant.joiner
+                || expected.anchor != grant.anchor
+                || expected.capability_secret != grant.capability_secret
+            {
+                return Err(pair_rpc_error(
+                    PairRpcErrorCode::InvalidState,
+                    "prepared checkpoint enrollment was superseded; pair again",
+                    false,
+                ));
+            }
+            (response, None, enrollment.checkpoint_admission_owned.ok_or_else(|| pair_rpc_error(PairRpcErrorCode::InvalidState, "checkpoint approval has no admission ownership; reconcile it before retrying", false))?)
+        } else {
+            let change = MembershipChange::UpsertMember(grant.joiner.clone());
+            let mutation = current
+                .sign_mutation_at(identity, change.clone(), wall_now)
+                .map_err(|error| {
+                    runner_error_pair_rpc(io::Error::other(error.to_string()).into())
+                })?;
+            let mut candidate = current.clone();
+            candidate
+                .apply_mutation_at(&mutation, wall_now)
+                .map_err(|error| {
+                    runner_error_pair_rpc(io::Error::other(error.to_string()).into())
+                })?;
+            let expected = checkpoint
+                .pairing_grant_for(&candidate, &approval.request.payload.joiner_peer, wall_now)
+                .map_err(runner_error_pair_rpc)?;
+            if expected != *grant {
+                return Err(pair_rpc_error(
+                    PairRpcErrorCode::InvalidState,
+                    "prepared checkpoint admission no longer matches the current branch",
+                    false,
+                ));
+            }
+            (response, Some(change), enrollment.checkpoint_admission_owned.ok_or_else(|| pair_rpc_error(PairRpcErrorCode::InvalidState, "checkpoint approval has no admission ownership; reconcile it before retrying", false))?)
+        }
+    } else {
+        let assigned_vpn_ip =
+            assigned_vpn_ip.or_else(|| approval.request.payload.requested_vpn_ip.clone());
+        let mut routes = pairing_route_grants_for_assignment(
+            &approval.request,
+            assigned_vpn_ip.as_deref(),
+            Some(granted_routes),
+        )
+        .map_err(|error| runner_error_pair_rpc(error.into()))?;
+        for route in &mut routes {
+            route.prefix = route
+                .prefix()
+                .map_err(|error| {
+                    runner_error_pair_rpc(crate::pairing::PairingError::from(error).into())
+                })?
+                .to_string();
+        }
+        routes
+            .sort_by(|left, right| (&left.prefix, left.metric).cmp(&(&right.prefix, right.metric)));
+        routes.dedup();
+        let mut roles = vec![MembershipRole::OverlayMember];
+        if !routes.is_empty() {
+            roles.push(MembershipRole::RouteAuthority);
+        }
+        let member = CheckpointMember {
+            subject: SnapshotPublisher {
+                peer_id: approval.request.payload.joiner_peer.clone(),
+                public_key: approval.request.payload.joiner_public_key.clone(),
+            },
+            incarnation: checkpoint
+                .state()
+                .snapshot()
+                .payload
+                .member(&approval.request.payload.joiner_peer)
+                .map_or([1; 32], |member| member.incarnation),
+            roles,
+            route_grants: routes,
+            expires_at_unix_seconds: None,
+        };
+        if checkpoint
+            .state()
+            .snapshot()
+            .payload
+            .member(&member.subject.peer_id)
+            .is_some_and(|existing| existing.active_at(wall_now) && existing != &member)
+        {
+            return Err(pair_rpc_error(
+                PairRpcErrorCode::InvalidRequest,
+                "pairing an active checkpoint member cannot replace its grants; update membership authority separately",
+                false,
+            ));
+        }
+        let change = (checkpoint
+            .state()
+            .snapshot()
+            .payload
+            .member(&member.subject.peer_id)
+            != Some(&member))
+        .then_some(MembershipChange::UpsertMember(member));
+        let mut candidate = checkpoint.state().clone();
+        if let Some(change) = &change {
+            let mutation = candidate
+                .sign_mutation_at(identity, change.clone(), wall_now)
+                .map_err(|error| runner_error_pair_rpc(ForwardError::Checkpoint(error).into()))?;
+            candidate
+                .apply_mutation_at(&mutation, wall_now)
+                .map_err(|error| runner_error_pair_rpc(ForwardError::Checkpoint(error).into()))?;
+        }
+        forwarder
+            .prepare_checkpoint_update(&candidate, checkpoint.anchor(), wall_now)
+            .map_err(|error| runner_error_pair_rpc(error.into()))?;
+        let grant = checkpoint
+            .pairing_grant_for(&candidate, &approval.request.payload.joiner_peer, wall_now)
+            .map_err(runner_error_pair_rpc)?;
+        let response = crate::pairing::build_checkpoint_pairing_response_at(
+            config,
+            &offer,
+            crate::pairing::PairingResponseOptions {
+                joiner_peer: approval.request.payload.joiner_peer.clone(),
+                assigned_vpn_ip,
+                membership_key: None,
+                member_records: Vec::new(),
+                expires_in_seconds: PAIRING_RESPONSE_EXPIRES_IN_SECONDS,
+            },
+            grant,
+            wall_now,
+        )
+        .map_err(|error| runner_error_pair_rpc(error.into()))?;
+        let admission_owned = checkpoint
+            .state()
+            .snapshot()
+            .payload
+            .member(&approval.request.payload.joiner_peer)
+            .is_none_or(|member| !member.active_at(wall_now));
+        (response, change, admission_owned)
+    };
+    let mut candidate = checkpoint.state().clone();
+    if let Some(change) = &change {
+        let mutation = candidate
+            .sign_mutation_at(identity, change.clone(), wall_now)
+            .map_err(|error| runner_error_pair_rpc(ForwardError::Checkpoint(error).into()))?;
+        candidate
+            .apply_mutation_at(&mutation, wall_now)
+            .map_err(|error| runner_error_pair_rpc(ForwardError::Checkpoint(error).into()))?;
+    }
+    let update = forwarder
+        .prepare_checkpoint_update(&candidate, checkpoint.anchor(), wall_now)
+        .map_err(|error| runner_error_pair_rpc(error.into()))?;
+    let next_tun =
+        TunRuntimeConfig::from_config_with_routes(update.config(), update.authorized_routes())
+            .map_err(|error| runner_error_pair_rpc(error.into()))?;
+    sessions
+        .prepare_enrollment(
+            &network,
+            PairingEnrollmentPreparation {
+                operation_id: approval.operation_id.clone(),
+                role: PairingEnrollmentRole::Inviter,
+                approval_id: Some(approval.approval_id.clone()),
+                offer: Some(offer),
+                response: response.clone(),
+                transcript_sha256: approval.transcript_sha256.clone(),
+                membership_key_preconfigured: Some(config.network.membership_key.is_some()),
+            },
+        )
+        .map_err(code_session_pair_rpc)?;
+    sessions
+        .record_checkpoint_admission_ownership(&approval.operation_id, admission_owned)
+        .map_err(code_session_pair_rpc)?;
+    sessions
+        .record_tun_cleanup(
+            &approval.operation_id,
+            super::tun::PairingTunCleanup::capture(tun_runtime, &next_tun)
+                .map_err(|error| runner_error_pair_rpc(error.into()))?,
+        )
+        .map_err(code_session_pair_rpc)?;
+    // Retain a retryable approval before advancing durable membership authority.
+    persist_code_pairing_sessions(pairing_store, sessions, &network)
+        .map_err(runner_error_pair_rpc)?;
+    if let Some(change) = change {
+        let recipients = swarm.connected_peers().copied().collect::<Vec<_>>();
+        checkpoint
+            .apply_change_with_handoff(
+                change,
+                identity,
+                checkpoint_store,
+                forwarder,
+                &recipients,
+                Instant::now(),
+                wall_now,
+            )
+            .map_err(runner_error_pair_rpc)?;
+    }
+    membership
+        .replace_from_forwarder(forwarder)
+        .map_err(|error| runner_error_pair_rpc(error.into()))?;
+    membership
+        .replace_checkpoint_sync_peers(checkpoint)
+        .map_err(|error| runner_error_pair_rpc(error.into()))?;
+    *capabilities = refreshed_local_capabilities(capabilities, forwarder);
+    checkpoint
+        .decorate_capabilities(capabilities)
+        .map_err(runner_error_pair_rpc)?;
+    retry_checkpoint_tun_routes(checkpoint, forwarder, tun_runtime, route_controller);
+    let actions = sessions
+        .complete_open(&approval.operation_id, &approval.approval_id, response)
+        .map_err(code_session_pair_rpc)?;
+    sessions
+        .mark_enrollment_applied_at(&approval.operation_id, wall_now)
+        .map_err(code_session_pair_rpc)?;
+    consumed_tokens.insert(approval.request.payload.rendezvous_token.clone());
+    stop_code_pairing_providers(swarm, &actions);
+    if let Err(error) = persist_code_pairing_sessions(pairing_store, sessions, &network) {
+        log_pairing_persistence_failure("checkpoint_inviter_finalization", &error);
+    }
+    Ok(())
+}
+
 fn pairing_rpc_completion_artifacts(
     sessions: &CodePairingSessions,
     operation_id: &str,
@@ -4647,6 +5129,13 @@ fn pairing_rpc_completion_artifacts(
     }
 
     let response = &enrollment.response.payload;
+    if response.checkpoint.is_some() {
+        return Err(pair_rpc_error(
+            PairRpcErrorCode::Unavailable,
+            "checkpoint pairing configuration export is not implemented; legacy membership artifacts are unsafe for this enrollment",
+            false,
+        ));
+    }
     if response.network_name != network_name {
         return Err(pair_rpc_error(
             PairRpcErrorCode::Internal,
@@ -12223,6 +12712,11 @@ fn expire_membership_probe_connections(
     }
 }
 
+struct CheckpointPairingContext<'a> {
+    runtime: &'a mut Option<CheckpointRuntime>,
+    store: &'a MembershipStateStore,
+}
+
 struct SwarmEventContext<'a> {
     forwarder: &'a mut Forwarder,
     membership: &'a mut OverlayMembership,
@@ -16907,62 +17401,14 @@ fn pairing_offer_and_response_for_request_with_grants_and_hostname(
     assigned_vpn_ip: Option<String>,
     granted_routes: Option<Vec<RouteConfig>>,
 ) -> Result<(crate::pairing::PairingOffer, PairingResponse), crate::pairing::PairingError> {
-    let offer = if let Some(offer) = request.offer.as_ref() {
-        offer.clone()
-    } else {
-        if request.payload.offer_issued_at_unix_seconds == 0
-            || request.payload.offer_expires_at_unix_seconds
-                <= request.payload.offer_issued_at_unix_seconds
-            || request.payload.offer_signature.is_empty()
-        {
-            return Err(crate::pairing::PairingError::InvalidSignature);
-        }
-        let options = crate::pairing::PairingOfferOptions {
-            expires_in_seconds: request
-                .payload
-                .offer_expires_at_unix_seconds
-                .saturating_sub(request.payload.offer_issued_at_unix_seconds),
-            rendezvous_token: Some(request.payload.rendezvous_token.clone()),
-        };
-        let reconstructed = match expected_acceptance_mode {
-            crate::pairing::PairingAcceptanceMode::FileBearer => {
-                crate::pairing::export_pairing_offer_at(
-                    config,
-                    options,
-                    request.payload.offer_issued_at_unix_seconds,
-                )?
-            }
-            crate::pairing::PairingAcceptanceMode::CodeApproval => {
-                crate::pairing::export_code_pairing_offer_at(
-                    config,
-                    options,
-                    request.payload.offer_issued_at_unix_seconds,
-                )?
-            }
-        };
-        if reconstructed.signature != request.payload.offer_signature {
-            return Err(crate::pairing::PairingError::InvalidSignature);
-        }
-        reconstructed
-    };
-    if offer.payload.acceptance_mode != expected_acceptance_mode {
-        return Err(crate::pairing::PairingError::ApprovalRequired);
-    }
-    request.verify_for_offer_at(&offer, now_unix_seconds)?;
-    if offer.payload.network_name != config.network.name
-        || offer.payload.inviter_peer != config.local_peer()?
-    {
-        return Err(crate::pairing::PairingError::OfferConfigMismatch);
-    }
-    if request.payload.joiner_peer != transport_peer.to_string() {
-        return Err(crate::pairing::PairingError::TransportPeerMismatch {
-            expected: request.payload.joiner_peer.clone(),
-            actual: transport_peer.to_string(),
-        });
-    }
-    if consumed_tokens.contains(&request.payload.rendezvous_token) {
-        return Err(crate::pairing::PairingError::RendezvousTokenMismatch);
-    }
+    let offer = validated_pairing_offer_for_request(
+        config,
+        consumed_tokens,
+        transport_peer,
+        request,
+        now_unix_seconds,
+        expected_acceptance_mode,
+    )?;
 
     let assigned_hostname = assigned_hostname
         .or_else(|| request.payload.requested_hostname.clone())
@@ -17059,6 +17505,73 @@ fn pairing_offer_and_response_for_request_with_grants_and_hostname(
     )?;
 
     Ok((offer, response))
+}
+
+fn validated_pairing_offer_for_request(
+    config: &Config,
+    consumed_tokens: &HashSet<String>,
+    transport_peer: Libp2pPeerId,
+    request: &PairingRequest,
+    now_unix_seconds: u64,
+    expected_acceptance_mode: crate::pairing::PairingAcceptanceMode,
+) -> Result<PairingOffer, crate::pairing::PairingError> {
+    let offer = if let Some(offer) = request.offer.as_ref() {
+        offer.clone()
+    } else {
+        if request.payload.offer_issued_at_unix_seconds == 0
+            || request.payload.offer_expires_at_unix_seconds
+                <= request.payload.offer_issued_at_unix_seconds
+            || request.payload.offer_signature.is_empty()
+        {
+            return Err(crate::pairing::PairingError::InvalidSignature);
+        }
+        let options = crate::pairing::PairingOfferOptions {
+            expires_in_seconds: request
+                .payload
+                .offer_expires_at_unix_seconds
+                .saturating_sub(request.payload.offer_issued_at_unix_seconds),
+            rendezvous_token: Some(request.payload.rendezvous_token.clone()),
+        };
+        let reconstructed = match expected_acceptance_mode {
+            crate::pairing::PairingAcceptanceMode::FileBearer => {
+                crate::pairing::export_pairing_offer_at(
+                    config,
+                    options,
+                    request.payload.offer_issued_at_unix_seconds,
+                )?
+            }
+            crate::pairing::PairingAcceptanceMode::CodeApproval => {
+                crate::pairing::export_code_pairing_offer_at(
+                    config,
+                    options,
+                    request.payload.offer_issued_at_unix_seconds,
+                )?
+            }
+        };
+        if reconstructed.signature != request.payload.offer_signature {
+            return Err(crate::pairing::PairingError::InvalidSignature);
+        }
+        reconstructed
+    };
+    if offer.payload.acceptance_mode != expected_acceptance_mode {
+        return Err(crate::pairing::PairingError::ApprovalRequired);
+    }
+    request.verify_for_offer_at(&offer, now_unix_seconds)?;
+    if offer.payload.network_name != config.network.name
+        || offer.payload.inviter_peer != config.local_peer()?
+    {
+        return Err(crate::pairing::PairingError::OfferConfigMismatch);
+    }
+    if request.payload.joiner_peer != transport_peer.to_string() {
+        return Err(crate::pairing::PairingError::TransportPeerMismatch {
+            expected: request.payload.joiner_peer.clone(),
+            actual: transport_peer.to_string(),
+        });
+    }
+    if consumed_tokens.contains(&request.payload.rendezvous_token) {
+        return Err(crate::pairing::PairingError::RendezvousTokenMismatch);
+    }
+    Ok(offer)
 }
 
 fn validate_pairing_hostname_available(
@@ -24222,6 +24735,1018 @@ mod tests {
         (config, inviter, joiner, offer, request, response)
     }
 
+    struct CheckpointApprovalFixture {
+        directory: PathBuf,
+        local: NodeIdentity,
+        joiner: NodeIdentity,
+        offer: PairingOffer,
+        node: P2pNode,
+        checkpoint: Option<CheckpointRuntime>,
+        checkpoint_store: MembershipStateStore,
+        pairing_store: PairingStateStore,
+        sessions: CodePairingSessions,
+        approval: PendingApproval,
+        forwarder: Forwarder,
+        membership: OverlayMembership,
+        tun: TunRuntimeConfig,
+        capabilities: ControlCapabilities,
+        consumed: HashSet<String>,
+        promoted: Option<Libp2pPeerId>,
+    }
+
+    impl CheckpointApprovalFixture {
+        fn new() -> Self {
+            use super::super::membership_store::checkpoint::CheckpointCredentials;
+            use crate::membership::checkpoint::{
+                CheckpointMember, CooperativeMembershipState, NetworkAnchor, SnapshotPolicy,
+            };
+            use std::os::unix::fs::PermissionsExt as _;
+
+            let wall = current_unix_seconds_lossy();
+            let (config, local, joiner, offer, request, _) = code_pairing_runtime_fixture_at(
+                Some(base64::engine::general_purpose::STANDARD.encode([7; 32])),
+                wall - 10,
+            );
+            let path = test_pairing_state_path(&format!("checkpoint-approval-{}", local.peer_id));
+            let directory = path.parent().unwrap().to_path_buf();
+            fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+            let checkpoint_store =
+                MembershipStateStore::new(directory.join("membership-state.json"));
+            let credentials =
+                CheckpointCredentials::new(NetworkAnchor::new([1; 32]).unwrap(), vec![7; 32])
+                    .unwrap();
+            let state = CooperativeMembershipState::bootstrap_at(
+                credentials.capability().unwrap(),
+                local.peer_id.clone(),
+                vec![CheckpointMember::new(&local).unwrap()],
+                SnapshotPolicy::default(),
+                wall,
+            )
+            .unwrap();
+            checkpoint_store
+                .save_checkpoint("lab", &local.peer_id, &credentials, &state.retained())
+                .unwrap();
+            let Some(PersistedAuthority::Checkpoint(loaded)) = checkpoint_store
+                .load_authority("lab", &local.peer_id, None, None)
+                .unwrap()
+            else {
+                panic!("checkpoint fixture")
+            };
+            let mut checkpoint =
+                CheckpointRuntime::restore("lab".into(), &local.peer_id, *loaded).unwrap();
+            let mut forwarder = Forwarder::from_checkpoint_config(
+                &config,
+                checkpoint.state(),
+                checkpoint.anchor(),
+                wall,
+            )
+            .unwrap();
+            let now = Instant::now();
+            checkpoint.begin_resync(now).unwrap();
+            checkpoint
+                .finish_due(
+                    &checkpoint_store,
+                    &mut forwarder,
+                    now + super::super::checkpoint_runtime::RESYNC_WINDOW,
+                    wall,
+                )
+                .unwrap();
+            let membership = OverlayMembership::from_transport_peers(
+                forwarder.config(),
+                forwarder.configured_transport_peers(),
+            )
+            .unwrap();
+            let tun = TunRuntimeConfig::from_config_with_routes(
+                forwarder.config(),
+                forwarder.authorized_routes(),
+            )
+            .unwrap();
+            let operation = crate::runtime::pairing_sessions::fresh_pairing_operation_id();
+            let mut sessions = CodePairingSessions::new();
+            sessions
+                .open_with_id(operation.clone(), "lab", 600, wall, Instant::now())
+                .unwrap();
+            let approval = PendingApproval::new(
+                operation,
+                joiner.peer_id.parse().unwrap(),
+                wall + 600,
+                request,
+            )
+            .unwrap();
+            sessions.set_pending_approval(approval.clone()).unwrap();
+            let pairing_store =
+                PairingStateStore::encrypted(&path, &local.private_key, "lab", &local.peer_id)
+                    .unwrap();
+            persist_code_pairing_sessions(Some(&pairing_store), &sessions, "lab").unwrap();
+            let mut capabilities =
+                ControlCapabilities::local("lab", config.membership_tag().unwrap(), 1280);
+            checkpoint.decorate_capabilities(&mut capabilities).unwrap();
+            Self {
+                directory,
+                node: pairing_test_node(&local),
+                local,
+                joiner,
+                offer,
+                checkpoint: Some(checkpoint),
+                checkpoint_store,
+                pairing_store,
+                sessions,
+                approval,
+                forwarder,
+                membership,
+                tun,
+                capabilities,
+                consumed: HashSet::new(),
+                promoted: None,
+            }
+        }
+
+        fn approve(
+            &mut self,
+            pairing_failure: bool,
+            checkpoint_failure: bool,
+            routes: &mut dyn TunRouteController,
+        ) -> PairRpcResponseEnvelope {
+            let bad_pairing =
+                PairingStateStore::new(self.directory.join("absent-parent/pairing.json"));
+            let bad_checkpoint =
+                MembershipStateStore::new(self.directory.join("absent-parent/membership.json"));
+            handle_pair_rpc_request(
+                &mut self.node.swarm,
+                PairRpcRequest::PairApprove {
+                    operation_id: self.approval.operation_id.clone(),
+                    approval_id: self.approval.approval_id.clone(),
+                    assigned_hostname: None,
+                    assigned_vpn_ip: None,
+                    granted_routes: vec![],
+                },
+                &mut self.sessions,
+                Some(if pairing_failure {
+                    &bad_pairing
+                } else {
+                    &self.pairing_store
+                }),
+                &mut self.forwarder,
+                &mut self.membership,
+                &mut self.tun,
+                routes,
+                &mut self.capabilities,
+                &self.local,
+                &mut self.consumed,
+                &mut self.promoted,
+                &RuntimeMetrics::default(),
+                Some(CheckpointPairingContext {
+                    runtime: &mut self.checkpoint,
+                    store: if checkpoint_failure {
+                        &bad_checkpoint
+                    } else {
+                        &self.checkpoint_store
+                    },
+                }),
+            )
+        }
+
+        fn restored_sessions(&self) -> CodePairingSessions {
+            CodePairingSessions::restore_persisted(
+                &self.pairing_store.load().unwrap().unwrap(),
+                "lab",
+                current_unix_seconds_lossy(),
+                Instant::now(),
+            )
+            .unwrap()
+        }
+
+        fn begin_repair(&mut self) {
+            let wall = current_unix_seconds_lossy();
+            self.offer = export_code_pairing_offer_at(
+                self.forwarder.config(),
+                PairingOfferOptions::default(),
+                wall,
+            )
+            .unwrap();
+            let request = build_pairing_request_at(
+                &self.offer,
+                PairingRequestOptions {
+                    identity: self.joiner.clone(),
+                    requested_vpn_ip: Some("10.42.0.2".into()),
+                    requested_routes: vec![],
+                },
+                wall,
+            )
+            .unwrap();
+            let operation = crate::runtime::pairing_sessions::fresh_pairing_operation_id();
+            self.sessions
+                .open_with_id(operation.clone(), "lab", 600, wall, Instant::now())
+                .unwrap();
+            self.approval = PendingApproval::new(
+                operation,
+                self.joiner.peer_id.parse().unwrap(),
+                wall + 600,
+                request,
+            )
+            .unwrap();
+            self.sessions
+                .set_pending_approval(self.approval.clone())
+                .unwrap();
+        }
+
+        fn cancel(&mut self) -> PairRpcResponseEnvelope {
+            handle_pair_rpc_request(
+                &mut self.node.swarm,
+                PairRpcRequest::PairCancel {
+                    operation_id: self.approval.operation_id.clone(),
+                },
+                &mut self.sessions,
+                Some(&self.pairing_store),
+                &mut self.forwarder,
+                &mut self.membership,
+                &mut self.tun,
+                &mut PreconfiguredTunRoutes,
+                &mut self.capabilities,
+                &self.local,
+                &mut self.consumed,
+                &mut self.promoted,
+                &RuntimeMetrics::default(),
+                Some(CheckpointPairingContext {
+                    runtime: &mut self.checkpoint,
+                    store: &self.checkpoint_store,
+                }),
+            )
+        }
+    }
+
+    impl Drop for CheckpointApprovalFixture {
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.directory).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn checkpoint_pair_rpc_approval_commits_signed_grant_without_legacy_history() {
+        let mut fixture = CheckpointApprovalFixture::new();
+        let result = fixture.approve(false, false, &mut PreconfiguredTunRoutes);
+        assert!(
+            matches!(
+                result.outcome,
+                crate::runtime::control_socket::PairRpcOutcome::Ok { .. }
+            ),
+            "{result:?}"
+        );
+        let response = fixture
+            .sessions
+            .open_completion(&fixture.approval.operation_id)
+            .unwrap();
+        response
+            .verify_for_offer_at(
+                &fixture.offer,
+                &fixture.joiner,
+                current_unix_seconds_lossy(),
+            )
+            .unwrap();
+        let grant = response.payload.checkpoint.as_ref().unwrap();
+        let checkpoint = fixture.checkpoint.as_ref().unwrap();
+        assert_eq!(
+            grant.minimum,
+            checkpoint.state().snapshot().payload.rank().unwrap()
+        );
+        assert_eq!(
+            grant.joiner.route_grants,
+            vec![RouteConfig {
+                prefix: "10.42.0.2/32".into(),
+                metric: 0
+            }]
+        );
+        assert!(response.payload.member_records.is_empty());
+        assert!(response.payload.membership_key.is_none());
+        assert!(fixture.forwarder.member_records().is_empty());
+        assert_eq!(fixture.promoted, Some(fixture.approval.peer));
+        assert!(fixture.membership.allows(fixture.approval.peer));
+        assert!(
+            fixture
+                .sessions
+                .enrollment_artifacts_ready(&fixture.approval.operation_id)
+        );
+        let saved = fixture.restored_sessions();
+        assert_eq!(
+            saved
+                .enrollment(&fixture.approval.operation_id)
+                .unwrap()
+                .state,
+            PairingEnrollmentState::Applied
+        );
+        assert!(
+            saved
+                .enrollment(&fixture.approval.operation_id)
+                .unwrap()
+                .tun_cleanup
+                .is_some()
+        );
+        let Some(PersistedAuthority::Checkpoint(loaded)) = fixture
+            .checkpoint_store
+            .load_authority("lab", &fixture.local.peer_id, None, None)
+            .unwrap()
+        else {
+            panic!("checkpoint authority")
+        };
+        assert_eq!(loaded.retained.snapshot, *checkpoint.state().snapshot());
+    }
+
+    #[tokio::test]
+    async fn checkpoint_pair_rpc_persistence_failures_preserve_retryable_admission() {
+        for pairing_failure in [true, false] {
+            let mut fixture = CheckpointApprovalFixture::new();
+            let before = fixture
+                .checkpoint
+                .as_ref()
+                .unwrap()
+                .state()
+                .snapshot()
+                .clone();
+            let result = fixture.approve(
+                pairing_failure,
+                !pairing_failure,
+                &mut PreconfiguredTunRoutes,
+            );
+            assert!(
+                matches!(
+                    result.outcome,
+                    crate::runtime::control_socket::PairRpcOutcome::Error { .. }
+                ),
+                "{result:?}"
+            );
+            assert_eq!(
+                *fixture.checkpoint.as_ref().unwrap().state().snapshot(),
+                before
+            );
+            assert_eq!(fixture.promoted, None);
+            assert!(!fixture.membership.allows(fixture.approval.peer));
+            let prepared = fixture
+                .sessions
+                .enrollment(&fixture.approval.operation_id)
+                .unwrap();
+            assert_eq!(prepared.state, PairingEnrollmentState::Prepared);
+            let grant = prepared.response.clone();
+            if !pairing_failure {
+                fixture.sessions = fixture.restored_sessions();
+            }
+            let result = fixture.approve(false, false, &mut PreconfiguredTunRoutes);
+            assert!(
+                matches!(
+                    result.outcome,
+                    crate::runtime::control_socket::PairRpcOutcome::Ok { .. }
+                ),
+                "{result:?}"
+            );
+            assert_eq!(
+                fixture
+                    .sessions
+                    .open_completion(&fixture.approval.operation_id),
+                Some(&grant)
+            );
+            assert!(fixture.membership.allows(fixture.approval.peer));
+        }
+    }
+
+    #[tokio::test]
+    async fn checkpoint_pair_rpc_stale_preparation_cannot_restore_removed_member() {
+        use crate::membership::checkpoint::MembershipChange;
+        let mut fixture = CheckpointApprovalFixture::new();
+        let result = fixture.approve(false, true, &mut PreconfiguredTunRoutes);
+        assert!(matches!(
+            result.outcome,
+            crate::runtime::control_socket::PairRpcOutcome::Error { .. }
+        ));
+        let grant = fixture
+            .sessions
+            .enrollment(&fixture.approval.operation_id)
+            .unwrap()
+            .response
+            .payload
+            .checkpoint
+            .clone()
+            .unwrap();
+        let checkpoint = fixture.checkpoint.as_mut().unwrap();
+        checkpoint
+            .apply_change(
+                MembershipChange::UpsertMember(grant.joiner),
+                &fixture.local,
+                &fixture.checkpoint_store,
+                &mut fixture.forwarder,
+                current_unix_seconds_lossy(),
+            )
+            .unwrap();
+        checkpoint
+            .apply_change(
+                MembershipChange::RemoveMember(fixture.joiner.peer_id.clone()),
+                &fixture.local,
+                &fixture.checkpoint_store,
+                &mut fixture.forwarder,
+                current_unix_seconds_lossy(),
+            )
+            .unwrap();
+        let before = checkpoint.state().snapshot().clone();
+        fixture.sessions = fixture.restored_sessions();
+        let result = fixture.approve(false, false, &mut PreconfiguredTunRoutes);
+        assert!(
+            matches!(
+                result.outcome,
+                crate::runtime::control_socket::PairRpcOutcome::Error { .. }
+            ),
+            "{result:?}"
+        );
+        assert_eq!(
+            *fixture.checkpoint.as_ref().unwrap().state().snapshot(),
+            before
+        );
+        assert_eq!(fixture.promoted, None);
+        assert!(
+            !fixture
+                .forwarder
+                .is_configured_transport_peer(fixture.approval.peer)
+        );
+    }
+
+    #[tokio::test]
+    async fn checkpoint_pair_rpc_artifacts_cannot_emit_legacy_authority() {
+        let mut fixture = CheckpointApprovalFixture::new();
+        let result = fixture.approve(false, false, &mut PreconfiguredTunRoutes);
+        assert!(matches!(
+            result.outcome,
+            crate::runtime::control_socket::PairRpcOutcome::Ok { .. }
+        ));
+        let result = pairing_rpc_completion_artifacts(
+            &fixture.sessions,
+            &fixture.approval.operation_id,
+            "lab",
+            &fixture.local.peer_id,
+            fixture.forwarder.member_records(),
+            Some(&fixture.pairing_store),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(
+                result.outcome,
+                crate::runtime::control_socket::PairRpcOutcome::Error { ref error }
+                    if error.code == PairRpcErrorCode::Unavailable
+            ),
+            "{result:?}"
+        );
+        assert!(!fixture.directory.join("membership-key").exists());
+    }
+
+    #[tokio::test]
+    async fn checkpoint_pair_rpc_resync_gate_does_not_prepare_or_promote() {
+        let mut fixture = CheckpointApprovalFixture::new();
+        fixture
+            .checkpoint
+            .as_mut()
+            .unwrap()
+            .begin_resync(Instant::now())
+            .unwrap();
+        let before = fixture
+            .checkpoint
+            .as_ref()
+            .unwrap()
+            .state()
+            .snapshot()
+            .clone();
+        let result = fixture.approve(false, false, &mut PreconfiguredTunRoutes);
+        assert!(
+            matches!(
+                result.outcome,
+                crate::runtime::control_socket::PairRpcOutcome::Error { .. }
+            ),
+            "{result:?}"
+        );
+        assert!(
+            fixture
+                .sessions
+                .enrollment(&fixture.approval.operation_id)
+                .is_none()
+        );
+        assert_eq!(
+            *fixture.checkpoint.as_ref().unwrap().state().snapshot(),
+            before
+        );
+        assert_eq!(fixture.promoted, None);
+    }
+
+    #[tokio::test]
+    async fn checkpoint_pair_rpc_existing_member_pairing_does_not_invent_a_revision() {
+        let mut fixture = CheckpointApprovalFixture::new();
+        let result = fixture.approve(false, false, &mut PreconfiguredTunRoutes);
+        assert!(matches!(
+            result.outcome,
+            crate::runtime::control_socket::PairRpcOutcome::Ok { .. }
+        ));
+        let before = fixture
+            .checkpoint
+            .as_ref()
+            .unwrap()
+            .state()
+            .snapshot()
+            .clone();
+        let wall = current_unix_seconds_lossy();
+        let offer = export_code_pairing_offer_at(
+            fixture.forwarder.config(),
+            PairingOfferOptions::default(),
+            wall,
+        )
+        .unwrap();
+        let request = build_pairing_request_at(
+            &offer,
+            PairingRequestOptions {
+                identity: fixture.joiner.clone(),
+                requested_vpn_ip: Some("10.42.0.2".into()),
+                requested_routes: vec![],
+            },
+            wall,
+        )
+        .unwrap();
+        let operation = crate::runtime::pairing_sessions::fresh_pairing_operation_id();
+        fixture
+            .sessions
+            .open_with_id(operation.clone(), "lab", 600, wall, Instant::now())
+            .unwrap();
+        fixture.approval = PendingApproval::new(
+            operation,
+            fixture.joiner.peer_id.parse().unwrap(),
+            wall + 600,
+            request,
+        )
+        .unwrap();
+        fixture
+            .sessions
+            .set_pending_approval(fixture.approval.clone())
+            .unwrap();
+        let result = fixture.approve(false, false, &mut PreconfiguredTunRoutes);
+        assert!(
+            matches!(
+                result.outcome,
+                crate::runtime::control_socket::PairRpcOutcome::Ok { .. }
+            ),
+            "{result:?}"
+        );
+        assert_eq!(
+            *fixture.checkpoint.as_ref().unwrap().state().snapshot(),
+            before
+        );
+        assert!(
+            fixture
+                .sessions
+                .enrollment_artifacts_ready(&fixture.approval.operation_id)
+        );
+    }
+
+    #[tokio::test]
+    async fn checkpoint_pair_rpc_approval_crosses_authenticated_tcp_pairing_transport() {
+        let mut fixture = CheckpointApprovalFixture::new();
+        let result = fixture.approve(false, false, &mut PreconfiguredTunRoutes);
+        assert!(matches!(
+            result.outcome,
+            crate::runtime::control_socket::PairRpcOutcome::Ok { .. }
+        ));
+        let response = fixture
+            .sessions
+            .open_completion(&fixture.approval.operation_id)
+            .unwrap()
+            .clone();
+        let peer = fixture.local.peer_id.parse().unwrap();
+        let mut joiner = membership_sync_test_node(fixture.joiner.clone());
+        fixture
+            .node
+            .swarm
+            .listen_on("/ip4/127.0.0.1/tcp/0".parse().unwrap())
+            .unwrap();
+        timeout(Duration::from_secs(10), async {
+            let address = loop {
+                if let SwarmEvent::NewListenAddr { address, .. } =
+                    fixture.node.swarm.select_next_some().await
+                {
+                    break address;
+                }
+            };
+            joiner
+                .swarm
+                .dial(DialOpts::peer_id(peer).addresses(vec![address]).build())
+                .unwrap();
+            loop {
+                tokio::select! {
+                    event = joiner.swarm.select_next_some() => {
+                        if let SwarmEvent::ConnectionEstablished { peer_id, .. } = event {
+                            assert_eq!(peer_id, peer);
+                            break;
+                        }
+                    }
+                    _ = fixture.node.swarm.select_next_some() => (),
+                }
+            }
+        })
+        .await
+        .unwrap();
+        let now = Instant::now();
+        let mut sessions = CodePairingSessions::new();
+        let started = sessions
+            .join(
+                "lab",
+                crate::pairing_code::PairingCode::generate(),
+                None,
+                vec![],
+                600,
+                current_unix_seconds_lossy(),
+                now,
+            )
+            .unwrap();
+        sessions
+            .set_remote_pending(
+                &started.operation_id,
+                peer,
+                fixture.offer.clone(),
+                fixture.approval.transcript_sha256.clone(),
+                fixture.approval.ticket.clone(),
+                now,
+            )
+            .unwrap();
+        let (_, accepted) = receive_pairing_acceptance_with_retry(
+            &mut joiner,
+            &mut fixture.node,
+            &mut sessions,
+            &PairingCodeRequest::Poll {
+                ticket: fixture.approval.ticket.clone(),
+            },
+            &response,
+        )
+        .await;
+        let PairingCodeResponse::Accepted { response: received } = accepted else {
+            panic!("checkpoint approval response")
+        };
+        assert_eq!(*received, response);
+        received
+            .verify_for_offer_at(
+                &fixture.offer,
+                &fixture.joiner,
+                current_unix_seconds_lossy(),
+            )
+            .unwrap();
+        assert!(received.payload.checkpoint.is_some());
+        assert!(received.payload.member_records.is_empty());
+    }
+
+    #[tokio::test]
+    async fn checkpoint_pair_rpc_route_cleanup_failure_keeps_selected_authority() {
+        struct Routes;
+        impl TunRouteController for Routes {
+            fn reconcile(
+                &mut self,
+                _: &TunRuntimeConfig,
+                _: &TunRuntimeConfig,
+                _: &TunRouteUpdate,
+            ) -> Result<(), RunnerError> {
+                Err(io::Error::other("injected route cleanup failure").into())
+            }
+        }
+        let mut fixture = CheckpointApprovalFixture::new();
+        let result = fixture.approve(false, false, &mut Routes);
+        assert!(
+            matches!(
+                result.outcome,
+                crate::runtime::control_socket::PairRpcOutcome::Ok { .. }
+            ),
+            "{result:?}"
+        );
+        let mut status = vec![];
+        fixture
+            .checkpoint
+            .as_ref()
+            .unwrap()
+            .extend_status_lines(&mut status);
+        assert!(status.contains(&"checkpoint_route_cleanup_pending 1".into()));
+        assert!(fixture.membership.allows(fixture.approval.peer));
+        retry_checkpoint_tun_routes(
+            fixture.checkpoint.as_mut().unwrap(),
+            &fixture.forwarder,
+            &mut fixture.tun,
+            &mut PreconfiguredTunRoutes,
+        );
+        let mut status = vec![];
+        fixture
+            .checkpoint
+            .as_ref()
+            .unwrap()
+            .extend_status_lines(&mut status);
+        assert!(status.contains(&"checkpoint_route_cleanup_pending 0".into()));
+        assert!(
+            fixture
+                .tun
+                .routes
+                .iter()
+                .any(|route| route.prefix.to_string() == "10.42.0.2/32")
+        );
+    }
+
+    struct InterruptCheckpointPairingFinalSave {
+        path: PathBuf,
+        backup: PathBuf,
+        interrupted: bool,
+    }
+
+    impl TunRouteController for InterruptCheckpointPairingFinalSave {
+        fn reconcile(
+            &mut self,
+            _: &TunRuntimeConfig,
+            _: &TunRuntimeConfig,
+            _: &TunRouteUpdate,
+        ) -> Result<(), RunnerError> {
+            assert!(!self.interrupted);
+            fs::rename(&self.path, &self.backup)?;
+            fs::create_dir(&self.path)?;
+            self.interrupted = true;
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn checkpoint_pair_rpc_final_write_failure_restart_cancel_removes_only_owned_admission() {
+        for owned in [true, false] {
+            let mut fixture = CheckpointApprovalFixture::new();
+            if !owned {
+                let result = fixture.approve(false, false, &mut PreconfiguredTunRoutes);
+                assert!(matches!(
+                    result.outcome,
+                    crate::runtime::control_socket::PairRpcOutcome::Ok { .. }
+                ));
+                fixture.begin_repair();
+            }
+            let mut routes = InterruptCheckpointPairingFinalSave {
+                path: fixture.directory.join("pairing-state.json"),
+                backup: fixture.directory.join("prepared-before-crash"),
+                interrupted: false,
+            };
+            let result = fixture.approve(false, false, &mut routes);
+            assert!(
+                matches!(
+                    result.outcome,
+                    crate::runtime::control_socket::PairRpcOutcome::Ok { .. }
+                ),
+                "{result:?}"
+            );
+            assert!(routes.interrupted);
+            assert!(
+                fixture
+                    .forwarder
+                    .is_configured_transport_peer(fixture.approval.peer)
+            );
+            fs::remove_dir(&routes.path).unwrap();
+            fs::rename(&routes.backup, &routes.path).unwrap();
+            fixture.sessions = fixture.restored_sessions();
+            let saved = fixture
+                .sessions
+                .enrollment(&fixture.approval.operation_id)
+                .unwrap();
+            assert_eq!(saved.state, PairingEnrollmentState::Prepared);
+            assert_eq!(saved.checkpoint_admission_owned, Some(owned));
+            fixture.checkpoint = load_checkpoint_runtime(
+                Some(&fixture.checkpoint_store),
+                &mut fixture.forwarder,
+                &mut fixture.membership,
+                &fixture.local.peer_id,
+                &RuntimeMetrics::default(),
+            )
+            .unwrap();
+            fixture
+                .checkpoint
+                .as_mut()
+                .unwrap()
+                .finish_due(
+                    &fixture.checkpoint_store,
+                    &mut fixture.forwarder,
+                    Instant::now() + super::super::checkpoint_runtime::RESYNC_WINDOW,
+                    current_unix_seconds_lossy(),
+                )
+                .unwrap();
+            fixture
+                .membership
+                .replace_from_forwarder(&fixture.forwarder)
+                .unwrap();
+            let result = fixture.cancel();
+            assert!(
+                matches!(
+                    result.outcome,
+                    crate::runtime::control_socket::PairRpcOutcome::Ok { .. }
+                ),
+                "{result:?}"
+            );
+            assert!(
+                fixture
+                    .sessions
+                    .enrollment(&fixture.approval.operation_id)
+                    .is_none()
+            );
+            assert!(
+                fixture
+                    .restored_sessions()
+                    .enrollment(&fixture.approval.operation_id)
+                    .is_none()
+            );
+            assert_eq!(
+                fixture
+                    .forwarder
+                    .is_configured_transport_peer(fixture.approval.peer),
+                !owned
+            );
+            let disk = fs::read_to_string(fixture.directory.join("membership-state.json")).unwrap();
+            assert_eq!(disk.contains(&fixture.joiner.peer_id), !owned);
+        }
+    }
+
+    #[tokio::test]
+    async fn checkpoint_pair_rpc_cancel_gated_absence_waits_for_durable_resync() {
+        use crate::membership::checkpoint::{MembershipChange, MembershipSyncState};
+
+        let mut fixture = CheckpointApprovalFixture::new();
+        let mut routes = InterruptCheckpointPairingFinalSave {
+            path: fixture.directory.join("pairing-state.json"),
+            backup: fixture.directory.join("prepared-before-crash"),
+            interrupted: false,
+        };
+        let result = fixture.approve(false, false, &mut routes);
+        assert!(matches!(
+            result.outcome,
+            crate::runtime::control_socket::PairRpcOutcome::Ok { .. }
+        ));
+        fs::remove_dir(&routes.path).unwrap();
+        fs::rename(&routes.backup, &routes.path).unwrap();
+        fixture.sessions = fixture.restored_sessions();
+        fixture
+            .checkpoint
+            .as_mut()
+            .unwrap()
+            .apply_change(
+                MembershipChange::RemoveMember(fixture.joiner.peer_id.clone()),
+                &fixture.local,
+                &fixture.checkpoint_store,
+                &mut fixture.forwarder,
+                current_unix_seconds_lossy(),
+            )
+            .unwrap();
+        // Restoring a visible replacement uses the same gate as an uncertain post-rename write.
+        let Some(PersistedAuthority::Checkpoint(loaded)) = fixture
+            .checkpoint_store
+            .load_authority("lab", &fixture.local.peer_id, None, None)
+            .unwrap()
+        else {
+            panic!("checkpoint authority")
+        };
+        fixture.checkpoint = Some(
+            CheckpointRuntime::restore("lab".into(), &fixture.local.peer_id, *loaded).unwrap(),
+        );
+        assert_eq!(
+            fixture.checkpoint.as_ref().unwrap().state().sync_state(),
+            MembershipSyncState::ResyncRequired
+        );
+        let result = fixture.cancel();
+        assert!(
+            matches!(
+                result.outcome,
+                crate::runtime::control_socket::PairRpcOutcome::Error { .. }
+            ),
+            "{result:?}"
+        );
+        assert_eq!(
+            fixture
+                .restored_sessions()
+                .enrollment(&fixture.approval.operation_id)
+                .unwrap()
+                .checkpoint_admission_owned,
+            Some(true)
+        );
+
+        let now = Instant::now();
+        fixture
+            .checkpoint
+            .as_mut()
+            .unwrap()
+            .begin_resync(now)
+            .unwrap();
+        let bad_store =
+            MembershipStateStore::new(fixture.directory.join("absent-parent/membership.json"));
+        assert!(
+            fixture
+                .checkpoint
+                .as_mut()
+                .unwrap()
+                .finish_due(
+                    &bad_store,
+                    &mut fixture.forwarder,
+                    now + super::super::checkpoint_runtime::RESYNC_WINDOW,
+                    current_unix_seconds_lossy(),
+                )
+                .is_err()
+        );
+        let result = fixture.cancel();
+        assert!(
+            matches!(
+                result.outcome,
+                crate::runtime::control_socket::PairRpcOutcome::Error { .. }
+            ),
+            "{result:?}"
+        );
+        assert_eq!(
+            fixture
+                .restored_sessions()
+                .enrollment(&fixture.approval.operation_id)
+                .unwrap()
+                .checkpoint_admission_owned,
+            Some(true)
+        );
+
+        fixture
+            .checkpoint
+            .as_mut()
+            .unwrap()
+            .finish_due(
+                &fixture.checkpoint_store,
+                &mut fixture.forwarder,
+                now + super::super::checkpoint_runtime::RESYNC_WINDOW,
+                current_unix_seconds_lossy(),
+            )
+            .unwrap();
+        let result = fixture.cancel();
+        assert!(
+            matches!(
+                result.outcome,
+                crate::runtime::control_socket::PairRpcOutcome::Ok { .. }
+            ),
+            "{result:?}"
+        );
+        assert!(
+            fixture
+                .restored_sessions()
+                .enrollment(&fixture.approval.operation_id)
+                .is_none()
+        );
+        assert!(
+            !fixture
+                .forwarder
+                .is_configured_transport_peer(fixture.approval.peer)
+        );
+        assert!(
+            !fs::read_to_string(fixture.directory.join("membership-state.json"))
+                .unwrap()
+                .contains(&fixture.joiner.peer_id)
+        );
+    }
+
+    #[tokio::test]
+    async fn checkpoint_pair_rpc_cancel_missing_ownership_retains_unresolved_transaction() {
+        let mut fixture = CheckpointApprovalFixture::new();
+        let result = fixture.approve(false, true, &mut PreconfiguredTunRoutes);
+        assert!(matches!(
+            result.outcome,
+            crate::runtime::control_socket::PairRpcOutcome::Error { .. }
+        ));
+        let mut encoded: serde_json::Value =
+            serde_json::from_slice(&fixture.sessions.encode_persisted("lab").unwrap()).unwrap();
+        encoded["enrollments"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("checkpoint_admission_owned");
+        fixture.sessions = CodePairingSessions::restore_persisted(
+            &serde_json::to_vec(&encoded).unwrap(),
+            "lab",
+            current_unix_seconds_lossy(),
+            Instant::now(),
+        )
+        .unwrap();
+        let before = fixture
+            .checkpoint
+            .as_ref()
+            .unwrap()
+            .state()
+            .snapshot()
+            .clone();
+        let result = fixture.cancel();
+        assert!(
+            matches!(
+                result.outcome,
+                crate::runtime::control_socket::PairRpcOutcome::Error { .. }
+            ),
+            "{result:?}"
+        );
+        assert_eq!(
+            fixture
+                .sessions
+                .enrollment(&fixture.approval.operation_id)
+                .unwrap()
+                .state,
+            PairingEnrollmentState::Aborting
+        );
+        assert_eq!(
+            *fixture.checkpoint.as_ref().unwrap().state().snapshot(),
+            before
+        );
+    }
+
     async fn receive_pairing_acceptance_with_retry(
         node: &mut P2pNode,
         remote: &mut P2pNode,
@@ -25032,6 +26557,7 @@ mod tests {
                     &mut HashSet::new(),
                     &mut None,
                     &RuntimeMetrics::default(),
+                    None,
                 );
                 assert_eq!(
                     matches!(result.outcome, PairRpcOutcome::Ok { .. }),

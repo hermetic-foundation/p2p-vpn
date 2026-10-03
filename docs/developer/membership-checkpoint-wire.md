@@ -73,8 +73,9 @@ revocation records. Paging never extends a transfer's deadline.
 ## Pairing Credentials
 
 The signed pairing response can carry an optional `checkpoint` grant. This
-contract is implemented, but ordinary pairing approval and migration do not
-activate checkpoint networks yet. It is not a new user configuration format.
+contract is implemented and ordinary inviter `PairApprove` uses it for an existing
+participating checkpoint instance. Joiner `Accepted` activation, fresh formation,
+legacy migration, and export/artifacts remain incomplete.
 
 | Field | Contract |
 | --- | --- |
@@ -86,11 +87,28 @@ activate checkpoint networks yet. It is not a new user configuration format.
 | Grant size | At most 16 KiB. |
 | Complete response | Existing 32 KiB pairing limit; no full roster in this frame. |
 
-1. Persist the inviter's admission before issuing the signed response.
-2. Validate the approved offer, complete response signature, scope, and joiner key.
-3. Persist credentials and the minimum rank in owner-only pending state.
-4. Fetch the complete authenticated snapshot through paged checkpoint transfer.
-5. Require an observed remote offer at or above the pinned rank before activation.
+### Inviter RPC
+
+1. Validate the signed request, scope, transport peer, and self-signed hostname intent.
+2. Prepare the candidate, signed grant, and route update without publishing authority.
+3. Persist protected transaction and admission/cleanup ownership before changing authority.
+4. Durably install genuine admission changes before making the response available.
+5. Revalidate prepared retries; an unchanged active member does not advance revision.
+
+Changed active-member grants are rejected through re-pair. Cancellation preserves
+prior membership, but reconciles a newly owned admission before discarding the
+transaction; uncertain removal durability must keep cleanup ownership pending.
+
+### Joiner Activation Contract
+
+1. Validate the approved offer, complete response signature, scope, and actual joiner key.
+2. Persist credentials and the minimum rank in owner-only pending state.
+3. Fetch the complete authenticated snapshot through paged checkpoint transfer.
+4. Require an observed remote offer at or above the pinned rank before activation.
+
+Protected staging is implemented; this sequence is not yet activated by the
+ordinary joiner `Accepted` handler. Cancellation and startup finalization must be
+integrated before that handler can safely enable packet authority.
 
 Descriptors are provisional discovery/sync seeds, not packet or mutation grants.
 An isolated timeout cannot activate this seed; a restart retains the pending gate.
@@ -103,12 +121,13 @@ The selected newer snapshot may already exclude the joiner.
 | Legacy response | Omit `checkpoint` entirely; preserve existing signed JSON bytes. |
 | Checkpoint plus legacy key/records | Reject mixed authority. |
 | Generic JSON/Nix config import | Reject checkpoint enrollment instead of exporting its capability. |
+| Checkpoint RPC artifacts | Return `Unavailable`; do not emit a legacy-only Nix plan. |
 | Old response decoder | Ignoring the new signed field changes signing bytes; verification fails. |
 | Superseded approval | Preserve newer pinned authority; do not reinstall its old roster. |
 
 Checkpoint credentials belong in protected runtime state, not Nix store paths,
-plain configuration exports, or public snapshot offers. Ordinary pairing RPC and
-export integration remain separate acceptance work.
+plain configuration exports, or public snapshot offers. Joiner activation,
+formation, migration, and export/artifact integration remain acceptance work.
 
 ## Mutation Handoff
 
@@ -205,5 +224,14 @@ replay slots, scope validation, and legacy descriptor decoding.
 Mutation coverage includes every core change variant, transport issuer binding,
 signature and scope rejection, strict bounded codecs, exact-base replay, lost
 acknowledgments, conflicting replies, and TCP/Noise self-departure delivery.
+
 Deadline tests verify expired queues, stalled writes, unchanged signatures/digests,
 rejected injected deadline fields, and the non-extending lifetime cap.
+
+Runtime tests cover bounded reply-owner cleanup and real TCP/Noise delivery
+across Identify after durable departure. Current results and remaining gaps are
+in the [acceptance audit](membership-checkpoint-acceptance.md).
+
+Three-daemon intermittency remains open, including a focused run with zero
+captured recipients. A passing full-suite rerun does not establish reliable
+connected delivery or deployed-network convergence.

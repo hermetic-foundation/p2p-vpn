@@ -2,9 +2,13 @@
 
 ## Status
 
-Core, protected storage, bounded snapshot/mutation transfer, and version-3 daemon
-restoration are implemented. Ordinary existing networks still use the legacy
-ledger: automatic provisioning/migration and pairing integration remain pending.
+Core, protected storage, bounded snapshot/mutation transfer, version-3 daemon
+restoration, and ordinary checkpoint inviter approval are implemented. Inviter
+approval requires an existing participating checkpoint instance.
+
+Ordinary joiner activation, fresh formation, legacy migration, and export/artifacts
+remain incomplete. Existing deployments use the legacy ledger; this iteration
+does not establish a deployed checkpoint network.
 
 No new configuration switch enables checkpoints yet. Full retained-artifact
 cleanup and deployed multi-node evidence remain required.
@@ -176,11 +180,65 @@ retain inviter identity, old admission proofs, or per-device revocation markers.
 Normal authorization uses the active snapshot as a closed namespace. Absent
 static peers receive no implicit permission even after their tombstones are gone.
 
-## Pending Pairing Enrollment
+## Inviter Pairing Approval
+
+The normal `PairApprove` RPC uses checkpoint authority when an existing owner is
+ready. It produces a signed capability/floor grant, not a legacy membership ledger
+or a full roster in the pairing frame.
+
+1. Validate the signed request, scope, transport identity, and requested hostname.
+2. Prepare the candidate snapshot, bounded grant, forwarding projection, and TUN update.
+3. Persist the protected `Prepared` transaction and admission/route cleanup ownership.
+4. Durably install any genuine admission change, then refresh consumers and routes.
+5. Finalize the response; retained preparation supports recovery if finalization fails.
+
+| Case | Behavior |
+| --- | --- |
+| New admission | Mark the transaction as owning that admitted incarnation before authority changes. |
+| Existing active member | Re-pair only with unchanged grants; no invented authority revision. |
+| Changed active grants | Reject re-pair; use a separate membership grant-update workflow. |
+| Prepared retry | Revalidate the frozen grant against selected authority; reject superseded branches. |
+| Hostname | Honor the joiner's signed hostname intent; do not synthesize an inviter-forged name claim. |
+| Response | No legacy membership key/records and no full snapshot; credentials stay protected. |
+
+### Cancellation And Crash Recovery
+
+`checkpoint_admission_owned` is protected transaction metadata, not a retained
+inviter profile or device archive. It distinguishes a new admission from re-pairing
+an already-active member and is discarded with completed abort cleanup.
+
+| Stage | Required Behavior |
+| --- | --- |
+| Cancel / reject | Persist `Aborting` before authority or kernel cleanup. |
+| Owned admission still installed | Remove only the matching incarnation through durable checkpoint authority. |
+| Preexisting member | Preserve its admission; the pairing transaction did not create it. |
+| Absence during resync / uncertain write | Keep ownership until selected absence is confirmed durable. |
+| Ownership release gate | No pending enrollment; installed state must be `Participating` or `Excluded`. |
+| Clear ownership | Persist `false` only after authority reconciliation succeeds. |
+| Kernel cleanup | Retain cleanup ownership and retry; never restore removed packet grants. |
+| Discard transaction | Require reconciled checkpoint ownership, then compact after cleanup succeeds. |
+| Unknown old ownership | Fail closed; do not guess whether cancellation may remove a member. |
+
+A failed final pairing save can leave `Prepared` on disk after admission commits.
+Cancellation must reconcile that transaction against restored checkpoint authority;
+deleting the session alone does not undo admission.
+
+The resync/enrollment guard passes gated-restoration and failed-resync-write tests.
+Direct cancellation fault injection after removal rename remains required. Gated
+in-memory absence is not evidence of confirmed durable removal.
+
+### Artifact Boundary
+
+Checkpoint pairing artifacts return `Unavailable` rather than emit a legacy-only
+Nix plan. This is a fail-closed incomplete export path, not complete configuration
+export or a supported shortcut around protected enrollment.
+
+## Pending Joiner Enrollment
 
 Signed checkpoint pairing installs a protected capability and minimum rank,
 not an authoritative two-member network. The staging API is implemented and
-tested; ordinary pairing RPC activation and legacy migration remain pending.
+tested; ordinary joiner `Accepted` activation, cancellation/finalization, fresh
+formation, legacy migration, and export/artifacts remain pending.
 
 | Surface | Required Behavior |
 | --- | --- |
@@ -275,15 +333,25 @@ Enrollment tests cover restart, insufficient offers, configured-secret pins,
 legacy rejection, superseded approvals, and initial/replacement write failures.
 A 102-member roster crosses real TCP/Noise paging without enlarging pairing frames;
 a joiner removed after approval receives exclusion instead of packet authority.
+
 Handoff tests cover deadlines, scheduling fairness, local exclusion, persistence
 failure, duplicate rejection, and removal without retained per-device history.
+
 Three in-process daemons exchange authenticated commands over TCP/Noise; creator
 departure, two survivor acknowledgments, route-cleanup retry, retained-state
 erasure, and subsequent survivor governance pass through the real control API.
 
+Ordinary inviter RPC, protected final-save/restart cancellation, no-op re-pair,
+and real reply-delivery/Identify regressions pass. The current workspace run passes
+1,734 tests; see the acceptance audit for remaining evidence gaps.
+
+Three-daemon departure intermittency remains open: an earlier run exhausted
+retries without ACKs; the latest focused failure captured no connected recipients.
+Passing reruns do not replace transport-readiness and reliable-delivery evidence.
+
 The fixture uses packet-device and route-controller adapters; it does not claim
 real TUN forwarding, deployed devices, or WAN evidence.
 
-These tests do not establish a deployed checkpoint network. Provisioning,
-automatic migration, pairing/self-departure, Android sync UI, full artifact
-erasure, and multi-daemon/NixOS end-to-end evidence remain required for completion.
+These tests do not establish a deployed checkpoint network. Joiner activation,
+fresh formation, legacy migration, export/artifacts, Android sync UI, full artifact
+erasure, and reliable multi-daemon/NixOS evidence remain required for completion.

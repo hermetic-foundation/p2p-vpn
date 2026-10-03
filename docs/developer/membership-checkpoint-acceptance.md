@@ -8,8 +8,29 @@ The peer-inventory cleanup is independent of durable checkpoint compaction.
 Neither hidden rows nor a fixed history limit proves that compaction is complete.
 
 Core, storage, wire transfer, version-3 restoration, and protected enrollment
-staging are implemented; the fixed-quorum prototype is gone. Automatic migration
-and ordinary pairing activation remain incomplete; deployments use the legacy ledger.
+staging are implemented; the fixed-quorum prototype is gone. Ordinary inviter
+approval is wired to the checkpoint-aware pairing RPC for existing checkpoint state.
+
+Joiner activation, fresh network formation, legacy migration, and export/artifacts
+remain incomplete. This iteration has not been deployed; existing deployments
+use the legacy ledger.
+
+## Current Integration
+
+| Surface | Implemented Path | Boundary / Remaining Work |
+| --- | --- | --- |
+| Inviter `PairApprove` | Validate the signed request, prepare a signed grant, persist the protected transaction, then commit authority. | Requires an already-participating checkpoint instance. |
+| Approval retry | Compare the prepared grant with current authority; reject superseded admissions. | No stale grant may restore a removed member. |
+| Active-member re-pair | Reuse unchanged admission without advancing the authority revision. | Changed active grants are rejected; require a separate grant-update workflow. |
+| Cancellation | Protected admission ownership distinguishes new admission from an existing member. | Confirm durable removal before clearing ownership or discarding the transaction. |
+| Mutation replies | Bound control-only reply ownership by request, peer, connection, and deadline. | No packet grants or permanent departure archive. |
+| Identify | Preserve checkpoint-only catch-up and pending reply connections. | Do not classify them as routing infrastructure or overlay members. |
+| Joiner `Accepted` | Signed-grant verification and protected staging APIs exist. | Ordinary activation, cancellation, and finalization remain unwired. |
+| Formation / migration | Core and storage primitives exist. | No automatic creation or conversion in the normal pairing workflow. |
+| Export / artifacts | Generic config import rejects checkpoint credentials; checkpoint RPC artifacts return `Unavailable`. | No unsafe legacy Nix plan; complete protected export remains. |
+
+The cancellation guard retains ownership during staged enrollment or gated
+resync. RPC and TCP/Noise regressions pass; this is not deployed-network evidence.
 
 ## Current Evidence
 
@@ -18,12 +39,13 @@ and ordinary pairing activation remain incomplete; deployments use the legacy le
 | Peer inventory | `25243a3c` omits revoked rows from shared Linux/Android snapshots, including stale static metadata. | Existing legacy networks still retain enforcement history. |
 | Runtime paths | `df78cfb3` erases unauthorized stream/datagram/relay path history and pending probes. | Other retained device state must follow checkpoint installation. |
 | Forwarding projection | Checkpoint prepare/commit rejects stale contexts, seals static fallback, and erases legacy metadata. | Full discovery/cache/artifact cleanup remains. |
-| Snapshot/mutation transfer | 21 snapshot and 19 mutation tests cover authenticated TCP/Noise, scope, replay, deadlines, correlated replies, and frame/session bounds. | Pairing integration remains pending. |
-| Daemon coordinator | 26 tests cover restart, bounded resync, removal, DNS, catch-up, handoff, enrollment gates, and retained-state erasure. | Ordinary networks lack automatic provisioning/migration. |
-| Pairing enrollment | Signed grants, protected minimum-rank staging, restart, replay, and a 102-member TCP/Noise paged fetch pass. | Normal pairing RPC and config-export integration remain. |
+| Snapshot/mutation transfer | 21 snapshot and 19 mutation tests cover authenticated TCP/Noise, scope, replay, deadlines, correlated replies, and frame/session bounds. | Ordinary joiner activation remains. |
+| Daemon coordinator | 29 tests cover restart, resync, removal, DNS, catch-up, handoff, enrollment gates, ACK/Identify ownership, and retained-state erasure. | Ordinary networks lack automatic provisioning/migration; departure intermittency remains. |
+| Pairing enrollment | Signed grants, protected minimum-rank staging, restart, replay, and a 102-member TCP/Noise paged fetch pass. | Inviter RPC is wired; joiner activation, formation, migration, and export/artifacts remain. |
+| Inviter pairing RPC | 11 tests cover signed grants, TCP/Noise delivery, retry, resync gates, cancellation ownership, and fail-closed artifacts. | No complete joiner or deployed pairing workflow yet. |
 | Creator departure | Three real daemon loops deliver removal to two survivors; later survivor governance and injected route-cleanup retry pass. | Packet/route adapters are fixtures, not real TUN or deployed-node evidence. |
 | Handoff scheduling | Five tests verify recipient/in-flight bounds, fairness, fixed deadlines, retry limits, and forgotten payloads. | No deployed checkpoint-network completion claim. |
-| Rust workspace | 1,720 tests pass; 47 opt-in tests excluded. Core, protected storage, checkpoint forwarding, and enrollment are covered. | Full VM/package/device checks remain. |
+| Rust workspace | 1,734 tests pass; 47 opt-in tests excluded. Core, storage, forwarding, enrollment, and inviter RPC are covered. | Full VM/package/device checks remain. |
 | Durable checkpoint state | Version-3 authentication, legacy dispatch, rollback, failure/retry, and 128 durable churn cycles pass. | Automatic migration and a full crash campaign remain. |
 | Static analysis | Formatting and required correctness/suspicious/performance Clippy groups pass. | Existing non-fatal lint warnings remain. |
 | Android consumer | JVM unit tests and debug lint pass for revoked-local filtering and missing-local snapshots. | No new APK or physical-device checkpoint test. |
@@ -37,13 +59,36 @@ those require the integration and evidence below.
 The daemon test also exposed and fixed zero-byte packet-reader EOF spinning.
 Regression coverage verifies no empty packet is queued or counted after EOF.
 
+The large-roster fixture allocates distinct derived IPv4 addresses after a full
+run exposed a collision. Route-conflict rejection stays enabled; the fixture
+proves paging, not automatic resolution of address collisions.
+
 A live-refresh ordering regression is covered explicitly: an authenticated
 exact-base departure can advance installed authority without losing an already
 collected higher offer, extending the deadline, or bypassing startup gates.
 
-An initial full-suite run failed the three-daemon departure acknowledgment check.
-The isolated replay and full-suite rerun passed. Keep that intermittent failure
-open; a passing rerun alone does not establish departure reliability.
+### Open Departure Evidence
+
+| Observation | Interpretation |
+| --- | --- |
+| Earlier full-suite run: no ACKs after all retries | Cause remains unproven; a passing isolated replay does not resolve it. |
+| Latest focused run: zero recipients, attempts, ACKs, and failures | Departure occurred without captured connections; investigate transport readiness. |
+| Full-suite reruns pass | Useful evidence, not proof that either intermittent case is resolved. |
+
+The connected-only test must establish real transport readiness before expecting
+two deliveries. Keep the two-ACK requirement; do not weaken it to accept an empty
+recipient set or infer connectivity from membership participation alone.
+
+### Cancellation Evidence
+
+| Boundary | Current Evidence / Gap |
+| --- | --- |
+| Final pairing save fails after admission | Injected final-save failure and restart from protected `Prepared` pass; cancel removes only the owned admission. |
+| Existing-member re-pair | Cancellation preserves prior authority; no-op re-pair does not invent a revision. |
+| Removal rename succeeds but directory sync fails | Store failure injection is covered; direct cancellation injection at this boundary remains. |
+| Startup / resync | Gated restoration and failed resync writes retain ownership until a successful durable resync. |
+| Missing ownership metadata | Regression verifies fail-closed retention of the unresolved transaction. |
+| Kernel cleanup fails | Selected packet authority remains installed; a complete abort/crash campaign remains. |
 
 ## Required Behavior
 
@@ -188,6 +233,6 @@ before it can support a completion claim.
 | --- | --- | --- |
 | Cooperative core | Singleton snapshots, canonical rank, scoped authentication, resync gate, active-only authorization, bounded churn tests. | Implemented; 30 core tests pass. |
 | Durable state | Atomic persistence, crash boundaries, migration, metadata cleanup, bounded retention. | Store and churn tests pass; automatic migration and full crash campaign remain. |
-| Runtime and wire | Version negotiation, sync, branch selection, pairing/departure, route/DNS/discovery cleanup. | Restoration, bounded departures, and enrollment staging are wired; ordinary pairing activation, provisioning, and full cleanup remain. |
+| Runtime and wire | Version negotiation, sync, branch selection, pairing/departure, route/DNS/discovery cleanup. | Restoration, bounded departures, and ordinary inviter approval are wired; joiner activation, formation, migration, export/artifacts, and full cleanup remain. |
 | User surfaces | Linux/Android sync and loss status, minimal provenance, structured instructions. | Linux aggregate status and inventories tested; Android sync/loss UI and activation workflow remain. |
 | End-to-end proof | Multi-daemon forks/offline return, restart, churn, CLI/Android/NixOS contracts. | Real paging and three-daemon fixtures pass; departure intermittency and deployed multi-node evidence remain. |

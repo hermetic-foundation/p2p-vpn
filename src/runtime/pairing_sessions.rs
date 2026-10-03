@@ -170,6 +170,8 @@ pub struct PairingEnrollment {
     pub membership_key_preconfigured: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) tun_cleanup: Option<super::tun::PairingTunCleanup>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) checkpoint_admission_owned: Option<bool>,
     pub state: PairingEnrollmentState,
 }
 
@@ -1318,6 +1320,7 @@ impl CodePairingSessions {
             membership_key_preconfigured: preparation.membership_key_preconfigured,
             tun_cleanup: None,
             state: PairingEnrollmentState::Prepared,
+            checkpoint_admission_owned: None,
         };
         validate_pairing_enrollment(&enrollment, network_name)?;
 
@@ -1628,6 +1631,32 @@ impl CodePairingSessions {
         self.enrollments
             .retain(|entry| entry.operation_id != operation_id);
         self.replay_tokens = next.replay_tokens;
+        Ok(())
+    }
+
+    pub(crate) fn record_checkpoint_admission_ownership(
+        &mut self,
+        operation_id: &str,
+        owned: bool,
+    ) -> Result<(), CodePairingSessionError> {
+        let enrollment = self
+            .enrollments
+            .iter_mut()
+            .find(|entry| entry.operation_id == operation_id)
+            .ok_or(CodePairingSessionError::NotFound)?;
+        if enrollment.response.payload.checkpoint.is_none()
+            || enrollment.role != PairingEnrollmentRole::Inviter
+            || enrollment.state == PairingEnrollmentState::Applied
+            || (enrollment.state == PairingEnrollmentState::Prepared
+                && enrollment
+                    .checkpoint_admission_owned
+                    .is_some_and(|old| old != owned))
+            || (enrollment.state == PairingEnrollmentState::Aborting
+                && (owned || enrollment.checkpoint_admission_owned.is_none()))
+        {
+            return Err(CodePairingSessionError::Conflict);
+        }
+        enrollment.checkpoint_admission_owned = Some(owned);
         Ok(())
     }
 
@@ -3082,6 +3111,14 @@ fn validate_pairing_enrollment(
 ) -> Result<(), CodePairingSessionError> {
     validate_pairing_operation_id(&enrollment.operation_id)?;
     validate_transcript_sha256(&enrollment.transcript_sha256, true)?;
+    if enrollment.checkpoint_admission_owned.is_some()
+        && (enrollment.response.payload.checkpoint.is_none()
+            || enrollment.role != PairingEnrollmentRole::Inviter)
+    {
+        return Err(invalid_enrollment(
+            "checkpoint admission ownership belongs only to checkpoint inviter transactions",
+        ));
+    }
     if let Some(cleanup) = &enrollment.tun_cleanup {
         cleanup
             .validate()
@@ -3089,6 +3126,7 @@ fn validate_pairing_enrollment(
     }
     if enrollment.membership_key_preconfigured == Some(true)
         && enrollment.response.payload.membership_key.is_none()
+        && enrollment.response.payload.checkpoint.is_none()
     {
         return Err(invalid_enrollment(
             "enrollment marks a missing membership key as preconfigured",
@@ -6650,6 +6688,7 @@ mod tests {
         assert_eq!(
             restored.enrollment(&inviter_operation_id),
             Some(&PairingEnrollment {
+                checkpoint_admission_owned: None,
                 operation_id: inviter_operation_id,
                 role: PairingEnrollmentRole::Inviter,
                 approval_id: Some(approval_id),
@@ -6665,6 +6704,7 @@ mod tests {
         assert_eq!(
             restored.enrollment(&joiner_operation_id),
             Some(&PairingEnrollment {
+                checkpoint_admission_owned: None,
                 operation_id: joiner_operation_id,
                 role: PairingEnrollmentRole::Joiner,
                 approval_id: None,
