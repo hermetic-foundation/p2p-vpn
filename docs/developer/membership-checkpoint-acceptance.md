@@ -7,9 +7,9 @@ Implementation in progress. This is an acceptance map, not a completion report.
 The peer-inventory cleanup is independent of durable checkpoint compaction.
 Neither hidden rows nor a fixed history limit proves that compaction is complete.
 
-The experimental checkpoint code is not connected to the runtime, wire protocol,
-or state store. The initial fixed-quorum prototype is being replaced; it does
-**not** satisfy the singleton requirement below.
+The cooperative core is implemented; the rejected fixed-quorum prototype is gone.
+Production runtime and wire activation remain incomplete. Core or storage unit
+tests alone do **not** establish a functioning checkpoint network.
 
 ## Current Evidence
 
@@ -17,7 +17,7 @@ or state store. The initial fixed-quorum prototype is being replaced; it does
 | --- | --- | --- |
 | Peer inventory | `25243a3c` omits revoked rows from shared Linux/Android snapshots, including stale static metadata. | Durable enforcement history is still retained. |
 | Runtime paths | `df78cfb3` erases unauthorized stream/datagram/relay path history and pending probes. | Other retained device state must follow checkpoint installation. |
-| Rust workspace | 1,580 tests pass; 47 opt-in tests excluded. | This includes the unintegrated prototype, not a completed checkpoint runtime. |
+| Rust workspace | 1,595 tests pass; 47 opt-in tests excluded, including 30 cooperative core tests. | This is not a completed checkpoint runtime. |
 | Static analysis | Formatting and required correctness/suspicious/performance Clippy groups pass. | Existing non-fatal lint warnings remain. |
 | Android consumer | JVM unit tests and debug lint pass for revoked-local filtering and missing-local snapshots. | No new APK or physical-device checkpoint test. |
 | NixOS VM preflight | The membership-convergence expression evaluates. | Offline dry run plans 2,859 uncached derivations; VM execution was not started. |
@@ -64,11 +64,11 @@ is an explicit user-approved tradeoff, not a claim of Byzantine-safe consensus.
 | Discard superseded state | Losing-branch records and removed-device metadata are not kept as a permanent archive. |
 | Visible reconciliation | Sync state and discarded changes are surfaced instead of implying irreversible success. |
 
-The exact ranking and bounded catch-up protocol still need implementation and
-verification. A score is a convergence rule, not evidence of globally current
-authority or resistance to a former member manufacturing a competing branch.
+The [core ranking and bounded catch-up protocol](membership-checkpoints.md) are
+implemented and unit-tested. A score is a convergence rule, not evidence of global
+freshness or resistance to a former member manufacturing a competing branch.
 
-### Proposed Deterministic Rank
+### Deterministic Rank
 
 ```text
 (authority_revision, active_member_count, snapshot_digest)
@@ -166,7 +166,7 @@ before it can support a completion claim.
 
 | Workstream | Required Deliverables | Status |
 | --- | --- | --- |
-| Cooperative core | Singleton snapshots, canonical rank, scoped authentication, resync gate, active-only authorization, bounded churn tests. | In progress; replaces the quorum prototype. |
+| Cooperative core | Singleton snapshots, canonical rank, scoped authentication, resync gate, active-only authorization, bounded churn tests. | Implemented; 30 core tests pass. |
 | Durable state | Atomic snapshot/capability persistence, crash boundaries, migration, retired metadata cleanup, bounded disk retention. | Not implemented. |
 | Runtime and wire | Capability/version negotiation, bounded sync window, branch selection, pairing handoff, stale-record rejection, route/DNS/discovery cleanup. | Not implemented. |
 | User surfaces | Linux/Android sync state, visible discarded changes, no retained inviter history, structured user/developer instructions. | Partial inventory cleanup only. |

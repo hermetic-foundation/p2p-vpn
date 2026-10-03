@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 use crate::dns::{DnsNameError, canonical_dns_label};
 use crate::{PeerId, config::RouteConfig, identity::NodeIdentity};
 
+pub mod checkpoint;
+
 pub const MEMBERSHIP_RECORD_VERSION: u8 = 1;
 pub const MAX_MEMBERSHIP_RECORD_INTEGER: u64 = i64::MAX as u64;
 pub const MAX_MEMBERSHIP_RECORDS: usize = 256;
@@ -432,6 +434,7 @@ fn effective_membership_from_evaluation(
     Ok(EffectiveMembership {
         members,
         governed_peers,
+        checkpoint_authoritative: false,
     })
 }
 
@@ -864,6 +867,7 @@ fn conflicting_record_version(record: &SignedMembershipRecord) -> MembershipReco
 pub struct EffectiveMembership {
     members: HashMap<PeerId, EffectiveMember>,
     governed_peers: HashSet<PeerId>,
+    checkpoint_authoritative: bool,
 }
 
 impl EffectiveMembership {
@@ -884,9 +888,11 @@ impl EffectiveMembership {
 
     /// Static configuration remains authoritative until a peer has signed ledger history.
     /// Once governed by the ledger, only an active overlay grant authorizes that peer.
+    /// An authenticated checkpoint seals the entire namespace: absent peers are
+    /// denied, including statically configured peers whose tombstones were erased.
     #[must_use]
     pub fn authorizes_configured_peer(&self, peer: PeerId) -> bool {
-        !self.governed_peers.contains(&peer)
+        (!self.checkpoint_authoritative && !self.governed_peers.contains(&peer))
             || self
                 .members
                 .get(&peer)
