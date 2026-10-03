@@ -81,6 +81,8 @@ pub(crate) struct CheckpointRuntime {
     last_handoff: HandoffReport,
     route_cleanup_pending: bool,
     enrollment_floor: Option<SnapshotRank>,
+    // Reconstructed from the protected pairing transaction before any resync can install grants.
+    pairing_activation_blocked: bool,
 }
 
 impl std::fmt::Debug for CheckpointRuntime {
@@ -95,6 +97,70 @@ impl std::fmt::Debug for CheckpointRuntime {
 }
 
 impl CheckpointRuntime {
+    pub(crate) fn fresh_solo_eligible(
+        config: &crate::config::Config,
+        identity: &NodeIdentity,
+        store: &MembershipStateStore,
+        wall_now: u64,
+    ) -> Result<bool, RunnerError> {
+        validate_local_checkpoint_identity(config, identity)?;
+        let secret = configured_checkpoint_secret(config)?;
+        let authority = store.load_authority(
+            &config.network.name,
+            &identity.peer_id,
+            None,
+            secret.as_deref(),
+        )?;
+        match authority {
+            Some(PersistedAuthority::Checkpoint(_)) => Ok(true),
+            Some(PersistedAuthority::Legacy(legacy)) => {
+                Ok(
+                    validate_fresh_solo_authority(config, identity, Some(&legacy), wall_now)
+                        .is_ok(),
+                )
+            }
+            None => Ok(validate_fresh_solo_authority(config, identity, None, wall_now).is_ok()),
+        }
+    }
+
+    pub(crate) fn set_pairing_activation_blocked(
+        &mut self,
+        blocked: bool,
+        forwarder: &mut Forwarder,
+        wall_now: u64,
+    ) -> Result<(), RunnerError> {
+        if !blocked && self.enrollment_pending() {
+            return Err(core_error(CheckpointError::NoParticipation));
+        }
+        let projected = if blocked {
+            CooperativeMembershipState::restore(
+                self.credentials.capability()?,
+                self.state.local_peer().to_owned(),
+                self.state.retained(),
+            )
+            .map_err(core_error)?
+        } else {
+            self.state.clone()
+        };
+        let update = forwarder.prepare_checkpoint_update(&projected, self.anchor(), wall_now)?;
+        forwarder.commit_checkpoint_update(update)?;
+        if blocked && !self.pairing_activation_blocked {
+            self.last_selection = None;
+        }
+        self.pairing_activation_blocked = blocked;
+        Ok(())
+    }
+
+    pub(crate) fn pairing_activation_blocked(&self) -> bool {
+        self.pairing_activation_blocked
+    }
+
+    pub(crate) fn pairing_remote_ready(&self) -> bool {
+        self.last_selection
+            .as_ref()
+            .is_some_and(|selection| selection.observed_remote_offer)
+    }
+
     /// Only explicit PairOpen authorization may create a scope from fresh solo authority.
     /// Saved checkpoints are restored without regenerating credentials or bypassing resync.
     pub(crate) fn form_new_network(
@@ -374,6 +440,7 @@ impl CheckpointRuntime {
             last_handoff: HandoffReport::default(),
             route_cleanup_pending: false,
             enrollment_floor,
+            pairing_activation_blocked: false,
         })
     }
 
@@ -390,6 +457,7 @@ impl CheckpointRuntime {
             && self.pending.is_none()
             && self.handoff.is_none()
             && !self.enrollment_pending()
+            && !self.pairing_activation_blocked
     }
 
     pub(crate) fn enrollment_pending(&self) -> bool {
@@ -421,7 +489,7 @@ impl CheckpointRuntime {
     }
 
     #[cfg(test)]
-    fn challenge(&self) -> Option<&SnapshotChallenge> {
+    pub(crate) fn challenge(&self) -> Option<&SnapshotChallenge> {
         self.pending.as_ref().map(|pending| &pending.challenge)
     }
 
@@ -430,6 +498,10 @@ impl CheckpointRuntime {
     }
 
     pub(crate) fn extend_status_lines(&self, lines: &mut Vec<String>) {
+        lines.push(format!(
+            "checkpoint_pairing_activation_blocked {}",
+            usize::from(self.pairing_activation_blocked)
+        ));
         lines.push(format!(
             "checkpoint_enrollment_pending {}",
             usize::from(self.enrollment_floor.is_some())
@@ -529,6 +601,10 @@ impl CheckpointRuntime {
             descriptor.sync = super::control::checkpoint::CheckpointSyncIndicator::Resyncing;
         }
         capabilities.checkpoint = Some(descriptor);
+        capabilities.membership_tag = Some(crate::config::membership_tag(
+            &self.network_name,
+            self.credentials.secret(),
+        ));
         Ok(())
     }
 
@@ -633,7 +709,10 @@ impl CheckpointRuntime {
         });
         if self.pending.is_none()
             && (self.state.sync_state() == MembershipSyncState::ResyncRequired
-                || (!connected.is_empty() && (higher_advertisement || now >= self.next_resync)))
+                || (!connected.is_empty()
+                    && (higher_advertisement
+                        || now >= self.next_resync
+                        || (self.pairing_activation_blocked && !self.pairing_remote_ready()))))
         {
             self.begin_resync(now)?;
         }
@@ -1348,7 +1427,17 @@ impl CheckpointRuntime {
         forwarder: &mut Forwarder,
         wall_now: u64,
     ) -> Result<(), RunnerError> {
-        let update = forwarder.prepare_checkpoint_update(&candidate, self.anchor(), wall_now)?;
+        let projection = if self.pairing_activation_blocked {
+            CooperativeMembershipState::restore(
+                self.credentials.capability()?,
+                candidate.local_peer().to_owned(),
+                candidate.retained(),
+            )
+            .map_err(core_error)?
+        } else {
+            candidate.clone()
+        };
+        let update = forwarder.prepare_checkpoint_update(&projection, self.anchor(), wall_now)?;
         let result = store.save_checkpoint(
             &self.network_name,
             candidate.local_peer(),

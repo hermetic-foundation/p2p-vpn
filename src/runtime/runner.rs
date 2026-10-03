@@ -157,6 +157,7 @@ use super::recovery_queries::{
     QUERY_TIMEOUT as RECOVERY_DISCOVERY_QUERY_TIMEOUT,
 };
 
+mod checkpoint_pairing;
 mod control_connection_retention;
 use control_connection_retention::should_retain_control_connection;
 mod recovery_snapshot;
@@ -1592,6 +1593,17 @@ where
         current_unix_seconds_lossy(),
         Instant::now(),
     )?;
+    if let Some(store) = membership_state_store.as_ref() {
+        checkpoint_pairing::stage_prepared(
+            &mut checkpoint_runtime,
+            store,
+            &code_pairing_sessions,
+            &mut forwarder,
+            &mut membership,
+            &node.identity,
+            current_unix_seconds_lossy(),
+        )?;
+    }
     if checkpoint_runtime.is_none() {
         reconcile_persisted_pairing_enrollments(
             &mut node.swarm,
@@ -1630,7 +1642,16 @@ where
             )],
         );
     }
-    sync_live_tun_routes(&forwarder, &mut tun_runtime, route_controller.as_mut())?;
+    if let Some(checkpoint) = checkpoint_runtime.as_mut() {
+        retry_checkpoint_tun_routes(
+            checkpoint,
+            &forwarder,
+            &mut tun_runtime,
+            route_controller.as_mut(),
+        );
+    } else {
+        sync_live_tun_routes(&forwarder, &mut tun_runtime, route_controller.as_mut())?;
+    }
     if let Err(error) = cleanup_pending_pairing_aborts_with(
         &mut code_pairing_sessions,
         pairing_state_store.as_ref(),
@@ -1759,6 +1780,15 @@ where
     if let Some(checkpoint) = &checkpoint_runtime {
         checkpoint.decorate_capabilities(&mut local_capabilities)?;
     }
+    reconcile_runtime_kademlia_scope(
+        &mut node,
+        &local_capabilities,
+        &previous_membership_tags,
+        &mut kademlia_rendezvous_key,
+        &mut kademlia_lookup_keys,
+        &mut kademlia_membership_records_key,
+        &mut kademlia_membership_record_lookup_keys,
+    );
     timers.prime().await;
     let discovery = node.discovery.clone();
     let mut control_rx = control;
@@ -1815,6 +1845,7 @@ where
     let mut checkpoint_tick = tokio::time::interval(Duration::from_secs(1));
     checkpoint_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut checkpoint_mutation_rate_limiter = GlobalRateLimiter::new(64, Instant::now());
+    let mut next_checkpoint_sync_capabilities = Instant::now();
     loop {
         membership_record_syncs.reconcile_authorization(&forwarder, &metrics);
         if packet_authorization_revision != Some(forwarder.authorization_revision()) {
@@ -1855,6 +1886,13 @@ where
                 checkpoint.drive_sync(&mut node.swarm, &peer_capabilities, Instant::now())?;
                 checkpoint.drive_mutations(&mut node.swarm, Instant::now())?;
                 membership.replace_checkpoint_sync_peers(checkpoint)?;
+                if (checkpoint.state().sync_state() != crate::membership::checkpoint::MembershipSyncState::Participating
+                    || checkpoint.pairing_activation_blocked())
+                    && Instant::now() >= next_checkpoint_sync_capabilities
+                {
+                    next_checkpoint_sync_capabilities = Instant::now() + Duration::from_secs(5);
+                    checkpoint_pairing::send_sync_capabilities(&mut node.swarm, checkpoint, &local_capabilities, &metrics);
+                }
                 let selection = checkpoint.finish_due(
                     store, &mut forwarder, Instant::now(), current_unix_seconds_lossy(),
                 )?;
@@ -1862,12 +1900,29 @@ where
                     &node.identity, store, &mut forwarder, current_unix_seconds_lossy(),
                 )?;
                 let renamed = checkpoint.reconcile_local_hostname(&node.identity, store, &mut forwarder, current_unix_seconds_lossy())?;
-                if selection.is_some() || pruned || renamed {
+                let finalized = match checkpoint_pairing::finalize_joiner(
+                    checkpoint, &mut code_pairing_sessions, pairing_state_store.as_ref(),
+                    &mut forwarder, &mut membership, &mut tun_runtime, route_controller.as_mut(),
+                    &node.identity, current_unix_seconds_lossy(),
+                ) {
+                    Ok(finalized) => finalized,
+                    Err(error) => {
+                        log_runtime_event(LogLevel::Warn, "checkpoint_pairing_finalization_pending",
+                            &[("reason", &format!("{error:?}")), ("action", "retry_automatically")]);
+                        false
+                    }
+                };
+                if selection.is_some() || pruned || renamed || finalized {
                     membership.replace_from_forwarder(&forwarder)?;
                     membership.replace_checkpoint_sync_peers(checkpoint)?;
                     retry_checkpoint_tun_routes(checkpoint, &forwarder, &mut tun_runtime, route_controller.as_mut());
                     local_capabilities = refreshed_local_capabilities(&local_capabilities, &forwarder);
                     checkpoint.decorate_capabilities(&mut local_capabilities)?;
+                    reconcile_runtime_kademlia_scope(
+                        &mut node, &local_capabilities, &previous_membership_tags,
+                        &mut kademlia_rendezvous_key, &mut kademlia_lookup_keys,
+                        &mut kademlia_membership_records_key, &mut kademlia_membership_record_lookup_keys,
+                    );
                     refresh_dns_zone_if_needed(dns_runtime.as_ref(), &forwarder, &mut dns_membership_revision, true);
                     if let Some(selection) = selection {
                         log_runtime_event(
@@ -2195,6 +2250,24 @@ where
             _ = timers.code_pairing.tick() => {
                 let now_unix_seconds = current_unix_seconds_lossy();
                 let now = Instant::now();
+                if let Some(store) = membership_state_store.as_ref()
+                    && let Some(enrollment) = checkpoint_pairing::pending_join(&code_pairing_sessions)
+                    && checkpoint_runtime.as_ref().is_none_or(|owner| {
+                        !owner.pairing_activation_blocked() || (!owner.enrollment_pending()
+                            && owner.state().snapshot().payload.rank().is_ok_and(|rank|
+                                rank < enrollment.response.payload.checkpoint.as_ref().expect("checkpoint join").minimum))
+                    })
+                {
+                    let staged = persist_code_pairing_sessions(pairing_state_store.as_ref(), &code_pairing_sessions, &node.network_name)
+                        .and_then(|()| checkpoint_pairing::stage_prepared(
+                            &mut checkpoint_runtime, store, &code_pairing_sessions, &mut forwarder,
+                            &mut membership, &node.identity, now_unix_seconds,
+                        ));
+                    if let Err(error) = staged {
+                        log_runtime_event(LogLevel::Warn, "checkpoint_pairing_stage_pending",
+                            &[("reason", &format!("{error:?}")), ("action", "retry_automatically")]);
+                    }
+                }
                 refresh_pairing_lan_candidates(&node.swarm, &mut code_pairing_sessions, now);
                 let actions = code_pairing_sessions.expire(now_unix_seconds, now);
                 if now >= next_pairing_abort_retry {
@@ -2213,6 +2286,10 @@ where
                     if let Err(error) = cleanup {
                         log_runtime_event(LogLevel::Warn, "pairing_abort_cleanup_pending",
                             &[("reason", &format!("{error:?}")), ("action", "retry_automatically")]);
+                    }
+                    if let Some(checkpoint) = &mut checkpoint_runtime {
+                        checkpoint_pairing::release_idle_barrier(checkpoint, &code_pairing_sessions,
+                            &mut forwarder, &mut membership, now_unix_seconds)?;
                     }
                 }
                 pairing_replay_tokens.replace_code_approval(
@@ -2487,6 +2564,7 @@ where
                         );
                         if let Some(peer) = promote_peer {
                             let mut context = SwarmEventContext {
+                                checkpoint_pairing: membership_state_store.as_ref().map(|store| CheckpointPairingContext { runtime: &mut checkpoint_runtime, store }),
                                 forwarder: &mut forwarder,
                                 membership: &mut membership,
                                 tun_runtime: &mut tun_runtime,
@@ -2708,6 +2786,18 @@ where
                     {
                         membership.replace_checkpoint_sync_peers(checkpoint)?;
                         checkpoint.drive_sync(&mut node.swarm, &peer_capabilities, Instant::now())?;
+                        if !forwarder.is_configured_transport_peer(*peer) {
+                            // Matching checkpoint scope grants control-only resync, not packet promotion.
+                            if let SwarmEvent::Behaviour(BehaviourEvent::Control(request_response::Event::Message {
+                                message: Message::Request { channel, .. }, ..
+                            })) = event {
+                                let mut capabilities = local_capabilities.clone();
+                                checkpoint.decorate_capabilities(&mut capabilities)?;
+                                let _ = node.swarm.behaviour_mut().control.send_response(channel,
+                                    ControlResponse::CapabilitiesAccepted(capabilities));
+                            }
+                            continue;
+                        }
                     }
                 }
                 if let SwarmEvent::Behaviour(BehaviourEvent::Checkpoint(event)) = event {
@@ -2732,6 +2822,7 @@ where
                 handle_swarm_event(
                     &mut node.swarm,
                     SwarmEventContext {
+                        checkpoint_pairing: membership_state_store.as_ref().map(|store| CheckpointPairingContext { runtime: &mut checkpoint_runtime, store }),
                         forwarder: &mut forwarder,
                         membership: &mut membership,
                         tun_runtime: &mut tun_runtime,
@@ -3045,6 +3136,12 @@ fn persist_code_pairing_sessions(
     sessions: &CodePairingSessions,
     network_name: &str,
 ) -> Result<(), RunnerError> {
+    if sessions.checkpoint_completion_uncertain() {
+        return Err(io::Error::other(
+            "checkpoint completion visibility must be reconciled before another save",
+        )
+        .into());
+    }
     let Some(store) = store else {
         return Ok(());
     };
@@ -3080,6 +3177,21 @@ fn cleanup_checkpoint_pairing_aborts(
     }
     persist_code_pairing_sessions(pairing_store, sessions, &forwarder.config().network.name)?;
     for enrollment in aborted {
+        if enrollment.role == PairingEnrollmentRole::Joiner {
+            let recipients = swarm.connected_peers().copied().collect::<Vec<_>>();
+            checkpoint_pairing::cleanup_joiner_abort(
+                checkpoint.as_deref_mut(),
+                &enrollment,
+                checkpoint_store,
+                sessions,
+                pairing_store,
+                forwarder,
+                membership,
+                identity,
+                &recipients,
+            )?;
+            continue;
+        }
         let owned = enrollment.checkpoint_admission_owned.ok_or_else(|| io::Error::other("checkpoint cancellation lacks admission ownership; synchronize and revoke explicitly"))?;
         if !owned {
             continue;
@@ -3171,7 +3283,17 @@ fn cleanup_pending_pairing_aborts_with(
     persist_code_pairing_sessions(store, sessions, network_name)?;
     for enrollment in aborted {
         if enrollment.response.payload.checkpoint.is_some()
-            && enrollment.checkpoint_admission_owned != Some(false)
+            && match enrollment.role {
+                PairingEnrollmentRole::Inviter => {
+                    enrollment.checkpoint_admission_owned != Some(false)
+                }
+                PairingEnrollmentRole::Joiner => {
+                    enrollment.checkpoint_joiner_ownership
+                        != Some(
+                            crate::runtime::pairing_sessions::CheckpointJoinerOwnership::Released,
+                        )
+                }
+            }
         {
             return Err(CodePairingSessionError::InvalidPersistedState(
                 "checkpoint abort authority must be reconciled before discarding its transaction"
@@ -4429,26 +4551,39 @@ fn handle_pair_rpc_request(
         PairRpcRequest::PairOpen {
             operation_id,
             expires_in_seconds,
-        } => sessions
-            .open_with_id(
-                operation_id,
-                &network_name,
-                expires_in_seconds,
-                current_unix_seconds_lossy(),
-                Instant::now(),
-            )
-            .map_err(code_session_pair_rpc)
-            .and_then(|started| {
-                persist_code_pairing_sessions(store, sessions, &network_name)
-                    .map_err(runner_error_pair_rpc)?;
-                Ok(PairRpcResult::OpenStarted(PairRpcOpenStarted {
-                    operation_id: started.operation_id,
-                    code: started.code,
-                    network_name: network_name.clone(),
-                    local_peer: local_peer.clone(),
-                    expires_at_unix_seconds: started.expires_at_unix_seconds,
-                }))
-            }),
+        } => (|| {
+            let started = sessions
+                .open_with_id(
+                    operation_id,
+                    &network_name,
+                    expires_in_seconds,
+                    current_unix_seconds_lossy(),
+                    Instant::now(),
+                )
+                .map_err(code_session_pair_rpc)?;
+            persist_code_pairing_sessions(store, sessions, &network_name)
+                .map_err(runner_error_pair_rpc)?;
+            if let Some(checkpoints) = checkpoint_context.as_mut() {
+                checkpoint_pairing::form_after_open(
+                    checkpoints.runtime,
+                    checkpoints.store,
+                    forwarder,
+                    membership,
+                    tun_runtime,
+                    route_controller,
+                    local_capabilities,
+                    identity,
+                )
+                .map_err(runner_error_pair_rpc)?;
+            }
+            Ok(PairRpcResult::OpenStarted(PairRpcOpenStarted {
+                operation_id: started.operation_id,
+                code: started.code,
+                network_name: network_name.clone(),
+                local_peer: local_peer.clone(),
+                expires_at_unix_seconds: started.expires_at_unix_seconds,
+            }))
+        })(),
         PairRpcRequest::PairJoin {
             operation_id,
             code,
@@ -5276,7 +5411,10 @@ fn pair_rpc_receipt(receipt: &PairingEnrollmentReceipt, network_name: &str) -> P
 }
 
 fn pairing_rpc_artifacts_ready(sessions: &CodePairingSessions, operation_id: &str) -> bool {
-    sessions.enrollment_artifacts_ready(operation_id)
+    sessions
+        .enrollment(operation_id)
+        .is_none_or(|entry| entry.response.payload.checkpoint.is_none())
+        && sessions.enrollment_artifacts_ready(operation_id)
 }
 
 fn pairing_rpc_member_routes(records: &[SignedMembershipRecord], peer: &str) -> Vec<PairRpcRoute> {
@@ -5379,6 +5517,26 @@ fn pairing_rpc_status(
         )
     })?;
     let diagnostics = pair_rpc_diagnostics(sessions, operation_id);
+    if let Some(enrollment) = sessions.enrollment(operation_id)
+        && enrollment.role == PairingEnrollmentRole::Joiner
+        && enrollment.response.payload.checkpoint.is_some()
+        && enrollment.state == PairingEnrollmentState::Prepared
+    {
+        return Ok(PairRpcOperationStatus {
+            operation_id: operation_id.to_owned(),
+            network_name: network_name.to_owned(),
+            local_peer: local_peer.to_owned(),
+            role: PairRpcRole::Joiner,
+            phase: PairRpcPhase::Finalizing,
+            revision: 1,
+            discovery: None,
+            diagnostics,
+            expires_at_unix_seconds,
+            candidate: None,
+            artifacts_ready: false,
+            failure: None,
+        });
+    }
     if let Some(receipt) = sessions.receipt(operation_id) {
         if receipt.local_peer != local_peer {
             return Err(pair_rpc_error(
@@ -12728,6 +12886,7 @@ struct CheckpointPairingContext<'a> {
 }
 
 struct SwarmEventContext<'a> {
+    checkpoint_pairing: Option<CheckpointPairingContext<'a>>,
     forwarder: &'a mut Forwarder,
     membership: &'a mut OverlayMembership,
     tun_runtime: &'a mut TunRuntimeConfig,
@@ -16390,6 +16549,21 @@ fn handle_pairing_code_response(
                 peer,
                 transport,
             );
+            if response.payload.checkpoint.is_some() {
+                if let Err(error) =
+                    checkpoint_pairing::accept_joiner(context, swarm, outbound, *response, now)
+                {
+                    log_runtime_event(
+                        LogLevel::Warn,
+                        "checkpoint_pairing_stage_pending",
+                        &[
+                            ("reason", &format!("{error:?}")),
+                            ("action", "retry_automatically"),
+                        ],
+                    );
+                }
+                return Ok(());
+            }
             let prepared = match prepare_pairing_runtime_enrollment(
                 context.forwarder,
                 &outbound.offer,
@@ -17229,6 +17403,9 @@ fn sync_live_tun_routes_with_route_update(
         forwarder.config(),
         forwarder.authorized_routes(),
     )?;
+    if forwarder.checkpoint_anchor().is_some() {
+        return reconcile_checkpoint_tun_with(installed, &next, apply);
+    }
     let update = next.route_reconciliation_from(installed)?;
     let changed = update.apply_commands().len();
     apply(installed, &next, &update)?;
@@ -17241,6 +17418,44 @@ fn sync_live_tun_routes_with_route_update(
         );
     }
 
+    Ok(())
+}
+
+fn reconcile_checkpoint_tun_with(
+    installed: &mut TunRuntimeConfig,
+    next: &TunRuntimeConfig,
+    mut apply: impl FnMut(
+        &TunRuntimeConfig,
+        &TunRuntimeConfig,
+        &TunRouteUpdate,
+    ) -> Result<(), RunnerError>,
+) -> Result<(), RunnerError> {
+    if let Ok(update) = next.pairing_reconciliation_from(installed) {
+        apply(installed, next, &update)?;
+        *installed = next.clone();
+        return Ok(());
+    }
+    // Check immutable interface identity before removal; authority owns all additional aliases.
+    let mut baseline = installed.clone();
+    baseline.additional_addresses.clear();
+    baseline.routes.clear();
+    next.pairing_reconciliation_from(&baseline)?;
+    let cleanup = super::tun::PairingTunCleanup::capture(&baseline, installed)?;
+    let mut surviving = installed.clone();
+    surviving
+        .additional_addresses
+        .retain(|address| next.additional_addresses.contains(address));
+    surviving
+        .routes
+        .retain(|route| next.routes.iter().any(|new| new.prefix == route.prefix));
+    let removal = cleanup.update(next)?;
+    if !removal.apply_commands().is_empty() {
+        apply(installed, &surviving, &removal)?;
+        *installed = surviving;
+    }
+    let update = next.pairing_reconciliation_from(installed)?;
+    apply(installed, next, &update)?;
+    *installed = next.clone();
     Ok(())
 }
 
@@ -17764,6 +17979,9 @@ fn apply_checkpoint_membership_revocation(
     member_peer: Option<&str>,
     recipients: &[Libp2pPeerId],
 ) -> Result<MembershipMutationResult, String> {
+    if checkpoint.pairing_activation_blocked() {
+        return Err("checkpoint pairing is still finalizing; cancel or finish pairing before membership mutations".into());
+    }
     let target = member_peer.unwrap_or(&identity.peer_id);
     checkpoint
         .apply_change_with_handoff(
@@ -24283,6 +24501,8 @@ mod tests {
 
     use super::*;
 
+    include!("runner/checkpoint_pairing_tests.rs");
+
     fn peer_id() -> Libp2pPeerId {
         Keypair::generate_ed25519().public().to_peer_id()
     }
@@ -25996,6 +26216,7 @@ mod tests {
                 handle_pairing_code_response(
                     &mut node.swarm,
                     &mut SwarmEventContext {
+                        checkpoint_pairing: None,
                         forwarder: &mut forwarder,
                         membership: &mut membership,
                         tun_runtime: &mut tun_runtime,
@@ -39139,6 +39360,7 @@ mod tests {
             handle_swarm_event(
                 &mut node.swarm,
                 SwarmEventContext {
+                    checkpoint_pairing: None,
                     forwarder: &mut forwarder,
                     membership: &mut membership,
                     tun_runtime: &mut tun_runtime,
@@ -40356,6 +40578,7 @@ mod tests {
                     let mut local_capabilities = ControlCapabilities::local("lab", None, 1280);
                     let (_, mut writer) = PacketIo::new(UnusedPacketIo, UnusedPacketIo).split();
                     let mut context = SwarmEventContext {
+                        checkpoint_pairing: None,
                         forwarder: &mut forwarder,
                         membership: &mut membership,
                         tun_runtime: &mut tun_runtime,
@@ -42319,6 +42542,7 @@ mod tests {
         handle_control_event(
             &mut node.swarm,
             &mut SwarmEventContext {
+                checkpoint_pairing: None,
                 forwarder,
                 membership: &mut membership,
                 tun_runtime: &mut tun_runtime,

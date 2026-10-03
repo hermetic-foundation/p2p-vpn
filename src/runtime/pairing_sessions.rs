@@ -153,6 +153,14 @@ pub enum PairingEnrollmentState {
     Applied,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum CheckpointJoinerOwnership {
+    Fresh,
+    Repair,
+    Released,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PairingEnrollment {
     pub operation_id: String,
@@ -172,6 +180,8 @@ pub struct PairingEnrollment {
     pub(crate) tun_cleanup: Option<super::tun::PairingTunCleanup>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) checkpoint_admission_owned: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) checkpoint_joiner_ownership: Option<CheckpointJoinerOwnership>,
     pub state: PairingEnrollmentState,
 }
 
@@ -217,6 +227,13 @@ pub struct CodePairingSessions {
     pending_approval: Option<PendingApproval>,
     inbound_ticket: Option<InboundTicket>,
     retained_inbound_tickets: VecDeque<InboundTicket>,
+    uncertain_checkpoint_completion: Option<UncertainCheckpointCompletion>,
+}
+
+// One active pairing owns at most two bounded encodings until the visible write is resolved.
+struct UncertainCheckpointCompletion {
+    previous: Vec<u8>,
+    completed: Vec<u8>,
 }
 
 struct OpenOperation {
@@ -498,6 +515,7 @@ impl CodePairingSessions {
             pending_approval: None,
             inbound_ticket: None,
             retained_inbound_tickets: VecDeque::new(),
+            uncertain_checkpoint_completion: None,
         }
     }
 
@@ -819,6 +837,9 @@ impl CodePairingSessions {
         &mut self,
         operation_id: &str,
     ) -> Result<PairingExpiryActions, CodePairingSessionError> {
+        if self.uncertain_checkpoint_completion.is_some() {
+            return Err(CodePairingSessionError::Conflict);
+        }
         if let Some(operation) = self
             .open
             .as_ref()
@@ -1321,6 +1342,7 @@ impl CodePairingSessions {
             tun_cleanup: None,
             state: PairingEnrollmentState::Prepared,
             checkpoint_admission_owned: None,
+            checkpoint_joiner_ownership: None,
         };
         validate_pairing_enrollment(&enrollment, network_name)?;
 
@@ -1660,6 +1682,98 @@ impl CodePairingSessions {
         Ok(())
     }
 
+    pub(crate) fn record_checkpoint_joiner_ownership(
+        &mut self,
+        operation_id: &str,
+        ownership: CheckpointJoinerOwnership,
+    ) -> Result<(), CodePairingSessionError> {
+        let enrollment = self
+            .enrollments
+            .iter_mut()
+            .find(|entry| entry.operation_id == operation_id)
+            .ok_or(CodePairingSessionError::NotFound)?;
+        if enrollment.role != PairingEnrollmentRole::Joiner
+            || enrollment.response.payload.checkpoint.is_none()
+            || enrollment.state == PairingEnrollmentState::Applied
+            || (enrollment.state == PairingEnrollmentState::Prepared
+                && (ownership == CheckpointJoinerOwnership::Released
+                    || enrollment
+                        .checkpoint_joiner_ownership
+                        .is_some_and(|old| old != ownership)))
+            || (enrollment.state == PairingEnrollmentState::Aborting
+                && (ownership != CheckpointJoinerOwnership::Released
+                    || enrollment.checkpoint_joiner_ownership.is_none()))
+        {
+            return Err(CodePairingSessionError::Conflict);
+        }
+        enrollment.checkpoint_joiner_ownership = Some(ownership);
+        Ok(())
+    }
+
+    /// Preserve Prepared on a definite pre-write failure; gate ambiguous visible completion.
+    pub(crate) fn finish_checkpoint_join_with<E: From<CodePairingSessionError>>(
+        &mut self,
+        operation_id: &str,
+        network: &str,
+        wall_now: u64,
+        persist: impl FnOnce(&[u8]) -> Result<(), E>,
+        read_back: impl FnOnce() -> Result<Option<Vec<u8>>, E>,
+    ) -> Result<(), E> {
+        if self.uncertain_checkpoint_completion.is_some() {
+            return Err(CodePairingSessionError::Conflict.into());
+        }
+        let previous = self.encode_persisted(network)?;
+        let mut next = Self::restore_persisted(&previous, network, wall_now, Instant::now())?;
+        let enrollment = next
+            .enrollment(operation_id)
+            .ok_or(CodePairingSessionError::NotFound)?
+            .clone();
+        if enrollment.checkpoint_joiner_ownership.is_none()
+            || enrollment.response.payload.checkpoint.is_none()
+        {
+            return Err(CodePairingSessionError::Conflict.into());
+        }
+        next.recover_prepared_join(network, &enrollment)?;
+        next.mark_enrollment_applied_at(operation_id, wall_now)?;
+        let completed = next.encode_persisted(network)?;
+        if let Err(error) = persist(&completed) {
+            if !matches!(read_back(), Ok(Some(visible)) if visible == previous) {
+                self.uncertain_checkpoint_completion = Some(UncertainCheckpointCompletion {
+                    previous,
+                    completed,
+                });
+            }
+            return Err(error);
+        }
+        *self = next;
+        Ok(())
+    }
+
+    pub(crate) fn reconcile_checkpoint_completion_with<E: From<CodePairingSessionError>>(
+        &mut self,
+        network: &str,
+        wall_now: u64,
+        read_back: impl FnOnce() -> Result<Option<Vec<u8>>, E>,
+        persist: impl FnOnce(&[u8]) -> Result<(), E>,
+    ) -> Result<(), E> {
+        let Some(pending) = self.uncertain_checkpoint_completion.as_ref() else {
+            return Ok(());
+        };
+        let visible = read_back()?.ok_or(CodePairingSessionError::Conflict)?;
+        if visible != pending.previous && visible != pending.completed {
+            return Err(CodePairingSessionError::Conflict.into());
+        }
+        let next = Self::restore_persisted(&visible, network, wall_now, Instant::now())?;
+        // Reconfirm directory durability before enabling packets or permitting cancellation.
+        persist(&visible)?;
+        *self = next;
+        Ok(())
+    }
+
+    pub(crate) fn checkpoint_completion_uncertain(&self) -> bool {
+        self.uncertain_checkpoint_completion.is_some()
+    }
+
     pub fn mark_enrollment_applied(
         &mut self,
         operation_id: &str,
@@ -1847,6 +1961,7 @@ impl CodePairingSessions {
             pending_approval,
             inbound_ticket,
             retained_inbound_tickets,
+            uncertain_checkpoint_completion: None,
         })
     }
 
@@ -2842,7 +2957,17 @@ impl CodePairingSessions {
             self.open_completion(operation_id).is_none()
                 && self.join_completion(operation_id).is_none()
         });
-        if open_active || join_active || prepared_pending {
+        let checkpoint_joiner_aborting = self.enrollments.iter().any(|entry| {
+            entry.role == PairingEnrollmentRole::Joiner
+                && entry.response.payload.checkpoint.is_some()
+                && entry.state == PairingEnrollmentState::Aborting
+        });
+        if open_active
+            || join_active
+            || prepared_pending
+            || checkpoint_joiner_aborting
+            || self.uncertain_checkpoint_completion.is_some()
+        {
             Err(CodePairingSessionError::Busy)
         } else {
             // Preserve a completed transaction before replacing its operation slot.
@@ -3111,6 +3236,17 @@ fn validate_pairing_enrollment(
 ) -> Result<(), CodePairingSessionError> {
     validate_pairing_operation_id(&enrollment.operation_id)?;
     validate_transcript_sha256(&enrollment.transcript_sha256, true)?;
+    if enrollment.checkpoint_joiner_ownership.is_some()
+        && (enrollment.role != PairingEnrollmentRole::Joiner
+            || enrollment.response.payload.checkpoint.is_none()
+            || (enrollment.checkpoint_joiner_ownership
+                == Some(CheckpointJoinerOwnership::Released)
+                && enrollment.state != PairingEnrollmentState::Aborting))
+    {
+        return Err(invalid_enrollment(
+            "invalid checkpoint joiner installation ownership",
+        ));
+    }
     if enrollment.checkpoint_admission_owned.is_some()
         && (enrollment.response.payload.checkpoint.is_none()
             || enrollment.role != PairingEnrollmentRole::Inviter)
@@ -6689,6 +6825,7 @@ mod tests {
             restored.enrollment(&inviter_operation_id),
             Some(&PairingEnrollment {
                 checkpoint_admission_owned: None,
+                checkpoint_joiner_ownership: None,
                 operation_id: inviter_operation_id,
                 role: PairingEnrollmentRole::Inviter,
                 approval_id: Some(approval_id),
@@ -6705,6 +6842,7 @@ mod tests {
             restored.enrollment(&joiner_operation_id),
             Some(&PairingEnrollment {
                 checkpoint_admission_owned: None,
+                checkpoint_joiner_ownership: None,
                 operation_id: joiner_operation_id,
                 role: PairingEnrollmentRole::Joiner,
                 approval_id: None,

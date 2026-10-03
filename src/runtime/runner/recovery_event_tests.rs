@@ -386,6 +386,7 @@ impl EventFixture {
                 pairing_replay_tokens: &mut self.pairing_tokens,
                 code_pairing_sessions: &mut self.pairing,
                 pairing_state_store: None,
+                checkpoint_pairing: None,
                 active_connections: &mut self.active_connections,
                 connection_epochs: &mut self.epochs,
                 membership_probe_connections: &mut MembershipProbeConnections::default(),

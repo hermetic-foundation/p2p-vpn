@@ -11,9 +11,9 @@ Core, storage, wire transfer, version-3 restoration, and protected enrollment
 staging are implemented; the fixed-quorum prototype is gone. Ordinary inviter
 approval is wired to the checkpoint-aware pairing RPC for existing checkpoint state.
 
-Fresh solo formation and accepted solo enrollment APIs are implemented. Ordinary
-joiner activation and formation, legacy migration, and export/artifacts remain
-incomplete. This iteration has not been deployed; existing deployments use the ledger.
+Ordinary fresh-solo `PairOpen` formation and joiner `Accepted` staging, resync,
+cancellation, and finalization are wired. Legacy migration and export/artifacts
+remain incomplete. This iteration has not been deployed; existing deployments use the ledger.
 
 ## Current Integration
 
@@ -25,8 +25,8 @@ incomplete. This iteration has not been deployed; existing deployments use the l
 | Cancellation | Protected admission ownership distinguishes new admission from an existing member. | Confirm durable removal before clearing ownership or discarding the transaction. |
 | Mutation replies | Bound control-only reply ownership by request, peer, connection, and deadline. | No packet grants or permanent departure archive. |
 | Identify | Preserve checkpoint-only catch-up and pending reply connections. | Do not classify them as routing infrastructure or overlay members. |
-| Joiner `Accepted` | Signed-grant verification and protected staging APIs exist. | Ordinary activation, cancellation, and finalization remain unwired. |
-| Fresh formation | Validate fresh solo history, generate or preserve protected credentials, persist version-3 authority, and return gated. | Ordinary pairing must call this API; no automatic migration of existing networks. |
+| Joiner `Accepted` | Verify the transcript, persist transaction ownership, stage a gated authority, fetch current state, reconcile TUN, then finalize durably. | Cold reconnect and complete CLI/Android export workflows remain. |
+| Fresh formation | Explicit `PairOpen` validates fresh solo history, generates or preserves protected credentials, and persists version-3 authority gated for resync. | Existing legacy networks are not automatically migrated. |
 | Legacy migration | Core and storage primitives exist; non-fresh solo history is rejected. | Explicit multi-member conversion remains. |
 | Export / artifacts | Generic config import rejects checkpoint credentials; checkpoint RPC artifacts return `Unavailable`. | No unsafe legacy Nix plan; complete protected export remains. |
 
@@ -41,14 +41,15 @@ resync. RPC and TCP/Noise regressions pass; this is not deployed-network evidenc
 | Runtime paths | `df78cfb3` erases unauthorized stream/datagram/relay path history and pending probes. | Other retained device state must follow checkpoint installation. |
 | Address-retirement API | Eight address-retention tests pass, including protected-only deletion, canonical deduplication, and 1,024 admission/removal cycles. | The checkpoint-aware runner hook and dual-DHT cleanup tests are not wired or verified yet. |
 | Forwarding projection | Seal static fallback; restore signed local aliases after restart; strip ungranted routes/aliases; preserve signed metrics and route policy. | Full discovery/cache/artifact cleanup and kernel integration remain. |
-| Snapshot/mutation transfer | 21 snapshot and 19 mutation tests cover authenticated TCP/Noise, scope, replay, deadlines, correlated replies, and frame/session bounds. | Ordinary joiner activation remains. |
-| Daemon coordinator | 37 tests cover restart, resync, solo APIs, removal, DNS, catch-up, handoff, enrollment gates, ACK/Identify ownership, and retained-state erasure. | Ordinary networks lack automatic provisioning/migration; departure intermittency remains. |
-| Pairing enrollment | Signed grants, protected minimum-rank staging, restart, replay, and a 102-member TCP/Noise paged fetch pass. | Inviter RPC is wired; joiner activation, formation, migration, and export/artifacts remain. |
-| Inviter pairing RPC | 11 tests cover signed grants, TCP/Noise delivery, retry, resync gates, cancellation ownership, and fail-closed artifacts. | No complete joiner or deployed pairing workflow yet. |
+| Snapshot/mutation transfer | 21 snapshot and 19 mutation tests cover authenticated TCP/Noise, scope, replay, deadlines, correlated replies, and frame/session bounds. | Cold gated reconnect and deployed convergence remain. |
+| Daemon coordinator | 37 tests cover restart, resync, solo APIs, removal, DNS, catch-up, handoff, enrollment gates, ACK/Identify ownership, and retained-state erasure. | Existing networks need explicit migration; departure intermittency remains. |
+| Pairing enrollment | Signed grants, protected minimum-rank staging, restart, replay, and a 102-member TCP/Noise paged fetch pass. | Both RPC roles are wired; migration and export/artifacts remain. |
+| Inviter pairing RPC | 11 tests cover signed grants, TCP/Noise delivery, retry, resync gates, cancellation ownership, and fail-closed artifacts. | Full CLI/Android export and deployed pairing remain. |
+| Joiner pairing RPC | 12 tests cover ordinary fresh formation, TCP/Noise full fetch, minimum-rank gating, expired protected restart, Fresh/Repair cancellation, ambiguous final writes, and signed TUN alias retry. | Packet/kernel adapters are fixtures; cold reconnect, export, Android, and deployed evidence remain. |
 | Creator departure | Three real daemon loops deliver removal to two survivors; later survivor governance and injected route-cleanup retry pass. | Packet/route adapters are fixtures, not real TUN or deployed-node evidence. |
 | Handoff scheduling | Five tests verify recipient/in-flight bounds, fairness, fixed deadlines, retry limits, and forgotten payloads. | No deployed checkpoint-network completion claim. |
-| Fresh solo APIs | Eight tests cover empty/self-only versions 1/2, signature/scope/key/history rejection, routes, pins, isolated enrollment gates, and write-boundary recovery. | Normal pairing and cancellation must integrate these APIs before production activation. |
-| Rust workspace | 1,746 tests pass; 47 opt-in tests excluded. Core, storage, forwarding, enrollment, and inviter RPC are covered. | Full VM/package/device checks remain. |
+| Fresh solo APIs | Eight tests cover empty/self-only versions 1/2, signature/scope/key/history rejection, routes, pins, isolated enrollment gates, and write-boundary recovery. | Normal daemon pairing is wired; migration, export, and deployment remain. |
+| Rust workspace | 1,761 tests pass; 47 opt-in tests excluded. Core, storage, forwarding, enrollment, and both pairing roles are covered. | Full VM/package/device checks remain. |
 | Durable checkpoint state | Version-3 authentication, legacy dispatch, rollback, failure/retry, and 128 durable churn cycles pass. | Automatic migration and a full crash campaign remain. |
 | Static analysis | Formatting and required correctness/suspicious/performance Clippy groups pass. | Existing non-fatal lint warnings remain. |
 | Android consumer | JVM unit tests and debug lint pass for revoked-local filtering and missing-local snapshots. | No new APK or physical-device checkpoint test. |
@@ -105,6 +106,9 @@ deployed checkpoint-network claim follows from those passes.
 | Startup / resync | Gated restoration and failed resync writes retain ownership until a successful durable resync. |
 | Missing ownership metadata | Regression verifies fail-closed retention of the unresolved transaction. |
 | Kernel cleanup fails | Selected packet authority remains installed; a complete abort/crash campaign remains. |
+| Joiner final write has uncertain visibility | Preserve the activation barrier and reject cancellation until the exact protected state is read back and durably reconfirmed. |
+| Joiner Fresh versus Repair | A provisional enrollment floor does not constitute prior established membership; duplicate acceptance preserves the original ownership. |
+| Released joiner cleanup restarts | Keep packets and mutations gated after resync until pending kernel cleanup finishes. |
 
 ## Required Behavior
 
@@ -274,6 +278,6 @@ stale declarative peers must still remain unauthorized.
 | --- | --- | --- |
 | Cooperative core | Singleton snapshots, canonical rank, scoped authentication, resync gate, active-only authorization, bounded churn tests. | Implemented; 30 core tests pass. |
 | Durable state | Atomic persistence, crash boundaries, migration, metadata cleanup, bounded retention. | Store and churn tests pass; automatic migration and full crash campaign remain. |
-| Runtime and wire | Version negotiation, sync, branch selection, pairing/departure, route/DNS/discovery cleanup. | Restoration, bounded departures, and ordinary inviter approval are wired; joiner activation, formation, migration, export/artifacts, and full cleanup remain. |
+| Runtime and wire | Version negotiation, sync, branch selection, pairing/departure, route/DNS/discovery cleanup. | Restoration, bounded departures, fresh formation, and both pairing roles are wired; cold reconnect, migration, export/artifacts, and full cleanup remain. |
 | User surfaces | Linux/Android sync and loss status, minimal provenance, structured instructions. | Linux aggregate status and inventories tested; Android sync/loss UI and activation workflow remain. |
 | End-to-end proof | Multi-daemon forks/offline return, restart, churn, CLI/Android/NixOS contracts. | Real paging and three-daemon fixtures pass; departure intermittency and deployed multi-node evidence remain. |

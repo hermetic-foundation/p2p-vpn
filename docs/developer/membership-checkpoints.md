@@ -6,8 +6,8 @@ Core, protected storage, bounded snapshot/mutation transfer, version-3 daemon
 restoration, and ordinary checkpoint inviter approval are implemented. Inviter
 approval requires an existing participating checkpoint instance.
 
-Fresh solo formation and accepted solo enrollment APIs are implemented. Ordinary
-`PairOpen` formation, joiner activation, legacy migration, and export/artifacts
+Ordinary fresh-solo `PairOpen` formation and joiner `Accepted` staging, resync,
+cancellation, and finalization are wired. Legacy migration and export/artifacts
 remain incomplete; existing deployments still use the legacy ledger.
 
 No new configuration switch enables checkpoints yet. Full retained-artifact
@@ -199,9 +199,9 @@ static peers receive no implicit permission even after their tombstones are gone
 
 ## Fresh Solo Formation
 
-These APIs require explicit pairing authorization. They are not yet called by the
-ordinary `PairOpen` or joiner `Accepted` workflow; startup alone does not create
-a new network anchor or convert legacy authority.
+These APIs require explicit pairing authorization. Ordinary `PairOpen` calls
+formation only for fresh solo authority; `Accepted` stages verified enrollment.
+Startup alone does not create a new network anchor or convert legacy authority.
 
 | Input / Boundary | API Behavior |
 | --- | --- |
@@ -274,9 +274,9 @@ export or a supported shortcut around protected enrollment.
 ## Pending Joiner Enrollment
 
 Signed checkpoint pairing installs a protected capability and minimum rank,
-not an authoritative two-member network. The staging API is implemented and
-tested; ordinary joiner `Accepted` activation, cancellation/finalization, fresh
-formation, legacy migration, and export/artifacts remain pending.
+not an authoritative two-member network. Ordinary joiner `Accepted` verifies and
+persists the transaction before staging. Completion requires authenticated current
+state and a durable final pairing save; legacy migration and export remain pending.
 
 | Surface | Required Behavior |
 | --- | --- |
@@ -288,6 +288,9 @@ formation, legacy migration, and export/artifacts remain pending.
 | Activation | Observe a remote authenticated snapshot meeting the complete pinned rank. |
 | Newer exclusion | Install current exclusion instead of honoring a superseded approval. |
 | Write/commit failure | Preserve visible selected authority, gate participation, and retry. |
+| Pairing activation barrier | Resync alone cannot activate packets while a protected transaction is still finalizing or aborting. |
+| Cancellation ownership | Fresh enrollment removes only its matching incarnation; repairing established membership preserves prior authority. |
+| Uncertain final pairing write | Block cancellation and further saves until visible protected state is read back and durably reconfirmed. |
 | Replay | Reuse newer retained state; do not reinstall an old seed or lower a pending floor. |
 | Legacy state | Require explicit migration; staging does not silently replace the ledger. |
 
@@ -297,6 +300,10 @@ consumers cannot accidentally drop its gate. Ready state remains byte-compatible
 
 One local node may still resume a previously established snapshot after a bounded
 empty resync. That availability rule does not apply to an incomplete enrollment.
+
+An enrollment floor is provisional, not established membership. It cannot turn
+Fresh ownership into Repair. Duplicate acceptance preserves the protected owner;
+Released abort cleanup remains gated across restart and successful resync.
 
 ## Verification
 
@@ -380,8 +387,9 @@ departure, two survivor acknowledgments, route-cleanup retry, retained-state
 erasure, and subsequent survivor governance pass through the real control API.
 
 Ordinary inviter RPC, protected final-save/restart cancellation, no-op re-pair,
-and real reply-delivery/Identify regressions pass. The current workspace run passes
-1,734 tests; see the acceptance audit for remaining evidence gaps.
+and real reply-delivery/Identify regressions pass. Twelve joiner regressions cover
+fresh formation, real TCP/Noise fetch, finalization, ownership, restart, and TUN retry.
+See the acceptance audit for workspace totals and remaining evidence gaps.
 
 Three-daemon departure intermittency remains open: an earlier run exhausted
 retries without ACKs; the latest focused failure captured no connected recipients.
@@ -390,6 +398,6 @@ Passing reruns do not replace transport-readiness and reliable-delivery evidence
 The fixture uses packet-device and route-controller adapters; it does not claim
 real TUN forwarding, deployed devices, or WAN evidence.
 
-These tests do not establish a deployed checkpoint network. Joiner activation,
-fresh formation, legacy migration, export/artifacts, Android sync UI, full artifact
-erasure, and reliable multi-daemon/NixOS evidence remain required for completion.
+These tests do not establish a deployed checkpoint network. Cold gated reconnect,
+legacy migration, export/artifacts, Android sync UI, full retained-state erasure,
+and reliable multi-daemon/NixOS evidence remain required for completion.
