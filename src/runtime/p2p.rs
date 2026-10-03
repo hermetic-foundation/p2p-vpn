@@ -25,7 +25,10 @@ use crate::{
     },
     identity::{IdentityError, NodeIdentity},
     runtime::{
-        control::{self, ControlCodec},
+        control::{
+            self, ControlCodec,
+            checkpoint::{self, CheckpointCodec},
+        },
         packet::{self, PacketCodec},
         pairing::{self, PairingCodec},
         pairing_code::{self, PairingCodeCodec, PairingCodeV2Codec},
@@ -71,6 +74,7 @@ pub struct Behaviour {
     pub mdns: Toggle<mdns::tokio::Behaviour>,
     pub pairing_mdns: Toggle<mdns::tokio::Behaviour>,
     pub control: request_response::Behaviour<ControlCodec>,
+    pub checkpoint: request_response::Behaviour<CheckpointCodec>,
     // SelectUpgrade gives the first matching handler priority. Keep this before
     // pinned_packet_stream to preserve the default inbound Packet event contract.
     pub packet: request_response::Behaviour<PacketCodec>,
@@ -244,6 +248,7 @@ pub(crate) fn build_node_with_dial_observer(
                     mdns: mdns.into(),
                     pairing_mdns: None.into(),
                     control: control::behaviour(control_streams),
+                    checkpoint: checkpoint::behaviour(control_streams),
                     packet: packet::behaviour(mtu, packet_streams),
                     pairing: pairing::behaviour(control_streams),
                     pairing_code: pairing_code::behaviour(control_streams),

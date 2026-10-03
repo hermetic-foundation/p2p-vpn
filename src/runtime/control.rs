@@ -17,6 +17,8 @@ use crate::{
     wire::{HEADER_LEN, WIRE_VERSION},
 };
 
+pub mod checkpoint;
+
 pub const CONTROL_PROTOCOL: &str = "/p2p-vpn/control/1";
 const MAX_CONTROL_MESSAGE_LEN: usize = 16_384;
 pub const MAX_CONTROL_MEMBERSHIP_RECORDS: usize = 8;
@@ -88,6 +90,12 @@ pub struct ControlCapabilities {
     pub membership_records_snapshot: Option<String>,
     #[serde(default)]
     pub membership_record_count: u16,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "checkpoint::deserialize_capabilities"
+    )]
+    pub checkpoint: Option<checkpoint::CheckpointCapabilities>,
 }
 
 impl ControlCapabilities {
@@ -116,6 +124,7 @@ impl ControlCapabilities {
             supports_membership_record_pages: false,
             membership_records_snapshot: None,
             membership_record_count: 0,
+            checkpoint: None,
         }
     }
 
@@ -155,6 +164,14 @@ impl ControlCapabilities {
         self.membership_records_snapshot = Some(membership_records_snapshot(records));
         self.membership_record_count = u16::try_from(records.len()).unwrap_or(u16::MAX);
         self
+    }
+
+    pub fn with_checkpoint(
+        mut self,
+        state: &crate::membership::checkpoint::CooperativeMembershipState,
+    ) -> Result<Self, checkpoint::CheckpointSyncError> {
+        self.checkpoint = Some(checkpoint::CheckpointCapabilities::from_state(state)?);
+        Ok(self)
     }
 
     #[must_use]
@@ -432,6 +449,13 @@ pub fn validate_capabilities(
     expected_membership_tag: Option<&str>,
     previous_membership_tags: &[String],
 ) -> Option<ControlRejectionReason> {
+    if capabilities
+        .checkpoint
+        .as_ref()
+        .is_some_and(|descriptor| descriptor.validate().is_err())
+    {
+        return Some(ControlRejectionReason::InvalidMembershipRecord);
+    }
     if capabilities.network_name != expected_network {
         return Some(ControlRejectionReason::WrongNetwork);
     }
