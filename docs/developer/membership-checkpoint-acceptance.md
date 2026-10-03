@@ -39,6 +39,7 @@ resync. RPC and TCP/Noise regressions pass; this is not deployed-network evidenc
 | --- | --- | --- |
 | Peer inventory | `25243a3c` omits revoked rows from shared Linux/Android snapshots, including stale static metadata. | Existing legacy networks still retain enforcement history. |
 | Runtime paths | `df78cfb3` erases unauthorized stream/datagram/relay path history and pending probes. | Other retained device state must follow checkpoint installation. |
+| Address-retirement API | Eight address-retention tests pass, including protected-only deletion, canonical deduplication, and 1,024 admission/removal cycles. | The checkpoint-aware runner hook and dual-DHT cleanup tests are not wired or verified yet. |
 | Forwarding projection | Seal static fallback; restore signed local aliases after restart; strip ungranted routes/aliases; preserve signed metrics and route policy. | Full discovery/cache/artifact cleanup and kernel integration remain. |
 | Snapshot/mutation transfer | 21 snapshot and 19 mutation tests cover authenticated TCP/Noise, scope, replay, deadlines, correlated replies, and frame/session bounds. | Ordinary joiner activation remains. |
 | Daemon coordinator | 37 tests cover restart, resync, solo APIs, removal, DNS, catch-up, handoff, enrollment gates, ACK/Identify ownership, and retained-state erasure. | Ordinary networks lack automatic provisioning/migration; departure intermittency remains. |

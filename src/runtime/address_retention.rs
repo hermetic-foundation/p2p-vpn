@@ -32,6 +32,48 @@ pub(super) enum Admission {
 }
 
 impl AddressRetention {
+    pub(super) fn overlay_peers(&self) -> impl Iterator<Item = PeerId> + '_ {
+        self.entries
+            .iter()
+            .filter(|entry| entry.overlay)
+            .map(|entry| entry.peer)
+    }
+
+    /// Forget addresses and static protection together when their peer loses retention eligibility.
+    pub(super) fn retain_peers(
+        &mut self,
+        mut eligible: impl FnMut(PeerId) -> bool,
+    ) -> Vec<(PeerId, Multiaddr)> {
+        let peers = self
+            .entries
+            .iter()
+            .map(|entry| entry.peer)
+            .chain(self.protected.iter().map(|(peer, _)| *peer))
+            .collect::<HashSet<_>>();
+        let removed_peers = peers
+            .into_iter()
+            .filter(|peer| !eligible(*peer))
+            .collect::<HashSet<_>>();
+        let mut removed = HashSet::new();
+        self.entries.retain(|entry| {
+            if removed_peers.contains(&entry.peer) {
+                removed.insert((entry.peer, entry.address.clone()));
+                false
+            } else {
+                true
+            }
+        });
+        self.protected.retain(|(peer, address)| {
+            if removed_peers.contains(peer) {
+                removed.insert((*peer, address.clone()));
+                false
+            } else {
+                true
+            }
+        });
+        removed.into_iter().collect()
+    }
+
     pub(super) fn protect(&mut self, peer: PeerId, address: Multiaddr) {
         self.protected.insert((peer, canonical(peer, address)));
     }
@@ -162,6 +204,98 @@ mod tests {
 
     fn address(port: usize) -> Multiaddr {
         format!("/ip4/11.252.0.2/tcp/{port}").parse().unwrap()
+    }
+
+    #[test]
+    fn authority_pruning_forgets_removed_peers_and_static_protection_once() {
+        let revoked = PeerId::random();
+        let survivor = PeerId::random();
+        let infrastructure = PeerId::random();
+        let now = Instant::now();
+        let mut book = AddressRetention::default();
+        book.admit(revoked, address(4001), true, now);
+        book.admit(revoked, address(4002), false, now);
+        book.protect(revoked, address(4001));
+        book.protect(revoked, address(4003));
+        for peer in [survivor, infrastructure] {
+            book.admit(peer, address(4004), peer == survivor, now);
+            book.protect(peer, address(4004));
+        }
+        let mut checked = HashSet::new();
+        let removed = book.retain_peers(|peer| {
+            assert!(
+                checked.insert(peer),
+                "eligibility is evaluated once per retained peer"
+            );
+            peer != revoked
+        });
+        assert_eq!(checked.len(), 3);
+        assert_eq!(removed.len(), 3);
+        assert_eq!(
+            removed.into_iter().collect::<HashSet<_>>(),
+            [4001, 4002, 4003]
+                .into_iter()
+                .map(|port| (revoked, canonical(revoked, address(port))))
+                .collect()
+        );
+        assert!(book.entries.iter().all(|entry| entry.peer != revoked));
+        for port in [4001, 4002, 4003] {
+            assert!(!book.is_protected(revoked, &address(port)));
+        }
+        assert_eq!(book.entries.len(), 2);
+        assert_eq!(book.protected.len(), 2);
+        for peer in [survivor, infrastructure] {
+            assert!(book.is_protected(peer, &address(4004)));
+        }
+        assert!(book.retain_peers(|peer| peer != revoked).is_empty());
+        // Re-admission starts without stale static protection or old addresses.
+        assert_eq!(
+            book.admit(revoked, address(4005), true, now),
+            Admission::Retained { evicted: vec![] }
+        );
+        assert!(!book.is_protected(revoked, &address(4005)));
+        assert_eq!(
+            book.entries
+                .iter()
+                .filter(|entry| entry.peer == revoked)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn pruning_protected_only_addresses_does_not_require_a_discovery_entry() {
+        let peer = PeerId::random();
+        let mut book = AddressRetention::default();
+        book.protect(peer, address(4001));
+        book.protect(peer, canonical(peer, address(4001)));
+        assert_eq!(book.protected.len(), 1);
+        assert_eq!(
+            book.retain_peers(|_| false),
+            vec![(peer, canonical(peer, address(4001)))]
+        );
+        assert!(book.protected.is_empty());
+        assert!(book.entries.is_empty());
+    }
+
+    #[test]
+    fn repeated_admission_and_pruning_retains_only_current_addresses() {
+        let survivor = PeerId::random();
+        let now = Instant::now();
+        let mut book = AddressRetention::default();
+        book.admit(survivor, address(4001), true, now);
+        book.protect(survivor, address(4001));
+        for cycle in 0..1_024 {
+            let departing = PeerId::random();
+            let candidate = address(4002 + cycle);
+            book.admit(departing, candidate.clone(), true, now);
+            book.protect(departing, candidate);
+            assert_eq!(book.retain_peers(|peer| peer == survivor).len(), 1);
+            assert_eq!(book.entries.len(), 1);
+            assert_eq!(book.protected.len(), 1);
+            assert_eq!(book.entries[0].peer, survivor);
+        }
+        assert!(book.is_protected(survivor, &address(4001)));
     }
 
     #[test]
