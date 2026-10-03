@@ -17,6 +17,7 @@ Use these docs when changing, testing, or debugging `p2p-vpn`.
 | [NixOS Module Design](nixos-module.md) | Modes, secret lifecycle, service contract, and tests. |
 | [Pairing Implementation](pairing.md) | Code PAKE, approval, durability, and proof commands. |
 | [Membership Convergence](membership.md) | Ownerless ledger, authorization, merge rules, paging, persistence, and routes. |
+| [Membership Checkpoint Acceptance](membership-checkpoint-acceptance.md) | In-progress compaction, accepted fork tradeoffs, and remaining verification. |
 | [DNS Architecture](dns.md) | Authenticated naming, resolver protocol, limits, and NixOS lifecycle. |
 | [Testing](testing.md) | Unit, Nix, namespace, and two-host tests. |
 | [Network Debugging](network-debugging.md) | Artifact capture and failure triage. |
