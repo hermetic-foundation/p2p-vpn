@@ -404,6 +404,22 @@ Local revoke and resign requests use the same staged route transaction.
 
 Successful mutations persist state and advertise new capabilities immediately.
 
+## State Envelope Compatibility
+
+The daemon-owned membership state file is not a user configuration file.
+Its top-level schema is strict so unsupported authority cannot be silently ignored.
+
+| Input | Loader Behavior |
+| --- | --- |
+| Version `1` | Read the legacy membership ledger; hostname records may be absent. |
+| Version `2` | Read membership and hostname records. |
+| Unsupported version | Fail closed without rewriting the file. |
+| Unknown top-level field | Fail closed without falling back to legacy authority. |
+
+Checkpoint persistence requires its own explicitly supported storage version.
+Do not add checkpoint authority to a version-1 or version-2 envelope, or strip
+unknown authority fields to make an older binary accept the file.
+
 ## Restart Order
 
 Startup order matters because `p2p-vpn up` installs file-backed routes first.

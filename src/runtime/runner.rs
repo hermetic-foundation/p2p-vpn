@@ -2968,7 +2968,10 @@ fn load_persisted_membership_records(
                 "membership_state_load_failed",
                 &[
                     ("reason", &error.to_string()),
-                    ("action", "repair_or_remove_the_invalid_state_file"),
+                    (
+                        "action",
+                        "upgrade_or_repair_state_without_discarding_authority",
+                    ),
                 ],
             );
             return Err(error.into());
@@ -40084,6 +40087,55 @@ mod tests {
                 .collect::<HashSet<_>>()
         );
         fs::remove_dir_all(root).expect("remove test directory");
+    }
+
+    #[test]
+    fn unsupported_membership_state_preserves_committed_authorization() {
+        let local = NodeIdentity::generate_ed25519().expect("local identity");
+        let configured_peer = peer_id();
+        let config = config_with_peer(&local, configured_peer);
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut membership = OverlayMembership::from_config(&config).expect("membership");
+        let metrics = RuntimeMetrics::default();
+        let path = test_pairing_state_path("unsupported-membership-authority")
+            .with_file_name("membership-state.json");
+        let store = MembershipStateStore::new(&path);
+        store
+            .save(&config.network.name, &local.peer_id, &[], &[])
+            .expect("initial state");
+        let mut state: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).expect("initial bytes")).expect("state JSON");
+        state["checkpoint"] = serde_json::json!({"unsupported": true});
+        let before = serde_json::to_vec(&state).expect("unsupported state bytes");
+        fs::write(&path, &before).expect("unsupported state");
+        let revision = forwarder.membership_revision();
+        let authorized = forwarder
+            .configured_transport_peers()
+            .collect::<HashSet<_>>();
+
+        load_persisted_membership_records(
+            Some(&store),
+            &mut forwarder,
+            &mut membership,
+            &local.peer_id,
+            &metrics,
+        )
+        .expect_err("unsupported authority must stop restoration");
+
+        assert_eq!(fs::read(&path).expect("preserved bytes"), before);
+        assert_eq!(forwarder.membership_revision(), revision);
+        assert_eq!(
+            forwarder
+                .configured_transport_peers()
+                .collect::<HashSet<_>>(),
+            authorized
+        );
+        assert!(forwarder.member_records().is_empty());
+        assert!(membership.allows(configured_peer));
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.membership_state_load_failures, 1);
+        assert_eq!(snapshot.membership_state_loads, 0);
+        fs::remove_dir_all(path.parent().expect("state parent")).expect("remove test directory");
     }
 
     #[test]

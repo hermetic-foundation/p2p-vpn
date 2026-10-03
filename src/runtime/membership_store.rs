@@ -181,6 +181,7 @@ struct PersistedMembershipState<'a> {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct OwnedPersistedMembershipState {
     version: u8,
     network_name: String,
@@ -553,6 +554,66 @@ mod tests {
             Err(MembershipStateStoreError::LocalPeerMismatch { .. })
         ));
 
+        fs::remove_dir_all(directory).expect("remove test directory");
+    }
+
+    #[test]
+    fn membership_state_rejects_unknown_authority_fields_without_rewriting() {
+        let directory = test_directory("unknown-authority");
+        let path = directory.join("membership-state.json");
+        let store = MembershipStateStore::new(&path);
+        let records = vec![membership_record()];
+        for version in [LEGACY_MEMBERSHIP_STATE_VERSION, MEMBERSHIP_STATE_VERSION] {
+            for field in ["checkpoint", "network_anchor", "sync_state"] {
+                let mut state = serde_json::to_value(PersistedMembershipState {
+                    version,
+                    network_name: "lab",
+                    local_peer: "local-peer",
+                    records: &records,
+                    hostname_records: &[],
+                })
+                .expect("state envelope");
+                state[field] = serde_json::json!({"unsupported": true});
+                let before = serde_json::to_vec(&state).expect("encoded state");
+                fs::write(&path, &before).expect("write unsupported envelope");
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("state mode");
+
+                assert!(
+                    matches!(
+                        store.load("lab", "local-peer"),
+                        Err(MembershipStateStoreError::Json(_))
+                    ),
+                    "version {version} must reject unknown authority field {field}",
+                );
+                assert_eq!(fs::read(&path).expect("unchanged state"), before);
+            }
+        }
+        fs::remove_dir_all(directory).expect("remove test directory");
+    }
+
+    #[test]
+    fn membership_state_rejects_unsupported_versions_without_rewriting() {
+        let directory = test_directory("unsupported-version");
+        let path = directory.join("membership-state.json");
+        let store = MembershipStateStore::new(&path);
+        for version in [0, MEMBERSHIP_STATE_VERSION + 1, u8::MAX] {
+            let before = serde_json::to_vec(&PersistedMembershipState {
+                version,
+                network_name: "lab",
+                local_peer: "local-peer",
+                records: &[],
+                hostname_records: &[],
+            })
+            .expect("encoded state");
+            fs::write(&path, &before).expect("write unsupported version");
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("state mode");
+
+            assert!(matches!(
+                store.load("lab", "local-peer"),
+                Err(MembershipStateStoreError::UnsupportedVersion(actual)) if actual == version
+            ));
+            assert_eq!(fs::read(&path).expect("unchanged state"), before);
+        }
         fs::remove_dir_all(directory).expect("remove test directory");
     }
 
