@@ -139,3 +139,10 @@ flakes, external backups, historical Nix generations, or system journals.
 Restart and periodic maintenance erase expired copies from protected pairing
 storage. Cleanup failures are retried; a full replay window is not evicted early
 to claim successful compaction. Keep the protected state directory writable.
+
+### Interrupted Writes
+
+- Recognized abandoned write copies retire when protected state is next loaded or saved.
+- Temporary copies are never recovered as membership authority or kept as backups.
+- Unsafe links or permissions require inspection; cleanup does not sweep unrelated files.
+- Upgrade and stop old writers before using the same state directory with the new daemon.

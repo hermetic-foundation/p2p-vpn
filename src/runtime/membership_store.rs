@@ -62,6 +62,7 @@ impl MembershipStateStore {
     }
 
     fn read_bytes(&self) -> Result<Option<Vec<u8>>, MembershipStateStoreError> {
+        let _write_owner = super::state_write_cleanup::lock_and_retire(&self.path)?;
         let metadata = match fs::symlink_metadata(&self.path) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -128,6 +129,7 @@ impl MembershipStateStore {
         if let Ok(metadata) = fs::symlink_metadata(&self.path) {
             validate_state_file(&self.path, &metadata)?;
         }
+        let _write_owner = super::state_write_cleanup::lock_and_retire(&self.path)?;
 
         let file_name = self
             .path

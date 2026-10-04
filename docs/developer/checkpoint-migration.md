@@ -77,7 +77,7 @@ is restricted to the daemon-owned path and requires the expected fingerprint.
 | Isolated multi-daemon packet/DNS migration and offline catch-up. | Native three-daemon campaign passes; evidence below. |
 | Superseded legacy pairing artifacts. | Startup, explicit installation, and periodic retirement implemented; focused evidence below. |
 | Combined storage bounds through repeated admission/removal cycles. | Existing checkpoint churn coverage; migration-wide campaign still required. |
-| Interrupted-process temporary residue. | Write-failure coverage exists; crash-residue retirement still required. |
+| Interrupted-process temporary residue. | Protected directory ownership, four process-exit stages, and native startup retirement pass; evidence below. |
 | Live networks. | Not migrated, revoked, or restarted by this work. |
 
 The workflow is not a claim that the full migration goal is complete. Android
@@ -88,7 +88,7 @@ activation and complete export/native-Nix artifacts remain separate goals.
 Nine core migration, six protected-artifact, and nine runtime workflow tests
 pass. Socket-contract and CLI-parsing regressions also pass. The isolated kernel
 route-cleanup and native migration tests pass when invoked explicitly.
-The full Rust workspace passes 1,805 tests, with 48 opt-in tests excluded.
+The full Rust workspace passes 1,811 tests, with 48 opt-in tests excluded.
 
 Nix `rust-test-sources` passes offline.
 Formatting and required correctness/suspicious/performance Clippy groups pass;
@@ -180,7 +180,7 @@ verifies that repeated reconciliation does not double-count a connection.
 | Transport | Isolated LAN discovery and authenticated TCP streams; not WAN, NAT, relay, or QUIC performance evidence. |
 | Restart | Kill/reap then service-managed transient socket cleanup; durable authority is untouched. |
 | Storage | Small-cohort authority stays below 64 KiB; this is not combined repeated authority/pairing churn proof. |
-| Durability | Restart works; power-loss and abandoned temporary-write cleanup remain separate acceptance checks. |
+| Durability | Restart and process-exit residue retirement pass; no simulated power-loss claim. |
 | Deployment | No user's live network or device was migrated, revoked, or restarted. |
 
 ## Pairing Artifact Retirement
@@ -227,3 +227,37 @@ unrelated lint warnings remain; no new retirement/migration warnings were added.
 
 See [Checkpoint Acceptance](membership-checkpoint-acceptance.md) for the full
 migration, storage-bound, and multi-daemon completion criteria.
+
+## Interrupted Write Ownership
+
+Source: `runtime/state_write_cleanup.rs`. Membership, migration-handoff, and
+pairing stores hold a shared directory lock through protected reads and atomic
+writes. The lock adds no persistent file or historical authority copy.
+
+| Boundary | Contract |
+| --- | --- |
+| Recognition | Exact `.<state filename>.<pid>.<nonce>` shape; canonical numeric suffixes only. |
+| Permission | Parent is not writable by group/others; candidate is an owner-only regular file owned by that directory's owner. |
+| Unsafe entries | Refuse symlinks, hardlinks, directories, special permissions, or foreign ownership; inspect instead of sweeping. |
+| Live writer | Directory lock prevents cleanup while a cooperating writer owns its temporary replacement. |
+| Authority | Never decode or recover a temporary copy; only the selected target file is authoritative. |
+| Retirement | Unlink recognized abandoned copies and sync the parent before returning ready state. |
+| Scope | Unrelated/malformed names and shared/symlinked parents are not swept. |
+
+### Verified Evidence
+
+| Test | Result |
+| --- | --- |
+| Four child-process exits | Before write, after write, after file sync, and after rename; uncommitted copies disappear, selected target remains unchanged or replaced as appropriate. |
+| Live writer | Concurrent cleanup waits until atomic replacement; the in-flight copy survives. |
+| Unsafe/scope inputs | Link, directory, permissive-file, malformed-name, and shared-parent checks pass. |
+| Repeated residue | 64 retirements across restrictive owner modes; one selected file remains. |
+| Native startup | A seeded pre-rename copy disappears before stale `C` completes resync; packet/DNS campaign still passes. |
+
+Directory locks serialize current cooperating stores, not network consensus or
+whole multi-file transactions. Never run older, non-cooperating writers against
+the same state paths. These tests model process termination, not power failure.
+
+```sh
+nix develop --offline -c cargo test --lib --locked --offline state_write_cleanup
+```

@@ -64,30 +64,22 @@ pub fn run() {
     // B is the only online member. C keeps its admission despite A's departure.
     drop(nodes[0].take());
     drop(nodes[2].take());
-    let before = authority_revision(&temp, "b");
-    let socket = socket_string(&temp, "b");
-    pair_cli_json(
-        "sole survivor removes creator",
-        &[
-            "membership",
-            "revoke",
-            &identities[0].peer_id,
-            "--socket",
-            &socket,
-            "--format",
-            "json",
-        ],
-    );
-    wait_checkpoint(&temp, "b", "participating", 2);
-    assert!(authority_revision(&temp, "b") > before);
+    remove_creator(&temp, &identities[0]);
     assert_authority(&temp, "b", &identities, &[1, 2]);
     assert_inventory(&temp, "b", &identities, &[1, 2]);
     assert_names(&nodes, &[1], &[1, 2]);
     assert_removed(&temp, node_pid(&nodes, 1), "b", &identities[0]);
     eprintln!("checkpoint_migration phase=sole_survivor active=2 removed_creator=pass");
 
+    // A pre-rename crash copy is not a backup or an alternative authority.
+    let residue = state_dir(&temp, "c").join(".membership-state.json.123.456");
+    write_private(&residue, &fs::read(authority_path(&temp, "c")).unwrap());
     nodes[2] = Some(start_node(&temp, 2, &identities[2]));
     wait_checkpoint_gate(&temp, "c");
+    assert!(
+        !residue.exists(),
+        "startup must retire abandoned write copies"
+    );
     ping(node_pid(&nodes, 2), "10.42.0.2", false);
     wait_checkpoint(&temp, "c", "participating", 2);
     assert_authority(&temp, "c", &identities, &[1, 2]);
@@ -462,6 +454,25 @@ fn wait_checkpoint(temp: &Path, role: &str, state: &str, members: usize) {
         lines.contains(&expected)
             && state_metric_count(lines, "checkpoint_active_members") == Some(members)
     });
+}
+
+fn remove_creator(temp: &Path, creator: &NodeIdentity) {
+    let before = authority_revision(temp, "b");
+    let socket = socket_string(temp, "b");
+    pair_cli_json(
+        "sole survivor removes creator",
+        &[
+            "membership",
+            "revoke",
+            &creator.peer_id,
+            "--socket",
+            &socket,
+            "--format",
+            "json",
+        ],
+    );
+    wait_checkpoint(temp, "b", "participating", 2);
+    assert!(authority_revision(temp, "b") > before);
 }
 
 fn wait_checkpoint_gate(temp: &Path, role: &str) {
