@@ -115,12 +115,19 @@ before calling the reported WAN failure resolved.
 | Lifecycle | Failure, cancel, expiry, completion, selection and restart covered |
 | Peerless code pairing | Linux namespace approval and traffic test passed |
 | Relayed file pairing | Linux namespace live pairing and traffic test passed |
-| Nix package and VM builds | Not rerun; reused the existing dev shell and Cargo artifacts to limit storage |
+| Nix package | Revision `67853219` built; release checks passed with 1,737 tests and 47 opt-in tests ignored |
+| Local NixOS deployment | Personal flake pin committed; system built and switched; both VPN daemons use the new package |
+| Existing network | Four validated runners peers; inventory preserved; ThinkPad overlay DNS and five-packet ping passed |
+| VM builds | Not rerun; tested namespace integration and local NixOS deployment instead |
 | External WAN acceptance | Outstanding; local tests do not establish public-relay reliability |
+
+The local VPN services restarted at 23:34:56 UTC on October 4. The NixOS switch
+succeeded and the Nix daemon kept its original process. No peer, key or relay
+configuration changes were needed.
 
 ### Fresh WAN Attempt
 
-1. Update the joiner's package to include the relay-ownership fix and restart its daemon.
+1. Update the joiner's package to revision `67853219` or a descendant and restart its daemon.
 2. Update the inviter as well so both journals include connection-closure causes.
 3. Open a new invitation and start the external join before its expiry.
 4. Verify the candidate, approve it, and confirm completion on both sides.
