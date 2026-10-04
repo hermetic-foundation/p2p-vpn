@@ -1,6 +1,6 @@
 //! Stateful production dispatch regressions, not physical network race measurements.
 
-use super::tests::{config_with_peer, membership_sync_test_node};
+use super::tests::{config_with_peer, membership_sync_test_node, test_pairing_state_path};
 use super::*;
 
 #[test]
@@ -301,6 +301,7 @@ struct EventFixture {
     configured_listeners: HashSet<ListenerId>,
     retired_listeners: HashSet<ListenerId>,
     pairing: CodePairingSessions,
+    pairing_store: Option<PairingStateStore>,
     pairing_tokens: PairingReplayTokens,
     packet_in_flight: PacketInFlight,
 }
@@ -329,6 +330,7 @@ impl EventFixture {
             configured_listeners: HashSet::new(),
             retired_listeners: HashSet::new(),
             pairing: CodePairingSessions::new(),
+            pairing_store: None,
             pairing_tokens: PairingReplayTokens::default(),
             packet_in_flight: PacketInFlight::new(1),
         }
@@ -389,7 +391,7 @@ impl EventFixture {
                 packet_plane_replay_windows_per_session: 1,
                 pairing_replay_tokens: &mut self.pairing_tokens,
                 code_pairing_sessions: &mut self.pairing,
-                pairing_state_store: None,
+                pairing_state_store: self.pairing_store.as_ref(),
                 checkpoint_pairing: None,
                 active_connections: &mut self.active_connections,
                 connection_epochs: &mut self.epochs,
@@ -493,8 +495,8 @@ async fn pairing_relay_establishment_bypasses_full_routing_pool_only_while_owned
 }
 
 #[tokio::test]
-async fn pairing_relay_carries_code_hello_with_a_full_routing_pool() {
-    tokio::time::timeout(Duration::from_secs(10), Box::pin(async {
+async fn pairing_relay_completes_code_pairing_with_a_full_routing_pool() {
+    tokio::time::timeout(Duration::from_secs(15), Box::pin(async {
         let mut relay = build_node(&HostConfig {
             identity: NodeIdentity::generate_ed25519().unwrap(),
             network_name: "lab".to_owned(),
@@ -536,10 +538,27 @@ async fn pairing_relay_carries_code_hello_with_a_full_routing_pool() {
             }
         }
         let inviter_peer = inviter.node.local_peer_id;
+        let mut joiner = EventFixture::new(Libp2pPeerId::random());
+        let joiner_peer = joiner.node.local_peer_id;
+        for (fixture, name) in [
+            (&mut inviter, "relay-code-inviter"),
+            (&mut joiner, "relay-code-joiner"),
+        ] {
+            let mut config = fixture.forwarder.config().clone();
+            config.peers.clear();
+            fixture.forwarder = Forwarder::from_config(&config).unwrap();
+            fixture.membership = OverlayMembership::from_config(&config).unwrap();
+            fixture.tun = TunRuntimeConfig::from_config(&config).unwrap();
+            fixture.pairing_store = Some(PairingStateStore::encrypted(
+                test_pairing_state_path(name),
+                &fixture.node.identity.private_key,
+                "lab",
+                &fixture.node.identity.peer_id,
+            ).unwrap());
+        }
         let now = Instant::now();
         let unix = current_unix_seconds_lossy();
         let open = inviter.pairing.open("lab", 600, unix, now).unwrap();
-        let mut joiner = EventFixture::new(Libp2pPeerId::random());
         for _ in 0..joiner.auto_relay.policy.max_reservations {
             joiner.auto_relay.accepted_reservation_peers.insert(Libp2pPeerId::random());
         }
@@ -557,35 +576,102 @@ async fn pairing_relay_carries_code_hello_with_a_full_routing_pool() {
             &joiner.metrics, now);
         assert!(joiner.pairing.uses_pairing_relay(relay_peer));
         let mut relayed_connection = false;
+        let mut pending_responses = 0;
+        let mut pending_poll_seen = false;
+        let mut approved = false;
+        let mut ticks = tokio::time::interval(Duration::from_millis(20));
         loop {
             tokio::select! {
+                _ = ticks.tick() => {
+                    drive_code_pairing_discovery(&mut joiner.node.swarm, &mut joiner.pairing,
+                        &joiner.node.identity, "lab", &joiner.node.discovery, &joiner.metrics);
+                }
                 _ = relay.swarm.select_next_some() => {}
-                event = inviter.node.swarm.select_next_some() => { inviter.dispatch(event).await; }
+                event = inviter.node.swarm.select_next_some() => {
+                    if matches!(&event,
+                        SwarmEvent::Behaviour(BehaviourEvent::PairingCode(request_response::Event::Message {
+                            message: Message::Request { request: PairingCodeRequest::Poll { .. }, .. }, ..
+                        }))) && !approved {
+                        pending_poll_seen = true;
+                    }
+                    inviter.dispatch(event).await;
+                }
                 event = joiner.node.swarm.select_next_some() => {
                     if let SwarmEvent::ConnectionEstablished { peer_id, ref endpoint, .. } = event
                         && peer_id == inviter_peer {
                         assert!(endpoint.is_relayed());
                         relayed_connection = true;
                     }
-                    let challenge = matches!(&event,
+                    if matches!(&event,
                         SwarmEvent::Behaviour(BehaviourEvent::PairingCode(request_response::Event::Message {
-                            peer, message: Message::Response { response: PairingCodeResponse::Challenge { .. }, .. }, ..
-                        })) if *peer == inviter_peer);
+                            peer, message: Message::Response { response: PairingCodeResponse::Pending { .. }, .. }, ..
+                        })) if *peer == inviter_peer) {
+                        pending_responses += 1;
+                    }
                     if let SwarmEvent::Behaviour(BehaviourEvent::PairingCode(request_response::Event::OutboundFailure { error, .. })) = &event {
-                        panic!("relay-backed code hello failed: {error}");
+                        panic!("relay-backed code pairing failed: {error}");
                     }
                     joiner.dispatch(event).await;
-                    if challenge { break; }
                 }
+            }
+            if !approved && pending_responses >= 2 {
+                assert!(pending_poll_seen, "must poll while approval is still pending");
+                assert!(joiner.pairing.uses_pairing_relay(relay_peer));
+                assert!(!joiner.membership.allows(inviter_peer));
+                assert!(!inviter.membership.allows(joiner_peer));
+                let PairingOpenStatus::AwaitingApproval { approval_id, joiner_peer: candidate, .. } =
+                    inviter.pairing.open_status(&open.operation_id).unwrap() else {
+                        panic!("inviter did not reach approval");
+                    };
+                assert_eq!(candidate, joiner_peer.to_string());
+                let mut promoted = None;
+                let response = handle_pair_rpc_request(
+                    &mut inviter.node.swarm,
+                    PairRpcRequest::PairApprove {
+                        operation_id: open.operation_id.clone(), approval_id,
+                        assigned_hostname: None, assigned_vpn_ip: None, granted_routes: Vec::new(),
+                    },
+                    &mut inviter.pairing, inviter.pairing_store.as_ref(),
+                    &mut inviter.forwarder, &mut inviter.membership, &mut inviter.tun,
+                    &mut PreconfiguredTunRoutes, &mut ControlCapabilities::local("lab", None, 1280),
+                    &inviter.node.identity, &mut inviter.pairing_tokens.code_approval,
+                    &mut promoted, &inviter.metrics, None,
+                );
+                let super::super::control_socket::PairRpcOutcome::Ok {
+                    result: PairRpcResult::ActionAccepted(status),
+                } = response.outcome else { panic!("approval failed: {response:?}"); };
+                assert_eq!(status.phase, PairRpcPhase::Completed);
+                assert_eq!(promoted, Some(joiner_peer));
+                approved = true;
+            }
+            if matches!(joiner.pairing.join_status(&join.operation_id).unwrap(), PairingJoinStatus::Completed) {
+                break;
             }
         }
         assert!(relayed_connection);
+        assert!(approved);
+        assert!(matches!(inviter.pairing.open_status(&open.operation_id).unwrap(), PairingOpenStatus::Completed));
+        assert!(joiner.membership.allows(inviter_peer));
+        assert!(inviter.membership.allows(joiner_peer));
         assert_eq!(joiner.routing.len(), KADEMLIA_ROUTING_PEER_CAPACITY);
         assert!(!joiner.membership.allows(relay_peer));
+        assert!(!inviter.membership.allows(relay_peer));
         assert!(!joiner.forwarder.is_configured_transport_peer(relay_peer));
-        joiner.pairing.cancel(&join.operation_id).unwrap();
+        assert!(!inviter.forwarder.is_configured_transport_peer(relay_peer));
         assert!(!joiner.pairing.uses_pairing_relay(relay_peer));
-    })).await.expect("relay-backed code hello timed out");
+        for fixture in [&inviter, &joiner] {
+            let store = fixture.pairing_store.as_ref().unwrap();
+            let restored = CodePairingSessions::restore_persisted(&store.load().unwrap().unwrap(),
+                "lab", current_unix_seconds_lossy(), Instant::now()).unwrap();
+            assert!(!restored.uses_pairing_relay(relay_peer));
+            if fixture.node.local_peer_id == inviter_peer {
+                assert!(matches!(restored.open_status(&open.operation_id).unwrap(), PairingOpenStatus::Completed));
+            } else {
+                assert!(matches!(restored.join_status(&join.operation_id).unwrap(), PairingJoinStatus::Completed));
+            }
+            std::fs::remove_dir_all(store.path().parent().unwrap()).unwrap();
+        }
+    })).await.expect("relay-backed code pairing timed out");
 }
 
 #[tokio::test]

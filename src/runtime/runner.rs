@@ -25078,7 +25078,7 @@ mod tests {
         assert!(!node.swarm.behaviour().pairing_mdns.is_enabled());
     }
 
-    fn test_pairing_state_path(name: &str) -> PathBuf {
+    pub(super) fn test_pairing_state_path(name: &str) -> PathBuf {
         let directory = std::env::temp_dir().join(format!(
             "p2p-vpn-runner-pairing-{}-{name}",
             std::process::id()

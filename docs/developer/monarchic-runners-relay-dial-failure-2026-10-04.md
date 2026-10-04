@@ -107,11 +107,11 @@ before calling the reported WAN failure resolved.
 
 | Check | Result |
 | --- | --- |
-| Rust suite | 1,737 passed; 47 opt-in tests ignored by the default run |
+| Rust workspace suite | 1,819 passed; 48 opt-in tests ignored, including the Android bridge and fixture crates |
 | Formatting | `cargo fmt -- --check` and included relay-test file passed |
-| Clippy | Correctness, suspicious and performance deny gates passed; existing warnings remain |
+| Clippy | Workspace correctness, suspicious and performance deny gates passed; non-deny warnings remain |
 | Full routing pool | Establishment and Identify retain only session-owned relays |
-| Live local relay | Code Hello/Challenge crosses a circuit with a full routing pool |
+| Live local relay | Peerless code pairing completes over a circuit with a full routing pool, including approval polling |
 | Lifecycle | Failure, cancel, expiry, completion, selection and restart covered |
 | Peerless code pairing | Linux namespace approval and traffic test passed |
 | Relayed file pairing | Linux namespace live pairing and traffic test passed |
@@ -124,6 +124,13 @@ before calling the reported WAN failure resolved.
 The local VPN services restarted at 23:34:56 UTC on October 4. The NixOS switch
 succeeded and the Nix daemon kept its original process. No peer, key or relay
 configuration changes were needed.
+
+The live circuit regression also verifies these boundaries:
+
+- Neither node authorizes the other before explicit approval.
+- Polling preserves the selected inviter's relay dependency.
+- Completion releases relay ownership without authorizing the relay.
+- Encrypted pairing state restores completion on both sides without relay ownership.
 
 ### Fresh WAN Attempt
 
