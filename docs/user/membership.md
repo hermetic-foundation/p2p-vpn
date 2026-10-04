@@ -82,6 +82,15 @@ This policy has no permanent owner or administrator account.
 A compromised active member can admit or revoke peers. Revoke that identity and
 rotate any shared membership key after recovering control from another member.
 
+## Checkpoint Migration Status
+
+Active-only checkpoints and explicit migration are under development.
+Upgrading or rebuilding an existing network does not migrate its membership
+state. Legacy networks still retain historical enforcement records on disk.
+
+Normal peer listings omit revoked devices. That does not prove historical
+records have been erased. No supported migration command is available yet.
+
 ## Automatic Convergence
 
 Membership records move through two authenticated paths:

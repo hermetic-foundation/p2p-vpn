@@ -18,6 +18,7 @@ Use these docs when changing, testing, or debugging `p2p-vpn`.
 | [Pairing Implementation](pairing.md) | Code PAKE, approval, durability, and proof commands. |
 | [Membership Convergence](membership.md) | Ownerless ledger, authorization, merge rules, paging, persistence, and routes. |
 | [Cooperative Checkpoints](membership-checkpoints.md) | Active-only protocol, authentication, fork selection, resync, and retention bounds. |
+| [Linux Checkpoint Migration](checkpoint-migration.md) | Signed migration seed, hostname preservation, ownership, and remaining integration. |
 | [Membership Checkpoint Acceptance](membership-checkpoint-acceptance.md) | In-progress compaction, accepted fork tradeoffs, and remaining verification. |
 | [DNS Architecture](dns.md) | Authenticated naming, resolver protocol, limits, and NixOS lifecycle. |
 | [Testing](testing.md) | Unit, Nix, namespace, and two-host tests. |

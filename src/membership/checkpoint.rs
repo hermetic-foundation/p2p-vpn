@@ -33,6 +33,8 @@ use super::{
 };
 use crate::{PeerId, config::RouteConfig, dns::canonical_dns_label, identity::NodeIdentity};
 
+pub mod migration;
+
 pub const COOPERATIVE_CHECKPOINT_VERSION: u8 = 2;
 pub const MAX_CHECKPOINT_MEMBERS: usize = 256;
 pub const MAX_CHECKPOINT_ROUTES: usize = 32;
