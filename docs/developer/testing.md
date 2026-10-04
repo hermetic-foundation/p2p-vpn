@@ -25,6 +25,32 @@ nix develop -c cargo test packet_plane
 nix develop -c cargo test overlay
 ```
 
+### Native Checkpoint Migration
+
+```sh
+nix develop --offline -c env TMPDIR=/tmp cargo test \
+  --test tun_namespace --locked --offline \
+  tun_namespace_checkpoint_migration_compacts_and_recovers \
+  -- --ignored --exact --nocapture
+```
+
+Run as the workspace user. Requires Linux user/mount/network/PID namespaces,
+`/dev/net/tun`, `ip`, `ping`, and `nsenter`; the Nix development shell supplies
+the command-line tools. The default orchestrator deadline is 240 seconds.
+
+| Check | Coverage |
+| --- | --- |
+| Migration | Native three-daemon CLI workflow, shared handoff, preserved active grants and names. |
+| Traffic | Real TUN ICMP in both directions and wire UDP DNS. |
+| Removal | Sole online survivor, creator removal, retained offline descendant, static-fallback rejection. |
+| Return | Gated stale catch-up, removed-member restart, survivor restart and restored packets/DNS. |
+
+The fixture has no public routing or access to live user networks. Successful
+runs remove generated files. `P2P_VPN_TUN_E2E_KEEP_TEMP=1` retains protected
+synthetic credentials for debugging; do not publish those files.
+
+See [Linux checkpoint migration](checkpoint-migration.md) for evidence and gaps.
+
 ## Controlled Idle Sampling
 
 Run as the workspace user, not through `sudo`. Requires Linux user, mount, PID,

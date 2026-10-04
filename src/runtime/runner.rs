@@ -1989,6 +1989,11 @@ where
                             ],
                         );
                     }
+                    // A connection opened behind the resync gate has no packet path yet.
+                    // Reinstall only live, non-retiring connections under selected authority.
+                    reconcile_checkpoint_connection_paths(
+                        &forwarder, &connection_epochs, &active_connections, &mut paths, &metrics,
+                    );
                     send_control_capabilities_to_connected_peers(&mut node.swarm, &forwarder, &local_capabilities, &metrics);
                 }
             }
@@ -21466,6 +21471,20 @@ fn record_path_established(
     change
 }
 
+fn reconcile_checkpoint_connection_paths(
+    forwarder: &Forwarder,
+    epochs: &ConnectionEpochs,
+    connections: &HashMap<(Libp2pPeerId, ConnectionId), ConnectedPoint>,
+    paths: &mut PathSet,
+    metrics: &RuntimeMetrics,
+) {
+    for ((peer, connection_id), endpoint) in connections {
+        if epochs.is_usable(*connection_id) {
+            record_path_established(paths, forwarder, metrics, *peer, *connection_id, endpoint);
+        }
+    }
+}
+
 fn record_path_closed(
     paths: &mut PathSet,
     forwarder: &Forwarder,
@@ -25344,6 +25363,113 @@ mod tests {
         fn drop(&mut self) {
             fs::remove_dir_all(&self.directory).unwrap();
         }
+    }
+
+    #[tokio::test]
+    async fn checkpoint_resync_reinstalls_only_usable_authorized_connection_paths() {
+        use crate::membership::checkpoint::MembershipChange;
+
+        let mut fixture = CheckpointApprovalFixture::new();
+        fixture.approve(false, false, &mut PreconfiguredTunRoutes);
+        let peer = fixture.approval.peer;
+        assert!(fixture.forwarder.is_configured_transport_peer(peer));
+        let Some(PersistedAuthority::Checkpoint(loaded)) = fixture
+            .checkpoint_store
+            .load_authority("lab", &fixture.local.peer_id, None, None)
+            .unwrap()
+        else {
+            panic!("checkpoint authority");
+        };
+        let anchor = loaded.credentials.anchor().clone();
+        let mut state = loaded.restore(&fixture.local.peer_id).unwrap();
+        let wall = current_unix_seconds_lossy();
+        let update = fixture
+            .forwarder
+            .prepare_checkpoint_update(&state, &anchor, wall)
+            .unwrap();
+        fixture.forwarder.commit_checkpoint_update(update).unwrap();
+
+        let ids = [1, 2, 3, 4].map(ConnectionId::new_unchecked);
+        let endpoint = ConnectedPoint::Listener {
+            local_addr: "/ip4/127.0.0.1/tcp/4001".parse().unwrap(),
+            send_back_addr: "/ip4/127.0.0.1/tcp/4002".parse().unwrap(),
+        };
+        let mut epochs = ConnectionEpochs::default();
+        epochs.record_started(ids[0]);
+        epochs.record_established(ids[0]);
+        epochs.advance();
+        for id in &ids[1..] {
+            epochs.record_started(*id);
+            epochs.record_established(*id);
+        }
+        epochs.mark_retiring(ids[1]);
+        let unknown = Libp2pPeerId::random();
+        let connections = HashMap::from([
+            ((peer, ids[0]), endpoint.clone()),
+            ((peer, ids[1]), endpoint.clone()),
+            ((peer, ids[2]), endpoint.clone()),
+            ((unknown, ids[3]), endpoint),
+        ]);
+        let mut paths = PathSet::new();
+        let metrics = RuntimeMetrics::default();
+        reconcile_checkpoint_connection_paths(
+            &fixture.forwarder,
+            &epochs,
+            &connections,
+            &mut paths,
+            &metrics,
+        );
+        assert_eq!(paths.candidates_for(PeerId::from_libp2p(peer)).count(), 0);
+
+        let now = Instant::now();
+        let interval = Duration::from_millis(1);
+        state.begin_resync(now, interval).unwrap();
+        state.finish_resync(now + interval, wall).unwrap();
+        let update = fixture
+            .forwarder
+            .prepare_checkpoint_update(&state, &anchor, wall)
+            .unwrap();
+        fixture.forwarder.commit_checkpoint_update(update).unwrap();
+        for _ in 0..2 {
+            reconcile_checkpoint_connection_paths(
+                &fixture.forwarder,
+                &epochs,
+                &connections,
+                &mut paths,
+                &metrics,
+            );
+            let candidates: Vec<_> = paths.candidates_for(PeerId::from_libp2p(peer)).collect();
+            assert_eq!(candidates.len(), 1);
+            assert_eq!(candidates[0].latest_connection_id, Some(ids[2]));
+            assert_eq!(candidates[0].established_connections, 1);
+            assert!(candidates[0].healthy);
+            assert_eq!(
+                paths.candidates_for(PeerId::from_libp2p(unknown)).count(),
+                0
+            );
+        }
+        let removal = state
+            .sign_mutation_at(
+                &fixture.local,
+                MembershipChange::RemoveMember(fixture.joiner.peer_id.clone()),
+                wall,
+            )
+            .unwrap();
+        state.apply_mutation_at(&removal, wall).unwrap();
+        let update = fixture
+            .forwarder
+            .prepare_checkpoint_update(&state, &anchor, wall)
+            .unwrap();
+        fixture.forwarder.commit_checkpoint_update(update).unwrap();
+        paths.forget_peer(PeerId::from_libp2p(peer));
+        reconcile_checkpoint_connection_paths(
+            &fixture.forwarder,
+            &epochs,
+            &connections,
+            &mut paths,
+            &metrics,
+        );
+        assert_eq!(paths.candidates_for(PeerId::from_libp2p(peer)).count(), 0);
     }
 
     #[tokio::test]

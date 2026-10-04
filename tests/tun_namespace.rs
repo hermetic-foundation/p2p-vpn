@@ -38,6 +38,8 @@ const CHILD_ENV: &str = "P2P_VPN_TUN_E2E_MODE";
 mod allocation_sample;
 #[path = "support/automatic_quic_recovery.rs"]
 mod automatic_quic_recovery;
+#[path = "support/checkpoint_migration.rs"]
+mod checkpoint_migration;
 #[path = "support/idle_counters.rs"]
 mod idle_counters;
 #[path = "support/idle_sample.rs"]
@@ -347,6 +349,17 @@ fn tun_namespace_ping_crosses_dht_discovered_overlay() {
 }
 
 #[test]
+#[ignore = "explicit checkpoint migration; requires isolated namespaces and real TUN"]
+fn tun_namespace_checkpoint_migration_compacts_and_recovers() {
+    match env::var(CHILD_ENV).as_deref() {
+        Ok("orchestrator") => checkpoint_migration::run(),
+        Ok("node") => checkpoint_migration::run_node(),
+        Ok("dns") => checkpoint_migration::run_dns_probe(),
+        _ => reexec_orchestrator(checkpoint_migration::TEST_NAME),
+    }
+}
+
+#[test]
 fn daemon_snapshot_capture_records_missing_control_sockets() {
     let temp_dir = env::temp_dir().join(format!(
         "p2p-vpn-daemon-snapshot-test-{}",
@@ -631,6 +644,7 @@ fn reexec_orchestrator(test_name: &str) {
     let default_timeout = if test_name == automatic_quic_recovery::TEST_NAME
         || test_name == automatic_quic_recovery::STARTUP_TEST_NAME
         || test_name == automatic_quic_recovery::MOVEMENT_TEST_NAME
+        || test_name == checkpoint_migration::TEST_NAME
     {
         Duration::from_secs(240)
     } else if test_name == lifecycle_churn::TEST_NAME {
@@ -671,6 +685,7 @@ fn reexec_orchestrator(test_name: &str) {
         || test_name == tcp_collision::TEST_NAME
         || sustained_traffic::is_test(test_name)
         || test_name == lifecycle_churn::TEST_NAME
+        || test_name == checkpoint_migration::TEST_NAME
     {
         eprint!("{}", String::from_utf8_lossy(&output.stderr));
     }

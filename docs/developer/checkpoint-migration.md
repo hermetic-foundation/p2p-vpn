@@ -3,8 +3,8 @@
 ## Status
 
 Migration acceptance is in progress. The signed seed, protected handoff owner,
-and serialized Linux command workflow are implemented. Rebuilding does not
-convert an existing version-2 membership authority.
+serialized Linux command workflow, and isolated native packet/DNS campaign are
+implemented. Rebuilding does not convert existing version-2 membership authority.
 
 ## Ownership
 
@@ -74,7 +74,7 @@ is restricted to the daemon-owned path and requires the expected fingerprint.
 
 | Item | Status |
 | --- | --- |
-| Isolated multi-daemon packet/DNS migration and offline catch-up. | Still required. |
+| Isolated multi-daemon packet/DNS migration and offline catch-up. | Native three-daemon campaign passes; evidence below. |
 | Superseded legacy pairing artifacts. | Startup, explicit installation, and periodic retirement implemented; focused evidence below. |
 | Combined storage bounds through repeated admission/removal cycles. | Existing checkpoint churn coverage; migration-wide campaign still required. |
 | Interrupted-process temporary residue. | Write-failure coverage exists; crash-residue retirement still required. |
@@ -86,18 +86,17 @@ activation and complete export/native-Nix artifacts remain separate goals.
 ## Focused Verification
 
 Nine core migration, six protected-artifact, and nine runtime workflow tests
-pass. Socket-contract and CLI-parsing regressions also pass. The full Rust
-workspace passes 1,804 tests, with 47 opt-in tests excluded. The isolated kernel
-route-cleanup test also passes when invoked explicitly.
+pass. Socket-contract and CLI-parsing regressions also pass. The isolated kernel
+route-cleanup and native migration tests pass when invoked explicitly.
+The full Rust workspace passes 1,805 tests, with 48 opt-in tests excluded.
 
 Nix `rust-test-sources` passes offline.
 Formatting and required correctness/suspicious/performance Clippy groups pass;
 existing unrelated non-fatal lint warnings remain.
 
 The offline package dry run succeeds but lists 1,377 uncached derivations. The
-full package build was not started. Unprivileged network namespaces are available
-for the remaining kernel/TUN campaign; this step creates no additional VM or
-Android build tree.
+full package build was not started. The native campaign uses unprivileged network
+namespaces; it creates no additional VM or Android build tree.
 
 ```sh
 nix develop --offline -c cargo test --lib --locked --offline \
@@ -122,10 +121,67 @@ nix develop --offline -c cargo test --lib --locked --offline \
 | Persistence | Failure before rename preserves legacy; uncertain visible replacement installs a gate; staged replay cannot roll back removal. |
 | Daemon | Local control migration gates packets/mutations, completes resync autonomously, and removes a peer from durable state and inventory. |
 
-The daemon uses fixture packet/route adapters, not real TUN. The cohort test
-validates authority installation, not peer-to-peer packet/DNS convergence.
+Those unit-level daemon tests use fixture packet/route adapters, not real TUN.
+The unit cohort test validates authority installation, not packet/DNS convergence.
 Existing formal verification assets were not found; executable regressions cover
 this step. Do not infer full migration acceptance from these passing layers.
+
+## Native Linux Campaign
+
+Source: `tests/support/checkpoint_migration.rs`. Three separate network namespaces
+run the native CLI daemon with real `pv0` TUN interfaces. A fourth identity is
+revoked in the synthetic legacy ledger before migration.
+
+```sh
+nix develop --offline -c env TMPDIR=/tmp cargo test \
+  --test tun_namespace --locked --offline \
+  tun_namespace_checkpoint_migration_compacts_and_recovers \
+  -- --ignored --exact --nocapture
+```
+
+| Phase | Required Evidence |
+| --- | --- |
+| Legacy baseline | ICMP in every direction, wire UDP DNS on each node, and a metric-bearing alias route. |
+| Explicit installation | One common protected handoff; matching fingerprints; preserved keys, roles, addresses, alias, metrics, and current names. |
+| Post-installation | Every active peer has a live supported path; fresh bidirectional packets and wire DNS pass. |
+| Sole survivor | `B` advances while `A` and `C` are stopped; removes creator `A` without removing offline descendant `C`. |
+| Offline catch-up | Stale `C` starts gated, denies packets, resyncs autonomously, then exchanges packets and DNS with `B`. |
+| Removed restart | Stale `A` resyncs to excluded state; unchanged static peers cannot restore its access. |
+| Survivor restart | `B` restarts gated and restores bidirectional packet/DNS service without authority fallback. |
+| Retained state | No removed roster identities, legacy history, inviter fields, obsolete labels, migration archive, or temporary files. |
+
+### Recorded Runs
+
+Three fresh-identity campaigns pass, including two after extracting the final
+path-reconciliation helper. Each completes in approximately 78 seconds.
+
+| Measurement | Result |
+| --- | --- |
+| Packet/DNS phases | Legacy, installed, offline catch-up, and survivor restart pass. |
+| Removal | Stale creator remains excluded; obsolete names and routes are absent. |
+| Final authority bytes per node | 3,001 through 3,043 bytes across the three runs. |
+| Workspace | 1,805 passing tests; 48 opt-in tests excluded from that command. |
+| Tooling | Formatting, required Clippy groups, and offline Nix source coverage pass. |
+
+### Path Recovery Regression
+
+A connection established during resync can be control-only. Once checkpoint
+selection commits forwarding authority, it must install a packet path for each
+still-live authorized connection; another admission event may never occur.
+
+The runner now reconciles these paths after selection. The focused regression
+rejects gated, unknown, removed, retiring, and obsolete-epoch connections and
+verifies that repeated reconciliation does not double-count a connection.
+
+### Scope
+
+| Boundary | Limitation |
+| --- | --- |
+| Transport | Isolated LAN discovery and authenticated TCP streams; not WAN, NAT, relay, or QUIC performance evidence. |
+| Restart | Kill/reap then service-managed transient socket cleanup; durable authority is untouched. |
+| Storage | Small-cohort authority stays below 64 KiB; this is not combined repeated authority/pairing churn proof. |
+| Durability | Restart works; power-loss and abandoned temporary-write cleanup remain separate acceptance checks. |
+| Deployment | No user's live network or device was migrated, revoked, or restarted. |
 
 ## Pairing Artifact Retirement
 
