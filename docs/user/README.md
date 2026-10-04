@@ -12,6 +12,7 @@ Use these docs when you want to run `p2p-vpn`.
 | [NixOS Module](nixos.md) | Start from one native Nix option and run managed instances. |
 | [Pairing](pairing.md) | Pair by code, approve a peer, and install native Nix grants. |
 | [Network Membership](membership.md) | Understand whole-overlay convergence, trust, routes, and recovery. |
+| [Checkpoint Migration](checkpoint-migration.md) | Explicitly convert an isolated Linux cohort; understand current acceptance limits. |
 | [Overlay DNS](dns.md) | Resolve authenticated members by short and canonical names. |
 | [Operations](operations.md) | Inspect a daemon, health-check it, and stop it. |
 | [Packet Transports](transports.md) | Understand path ordering, fallback, MTU, and diagnostics. |

@@ -18,6 +18,7 @@ use crate::membership::{
 };
 
 pub(crate) mod checkpoint;
+pub(crate) mod migration;
 
 const MEMBERSHIP_STATE_VERSION: u8 = 2;
 const LEGACY_MEMBERSHIP_STATE_VERSION: u8 = 1;
@@ -299,6 +300,7 @@ pub enum MembershipStateStoreError {
     CheckpointEnrollmentIncomplete,
     HostnameRollback,
     CheckpointDurabilityUncertain(io::Error),
+    MigrationDurabilityUncertain(io::Error),
     MissingParent,
     UnsafeParent(PathBuf),
     UnsafeFile(PathBuf),
@@ -346,6 +348,10 @@ impl std::fmt::Display for MembershipStateStoreError {
             Self::CheckpointDurabilityUncertain(error) => write!(
                 formatter,
                 "checkpoint replacement is visible but directory durability is unconfirmed; preserve the selected authority and retry: {error}",
+            ),
+            Self::MigrationDurabilityUncertain(error) => write!(
+                formatter,
+                "migration artifact is visible but directory durability is unconfirmed; retry the same artifact without installing authority: {error}",
             ),
             Self::MissingParent => formatter.write_str("membership state path has no parent"),
             Self::UnsafeParent(path) => write!(

@@ -89,7 +89,8 @@ Upgrading or rebuilding an existing network does not migrate its membership
 state. Legacy networks still retain historical enforcement records on disk.
 
 Normal peer listings omit revoked devices. That does not prove historical
-records have been erased. No supported migration command is available yet.
+records have been erased. An explicit Linux command workflow is now available;
+full acceptance remains in progress. See [Checkpoint Migration](checkpoint-migration.md).
 
 ## Automatic Convergence
 

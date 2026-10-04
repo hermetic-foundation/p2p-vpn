@@ -1425,7 +1425,7 @@ fn nonce() -> [u8; 32] {
     }
 }
 
-fn canonical_route(route: &RouteConfig) -> Result<String, CheckpointError> {
+pub(crate) fn canonical_route(route: &RouteConfig) -> Result<String, CheckpointError> {
     let prefix = route
         .prefix()
         .map_err(|_| CheckpointError::Invalid("invalid route prefix"))?;

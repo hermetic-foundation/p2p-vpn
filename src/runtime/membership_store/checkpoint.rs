@@ -283,7 +283,7 @@ impl MembershipStateStore {
         }
     }
 
-    fn validate_checkpoint_parent(&self) -> Result<(), MembershipStateStoreError> {
+    pub(super) fn validate_checkpoint_parent(&self) -> Result<(), MembershipStateStoreError> {
         use std::os::unix::fs::PermissionsExt as _;
 
         let parent = self
@@ -410,7 +410,7 @@ fn validate_checkpoint_length(length: usize) -> Result<(), MembershipStateStoreE
     }
 }
 
-fn sync_checkpoint_parent(parent: &std::path::Path) -> std::io::Result<()> {
+pub(super) fn sync_checkpoint_parent(parent: &std::path::Path) -> std::io::Result<()> {
     std::fs::File::open(parent)?.sync_all()
 }
 

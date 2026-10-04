@@ -28,7 +28,7 @@ the inspected Linux networks still use version-2 ledger state.
 | Identify | Preserve checkpoint-only catch-up and pending reply connections. | Do not classify them as routing infrastructure or overlay members. |
 | Joiner `Accepted` | Verify the transcript, persist transaction ownership, stage a gated authority, fetch current state, reconcile TUN, then finalize durably. | Cold reconnect and complete CLI/Android export workflows remain. |
 | Fresh formation | Explicit `PairOpen` validates fresh solo history, generates or preserves protected credentials, and persists version-3 authority gated for resync. | Existing legacy networks are not automatically migrated. |
-| Legacy migration | Signed active-only seeds preserve grants, selected policy, and current labels; recipients restore gated and sign their own names. | Daemon/CLI conversion, protected handoff, static-grant coverage, and atomic installation remain. |
+| Legacy migration | Protected common handoff and serialized `membership checkpoint` CLI/daemon workflow; preserve static grants and names, persist gated v3 before projection. | Multi-daemon packet/DNS migration, legacy pairing cleanup, and crash/storage campaign remain. |
 | Export / artifacts | Generic config import rejects checkpoint credentials; checkpoint RPC artifacts return `Unavailable`. | No unsafe legacy Nix plan; complete protected export remains. |
 
 The cancellation guard retains ownership during staged enrollment or gated
@@ -50,8 +50,9 @@ resync. RPC and TCP/Noise regressions pass; this is not deployed-network evidenc
 | Creator departure | Three real daemon loops deliver removal to two survivors; later survivor governance and injected route-cleanup retry pass. | Packet/route adapters are fixtures, not real TUN or deployed-node evidence. |
 | Handoff scheduling | Five tests verify recipient/in-flight bounds, fairness, fixed deadlines, retry limits, and forgotten payloads. | No deployed checkpoint-network completion claim. |
 | Fresh solo APIs | Eight tests cover empty/self-only versions 1/2, signature/scope/key/history rejection, routes, pins, isolated enrollment gates, and write-boundary recovery. | Normal daemon pairing is wired; migration, export, and deployment remain. |
-| Migration seed | Nine core regressions cover active-only transfer, descendant/grant/name preservation, shared scope, expiry, self-signing, gates, validation, and restart without staging proof. | No migration command, authority replacement, or multi-daemon deployment claim. |
-| Rust workspace | 1,776 tests pass; 47 opt-in tests excluded. Core, storage, forwarding, enrollment, both pairing roles, migration seeds, and discovery cleanup are covered. | Full VM/package/device checks remain. |
+| Migration seed | Nine core regressions cover active-only transfer, descendant/grant/name preservation, shared scope, expiry, self-signing, gates, validation, and restart without staging proof. | Not a multi-daemon deployment claim. |
+| Linux migration workflow | Six protected-store, nine runtime/cohort, socket-contract, and CLI tests cover explicit preparation/installation, static grants, gates, retirement, authority drift, and write-boundary recovery. | Packet/route adapters are fixtures; real multi-daemon packet/DNS migration and obsolete pairing cleanup remain. |
+| Rust workspace | 1,793 tests pass; 47 opt-in tests excluded. Core, storage, forwarding, enrollment, pairing, migration workflow, and discovery cleanup are covered. | Full VM/package/device checks remain. |
 | Durable checkpoint state | Version-3 authentication, legacy dispatch, rollback, failure/retry, and 128 durable churn cycles pass. | Automatic migration and a full crash campaign remain. |
 | Static analysis | Formatting and required correctness/suspicious/performance Clippy groups pass. | Existing non-fatal lint warnings remain. |
 | Android consumer | JVM unit tests and debug lint pass for revoked-local filtering and missing-local snapshots. | No new APK or physical-device checkpoint test. |

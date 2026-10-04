@@ -13,6 +13,7 @@ use tokio::{
 use crate::{
     network_peer::{NETWORK_PEER_LIST_SCHEMA_VERSION, NetworkPeerList, NetworkPeerSnapshot},
     runtime::dns::{DnsLookupType, MAX_DNS_CONTROL_LIST_LIMIT},
+    runtime::membership_migration::{MembershipMigrationRequest, MembershipMigrationStatus},
 };
 
 const STATUS_REQUEST: &[u8] = b"status\n";
@@ -25,6 +26,7 @@ const CAPABILITIES_REQUEST: &[u8] = b"capabilities\n";
 const NETWORK_PEERS_REQUEST: &[u8] = b"network-peers-v1\n";
 const MEMBERSHIP_RESIGN_REQUEST: &[u8] = b"membership-resign-v1\n";
 const MEMBERSHIP_REVOKE_PREFIX: &[u8] = b"membership-revoke-v1 ";
+const MEMBERSHIP_MIGRATION_PREFIX: &[u8] = b"membership-migration-v1 ";
 const SHUTDOWN_REQUEST: &[u8] = b"shutdown\n";
 const PAIR_RPC_FRAME_PREFIX: &str = "rpc-v1 ";
 const MAX_REQUEST_LEN: usize = 512;
@@ -522,6 +524,10 @@ pub enum RuntimeControlRequest {
         member_peer: Option<String>,
         respond_to: oneshot::Sender<Result<MembershipMutationResult, String>>,
     },
+    MembershipMigration {
+        request: MembershipMigrationRequest,
+        respond_to: oneshot::Sender<Result<MembershipMigrationStatus, String>>,
+    },
     Dns {
         request: DnsControlRequest,
         respond_to: oneshot::Sender<Vec<String>>,
@@ -637,6 +643,22 @@ impl RuntimeControlHandle {
         let (respond_to, response) = oneshot::channel();
         self.send(RuntimeControlRequest::MembershipRevoke {
             member_peer,
+            respond_to,
+        })
+        .await?;
+        response
+            .await
+            .map_err(|_| runtime_response_dropped())?
+            .map_err(io::Error::other)
+    }
+
+    pub async fn membership_migration(
+        &self,
+        request: MembershipMigrationRequest,
+    ) -> io::Result<MembershipMigrationStatus> {
+        let (respond_to, response) = oneshot::channel();
+        self.send(RuntimeControlRequest::MembershipMigration {
+            request,
             respond_to,
         })
         .await?;
@@ -813,6 +835,45 @@ async fn handle_connection(
     }
     if header == MEMBERSHIP_RESIGN_REQUEST {
         return handle_membership_mutation_connection(&mut stream, &tx, None).await;
+    }
+    if let Some(body) = header.strip_prefix(MEMBERSHIP_MIGRATION_PREFIX) {
+        let request = match serde_json::from_slice::<MembershipMigrationRequest>(body) {
+            Ok(request) => request,
+            Err(_) => {
+                stream
+                    .write_all(b"error invalid membership migration request\n")
+                    .await?;
+                return Ok(());
+            }
+        };
+        let (respond_to, response) = oneshot::channel();
+        tx.send(RuntimeControlRequest::MembershipMigration {
+            request,
+            respond_to,
+        })
+        .await
+        .map_err(|_| runtime_stopped())?;
+        match response.await.map_err(|_| runtime_response_dropped())? {
+            Ok(result) => {
+                let body = serde_json::to_string(&result).map_err(invalid_data)?;
+                if body.len() > MAX_RESPONSE_LEN.saturating_sub(4) {
+                    stream
+                        .write_all(b"error migration response exceeds size limit\n")
+                        .await?;
+                } else {
+                    stream
+                        .write_all(encode_line_response(&[body]).as_bytes())
+                        .await?;
+                }
+            }
+            Err(error) => {
+                let error = error.split_whitespace().collect::<Vec<_>>().join(" ");
+                stream
+                    .write_all(format!("error {error}\n").as_bytes())
+                    .await?;
+            }
+        }
+        return Ok(());
     }
     if let Some(encoded_peer) = header.strip_prefix(MEMBERSHIP_REVOKE_PREFIX) {
         let encoded_peer = encoded_peer.strip_suffix(b"\n").unwrap_or(encoded_peer);
@@ -1318,6 +1379,39 @@ pub async fn query_membership_resign(
     timeout: std::time::Duration,
 ) -> Result<MembershipMutationResult, QueryError> {
     query_membership_mutation(path, timeout, MEMBERSHIP_RESIGN_REQUEST).await
+}
+
+pub async fn query_membership_migration(
+    path: &Path,
+    timeout: std::time::Duration,
+    request: &MembershipMigrationRequest,
+) -> Result<MembershipMigrationStatus, QueryError> {
+    let mut bytes = MEMBERSHIP_MIGRATION_PREFIX.to_vec();
+    bytes.extend(
+        serde_json::to_vec(request)
+            .map_err(|error| QueryError::InvalidResponse(error.to_string()))?,
+    );
+    bytes.push(b'\n');
+    if bytes.len() > MAX_REQUEST_LEN {
+        return Err(QueryError::Io(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "migration request exceeds size limit",
+        )));
+    }
+    let lines = query_lines(path, timeout, &bytes).await?;
+    if lines.len() != 1 {
+        return Err(QueryError::InvalidResponse(
+            "migration response must contain one JSON summary".into(),
+        ));
+    }
+    let status: MembershipMigrationStatus = serde_json::from_str(&lines[0])
+        .map_err(|error| QueryError::InvalidResponse(error.to_string()))?;
+    if status.schema_version != 1 {
+        return Err(QueryError::InvalidResponse(
+            "unsupported membership migration schema".into(),
+        ));
+    }
+    Ok(status)
 }
 
 async fn query_membership_mutation(
@@ -1946,6 +2040,84 @@ mod tests {
             vec!["network shared".to_owned()]
         );
         responder.await.expect("responder");
+        drop(socket);
+    }
+
+    #[tokio::test]
+    async fn control_socket_migration_contract_is_bounded_strict_and_secret_free() {
+        use crate::runtime::membership_migration::MembershipMigrationPhase;
+        let path = test_socket_path("membership-migration");
+        let (socket, mut rx) = ControlSocket::bind(&path).unwrap();
+        let responder = tokio::spawn(async move {
+            let Some(RuntimeControlRequest::MembershipMigration {
+                request,
+                respond_to,
+            }) = rx.recv().await
+            else {
+                panic!("expected typed migration request");
+            };
+            assert_eq!(
+                request,
+                MembershipMigrationRequest::Install {
+                    accept_id: "a".repeat(64)
+                }
+            );
+            respond_to
+                .send(Ok(MembershipMigrationStatus {
+                    schema_version: 1,
+                    network_name: "lab".into(),
+                    phase: MembershipMigrationPhase::Installed,
+                    artifact_path: "/protected/membership-state.migration.json".into(),
+                    migration_id: Some("a".repeat(64)),
+                    expires_at_unix_seconds: Some(4_600),
+                    active_members: 2,
+                    current_hostnames: 1,
+                    route_grants: 0,
+                    publisher_peer: None,
+                }))
+                .unwrap();
+            rx
+        });
+        let status = query_membership_migration(
+            &path,
+            std::time::Duration::from_secs(1),
+            &MembershipMigrationRequest::Install {
+                accept_id: "a".repeat(64),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(status.active_members, 2);
+        assert!(
+            !serde_json::to_string(&status)
+                .unwrap()
+                .contains("capability_secret")
+        );
+        let mut rx = responder.await.unwrap();
+        let mut malformed = UnixStream::connect(&path).await.unwrap();
+        malformed.write_all(b"membership-migration-v1 {\"method\":\"inspect\",\"capability_secret\":\"forbidden\"}\n").await.unwrap();
+        let mut response = String::new();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            malformed.read_to_string(&mut response),
+        )
+        .await
+        .expect("malformed migration requests must fail before runtime dispatch")
+        .unwrap();
+        assert_eq!(response, "error invalid membership migration request\n");
+        assert!(rx.try_recv().is_err());
+        assert!(
+            query_membership_migration(
+                &path,
+                std::time::Duration::from_secs(1),
+                &MembershipMigrationRequest::Install {
+                    accept_id: "a".repeat(MAX_REQUEST_LEN)
+                }
+            )
+            .await
+            .is_err()
+        );
+        assert!(rx.try_recv().is_err());
         drop(socket);
     }
 

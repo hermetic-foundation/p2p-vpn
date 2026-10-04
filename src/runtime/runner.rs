@@ -1849,7 +1849,34 @@ where
     checkpoint_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut checkpoint_mutation_rate_limiter = GlobalRateLimiter::new(64, Instant::now());
     let mut next_checkpoint_sync_capabilities = Instant::now();
+    let mut next_migration_retirement = Instant::now();
     loop {
+        if Instant::now() >= next_migration_retirement {
+            next_migration_retirement = Instant::now() + Duration::from_secs(60);
+            if let Some(store) = membership_state_store.as_ref() {
+                match super::membership_migration::retire_due(
+                    store,
+                    &forwarder,
+                    &node.identity,
+                    current_unix_seconds_lossy(),
+                ) {
+                    Ok(true) => log_runtime_event(
+                        LogLevel::Info,
+                        "membership_migration_artifact_retired",
+                        &[],
+                    ),
+                    Ok(false) => {}
+                    Err(error) => log_runtime_event(
+                        LogLevel::Warn,
+                        "membership_migration_cleanup_pending",
+                        &[
+                            ("reason", &format!("{error:?}")),
+                            ("action", "inspect_protected_migration_artifact"),
+                        ],
+                    ),
+                }
+            }
+        }
         membership_record_syncs.reconcile_authorization(&forwarder, &metrics);
         checkpoint_discovery_retention.reconcile(
             checkpoint_runtime.as_ref(),
@@ -2439,6 +2466,65 @@ where
                         if respond_to.send(response).is_err() {
                             eprintln!("runtime network change response receiver dropped");
                         }
+                        runtime_data_priority.record_other();
+                        continue;
+                    }
+                    RuntimeControlRequest::MembershipMigration { request, respond_to } => {
+                        use super::membership_migration::{self, MembershipMigrationRequest};
+                        let mutation = matches!(request, MembershipMigrationRequest::Prepare { .. }
+                            | MembershipMigrationRequest::Install { .. });
+                        let installing = matches!(request, MembershipMigrationRequest::Install { .. });
+                        let pairing_busy = code_pairing_sessions.has_active_open()
+                            || code_pairing_sessions.active_join_code().is_some()
+                            || code_pairing_sessions.enrollments().any(|entry|
+                                entry.state != PairingEnrollmentState::Applied);
+                        let response = match membership_state_store.as_ref() {
+                            None => Err("migration requires protected membership-state storage".to_owned()),
+                            Some(_) if mutation && pairing_busy => Err(
+                                "finish or cancel pending pairing before migration".to_owned()),
+                            Some(store) => {
+                                let now = current_unix_seconds_lossy();
+                                let result = match request {
+                                    MembershipMigrationRequest::Prepare { .. } => membership_migration::prepare(
+                                        store, &forwarder, &node.identity, now),
+                                    MembershipMigrationRequest::Inspect { .. } => membership_migration::inspect(
+                                        store, &forwarder, &node.identity, now),
+                                    MembershipMigrationRequest::Install { accept_id } => membership_migration::install(
+                                        &mut checkpoint_runtime, store, &mut forwarder, &node.identity, &accept_id, now),
+                                    MembershipMigrationRequest::Cancel { accept_id } => membership_migration::cancel(
+                                        store, &forwarder, &accept_id),
+                                };
+                                if installing && checkpoint_runtime.is_none() {
+                                    // If a rename became visible but recovery failed, abort rather
+                                    // than retaining legacy authority in a checkpoint namespace.
+                                    checkpoint_runtime = load_checkpoint_runtime(Some(store), &mut forwarder,
+                                        &mut membership, &node.identity.peer_id, &metrics)?;
+                                }
+                                // Also refresh after an uncertain write: the new durable authority
+                                // may already be installed behind its resync gate.
+                                if let Some(checkpoint) = checkpoint_runtime.as_mut() {
+                                    membership.replace_from_forwarder(&forwarder)?;
+                                    membership.replace_checkpoint_sync_peers(checkpoint)?;
+                                    retry_checkpoint_tun_routes(checkpoint, &forwarder,
+                                        &mut tun_runtime, route_controller.as_mut());
+                                    local_capabilities = refreshed_local_capabilities(&local_capabilities, &forwarder);
+                                    checkpoint.decorate_capabilities(&mut local_capabilities)?;
+                                    reconcile_runtime_kademlia_scope(&mut node, &local_capabilities,
+                                        &previous_membership_tags, &mut kademlia_rendezvous_key,
+                                        &mut kademlia_lookup_keys, &mut kademlia_membership_records_key,
+                                        &mut kademlia_membership_record_lookup_keys);
+                                    refresh_dns_zone_if_needed(dns_runtime.as_ref(), &forwarder,
+                                        &mut dns_membership_revision, true);
+                                }
+                                result.map_err(|error| format!("{error:?}"))
+                            }
+                        };
+                        if let Ok(status) = &response {
+                            log_runtime_event(LogLevel::Info, "membership_migration_status",
+                                &[("phase", &format!("{:?}", status.phase)),
+                                    ("active_members", &status.active_members.to_string())]);
+                        }
+                        let _ = respond_to.send(response);
                         runtime_data_priority.record_other();
                         continue;
                     }
@@ -6307,6 +6393,10 @@ fn handle_runtime_control_request(
             if respond_to.send(peers).is_err() {
                 eprintln!("control socket peer snapshot response receiver dropped");
             }
+            None
+        }
+        RuntimeControlRequest::MembershipMigration { respond_to, .. } => {
+            let _ = respond_to.send(Err("membership migration is not initialized".to_owned()));
             None
         }
         RuntimeControlRequest::MembershipRevoke { respond_to, .. } => {

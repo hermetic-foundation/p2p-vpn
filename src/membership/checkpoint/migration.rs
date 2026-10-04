@@ -6,11 +6,11 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    AuthenticatedSnapshot, CheckpointError, CooperativeMembershipState, MAX_CHECKPOINT_MEMBERS,
-    MAX_SIGNATURE_BYTES, MAX_SNAPSHOT_OFFER_BYTES, NetworkCapability, RetainedCheckpointState,
-    SignedHostnameClaim, SnapshotPolicy, SnapshotPublisher, canonical_dns_label, encoded_bound,
-    evaluate_membership_ledger_at, field_bound, membership_trust_anchors, participation, portable,
-    sign, verify_signature,
+    AuthenticatedSnapshot, CheckpointError, CheckpointMember, CooperativeMembershipState,
+    MAX_CHECKPOINT_MEMBERS, MAX_SIGNATURE_BYTES, MAX_SNAPSHOT_OFFER_BYTES, NetworkCapability,
+    RetainedCheckpointState, SignedHostnameClaim, SnapshotPolicy, SnapshotPublisher,
+    canonical_dns_label, canonical_route, digest, encoded_bound, evaluate_membership_ledger_at,
+    field_bound, membership_trust_anchors, participation, portable, sign, verify_signature,
 };
 use crate::{
     hostname::{SignedHostnameRecord, merge_hostname_records, validate_hostname_record_history},
@@ -25,6 +25,14 @@ pub struct LegacyMigrationOptions<'a> {
     pub network_name: &'a str,
     pub records: &'a [SignedMembershipRecord],
     pub hostname_records: &'a [SignedHostnameRecord],
+    pub policy: SnapshotPolicy,
+}
+
+/// Current caller-authorized projection, including static addresses and grants.
+pub struct AuthorizedMigrationOptions<'a> {
+    pub network_name: &'a str,
+    pub members: Vec<CheckpointMember>,
+    pub hostnames: Vec<MigrationHostname>,
     pub policy: SnapshotPolicy,
 }
 
@@ -136,23 +144,57 @@ impl SignedLegacyMigrationSeed {
                     })
             })
             .collect();
-        let payload = LegacyMigrationPayload {
-            version: 1,
-            network_name: options.network_name.to_owned(),
-            issued_at_unix_seconds: now,
-            expires_at_unix_seconds: now
-                .checked_add(MIGRATION_SEED_LIFETIME_SECONDS)
-                .ok_or(CheckpointError::Invalid("migration expiry overflow"))?,
-            snapshot: state.snapshot().clone(),
-            hostnames,
-            publisher: SnapshotPublisher::from_identity(publisher)?,
-        };
-        let seed = Self {
-            signature: sign(publisher, MIGRATION_DOMAIN, &payload)?,
-            payload,
-        };
-        seed.verify_at(&state.capability, options.network_name, now)?;
-        Ok(seed)
+        sign_seed(&state, publisher, options.network_name, hostnames, now)
+    }
+
+    /// Only an explicit migration owner may authorize this projection. A public
+    /// seed signature alone is not evidence that these were the current grants.
+    pub fn prepare_authorized_at(
+        capability: NetworkCapability,
+        publisher: &NodeIdentity,
+        mut options: AuthorizedMigrationOptions<'_>,
+        now: u64,
+    ) -> Result<Self, CheckpointError> {
+        for member in &mut options.members {
+            if !member.active_at(now) {
+                return Err(CheckpointError::Invalid("expired migration member"));
+            }
+            member.incarnation = digest(
+                b"p2p-vpn migration incarnation v1\n",
+                &(capability.anchor(), &member.subject),
+            )?;
+            for route in &mut member.route_grants {
+                route.prefix = canonical_route(route)?;
+            }
+            member
+                .route_grants
+                .sort_by(|a, b| (&a.prefix, a.metric).cmp(&(&b.prefix, b.metric)));
+            member.route_grants.dedup();
+        }
+        options.hostnames.sort_by(|a, b| a.peer_id.cmp(&b.peer_id));
+        let state = CooperativeMembershipState::bootstrap_at(
+            capability,
+            publisher.peer_id.clone(),
+            options.members,
+            options.policy,
+            now,
+        )?;
+        if state.sync_state() != super::MembershipSyncState::Participating {
+            return Err(CheckpointError::NoParticipation);
+        }
+        sign_seed(
+            &state,
+            publisher,
+            options.network_name,
+            options.hostnames,
+            now,
+        )
+    }
+
+    /// Fingerprint the complete signed public seed, including its name plan.
+    pub fn migration_id(&self) -> Result<String, CheckpointError> {
+        let id = digest(b"p2p-vpn migration seed id v1\n", self)?;
+        Ok(id.iter().map(|byte| format!("{byte:02x}")).collect())
     }
 
     pub fn decode_at(
@@ -280,7 +322,33 @@ impl SignedLegacyMigrationSeed {
     }
 }
 
-fn validate_legacy_roles(
+fn sign_seed(
+    state: &CooperativeMembershipState,
+    publisher: &NodeIdentity,
+    network_name: &str,
+    hostnames: Vec<MigrationHostname>,
+    now: u64,
+) -> Result<SignedLegacyMigrationSeed, CheckpointError> {
+    let payload = LegacyMigrationPayload {
+        version: 1,
+        network_name: network_name.to_owned(),
+        issued_at_unix_seconds: now,
+        expires_at_unix_seconds: now
+            .checked_add(MIGRATION_SEED_LIFETIME_SECONDS)
+            .ok_or(CheckpointError::Invalid("migration expiry overflow"))?,
+        snapshot: state.snapshot().clone(),
+        hostnames,
+        publisher: SnapshotPublisher::from_identity(publisher)?,
+    };
+    let seed = SignedLegacyMigrationSeed {
+        signature: sign(publisher, MIGRATION_DOMAIN, &payload)?,
+        payload,
+    };
+    seed.verify_at(&state.capability, network_name, now)?;
+    Ok(seed)
+}
+
+pub(crate) fn validate_legacy_roles(
     records: &[SignedMembershipRecord],
     network_name: &str,
     now: u64,

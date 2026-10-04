@@ -64,10 +64,12 @@ use p2p_vpn::{
             PairRpcRejectionReason, PairRpcRequest, PairRpcRequestEnvelope,
             PairRpcResponseEnvelope, PairRpcResult, PairRpcRole, PairRpcRoute,
             PairRpcSignedMembershipRecord, query_dns_list, query_dns_resolve, query_dns_status,
-            query_membership_resign, query_membership_revoke, query_network_peers, query_pair_rpc,
+            query_membership_migration, query_membership_resign, query_membership_revoke,
+            query_network_peers, query_pair_rpc,
         },
         dns::{DnsLookupType, DnsRuntime, MAX_DNS_CONTROL_LIST_LIMIT},
         forward::session_id_for_peer,
+        membership_migration::MembershipMigrationRequest,
         p2p::{BehaviourEvent, HostConfig, build_node},
         packet_plane::{PACKET_PLANE_DATAGRAM_OVERHEAD_LEN, PACKET_PLANE_MAX_PAYLOAD_LEN},
         pairing_sessions::fresh_pairing_operation_id,
@@ -858,6 +860,11 @@ enum PairCommand {
 
 #[derive(Debug, Subcommand)]
 enum MembershipCommand {
+    /// Explicitly migrate a legacy Linux instance to checkpoint authority.
+    Checkpoint {
+        #[command(subcommand)]
+        command: CheckpointMigrationCommand,
+    },
     /// Revoke an active member from a running network.
     Revoke {
         member_peer: String,
@@ -868,6 +875,42 @@ enum MembershipCommand {
     },
     /// Revoke this daemon's own membership without affecting other members.
     Resign {
+        #[command(flatten)]
+        target: DaemonTarget,
+        #[arg(long, value_enum, default_value_t = DaemonViewFormat::Text)]
+        format: DaemonViewFormat,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum CheckpointMigrationCommand {
+    /// Prepare one protected one-hour artifact from current authority.
+    Prepare {
+        #[command(flatten)]
+        target: DaemonTarget,
+        #[arg(long, value_enum, default_value_t = DaemonViewFormat::Text)]
+        format: DaemonViewFormat,
+    },
+    /// Inspect public migration scope without printing credentials.
+    Inspect {
+        #[command(flatten)]
+        target: DaemonTarget,
+        #[arg(long, value_enum, default_value_t = DaemonViewFormat::Text)]
+        format: DaemonViewFormat,
+    },
+    /// Install the inspected artifact; packet authority stays gated until resync.
+    Install {
+        #[arg(long)]
+        accept_id: String,
+        #[command(flatten)]
+        target: DaemonTarget,
+        #[arg(long, value_enum, default_value_t = DaemonViewFormat::Text)]
+        format: DaemonViewFormat,
+    },
+    /// Erase only the prepared handoff artifact, not installed authority.
+    Cancel {
+        #[arg(long)]
+        accept_id: String,
         #[command(flatten)]
         target: DaemonTarget,
         #[arg(long, value_enum, default_value_t = DaemonViewFormat::Text)]
@@ -8346,6 +8389,9 @@ async fn dns_command(command: DnsCommand) -> Result<(), String> {
 
 async fn membership_command(command: MembershipCommand) -> Result<(), String> {
     let (target, member_peer, format) = match command {
+        MembershipCommand::Checkpoint { command } => {
+            return membership_checkpoint_command(command).await;
+        }
         MembershipCommand::Revoke {
             member_peer,
             target,
@@ -8383,6 +8429,66 @@ async fn membership_command(command: MembershipCommand) -> Result<(), String> {
             println!("member: {}", result.member_peer);
             println!("issuer: {}", result.issuer_peer);
             println!("version: {}:{}", result.membership_epoch, result.sequence);
+        }
+    }
+    Ok(())
+}
+
+async fn membership_checkpoint_command(command: CheckpointMigrationCommand) -> Result<(), String> {
+    let (request, target, format) = match command {
+        CheckpointMigrationCommand::Prepare { target, format } => {
+            (MembershipMigrationRequest::Prepare {}, target, format)
+        }
+        CheckpointMigrationCommand::Inspect { target, format } => {
+            (MembershipMigrationRequest::Inspect {}, target, format)
+        }
+        CheckpointMigrationCommand::Install {
+            accept_id,
+            target,
+            format,
+        } => (
+            MembershipMigrationRequest::Install { accept_id },
+            target,
+            format,
+        ),
+        CheckpointMigrationCommand::Cancel {
+            accept_id,
+            target,
+            format,
+        } => (
+            MembershipMigrationRequest::Cancel { accept_id },
+            target,
+            format,
+        ),
+    };
+    let (socket, timeout) = daemon_target(&target)?;
+    let result = query_membership_migration(&socket, timeout, &request)
+        .await
+        .map_err(|error| {
+            format!(
+                "membership checkpoint request failed through {}: {error:?}",
+                socket.display()
+            )
+        })?;
+    match format {
+        DaemonViewFormat::Json => println!(
+            "{}",
+            serde_json::to_string_pretty(&result)
+                .map_err(|error| format!("failed to encode migration summary: {error}"))?
+        ),
+        DaemonViewFormat::Text => {
+            println!("network: {}", result.network_name);
+            println!("phase: {:?}", result.phase);
+            println!("artifact: {}", result.artifact_path);
+            if let Some(id) = result.migration_id {
+                println!("migration-id: {id}");
+            }
+            if let Some(expiry) = result.expires_at_unix_seconds {
+                println!("expires-at: {expiry}");
+            }
+            println!("active-members: {}", result.active_members);
+            println!("current-hostnames: {}", result.current_hostnames);
+            println!("route-grants: {}", result.route_grants);
         }
     }
     Ok(())
@@ -16236,6 +16342,64 @@ mod tests {
             Some(PathBuf::from("/run/p2p-vpn-runners/control.sock"))
         );
         assert_eq!(format, DaemonViewFormat::Text);
+    }
+
+    #[test]
+    fn cli_checkpoint_migration_requires_acceptance_and_preserves_target_selection() {
+        for verb in ["prepare", "inspect"] {
+            let cli = Cli::try_parse_from([
+                "p2p-vpn",
+                "membership",
+                "checkpoint",
+                verb,
+                "--instance",
+                "lab",
+                "--format",
+                "json",
+            ])
+            .unwrap();
+            let Command::Membership {
+                command: MembershipCommand::Checkpoint { command },
+            } = cli.command
+            else {
+                panic!("checkpoint command");
+            };
+            let target = match command {
+                CheckpointMigrationCommand::Prepare { target, .. }
+                | CheckpointMigrationCommand::Inspect { target, .. } => target,
+                _ => panic!("read/preparation command"),
+            };
+            assert_eq!(target.instance.as_deref(), Some("lab"));
+        }
+        for verb in ["install", "cancel"] {
+            assert!(Cli::try_parse_from(["p2p-vpn", "membership", "checkpoint", verb]).is_err());
+            assert!(
+                Cli::try_parse_from([
+                    "p2p-vpn",
+                    "membership",
+                    "checkpoint",
+                    verb,
+                    "--accept-id",
+                    &"a".repeat(64),
+                    "--socket",
+                    "/tmp/fixture.sock"
+                ])
+                .is_ok()
+            );
+        }
+        assert!(
+            Cli::try_parse_from([
+                "p2p-vpn",
+                "membership",
+                "checkpoint",
+                "prepare",
+                "--instance",
+                "lab",
+                "--socket",
+                "/tmp/fixture.sock"
+            ])
+            .is_err()
+        );
     }
 
     #[test]
