@@ -2,8 +2,8 @@
 
 Online code pairing found the inviter through public discovery, but repeatedly
 failed to establish a relay connection. The joiner never reached an approval
-candidate or selected a transport. This report records observed failures; the
-cause of the cancellation is not established.
+candidate or selected a transport. The full journal exposed local routing-pool
+rejections; other handshake failures and closures remain unexplained.
 
 ## Environment and operation
 
@@ -65,6 +65,71 @@ sudo journalctl -u p2p-vpn-monarchic-runners.service \
 ```
 
 ## Investigation requested
+
+### Full Journal Findings
+
+Source: [unfiltered joiner journal](monarchic-runners-service-2026-10-04-1900-1930-utc.log).
+
+| Relay | Observed Failure |
+| --- | --- |
+| `144.76.30.57` | TCP transport handshake failed with EOF or reset. |
+| `83.173.236.99` | TCP transport handshake failed with EOF or reset. |
+| `135.181.230.175` | Connections established, then closed before circuit completion. |
+
+At 19:10:32 and 19:20:36 UTC, the joiner explicitly closed the third relay with
+`public_routing_connection_rejected reason=capacity close_requested=true`.
+At 19:20:36, the target circuit cancellation immediately follows that closure.
+
+This proves a local routing-capacity rejection path, not the cause of every
+closure. The earlier transport failures and other short-lived connections remain
+separate observations.
+
+### Pairing Relay Ownership
+
+- Snapshot relay dependencies from the addresses available to each pairing dial.
+- Bound dependencies to 64 distinct relays per tracked peer attempt.
+- Protect active attempt and selected-inviter relays from routing-pool rejection.
+- Retain their connections while the pairing operation owns them.
+- Release ownership on attempt failure, cancellation, expiry or completion.
+- Relearn dependencies after restart; do not persist transient route hints.
+- Preserve membership and route authorization independently of transport ownership.
+
+`connection_closed` now includes libp2p's `cause` for subsequent investigation.
+`none` means the event supplied no error; it is not proof of a remote refusal.
+
+### Acceptance Boundary
+
+Controlled regression tests must cover a full routing pool and ownership cleanup.
+A successful external WAN pairing through approval and completion is still required
+before calling the reported WAN failure resolved.
+
+### Local Verification
+
+| Check | Result |
+| --- | --- |
+| Rust suite | 1,737 passed; 47 opt-in tests ignored by the default run |
+| Formatting | `cargo fmt -- --check` and included relay-test file passed |
+| Clippy | Correctness, suspicious and performance deny gates passed; existing warnings remain |
+| Full routing pool | Establishment and Identify retain only session-owned relays |
+| Live local relay | Code Hello/Challenge crosses a circuit with a full routing pool |
+| Lifecycle | Failure, cancel, expiry, completion, selection and restart covered |
+| Peerless code pairing | Linux namespace approval and traffic test passed |
+| Relayed file pairing | Linux namespace live pairing and traffic test passed |
+| Nix package and VM builds | Not rerun; reused the existing dev shell and Cargo artifacts to limit storage |
+| External WAN acceptance | Outstanding; local tests do not establish public-relay reliability |
+
+### Fresh WAN Attempt
+
+1. Update the joiner's package to include the relay-ownership fix and restart its daemon.
+2. Update the inviter as well so both journals include connection-closure causes.
+3. Open a new invitation and start the external join before its expiry.
+4. Verify the candidate, approve it, and confirm completion on both sides.
+5. Capture both full journals for that UTC window if dialing still fails.
+
+Use the existing minimal configuration. Do not pin another public relay as a
+workaround: automatic discovery and circuit selection remain runtime responsibilities.
+
+### Original Follow-Up
 
 Trace where the relay client's response channel is dropped or cancelled during
 these circuit dials. Correlate joiner logs with the inviter's operation status

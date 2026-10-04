@@ -32,6 +32,7 @@ pub const MAX_CODE_PAIRING_PEER_ATTEMPTS: usize = MAX_CODE_PAIRING_TRACKED_PEERS
 pub const MAX_CODE_PAIRING_ATTEMPTS_PER_PEER: u16 = 16;
 pub const MAX_CODE_PAIRING_TOTAL_ATTEMPTS: u16 = 2_048;
 pub const MAX_PENDING_CODE_HELLOS: usize = 32;
+const MAX_CODE_PAIRING_RELAYS_PER_PEER: usize = 64;
 pub const MAX_INBOUND_CODE_SESSIONS: usize = 8;
 pub const CODE_PAIRING_POLL_INTERVAL: Duration = Duration::from_secs(1);
 pub const MAX_CODE_PAIRING_ENROLLMENTS: usize = 256;
@@ -285,11 +286,12 @@ struct JoinOperation {
     terminal: Option<TerminalStatus>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct PeerAttemptState {
     attempts: u16,
     in_flight: bool,
     next_attempt_at: Instant,
+    relay_peers: Vec<Libp2pPeerId>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1023,6 +1025,9 @@ impl CodePairingSessions {
         operation.pending_submission = None;
         operation.remote_approval = None;
         operation.completed = Some((offer, response));
+        for attempt in operation.peer_attempts.values_mut() {
+            attempt.relay_peers = Vec::new();
+        }
         self.clear_transient_handshakes(operation_id);
         Ok(())
     }
@@ -2460,6 +2465,7 @@ impl CodePairingSessions {
                 attempts: 0,
                 in_flight: false,
                 next_attempt_at: now,
+                relay_peers: Vec::new(),
             });
         let retry = state.attempts > 0;
         state.attempts = state.attempts.saturating_add(1);
@@ -2488,6 +2494,11 @@ impl CodePairingSessions {
             return false;
         }
         operation.selected_inviter = Some(peer);
+        for (candidate, attempt) in &mut operation.peer_attempts {
+            if *candidate != peer {
+                attempt.relay_peers = Vec::new();
+            }
+        }
         operation.selected_discovery = Some(discovery);
         operation.selected_transport = transport;
         true
@@ -2506,6 +2517,43 @@ impl CodePairingSessions {
             && transport.is_some()
         {
             operation.selected_transport = transport;
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn uses_pairing_relay(&self, relay: Libp2pPeerId) -> bool {
+        self.active_join().is_some_and(|join| {
+            join.peer_attempts.iter().any(|(peer, attempt)| {
+                join.selected_inviter
+                    .map_or(attempt.in_flight, |selected| selected == *peer)
+                    && attempt.relay_peers.contains(&relay)
+            })
+        })
+    }
+
+    pub(crate) fn record_pairing_relays(
+        &mut self,
+        peer: Libp2pPeerId,
+        relays: impl IntoIterator<Item = Libp2pPeerId>,
+    ) {
+        let Some(join) = self.active_join_mut() else {
+            return;
+        };
+        let selected = join.selected_inviter == Some(peer);
+        let Some(attempt) = join
+            .peer_attempts
+            .get_mut(&peer)
+            .filter(|attempt| attempt.in_flight || selected)
+        else {
+            return;
+        };
+        for relay in relays {
+            if attempt.relay_peers.len() == MAX_CODE_PAIRING_RELAYS_PER_PEER {
+                break;
+            }
+            if !attempt.relay_peers.contains(&relay) {
+                attempt.relay_peers.push(relay);
+            }
         }
     }
 
@@ -2768,6 +2816,7 @@ impl CodePairingSessions {
         operation.selected_inviter = None;
         if let Some(state) = operation.peer_attempts.get_mut(&peer) {
             state.in_flight = false;
+            state.relay_peers.clear();
             state.next_attempt_at =
                 now + code_pairing_retry_delay(&peer.to_bytes(), state.attempts);
         }
@@ -2904,6 +2953,7 @@ impl CodePairingSessions {
         };
         if let Some(state) = operation.peer_attempts.get_mut(&peer) {
             state.in_flight = false;
+            state.relay_peers = Vec::new();
             state.next_attempt_at =
                 now + code_pairing_retry_delay(&peer.to_bytes(), state.attempts);
         }
@@ -3039,6 +3089,9 @@ impl CodePairingSessions {
                 operation.remote_approval = None;
             }
             operation.terminal = Some(terminal);
+            for attempt in operation.peer_attempts.values_mut() {
+                attempt.relay_peers = Vec::new();
+            }
             self.clear_transient_handshakes(&operation_id);
         }
     }
@@ -4154,6 +4207,7 @@ fn restore_peer_attempts(
                     attempts: attempt.attempts,
                     in_flight: false,
                     next_attempt_at: resumed_at,
+                    relay_peers: Vec::new(),
                 },
             )
             .is_some()
@@ -4672,6 +4726,173 @@ mod tests {
             ),
             Err(CodePairingSessionError::Busy)
         ));
+    }
+
+    #[test]
+    fn pairing_relays_are_attempt_owned_bounded_and_not_membership_probes() {
+        let mut sessions = CodePairingSessions::new();
+        let now = Instant::now();
+        let inviter = peer(1);
+        let relay = peer(2);
+        sessions
+            .join(
+                "runners",
+                PairingCode::generate(),
+                None,
+                Vec::new(),
+                600,
+                1_000,
+                now,
+            )
+            .unwrap();
+        sessions.record_pairing_relays(inviter, [relay]);
+        assert!(!sessions.uses_pairing_relay(relay));
+        sessions.mark_peer_attempted(inviter, now).unwrap();
+        sessions.record_pairing_relays(inviter, [relay, relay]);
+        assert!(sessions.uses_pairing_relay(relay));
+        assert!(!sessions.allows_pairing_probe(relay));
+        let relays = (0..MAX_CODE_PAIRING_RELAYS_PER_PEER + 1)
+            .map(|_| Libp2pPeerId::random())
+            .collect::<Vec<_>>();
+        sessions.record_pairing_relays(inviter, relays.iter().copied());
+        assert_eq!(
+            sessions.join.as_ref().unwrap().peer_attempts[&inviter]
+                .relay_peers
+                .len(),
+            MAX_CODE_PAIRING_RELAYS_PER_PEER
+        );
+        assert!(!sessions.uses_pairing_relay(*relays.last().unwrap()));
+    }
+
+    #[test]
+    fn pairing_relay_ownership_ends_on_failure_cancel_expiry_and_completion() {
+        for outcome in [
+            "attempt_failure",
+            "cancel",
+            "expiry",
+            "join_failure",
+            "completion",
+        ] {
+            let mut sessions = CodePairingSessions::new();
+            let now = Instant::now();
+            let inviter = peer(1);
+            let relay = peer(2);
+            let started = sessions
+                .join(
+                    "runners",
+                    PairingCode::generate(),
+                    None,
+                    Vec::new(),
+                    600,
+                    1_000,
+                    now,
+                )
+                .unwrap();
+            sessions.mark_peer_attempted(inviter, now).unwrap();
+            sessions.record_pairing_relays(inviter, [relay]);
+            assert!(sessions.uses_pairing_relay(relay));
+            match outcome {
+                "attempt_failure" => {
+                    sessions.release_peer_attempt(&started.operation_id, inviter, now)
+                }
+                "cancel" => {
+                    sessions.cancel(&started.operation_id).unwrap();
+                }
+                "expiry" => {
+                    sessions.expire(1_601, now + Duration::from_secs(601));
+                }
+                "join_failure" => sessions.fail_join(&started.operation_id, "failed"),
+                "completion" => {
+                    sessions
+                        .complete_join(
+                            &started.operation_id,
+                            test_offer(inviter),
+                            test_response(inviter, peer(3)),
+                        )
+                        .unwrap();
+                }
+                _ => unreachable!(),
+            }
+            assert!(!sessions.uses_pairing_relay(relay), "{outcome}");
+        }
+    }
+
+    #[test]
+    fn selected_inviter_keeps_only_its_relays_until_pairing_finishes() {
+        let mut sessions = CodePairingSessions::new();
+        let now = Instant::now();
+        let inviter = peer(1);
+        let relay = peer(2);
+        let other = peer(3);
+        let other_relay = peer(4);
+        let started = sessions
+            .join(
+                "runners",
+                PairingCode::generate(),
+                None,
+                Vec::new(),
+                600,
+                1_000,
+                now,
+            )
+            .unwrap();
+        for (target, transport) in [(inviter, relay), (other, other_relay)] {
+            sessions.mark_peer_attempted(target, now).unwrap();
+            sessions.record_pairing_relays(target, [transport]);
+        }
+        assert!(sessions.select_inviter(
+            &started.operation_id,
+            inviter,
+            PairingDiscoveryStage::Public,
+            Some(PairingTransport::Relay)
+        ));
+        sessions
+            .join
+            .as_mut()
+            .unwrap()
+            .peer_attempts
+            .get_mut(&inviter)
+            .unwrap()
+            .in_flight = false;
+        assert!(sessions.uses_pairing_relay(relay));
+        assert!(!sessions.uses_pairing_relay(other_relay));
+        sessions.record_pairing_relays(inviter, [peer(5)]);
+        assert!(sessions.uses_pairing_relay(peer(5)));
+        sessions.cancel(&started.operation_id).unwrap();
+        assert!(!sessions.uses_pairing_relay(relay));
+    }
+
+    #[test]
+    fn pairing_relay_dependencies_are_not_restored_or_owned_by_an_open_invitation() {
+        let now = Instant::now();
+        let mut sessions = CodePairingSessions::new();
+        let inviter = peer(1);
+        let relay = peer(2);
+        let started = sessions
+            .join(
+                "runners",
+                PairingCode::generate(),
+                None,
+                Vec::new(),
+                600,
+                1_000,
+                now,
+            )
+            .unwrap();
+        sessions.mark_peer_attempted(inviter, now).unwrap();
+        sessions.record_pairing_relays(inviter, [relay]);
+        let restored = CodePairingSessions::restore_persisted(
+            &sessions.encode_persisted("runners").unwrap(),
+            "runners",
+            1_001,
+            now + Duration::from_secs(1),
+        )
+        .unwrap();
+        assert!(!restored.uses_pairing_relay(relay));
+        sessions.cancel(&started.operation_id).unwrap();
+        sessions.open("runners", 600, 1_001, now).unwrap();
+        assert!(sessions.allows_pairing_probe(relay));
+        assert!(!sessions.uses_pairing_relay(relay));
     }
 
     #[test]

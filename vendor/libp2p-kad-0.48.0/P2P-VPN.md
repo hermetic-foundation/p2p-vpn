@@ -221,6 +221,11 @@ stream tasks timed out before the swarm returned their upgrade callbacks.
 
 ## Runtime Observation
 
+`addresses_of_peer()` exposes the same routing-table and ongoing-query hints used
+by outbound dial address resolution. It starts no query or connection. p2p-vpn
+uses it to snapshot bounded relay dependencies before online pairing dials;
+the existing outbound resolution delegates to this method without changing order.
+
 | API | Meaning |
 | --- | --- |
 | `query_lifecycle_usage()` | Cumulative admitted, retired, completed, timed-out, and canceled query phases; request outcomes include retained and retired phases. |

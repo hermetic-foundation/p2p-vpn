@@ -285,6 +285,8 @@ struct EventFixture {
     node: P2pNode,
     forwarder: Forwarder,
     membership: OverlayMembership,
+    infrastructure: InfrastructurePeers,
+    routing: RoutingInfrastructurePeers,
     tun: TunRuntimeConfig,
     paths: PathSet,
     capabilities: PeerCapabilities,
@@ -311,6 +313,8 @@ impl EventFixture {
             node: membership_sync_test_node(identity),
             forwarder: Forwarder::from_config(&config).unwrap(),
             membership: OverlayMembership::from_config(&config).unwrap(),
+            infrastructure: InfrastructurePeers::default(),
+            routing: RoutingInfrastructurePeers::default(),
             tun: TunRuntimeConfig::from_config(&config).unwrap(),
             paths: PathSet::new(),
             capabilities: PeerCapabilities::default(),
@@ -349,8 +353,8 @@ impl EventFixture {
                 membership: &mut self.membership,
                 tun_runtime: &mut self.tun,
                 route_controller: routes,
-                infrastructure_peers: &mut InfrastructurePeers::default(),
-                routing_infrastructure_peers: &mut RoutingInfrastructurePeers::default(),
+                infrastructure_peers: &mut self.infrastructure,
+                routing_infrastructure_peers: &mut self.routing,
                 writer: &mut writer,
                 paths: &mut self.paths,
                 peer_capabilities: &mut self.capabilities,
@@ -415,6 +419,173 @@ fn relay_address(relay: Libp2pPeerId) -> Multiaddr {
     format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}")
         .parse()
         .unwrap()
+}
+
+#[tokio::test]
+async fn pairing_relay_establishment_bypasses_full_routing_pool_only_while_owned() {
+    for owned in [false, true] {
+        let relay = Libp2pPeerId::random();
+        let inviter = Libp2pPeerId::random();
+        let mut fixture = EventFixture::new(inviter);
+        for _ in 0..fixture.auto_relay.policy.max_reservations {
+            fixture
+                .auto_relay
+                .accepted_reservation_peers
+                .insert(Libp2pPeerId::random());
+        }
+        assert!(!fixture.auto_relay.should_discover_candidates());
+        let now = Instant::now();
+        let operation = fixture
+            .pairing
+            .join(
+                "lab",
+                crate::pairing_code::PairingCode::generate(),
+                None,
+                Vec::new(),
+                600,
+                current_unix_seconds_lossy(),
+                now,
+            )
+            .unwrap();
+        fixture.pairing.mark_peer_attempted(inviter, now).unwrap();
+        fixture.pairing.record_pairing_relays(inviter, [relay]);
+        if !owned {
+            fixture
+                .pairing
+                .release_peer_attempt(&operation.operation_id, inviter, now);
+        }
+        for _ in 0..KADEMLIA_ROUTING_PEER_CAPACITY {
+            assert_eq!(
+                fixture.routing.admit(Libp2pPeerId::random()),
+                RoutingInfrastructureAdmission::Admitted
+            );
+        }
+        fixture.backoff.bootstrap_peers.insert(relay);
+        fixture.backoff.suppressed_until = Some(now + Duration::from_mins(1));
+        let connection_id = ConnectionId::new_unchecked(700);
+        fixture.epochs.record_started(connection_id);
+        fixture
+            .dispatch(SwarmEvent::ConnectionEstablished {
+                peer_id: relay,
+                connection_id,
+                endpoint: ConnectedPoint::Dialer {
+                    address: "/ip4/135.181.230.175/tcp/4001".parse().unwrap(),
+                    role_override: libp2p::core::Endpoint::Dialer,
+                    port_use: libp2p::core::transport::PortUse::New,
+                },
+                num_established: std::num::NonZeroU32::new(1).unwrap(),
+                concurrent_dial_errors: None,
+                established_in: Duration::ZERO,
+            })
+            .await;
+        assert_eq!(fixture.backoff.suppresses(now), !owned);
+        assert_eq!(fixture.routing.len(), KADEMLIA_ROUTING_PEER_CAPACITY);
+        assert!(!fixture.membership.allows(relay));
+        assert!(!fixture.forwarder.is_configured_transport_peer(relay));
+        assert_eq!(
+            fixture
+                .paths
+                .candidates_for(PeerId::from_libp2p(relay))
+                .count(),
+            0
+        );
+    }
+}
+
+#[tokio::test]
+async fn pairing_relay_carries_code_hello_with_a_full_routing_pool() {
+    tokio::time::timeout(Duration::from_secs(10), Box::pin(async {
+        let mut relay = build_node(&HostConfig {
+            identity: NodeIdentity::generate_ed25519().unwrap(),
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: true,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig { mdns: false, dcutr: false, autonat: false,
+                ..DiscoveryConfig::default() },
+        }).unwrap();
+        let relay_address = loop {
+            if let SwarmEvent::NewListenAddr { address, .. } = relay.swarm.select_next_some().await {
+                break address;
+            }
+        };
+        relay.swarm.add_external_address(relay_address.clone());
+        let relay_peer = relay.local_peer_id;
+        let circuit = relay_address.with(Protocol::P2p(relay_peer)).with(Protocol::P2pCircuit);
+        let mut inviter = EventFixture::new(Libp2pPeerId::random());
+        // The inviter owns a reservation, but the joiner has no configured relay.
+        inviter.node.swarm.listen_on(circuit.clone()).unwrap();
+        loop {
+            tokio::select! {
+                _ = relay.swarm.select_next_some() => {}
+                event = inviter.node.swarm.select_next_some() => {
+                    if matches!(event, SwarmEvent::NewListenAddr { ref address, .. }
+                        if address.iter().any(|p| matches!(p, Protocol::P2pCircuit))) {
+                        break;
+                    }
+                }
+            }
+        }
+        let inviter_peer = inviter.node.local_peer_id;
+        let now = Instant::now();
+        let unix = current_unix_seconds_lossy();
+        let open = inviter.pairing.open("lab", 600, unix, now).unwrap();
+        let mut joiner = EventFixture::new(Libp2pPeerId::random());
+        for _ in 0..joiner.auto_relay.policy.max_reservations {
+            joiner.auto_relay.accepted_reservation_peers.insert(Libp2pPeerId::random());
+        }
+        assert!(!joiner.auto_relay.should_discover_candidates());
+        let join = joiner.pairing.join("lab", open.code.parse().unwrap(), None,
+            Vec::new(), 600, unix, now).unwrap();
+        public_pairing_kad_mut(joiner.node.swarm.behaviour_mut())
+            .add_address(&inviter_peer, circuit.with(Protocol::P2p(inviter_peer)));
+        for _ in 0..KADEMLIA_ROUTING_PEER_CAPACITY {
+            assert_eq!(joiner.routing.admit(Libp2pPeerId::random()),
+                RoutingInfrastructureAdmission::Admitted);
+        }
+        send_pairing_code_hello(&mut joiner.node.swarm, &mut joiner.pairing,
+            &joiner.node.identity, "lab", inviter_peer, PairingDiscoveryStage::Public,
+            &joiner.metrics, now);
+        assert!(joiner.pairing.uses_pairing_relay(relay_peer));
+        let mut relayed_connection = false;
+        loop {
+            tokio::select! {
+                _ = relay.swarm.select_next_some() => {}
+                event = inviter.node.swarm.select_next_some() => { inviter.dispatch(event).await; }
+                event = joiner.node.swarm.select_next_some() => {
+                    if let SwarmEvent::ConnectionEstablished { peer_id, ref endpoint, .. } = event
+                        && peer_id == inviter_peer {
+                        assert!(endpoint.is_relayed());
+                        relayed_connection = true;
+                    }
+                    let challenge = matches!(&event,
+                        SwarmEvent::Behaviour(BehaviourEvent::PairingCode(request_response::Event::Message {
+                            peer, message: Message::Response { response: PairingCodeResponse::Challenge { .. }, .. }, ..
+                        })) if *peer == inviter_peer);
+                    if let SwarmEvent::Behaviour(BehaviourEvent::PairingCode(request_response::Event::OutboundFailure { error, .. })) = &event {
+                        panic!("relay-backed code hello failed: {error}");
+                    }
+                    joiner.dispatch(event).await;
+                    if challenge { break; }
+                }
+            }
+        }
+        assert!(relayed_connection);
+        assert_eq!(joiner.routing.len(), KADEMLIA_ROUTING_PEER_CAPACITY);
+        assert!(!joiner.membership.allows(relay_peer));
+        assert!(!joiner.forwarder.is_configured_transport_peer(relay_peer));
+        joiner.pairing.cancel(&join.operation_id).unwrap();
+        assert!(!joiner.pairing.uses_pairing_relay(relay_peer));
+    })).await.expect("relay-backed code hello timed out");
 }
 
 #[tokio::test]

@@ -36,6 +36,26 @@ Existing signature, transport-identity, offer-expiry, and replay checks still
 decide whether file pairing succeeds. Active code sessions retain their own
 bounded lifecycle.
 
+### Relay Dependencies
+
+Code pairing snapshots relay identities from Kademlia's routing and query
+addresses before each Hello, Submit or Poll dial. A full public-routing pool
+must not close a relay while an active pairing attempt depends on it.
+
+| Ownership | Lifetime |
+| --- | --- |
+| Hello attempt | Until failure, inviter selection or operation termination |
+| Selected inviter | Through approval polling and completion |
+| Dependency limit | 64 distinct relays per tracked peer attempt |
+| Restart | Relearn addresses; transient relay dependencies are not persisted |
+
+- Connection establishment and Identify bypass ordinary routing-pool admission for owned relays.
+- Connection retention preserves owned relays; terminal cleanup releases ownership.
+- Transport ownership never grants membership, packet forwarding or route authority.
+
+`connection_closed` logs the libp2p closure `cause`. `none` means the event
+provided no error; it does not distinguish every local and remote close.
+
 ## Local RPC Methods
 
 | Method | State Transition |

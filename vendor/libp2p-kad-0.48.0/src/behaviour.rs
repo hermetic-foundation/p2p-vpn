@@ -792,6 +792,26 @@ where
         }
     }
 
+    /// Returns the addresses available to a dial, including ongoing query hints.
+    /// This does not start a dial or a discovery query.
+    pub fn addresses_of_peer(&mut self, peer_id: PeerId) -> Vec<Multiaddr> {
+        let key = kbucket::Key::from(peer_id);
+        let mut peer_addrs =
+            if let Some(kbucket::Entry::Present(mut entry, _)) = self.kbuckets.entry(&key) {
+                let addrs = entry.value().iter().cloned().collect::<Vec<_>>();
+                debug_assert!(!addrs.is_empty(), "Empty peer addresses in routing table.");
+                addrs
+            } else {
+                Vec::new()
+            };
+        for query in self.queries.iter() {
+            if let Some(addrs) = query.peers.addresses.get(&peer_id) {
+                peer_addrs.extend(addrs.iter().cloned())
+            }
+        }
+        peer_addrs
+    }
+
     /// Adds an application-configured address protected from churn eviction.
     /// Protected entries still count toward the address budget and can be
     /// explicitly removed with `remove_address` or `remove_peer`.
@@ -2776,30 +2796,7 @@ where
         _addresses: &[Multiaddr],
         _effective_role: Endpoint,
     ) -> Result<Vec<Multiaddr>, ConnectionDenied> {
-        let Some(peer_id) = maybe_peer else {
-            return Ok(vec![]);
-        };
-
-        // We should order addresses from decreasing likelihood of connectivity, so start with
-        // the addresses of that peer in the k-buckets.
-        let key = kbucket::Key::from(peer_id);
-        let mut peer_addrs =
-            if let Some(kbucket::Entry::Present(mut entry, _)) = self.kbuckets.entry(&key) {
-                let addrs = entry.value().iter().cloned().collect::<Vec<_>>();
-                debug_assert!(!addrs.is_empty(), "Empty peer addresses in routing table.");
-                addrs
-            } else {
-                Vec::new()
-            };
-
-        // We add to that a temporary list of addresses from the ongoing queries.
-        for query in self.queries.iter() {
-            if let Some(addrs) = query.peers.addresses.get(&peer_id) {
-                peer_addrs.extend(addrs.iter().cloned())
-            }
-        }
-
-        Ok(peer_addrs)
+        Ok(maybe_peer.map_or_else(Vec::new, |peer| self.addresses_of_peer(peer)))
     }
 
     fn on_connection_handler_event(

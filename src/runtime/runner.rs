@@ -2122,7 +2122,7 @@ where
             _ = timers.redial.tick() => {
                 let local_networks = local_interface_networks(&forwarder.config().interface.name);
                 node.swarm.behaviour_mut().connection_retention.retain_connections(|peer, connection| {
-                    should_retain_control_connection(
+                    code_pairing_sessions.uses_pairing_relay(peer) || should_retain_control_connection(
                         peer,
                         connection,
                         &forwarder,
@@ -3924,6 +3924,7 @@ fn drive_code_pairing_discovery(
     }
 
     if let Some(submission) = sessions.due_pending_submission(now) {
+        refresh_pairing_relay_dependencies(swarm, sessions, submission.peer);
         let request_id = swarm.behaviour_mut().pairing_code.send_request(
             &submission.peer,
             PairingCodeRequest::Submit {
@@ -3947,6 +3948,7 @@ fn drive_code_pairing_discovery(
     }
 
     if let Some(poll) = sessions.due_remote_poll(now) {
+        refresh_pairing_relay_dependencies(swarm, sessions, poll.peer);
         metrics.record_code_pairing_poll();
         let request_id = swarm.behaviour_mut().pairing_code.send_request(
             &poll.peer,
@@ -4158,6 +4160,7 @@ fn send_pairing_code_hello(
             return;
         }
     };
+    refresh_pairing_relay_dependencies(swarm, sessions, peer);
     let request_id = swarm.behaviour_mut().pairing_code.send_request(
         &peer,
         PairingCodeRequest::Hello {
@@ -4178,6 +4181,22 @@ fn send_pairing_code_hello(
     {
         sessions.release_peer_attempt(&operation_id, peer, now);
     }
+}
+
+fn refresh_pairing_relay_dependencies(
+    swarm: &mut Swarm<Behaviour>,
+    sessions: &mut CodePairingSessions,
+    peer: Libp2pPeerId,
+) {
+    let mut addresses = swarm.behaviour_mut().kad.addresses_of_peer(peer);
+    if let Some(pairing_kad) = swarm.behaviour_mut().pairing_kad.as_mut() {
+        addresses.extend(pairing_kad.addresses_of_peer(peer));
+    }
+    addresses.extend(sessions.lan_addresses(peer));
+    sessions.record_pairing_relays(
+        peer,
+        addresses.iter().filter_map(relayed_address_relay_peer),
+    );
 }
 
 impl RuntimeTimers {
@@ -13303,18 +13322,25 @@ async fn handle_swarm_event(
                     "overlay_connection_established",
                 );
             }
-            match authorize_established_connection(
-                context.membership,
-                context.infrastructure_peers,
-                context.routing_infrastructure_peers,
-                context.metrics,
-                peer_id,
-                matches!(endpoint, ConnectedPoint::Listener { .. })
-                    || context.code_pairing_sessions.allows_pairing_probe(peer_id),
-                context.auto_relay.should_discover_candidates(),
-                context.discovery.kademlia,
-                context.relay_server_enabled,
-            ) {
+            let authorization = if !context.membership.allows(peer_id)
+                && context.code_pairing_sessions.uses_pairing_relay(peer_id)
+            {
+                EstablishedConnectionAuthorization::InfrastructurePeer
+            } else {
+                authorize_established_connection(
+                    context.membership,
+                    context.infrastructure_peers,
+                    context.routing_infrastructure_peers,
+                    context.metrics,
+                    peer_id,
+                    matches!(endpoint, ConnectedPoint::Listener { .. })
+                        || context.code_pairing_sessions.allows_pairing_probe(peer_id),
+                    context.auto_relay.should_discover_candidates(),
+                    context.discovery.kademlia,
+                    context.relay_server_enabled,
+                )
+            };
+            match authorization {
                 EstablishedConnectionAuthorization::OverlayPeer => {
                     authorize_membership_probe_peer(
                         swarm,
@@ -13593,6 +13619,7 @@ async fn handle_swarm_event(
             connection_id,
             endpoint,
             num_established,
+            cause,
             ..
         } => {
             let retired_current_connection = context.connection_epochs.is_current(connection_id)
@@ -13738,6 +13765,12 @@ async fn handle_swarm_event(
                     ("connection_id", &connection_id.to_string()),
                     ("relayed", &endpoint.is_relayed().to_string()),
                     ("endpoint", &format!("{endpoint:?}")),
+                    (
+                        "cause",
+                        &cause
+                            .as_ref()
+                            .map_or_else(|| "none".to_owned(), |error| format!("{error:?}")),
+                    ),
                 ],
             );
         }
@@ -22170,7 +22203,9 @@ fn handle_behaviour_event(
             handle_identify_received(swarm, context, peer_id, connection_id, info);
         }
         BehaviourEvent::Identify(identify::Event::Error { peer_id, error, .. }) => {
-            if context.infrastructure_peers.contains(peer_id) && !context.membership.allows(peer_id)
+            if context.infrastructure_peers.contains(peer_id)
+                && !context.membership.allows(peer_id)
+                && !context.code_pairing_sessions.uses_pairing_relay(peer_id)
             {
                 reject_unconfirmed_infrastructure_peer(
                     swarm,
@@ -22183,6 +22218,7 @@ fn handle_behaviour_event(
             if context.routing_infrastructure_peers.remove(peer_id)
                 && !context.membership.allows(peer_id)
                 && !context.code_pairing_sessions.allows_pairing_probe(peer_id)
+                && !context.code_pairing_sessions.uses_pairing_relay(peer_id)
             {
                 log_runtime_event(
                     LogLevel::Warn,
@@ -22416,6 +22452,7 @@ fn handle_identify_received(
         || context
             .membership_probe_connections
             .allows_file_pairing_probe(peer_id, connection_id, &info.protocols, Instant::now());
+    let pairing_relay = context.code_pairing_sessions.uses_pairing_relay(peer_id);
     let identify_source = if context.membership.allows(peer_id) {
         DiscoveredPeerAddressSource::AuthenticatedPeerIdentify
     } else {
@@ -22461,7 +22498,15 @@ fn handle_identify_received(
     }
     // Pairing protocol support alone must not strand a routing peer in the
     // temporary membership-probe window; only an active code session owns it.
-    if !context.membership.allows(peer_id)
+    if pairing_relay {
+        context.routing_infrastructure_peers.remove(peer_id);
+        authorize_membership_probe_peer(
+            swarm,
+            context.membership_probe_connections,
+            peer_id,
+            "pairing_relay_owned",
+        );
+    } else if !context.membership.allows(peer_id)
         && !context.code_pairing_sessions.allows_pairing_probe(peer_id)
         && !checkpoint_sync
         && kademlia_routing
@@ -24656,6 +24701,7 @@ mod tests {
     use super::*;
 
     include!("runner/checkpoint_pairing_tests.rs");
+    include!("runner/pairing_relay_tests.rs");
 
     fn peer_id() -> Libp2pPeerId {
         Keypair::generate_ed25519().public().to_peer_id()
