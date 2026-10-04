@@ -23,6 +23,10 @@ The joining command used `pair join` with `--instance monarchic-runners
 
 ## Exact journal excerpt
 
+The [complete service log for 19:00-19:30 UTC](monarchic-runners-service-2026-10-04-1900-1930-utc.log)
+contains every journal entry in that window, without message filtering or
+redaction. It was exported with UTC timestamps and `short-iso` formatting.
+
 This entry is copied from the joiner's journal, rendered with
 `journalctl --utc -o short-iso`:
 
