@@ -2,9 +2,9 @@
 
 ## Status
 
-Migration acceptance is in progress. The signed seed, protected handoff owner,
-serialized Linux command workflow, and isolated native packet/DNS campaign are
-implemented. Rebuilding does not convert existing version-2 membership authority.
+Linux migration and durable-cleanup acceptance pass within the isolated scope
+below. This is not live deployment or production migration approval. Rebuilding
+does not convert existing version-2 membership authority.
 
 ## Ownership
 
@@ -70,25 +70,25 @@ replacement. `runtime::membership_migration` owns that guard. Local control RPC
 uses bounded, strict JSON requests and secret-free summaries. Artifact deletion
 is restricted to the daemon-owned path and requires the expected fingerprint.
 
-### Remaining Acceptance
+### Linux Acceptance
 
 | Item | Status |
 | --- | --- |
 | Isolated multi-daemon packet/DNS migration and offline catch-up. | Native three-daemon campaign passes; evidence below. |
 | Superseded legacy pairing artifacts. | Startup, explicit installation, and periodic retirement implemented; focused evidence below. |
-| Combined storage bounds through repeated admission/removal cycles. | Existing checkpoint churn coverage; migration-wide campaign still required. |
+| Combined storage bounds through repeated admission/removal cycles. | 128 signed RPC admissions/removals and nine protected owner restarts pass; measured evidence below. |
 | Interrupted-process temporary residue. | Protected directory ownership, four process-exit stages, and native startup retirement pass; evidence below. |
 | Live networks. | Not migrated, revoked, or restarted by this work. |
 
-The workflow is not a claim that the full migration goal is complete. Android
-activation and complete export/native-Nix artifacts remain separate goals.
+The Linux-only workflow meets this acceptance scope. Android activation and
+complete export/native-Nix artifacts remain separate goals.
 
 ## Focused Verification
 
 Nine core migration, six protected-artifact, and nine runtime workflow tests
 pass. Socket-contract and CLI-parsing regressions also pass. The isolated kernel
 route-cleanup and native migration tests pass when invoked explicitly.
-The full Rust workspace passes 1,811 tests, with 48 opt-in tests excluded.
+The full Rust workspace passes 1,812 tests, with 48 opt-in tests excluded.
 
 Nix `rust-test-sources` passes offline.
 Formatting and required correctness/suspicious/performance Clippy groups pass;
@@ -152,15 +152,16 @@ nix develop --offline -c env TMPDIR=/tmp cargo test \
 
 ### Recorded Runs
 
-Three fresh-identity campaigns pass, including two after extracting the final
-path-reconciliation helper. Each completes in approximately 78 seconds.
+Five fresh-identity campaigns pass. The first three verify path recovery;
+the last two also verify abandoned-copy retirement. Each completes in
+approximately 78 through 80 seconds.
 
 | Measurement | Result |
 | --- | --- |
 | Packet/DNS phases | Legacy, installed, offline catch-up, and survivor restart pass. |
 | Removal | Stale creator remains excluded; obsolete names and routes are absent. |
-| Final authority bytes per node | 3,001 through 3,043 bytes across the three runs. |
-| Workspace | 1,805 passing tests; 48 opt-in tests excluded from that command. |
+| Final authority bytes per node | 2,996 through 3,043 bytes across the five runs. |
+| Workspace | 1,812 passing tests; 48 opt-in tests excluded from that command. |
 | Tooling | Formatting, required Clippy groups, and offline Nix source coverage pass. |
 
 ### Path Recovery Regression
@@ -177,9 +178,9 @@ verifies that repeated reconciliation does not double-count a connection.
 
 | Boundary | Limitation |
 | --- | --- |
-| Transport | Isolated LAN discovery and authenticated TCP streams; not WAN, NAT, relay, or QUIC performance evidence. |
+| Transport | Isolated LAN discovery and authenticated TCP streams; not WAN, NAT, relay, or QUIC migration/performance evidence. |
 | Restart | Kill/reap then service-managed transient socket cleanup; durable authority is untouched. |
-| Storage | Small-cohort authority stays below 64 KiB; this is not combined repeated authority/pairing churn proof. |
+| Storage | Native small-cohort authority stays below 64 KiB; separate combined churn evidence follows. |
 | Durability | Restart and process-exit residue retirement pass; no simulated power-loss claim. |
 | Deployment | No user's live network or device was migrated, revoked, or restarted. |
 
@@ -261,3 +262,33 @@ the same state paths. These tests model process termination, not power failure.
 ```sh
 nix develop --offline -c cargo test --lib --locked --offline state_write_cleanup
 ```
+
+## Combined Durable Storage Campaign
+
+Source: the runner's `CheckpointApprovalFixture`. The campaign uses the ordinary
+inviter RPC handler, verifies signed checkpoint responses, invokes the normal
+revocation owner, and retires results against the same selected authority.
+
+```sh
+nix develop --offline -c cargo test --lib --locked --offline \
+  checkpoint_admission_removal_churn_bounds_combined_protected_storage \
+  -- --nocapture
+```
+
+| Check | Result |
+| --- | --- |
+| Distinct identities | 128 admissions/removals; active count returns from two to one each cycle. |
+| Restart | Eight owner restores during churn, plus one after expiry; restored authority gates before resync. |
+| Authority size | Maximum 1,235 bytes in the focused run; bounded relative to the steady active-roster baseline. |
+| Encrypted pairing sidecar | Maximum 12,829 bytes; opaque replay window remains under 64 KiB. |
+| Expiry | Sidecar falls to 283 bytes after the finite window; no replay tokens survive restore. |
+| Erasure | Every previously removed peer ID is absent from both authority and decrypted sidecar after each cycle. |
+| Files | Exactly two protected files; no backup, archive, or abandoned temporary copies. |
+
+Genesis has no parent digest. The steady-state baseline starts after the first
+committed removal and allows bounded digest/counter encoding variation, not
+historical member retention. Expiry uses an advanced test clock, not an hour wait.
+
+These are real signed/durable owners with fixture route controllers, not 128
+physical daemon deployments. The native namespace campaign independently proves
+packet, DNS, stale-return, and restart behavior using the same authority format.

@@ -2,9 +2,9 @@
 
 ## Status
 
-The explicit Linux command workflow is implemented. Full migration acceptance
-is still in progress; do not treat this as production migration approval.
-Rebuilding alone never converts an existing network.
+The explicit Linux workflow and isolated migration/cleanup tests pass. This is
+not production migration approval; Android and complete export/Nix pairing
+remain separate work. Rebuilding alone never converts an existing network.
 
 | Supported Here | Not Included |
 | --- | --- |

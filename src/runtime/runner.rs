@@ -25357,6 +25357,72 @@ mod tests {
                 }),
             )
         }
+
+        fn revoke_joiner_and_retire(&mut self, wall: u64) {
+            apply_checkpoint_membership_revocation(
+                self.checkpoint.as_mut().unwrap(),
+                &self.checkpoint_store,
+                &mut self.forwarder,
+                &mut self.membership,
+                &mut self.tun,
+                &mut PreconfiguredTunRoutes,
+                &mut self.capabilities,
+                &self.local,
+                Some(&self.joiner.peer_id),
+                &[],
+            )
+            .unwrap();
+            checkpoint_pairing::retire_artifacts(
+                self.checkpoint.as_ref().unwrap(),
+                &mut self.sessions,
+                Some(&self.pairing_store),
+                "lab",
+                wall,
+            )
+            .unwrap();
+        }
+
+        fn restart_checkpoint_owner(&mut self) {
+            let Some(PersistedAuthority::Checkpoint(loaded)) = self
+                .checkpoint_store
+                .load_authority("lab", &self.local.peer_id, None, None)
+                .unwrap()
+            else {
+                panic!("checkpoint authority");
+            };
+            let mut owner =
+                CheckpointRuntime::restore("lab".into(), &self.local.peer_id, *loaded).unwrap();
+            let wall = current_unix_seconds_lossy();
+            self.forwarder = Forwarder::from_checkpoint_config(
+                self.forwarder.config(),
+                owner.state(),
+                owner.anchor(),
+                wall,
+            )
+            .unwrap();
+            assert!(
+                !self
+                    .forwarder
+                    .is_configured_transport_peer(self.approval.peer)
+            );
+            let now = Instant::now();
+            owner.begin_resync(now).unwrap();
+            owner
+                .finish_due(
+                    &self.checkpoint_store,
+                    &mut self.forwarder,
+                    now + super::super::checkpoint_runtime::RESYNC_WINDOW,
+                    wall,
+                )
+                .unwrap();
+            self.membership
+                .replace_from_forwarder(&self.forwarder)
+                .unwrap();
+            self.capabilities = refreshed_local_capabilities(&self.capabilities, &self.forwarder);
+            owner.decorate_capabilities(&mut self.capabilities).unwrap();
+            self.checkpoint = Some(owner);
+            self.sessions = self.restored_sessions();
+        }
     }
 
     impl Drop for CheckpointApprovalFixture {
@@ -25540,6 +25606,101 @@ mod tests {
             panic!("checkpoint authority")
         };
         assert_eq!(loaded.retained.snapshot, *checkpoint.state().snapshot());
+    }
+
+    #[tokio::test]
+    async fn checkpoint_admission_removal_churn_bounds_combined_protected_storage() {
+        use crate::runtime::control_socket::PairRpcOutcome;
+
+        let mut fixture = CheckpointApprovalFixture::new();
+        let authority = fixture.directory.join("membership-state.json");
+        let mut baseline = None;
+        let mut removed = Vec::new();
+        let mut maximum_authority = 0;
+        let mut maximum_pairing = 0;
+        for cycle in 0..128 {
+            if cycle != 0 {
+                fixture.joiner = NodeIdentity::generate_ed25519().unwrap();
+                fixture.begin_repair();
+            }
+            let result = fixture.approve(false, false, &mut PreconfiguredTunRoutes);
+            assert!(
+                matches!(result.outcome, PairRpcOutcome::Ok { .. }),
+                "{result:?}"
+            );
+            let wall = current_unix_seconds_lossy();
+            let response = fixture
+                .sessions
+                .open_completion(&fixture.approval.operation_id)
+                .unwrap();
+            response
+                .verify_for_offer_at(&fixture.offer, &fixture.joiner, wall)
+                .unwrap();
+            assert!(response.payload.checkpoint.is_some());
+            assert!(fixture.membership.allows(fixture.approval.peer));
+            let state = fixture.checkpoint.as_ref().unwrap().state();
+            assert_eq!(state.snapshot().payload.members.len(), 2);
+
+            fixture.revoke_joiner_and_retire(wall);
+            removed.push(fixture.joiner.peer_id.clone());
+            assert!(!fixture.membership.allows(fixture.approval.peer));
+            assert!(
+                !fixture
+                    .forwarder
+                    .is_configured_transport_peer(fixture.approval.peer)
+            );
+            let state = fixture.checkpoint.as_ref().unwrap().state();
+            assert_eq!(state.snapshot().payload.members.len(), 1);
+            let authority_text = fs::read_to_string(&authority).unwrap();
+            let sidecar = fixture.pairing_store.load().unwrap().unwrap();
+            let sidecar_text = std::str::from_utf8(&sidecar).unwrap();
+            for peer in &removed {
+                assert!(
+                    !authority_text.contains(peer),
+                    "removed authority history retained"
+                );
+                assert!(
+                    !sidecar_text.contains(peer),
+                    "removed pairing history retained"
+                );
+            }
+            assert!(fixture.sessions.enrollments().next().is_none());
+            let authority_bytes = fs::metadata(&authority).unwrap().len();
+            let pairing_bytes = fs::metadata(fixture.pairing_store.path()).unwrap().len();
+            maximum_authority = maximum_authority.max(authority_bytes);
+            maximum_pairing = maximum_pairing.max(pairing_bytes);
+            // Genesis has no parent digest. Measure the steady single-member shape.
+            let baseline = *baseline.get_or_insert(authority_bytes);
+            assert!(authority_bytes <= baseline + 128);
+            assert!(pairing_bytes < 64 * 1024);
+            assert_eq!(fs::read_dir(&fixture.directory).unwrap().count(), 2);
+            if cycle % 16 == 15 {
+                fixture.restart_checkpoint_owner();
+                assert!(!fixture.membership.allows(fixture.approval.peer));
+            }
+        }
+        checkpoint_pairing::retire_artifacts(
+            fixture.checkpoint.as_ref().unwrap(),
+            &mut fixture.sessions,
+            Some(&fixture.pairing_store),
+            "lab",
+            current_unix_seconds_lossy() + 3_601,
+        )
+        .unwrap();
+        let expired_bytes = fs::metadata(fixture.pairing_store.path()).unwrap().len();
+        assert!(expired_bytes < 512);
+        fixture.restart_checkpoint_owner();
+        assert!(
+            fixture
+                .sessions
+                .active_replay_tokens(current_unix_seconds_lossy())
+                .next()
+                .is_none()
+        );
+        assert_eq!(fs::read_dir(&fixture.directory).unwrap().count(), 2);
+        eprintln!(
+            "checkpoint_combined_churn cycles=128 restarts=9 max_authority_bytes={maximum_authority} max_pairing_bytes={maximum_pairing} expired_pairing_bytes={expired_bytes}"
+        );
     }
 
     #[tokio::test]

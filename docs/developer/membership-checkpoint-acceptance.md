@@ -2,7 +2,9 @@
 
 ## Status
 
-Implementation in progress. This is an acceptance map, not a completion report.
+Overall integration remains in progress. Linux-only migration and durable-cleanup
+acceptance pass; Android activation and complete export/native-Nix artifacts
+remain separate workstreams.
 
 The peer-inventory cleanup is independent of durable checkpoint compaction.
 Neither hidden rows nor a fixed history limit proves that compaction is complete.
@@ -13,7 +15,8 @@ approval is wired to the checkpoint-aware pairing RPC for existing checkpoint st
 
 Ordinary fresh-solo `PairOpen` formation and joiner `Accepted` staging, resync,
 cancellation, and finalization are wired. Explicit Linux migration and its native
-packet/DNS campaign pass; crash/churn acceptance and export remain incomplete.
+packet/DNS, interrupted-write, and combined durable churn campaigns pass.
+Export and Android activation remain incomplete.
 Deploying the package does not convert existing authority;
 the inspected Linux networks still use version-2 ledger state.
 
@@ -29,7 +32,7 @@ the inspected Linux networks still use version-2 ledger state.
 | Identify | Preserve checkpoint-only catch-up and pending reply connections. | Do not classify them as routing infrastructure or overlay members. |
 | Joiner `Accepted` | Verify the transcript, persist transaction ownership, stage a gated authority, fetch current state, reconcile TUN, then finalize durably. | Cold reconnect and complete CLI/Android export workflows remain. |
 | Fresh formation | Explicit `PairOpen` validates fresh solo history, generates or preserves protected credentials, and persists version-3 authority gated for resync. | Existing legacy networks are not automatically migrated. |
-| Legacy migration | Protected common handoff and serialized `membership checkpoint` workflow; native three-daemon packet/DNS migration and offline catch-up pass. | Combined authority/pairing churn remains. |
+| Legacy migration | Protected common handoff, native three-daemon packet/DNS migration, offline catch-up, and durable cleanup pass. | Live conversion needs separate approval; Android/export are separate goals. |
 | Export / artifacts | Generic config import rejects checkpoint credentials; checkpoint RPC artifacts return `Unavailable`. | No unsafe legacy Nix plan; complete protected export remains. |
 
 The cancellation guard retains ownership during staged enrollment or gated
@@ -55,10 +58,11 @@ resync. RPC and TCP/Noise regressions pass; this is not deployed-network evidenc
 | Linux migration workflow | Six protected-store, nine runtime/cohort, socket-contract, and CLI tests cover explicit installation, static grants, gates, retirement, authority drift, and write-boundary recovery. | These unit packet/route adapters are fixtures; native evidence is separate below. |
 | Native Linux migration | Three native daemons, real TUN packets, wire DNS, common installation, sole-survivor removal, stale catch-up, excluded restart, and survivor restart pass. | LAN/TCP only; no live network migration or power-loss claim. |
 | Checkpoint path recovery | Resync installs paths for usable authorized connections; unknown, gated, removed, stale-epoch, and retiring connections stay ineligible. | Does not establish WAN or QUIC performance. |
-| Pairing proof retirement | Eleven regressions and encrypted 512-identity churn pass; legacy completed proofs retire on installation and restart. | Combined authority/pairing churn remains. |
+| Pairing proof retirement | Eleven regressions and encrypted 512-identity churn pass; legacy completed proofs retire on installation and restart. | Complete export/Android consumers remain separate workstreams. |
+| Combined protected storage | 128 verified signed RPC admissions/removals, nine owner restores, identity erasure, two-file retention, and finite-window expiry pass. | Route controller is a fixture; native packet/DNS evidence is separate. |
 | Interrupted-write residue | Six regressions cover four process-exit stages, live-writer exclusion, unsafe-entry rejection, scoped cleanup, and 64 repeated retirements; native startup removes a seeded copy. | No power-loss or concurrent older-writer claim. |
-| Rust workspace | 1,811 tests pass; 48 opt-in tests excluded. Native migration is run separately. | Full VM/package/device checks remain. |
-| Durable checkpoint state | Version-3 authentication, legacy dispatch, rollback, failure/retry, and 128 durable churn cycles pass. | Explicit migration is implemented; full crash campaign remains. |
+| Rust workspace | 1,812 tests pass; 48 opt-in tests excluded. Native migration is run separately. | Full VM/package/device checks remain. |
+| Durable checkpoint state | Version-3 authentication, rollback, injected write boundaries, process-exit cleanup, and separate/combined churn pass. | No power-loss or concurrent older-writer claim. |
 | Static analysis | Formatting and required correctness/suspicious/performance Clippy groups pass. | Existing non-fatal lint warnings remain. |
 | Android consumer | JVM unit tests and debug lint pass for revoked-local filtering and missing-local snapshots. | No new APK or physical-device checkpoint test. |
 | Nix source coverage | Offline `rust-test-sources` check passes with the new modules. | Full package/VM rebuilds were not run for this slice. |
@@ -271,7 +275,7 @@ membership file.
 | Static dial references, address protection, and both DHTs | Wired cleanup removes absent overlay peers, owned address/legacy values, and scoped provider records. | Preserve returning roster members, public infrastructure, and bounded control-only owners; migration-era scopes remain part of migration review. |
 | Recovery queries, dial backoff, and LAN-first state | Wired cleanup cancels owned queries and removes absent-peer backoff and LAN-first state; unrelated queries survive. | Extend fixture evidence to cold reconnect and deployed convergence. |
 | Connection, request, and rate-limit owners | Existing disconnect, completion, and timeout cleanup applies. | Verify checkpoint removal and pending-reply expiry across all owners. |
-| Pairing transcripts, receipts, and completion state | Installed checkpoint owners retire legacy proofs and missing/changed-incarnation results durably; unresolved transaction ownership survives. | Combine primary authority and encrypted sidecar churn. |
+| Pairing transcripts, receipts, and completion state | Installed checkpoint owners retire legacy proofs and missing/changed-incarnation results durably; unresolved transaction ownership survives; combined churn passes. | Complete protected export and Android profile ownership remain separate. |
 | Android profiles and presentation | Revoked rows are filtered; checkpoint enrollment and sync/loss UI remain incomplete. | Verify protected restart, profile cleanup, and discarded-change presentation. |
 
 Temporary catch-up, reply, and departure ownership is not permanent revocation
@@ -286,7 +290,7 @@ stale declarative peers must still remain unauthorized.
 | Workstream | Required Deliverables | Status |
 | --- | --- | --- |
 | Cooperative core | Singleton snapshots, canonical rank, scoped authentication, resync gate, active-only authorization, bounded churn tests. | Implemented; 30 core tests pass. |
-| Durable state | Atomic persistence, crash boundaries, migration, metadata cleanup, bounded retention. | Explicit migration, process-exit cleanup, and separate store/churn tests pass; combined churn acceptance remains. |
+| Durable state | Atomic persistence, crash boundaries, migration, metadata cleanup, bounded retention. | Linux migration, process-exit cleanup, and combined storage churn meet the documented scope; no power-loss claim. |
 | Runtime and wire | Version negotiation, sync, branch selection, pairing/departure, route/DNS/discovery cleanup. | Native migration, cold restart, and packet/DNS catch-up pass; export/artifacts and full cleanup remain. |
 | User surfaces | Linux/Android sync and loss status, minimal provenance, structured instructions. | Linux aggregate status and inventories tested; Android sync/loss UI and activation workflow remain. |
 | End-to-end proof | Multi-daemon forks/offline return, restart, churn, CLI/Android/NixOS contracts. | Real paging and three-daemon fixtures pass; departure intermittency and deployed multi-node evidence remain. |
