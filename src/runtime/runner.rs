@@ -1605,6 +1605,22 @@ where
             current_unix_seconds_lossy(),
         )?;
     }
+    if let Some(owner) = &checkpoint_runtime {
+        checkpoint_pairing::retire_artifacts(
+            owner,
+            &mut code_pairing_sessions,
+            pairing_state_store.as_ref(),
+            &node.network_name,
+            current_unix_seconds_lossy(),
+        )?;
+        // Restore may already have pruned expired tickets/tokens; erase their durable
+        // copies as well before reporting startup ready.
+        persist_code_pairing_sessions(
+            pairing_state_store.as_ref(),
+            &code_pairing_sessions,
+            &node.network_name,
+        )?;
+    }
     if checkpoint_runtime.is_none() {
         reconcile_persisted_pairing_enrollments(
             &mut node.swarm,
@@ -2354,6 +2370,13 @@ where
                     &discovery,
                     &metrics,
                 );
+                if let Some(owner) = &checkpoint_runtime
+                    && checkpoint_pairing::retire_artifacts(owner, &mut code_pairing_sessions,
+                        pairing_state_store.as_ref(), &node.network_name, now_unix_seconds).is_err()
+                {
+                    log_runtime_event(LogLevel::Warn, "checkpoint_pairing_retirement_pending",
+                        &[("action", "retry_automatically")]);
+                }
                 if let Err(error) = persist_code_pairing_sessions(
                     pairing_state_store.as_ref(),
                     &code_pairing_sessions,
@@ -2476,6 +2499,7 @@ where
                         let installing = matches!(request, MembershipMigrationRequest::Install { .. });
                         let pairing_busy = code_pairing_sessions.has_active_open()
                             || code_pairing_sessions.active_join_code().is_some()
+                            || code_pairing_sessions.checkpoint_completion_uncertain()
                             || code_pairing_sessions.enrollments().any(|entry|
                                 entry.state != PairingEnrollmentState::Applied);
                         let response = match membership_state_store.as_ref() {
@@ -2484,7 +2508,7 @@ where
                                 "finish or cancel pending pairing before migration".to_owned()),
                             Some(store) => {
                                 let now = current_unix_seconds_lossy();
-                                let result = match request {
+                                let mut result = match request {
                                     MembershipMigrationRequest::Prepare { .. } => membership_migration::prepare(
                                         store, &forwarder, &node.identity, now),
                                     MembershipMigrationRequest::Inspect { .. } => membership_migration::inspect(
@@ -2503,6 +2527,16 @@ where
                                 // Also refresh after an uncertain write: the new durable authority
                                 // may already be installed behind its resync gate.
                                 if let Some(checkpoint) = checkpoint_runtime.as_mut() {
+                                    if checkpoint_pairing::retire_artifacts(checkpoint,
+                                        &mut code_pairing_sessions, pairing_state_store.as_ref(),
+                                        &node.network_name, now).is_err()
+                                    {
+                                        if let Ok(status) = &mut result {
+                                            status.phase = membership_migration::MembershipMigrationPhase::CleanupPending;
+                                        }
+                                        log_runtime_event(LogLevel::Warn, "checkpoint_pairing_retirement_pending",
+                                            &[("action", "retry_automatically")]);
+                                    }
                                     membership.replace_from_forwarder(&forwarder)?;
                                     membership.replace_checkpoint_sync_peers(checkpoint)?;
                                     retry_checkpoint_tun_routes(checkpoint, &forwarder,

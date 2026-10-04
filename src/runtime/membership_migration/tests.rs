@@ -1,3 +1,13 @@
+use super::super::{
+    control_socket::{RuntimeControlHandle, runtime_control_channel},
+    pairing_sessions::{
+        CodePairingSessions, PairingEnrollment, PairingEnrollmentPreparation,
+        PairingEnrollmentRole, PendingApproval,
+    },
+    pairing_store::PairingStateStore,
+    runner::{PreconfiguredTunRoutes, RuntimePlatform, run_config_until_with_runtime_platform},
+    tun::{PacketIo, PacketRead, PacketWrite},
+};
 use super::*;
 use crate::{
     config::Config,
@@ -493,11 +503,175 @@ fn replayed_handoff_never_rolls_back_newer_installed_removal() {
 
 #[tokio::test]
 async fn daemon_migrates_via_control_then_resyncs_and_compacts_removed_member() {
-    use super::super::{
-        control_socket::runtime_control_channel,
-        runner::{PreconfiguredTunRoutes, RuntimePlatform, run_config_until_with_runtime_platform},
-        tun::{PacketIo, PacketRead, PacketWrite},
-    };
+    let fixture_owner = Fixture::new("daemon");
+    let fixture = &fixture_owner;
+    let (pairing_store, pairing, enrollment) = prepared_migration_pairing(fixture);
+    let pairing_store = &pairing_store;
+    let enrollment = &enrollment;
+    with_migration_daemon(fixture, |control| async move {
+        let prepared = control
+            .membership_migration(MembershipMigrationRequest::Prepare {})
+            .await
+            .unwrap();
+        assert_eq!(prepared.active_members, 2);
+        let installed = control
+            .membership_migration(MembershipMigrationRequest::Install {
+                accept_id: prepared.migration_id.unwrap(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(installed.phase, MembershipMigrationPhase::Installed);
+        let compacted = pairing_store.load().unwrap().unwrap();
+        let compacted_text = String::from_utf8_lossy(&compacted);
+        assert!(!compacted_text.contains(&fixture.peer.peer_id));
+        assert!(!compacted_text.contains(&enrollment.response.signature));
+        assert!(!compacted_text.contains("issuer_peer"));
+        assert!(control.network_peers().await.unwrap().peers.is_empty());
+        assert!(
+            control
+                .revoke_member(Some(fixture.peer.peer_id.clone()))
+                .await
+                .is_err()
+        );
+        wait_for_migration_participation(&control).await;
+        assert_eq!(control.network_peers().await.unwrap().peers.len(), 2);
+        control
+            .revoke_member(Some(fixture.peer.peer_id.clone()))
+            .await
+            .unwrap();
+        assert_eq!(control.network_peers().await.unwrap().peers.len(), 1);
+        assert!(!String::from_utf8_lossy(&fixture.bytes()).contains(&fixture.peer.peer_id));
+        let status = control
+            .membership_migration(MembershipMigrationRequest::Inspect {})
+            .await
+            .unwrap();
+        assert_eq!(status.phase, MembershipMigrationPhase::Installed);
+        assert_eq!(status.active_members, 1);
+        assert_eq!(fs::read_dir(&fixture.directory).unwrap().count(), 2);
+    })
+    .await;
+    // A stale sidecar restored by an interrupted deployment must not restore legacy
+    // authority, and its obsolete proof must disappear before readiness on restart.
+    pairing_store
+        .save(&pairing.encode_persisted("lab").unwrap())
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&pairing_store.load().unwrap().unwrap()).contains("issuer_peer")
+    );
+    with_migration_daemon(fixture, |control| async move {
+        control.state().await.unwrap();
+        let compacted = pairing_store.load().unwrap().unwrap();
+        assert!(!String::from_utf8_lossy(&compacted).contains(&fixture.peer.peer_id));
+        wait_for_migration_participation(&control).await;
+        assert_eq!(control.network_peers().await.unwrap().peers.len(), 1);
+        assert!(!String::from_utf8_lossy(&fixture.bytes()).contains(&fixture.peer.peer_id));
+        assert_eq!(fs::read_dir(&fixture.directory).unwrap().count(), 2);
+    })
+    .await;
+}
+
+async fn wait_for_migration_participation(control: &RuntimeControlHandle) {
+    while !control
+        .state()
+        .await
+        .unwrap()
+        .contains(&"checkpoint_sync_state participating".to_owned())
+    {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+}
+
+fn prepared_migration_pairing(
+    fixture: &Fixture,
+) -> (PairingStateStore, CodePairingSessions, PairingEnrollment) {
+    let store = PairingStateStore::encrypted(
+        fixture.directory.join("pairing-state"),
+        &fixture.identity.private_key,
+        "lab",
+        &fixture.identity.peer_id,
+    )
+    .unwrap();
+    let offer = crate::pairing::export_code_pairing_offer_at(
+        fixture.forwarder.config(),
+        crate::pairing::PairingOfferOptions::default(),
+        NOW,
+    )
+    .unwrap();
+    let response = crate::pairing::build_pairing_response_at(
+        fixture.forwarder.config(),
+        &offer,
+        crate::pairing::PairingResponseOptions {
+            joiner_peer: fixture.peer.peer_id.clone(),
+            assigned_vpn_ip: None,
+            membership_key: None,
+            member_records: fixture.forwarder.member_records().to_vec(),
+            expires_in_seconds: 600,
+        },
+        NOW,
+    )
+    .unwrap();
+    let mut pairing = CodePairingSessions::new();
+    let opened = pairing
+        .open("lab", 600, NOW, std::time::Instant::now())
+        .unwrap();
+    let operation_id = opened.operation_id;
+    let mut request = crate::pairing::build_pairing_request_at(
+        &offer,
+        crate::pairing::PairingRequestOptions {
+            identity: fixture.peer.clone(),
+            requested_vpn_ip: None,
+            requested_routes: vec![],
+        },
+        NOW,
+    )
+    .unwrap();
+    request.code_authentication = Some(crate::pairing::PairingCodeAuthentication {
+        locator: opened
+            .code
+            .parse::<crate::pairing_code::PairingCode>()
+            .unwrap()
+            .locator("lab")
+            .unwrap(),
+        confirmation: STANDARD.encode([7; 32]),
+    });
+    let approval = PendingApproval::new(
+        operation_id.clone(),
+        fixture.peer.peer_id.parse().unwrap(),
+        NOW + 600,
+        request,
+    )
+    .unwrap();
+    let approval_id = approval.approval_id.clone();
+    let transcript_sha256 = approval.transcript_sha256.clone();
+    pairing.set_pending_approval(approval).unwrap();
+    let enrollment = pairing
+        .prepare_enrollment(
+            "lab",
+            PairingEnrollmentPreparation {
+                operation_id: operation_id.clone(),
+                role: PairingEnrollmentRole::Inviter,
+                approval_id: Some(approval_id),
+                offer: Some(offer),
+                response,
+                transcript_sha256,
+                membership_key_preconfigured: None,
+            },
+        )
+        .unwrap()
+        .clone();
+    pairing.recover_prepared_open("lab", &enrollment).unwrap();
+    pairing.mark_enrollment_applied(&operation_id).unwrap();
+    store
+        .save(&pairing.encode_persisted("lab").unwrap())
+        .unwrap();
+    (store, pairing, enrollment)
+}
+
+async fn with_migration_daemon<F, Fut>(fixture: &Fixture, assertion: F)
+where
+    F: FnOnce(RuntimeControlHandle) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
     struct EmptyPackets;
     impl PacketRead for EmptyPackets {
         fn read_packet(&mut self, _: &mut [u8]) -> io::Result<usize> {
@@ -509,7 +683,6 @@ async fn daemon_migrates_via_control_then_resyncs_and_compacts_removed_member() 
             Ok(packet.len())
         }
     }
-    let fixture = Fixture::new("daemon");
     let mut config = fixture.forwarder.config().clone();
     config.network.listen_addresses.clear();
     config.network.discovery = crate::config::DiscoveryConfig {
@@ -534,56 +707,14 @@ async fn daemon_migrates_via_control_then_resyncs_and_compacts_removed_member() 
         platform,
         None,
         None,
-        None,
+        Some(fixture.directory.join("pairing-state")),
         Some(fixture.directory.join("membership-state.json")),
         std::future::pending(),
     ));
-    let deadline = tokio::time::timeout(std::time::Duration::from_secs(35), async {
-        let prepared = control
-            .membership_migration(MembershipMigrationRequest::Prepare {})
-            .await
-            .unwrap();
-        assert_eq!(prepared.active_members, 2);
-        let installed = control
-            .membership_migration(MembershipMigrationRequest::Install {
-                accept_id: prepared.migration_id.unwrap(),
-            })
-            .await
-            .unwrap();
-        assert_eq!(installed.phase, MembershipMigrationPhase::Installed);
-        assert!(control.network_peers().await.unwrap().peers.is_empty());
-        assert!(
-            control
-                .revoke_member(Some(fixture.peer.peer_id.clone()))
-                .await
-                .is_err()
-        );
-        loop {
-            if control
-                .state()
-                .await
-                .unwrap()
-                .contains(&"checkpoint_sync_state participating".to_owned())
-            {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        }
-        assert_eq!(control.network_peers().await.unwrap().peers.len(), 2);
-        control
-            .revoke_member(Some(fixture.peer.peer_id.clone()))
-            .await
-            .unwrap();
-        assert_eq!(control.network_peers().await.unwrap().peers.len(), 1);
-        assert!(!String::from_utf8_lossy(&fixture.bytes()).contains(&fixture.peer.peer_id));
-        let status = control
-            .membership_migration(MembershipMigrationRequest::Inspect {})
-            .await
-            .unwrap();
-        assert_eq!(status.phase, MembershipMigrationPhase::Installed);
-        assert_eq!(status.active_members, 1);
-        assert_eq!(fs::read_dir(&fixture.directory).unwrap().count(), 1);
-    })
+    let deadline = tokio::time::timeout(
+        std::time::Duration::from_secs(35),
+        assertion(control.clone()),
+    )
     .await;
     let _ = control.shutdown().await;
     tokio::time::timeout(std::time::Duration::from_secs(5), daemon)
@@ -591,5 +722,5 @@ async fn daemon_migrates_via_control_then_resyncs_and_compacts_removed_member() 
         .unwrap()
         .unwrap()
         .unwrap();
-    deadline.expect("daemon migration and compaction finish autonomously");
+    deadline.expect("migration/restart, resync and retirement finish autonomously");
 }

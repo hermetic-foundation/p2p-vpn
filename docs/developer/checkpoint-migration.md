@@ -14,6 +14,7 @@ convert an existing version-2 membership authority.
 | Signed migration seed | Active roster, canonical grants, selected policy, current names, publisher proof. | Valid for one hour; not retained in installed authority. |
 | Network capability | Shared secret and pinned checkpoint anchor. | Protected authority storage; never public diagnostics. |
 | Installed authority | Active snapshot and independently signed current hostname claims. | Compacted as membership changes. |
+| Pairing artifacts | Unfinished transaction ownership and bounded recent checkpoint results. | Legacy completed proofs retire after installation; current results expire or retire on removal/incarnation change. |
 
 The seed contains no private key, capability secret, revoked-device profile,
 inviter chain, or historical hostname records. Its publisher proof authenticates
@@ -74,7 +75,7 @@ is restricted to the daemon-owned path and requires the expected fingerprint.
 | Item | Status |
 | --- | --- |
 | Isolated multi-daemon packet/DNS migration and offline catch-up. | Still required. |
-| Superseded legacy pairing artifacts. | Cleanup integration and evidence still required. |
+| Superseded legacy pairing artifacts. | Startup, explicit installation, and periodic retirement implemented; focused evidence below. |
 | Combined storage bounds through repeated admission/removal cycles. | Existing checkpoint churn coverage; migration-wide campaign still required. |
 | Interrupted-process temporary residue. | Write-failure coverage exists; crash-residue retirement still required. |
 | Live networks. | Not migrated, revoked, or restarted by this work. |
@@ -86,7 +87,8 @@ activation and complete export/native-Nix artifacts remain separate goals.
 
 Nine core migration, six protected-artifact, and nine runtime workflow tests
 pass. Socket-contract and CLI-parsing regressions also pass. The full Rust
-workspace passes 1,793 tests, with 47 opt-in tests excluded.
+workspace passes 1,804 tests, with 47 opt-in tests excluded. The isolated kernel
+route-cleanup test also passes when invoked explicitly.
 
 Nix `rust-test-sources` passes offline.
 Formatting and required correctness/suspicious/performance Clippy groups pass;
@@ -124,6 +126,48 @@ The daemon uses fixture packet/route adapters, not real TUN. The cohort test
 validates authority installation, not peer-to-peer packet/DNS convergence.
 Existing formal verification assets were not found; executable regressions cover
 this step. Do not infer full migration acceptance from these passing layers.
+
+## Pairing Artifact Retirement
+
+Sources: `runtime/pairing_sessions/checkpoint_retirement.rs` and the serialized
+`runner/checkpoint_pairing.rs` owner. The legacy runtime does not call retirement.
+
+| Boundary | Contract |
+| --- | --- |
+| Authority first | Only an installed checkpoint owner permits proof retirement. |
+| Unresolved transactions | Prepared/aborting enrollment and uncertain completion ownership survive, even past expiry. |
+| Proof copies | Remove applied legacy enrollment, completed operation, accepted polling-ticket, and corresponding receipt copies. |
+| Current results | Preserve active checkpoint results until expiry; remove missing or changed incarnations. |
+| Replay | Keep at most 256 opaque tokens with nonrenewing, at-most-one-hour deadlines; never retain signed history as a replay guard. |
+| Receipts | At most 256, active endpoints only, expiry bounded to one hour from completion. |
+| Persistence | Atomic encrypted replacement before in-memory retirement; ambiguous visibility blocks ordinary saves until durable readback reconciliation. |
+| Retry | Startup flushes restore-pruned copies; maintenance retries; migration reports `cleanup_pending` on failure. |
+
+Existing configured `membership.key` files are not deleted: they may still be
+the consumer's explicit credential pin. This is not an authority archive.
+
+### Verified Evidence
+
+| Test | Result |
+| --- | --- |
+| Eleven retirement regressions. | Completed legacy copies disappear; active operations and unfinished ownership survive; expiry and changed incarnations retire results. |
+| Encrypted churn: 512 distinct removed identities. | One file, no archive; replay window under 64 KiB; under 512 bytes after each expiry window. |
+| Write failures. | Definite failure preserves state; ambiguous visibility blocks rollback; unsaved expiry is compared with the actual stored baseline. |
+| Daemon migration and restart. | Explicit installation erases signed legacy pairing history; a restored stale sidecar is erased before readiness and cannot reopen static authorization. |
+| Isolated kernel route cleanup. | IPv4/IPv6 address and route absence checks pass; this is not multi-daemon migration packet/DNS evidence. |
+
+```sh
+nix develop --offline -c cargo test --lib --locked --offline \
+  checkpoint_retirement
+nix develop --offline -c cargo test --lib --locked --offline \
+  runtime::tun::tests::cleanup_absence_checks_match_kernel_state \
+  -- --ignored --exact
+```
+
+The kernel test reexecutes itself in a separate user/network namespace and checks
+that it differs from its parent. No live network, device, or authority was changed.
+Formatting, required Clippy groups, and Nix `rust-test-sources` pass. Existing
+unrelated lint warnings remain; no new retirement/migration warnings were added.
 
 See [Checkpoint Acceptance](membership-checkpoint-acceptance.md) for the full
 migration, storage-bound, and multi-daemon completion criteria.

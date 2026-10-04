@@ -49,6 +49,8 @@ const CODE_PAIRING_RETRY_MAX: Duration = Duration::from_secs(30);
 const CODE_PAIRING_RETRY_JITTER_MAX_MILLIS: u64 = 1_000;
 const MAX_CODE_PAIRING_PROVIDER_ATTEMPTS: u16 = 128;
 
+mod checkpoint_retirement;
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PairingDiscoveryStage {
@@ -4284,6 +4286,8 @@ fn pairing_approval_id(request: &PairingRequest) -> Result<String, serde_json::E
 
 #[cfg(test)]
 mod tests {
+    mod checkpoint_retirement;
+
     use std::net::Ipv4Addr;
 
     use base64::engine::general_purpose::STANDARD;

@@ -4,6 +4,32 @@ use super::*;
 use crate::membership::checkpoint::{MembershipChange, MembershipSyncState};
 use crate::runtime::pairing_sessions::{CheckpointJoinerOwnership, PairingEnrollment};
 
+pub(super) fn retire_artifacts(
+    owner: &CheckpointRuntime,
+    sessions: &mut CodePairingSessions,
+    store: Option<&PairingStateStore>,
+    network: &str,
+    wall_now: u64,
+) -> Result<bool, RunnerError> {
+    sessions.retire_checkpoint_artifacts_with::<RunnerError>(
+        network,
+        &owner.state().snapshot().payload.members,
+        wall_now,
+        |bytes| {
+            store
+                .ok_or_else(|| {
+                    io::Error::other("artifact retirement requires protected pairing state")
+                })?
+                .save(bytes)
+                .map_err(Into::into)
+        },
+        || match store {
+            Some(store) => store.load().map_err(Into::into),
+            None => Ok(None),
+        },
+    )
+}
+
 pub(super) fn pending_join(sessions: &CodePairingSessions) -> Option<PairingEnrollment> {
     sessions
         .enrollments()

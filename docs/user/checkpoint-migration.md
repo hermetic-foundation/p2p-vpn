@@ -76,7 +76,7 @@ sudo p2p-vpn membership checkpoint install \
 | Result | Meaning |
 | --- | --- |
 | `installed` | Checkpoint authority is durable; packet access remains gated until resync. |
-| `cleanup_pending` | Authority is installed, but handoff retirement needs retry or repair. |
+| `cleanup_pending` | Authority is installed, but handoff or pairing-state retirement needs retry or repair. |
 | Fingerprint or grant error. | No conversion; resolve inconsistent state before retrying. |
 | Uncertain write error. | Do not delete authority or regenerate scope; inspect and retry the same operation. |
 
@@ -126,3 +126,16 @@ or members are a branch-selection heuristic, not costly proof of work.
 
 This workflow replaces daemon-owned authority. It does not rewrite personal
 flakes, external backups, historical Nix generations, or system journals.
+
+### Pairing Results After Migration
+
+| State | Retention |
+| --- | --- |
+| Completed legacy results and polling responses. | Removed once checkpoint authority is installed; old operation IDs stop resolving. |
+| Unfinished pairing transactions. | Preserved until their commit or cancellation cleanup finishes. |
+| Current checkpoint pairing results. | Available until expiry, removal, or a changed member incarnation. |
+| Acknowledgement receipts and opaque replay guards. | Capacity-bounded, expiring state; never a permanent device archive. |
+
+Restart and periodic maintenance erase expired copies from protected pairing
+storage. Cleanup failures are retried; a full replay window is not evicted early
+to claim successful compaction. Keep the protected state directory writable.
