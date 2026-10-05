@@ -5,6 +5,10 @@ failed to establish a relay connection. The joiner never reached an approval
 candidate or selected a transport. The full journal exposed local routing-pool
 rejections; other handshake failures and closures remain unexplained.
 
+The [October 5 acceptance run](#external-wan-acceptance-2026-10-05) subsequently
+completed code pairing with the same external peer. Overlay DNS and traffic
+passed; this was not a forced public-relay test.
+
 ## Environment and operation
 
 - Installed source revision: `e7dc13c9c9ddb3da9adfd29be3bd2fe143e79c72`.
@@ -100,8 +104,9 @@ separate observations.
 ### Acceptance Boundary
 
 Controlled regression tests must cover a full routing pool and ownership cleanup.
-A successful external WAN pairing through approval and completion is still required
-before calling the reported WAN failure resolved.
+A successful external WAN pairing through approval and completion was required
+beyond those tests. The October 5 run satisfies the external enrollment and
+traffic check; arbitrary public-relay reliability remains outside that evidence.
 
 ### Local Verification
 
@@ -119,7 +124,7 @@ before calling the reported WAN failure resolved.
 | Local NixOS deployment | Personal flake pin committed; system built and switched; both VPN daemons use the new package |
 | Existing network | Four validated runners peers; inventory preserved; ThinkPad overlay DNS and five-packet ping passed |
 | VM builds | Not rerun; tested namespace integration and local NixOS deployment instead |
-| External WAN acceptance | Outstanding; local tests do not establish public-relay reliability |
+| External WAN acceptance | October 5 pairing completed; overlay DNS and 5/5 pings passed; not forced through a public relay |
 
 The local VPN services restarted at 23:34:56 UTC on October 4. The NixOS switch
 succeeded and the Nix daemon kept its original process. No peer, key or relay
@@ -131,6 +136,39 @@ The live circuit regression also verifies these boundaries:
 - Polling preserves the selected inviter's relay dependency.
 - Completion releases relay ownership without authorizing the relay.
 - Encrypted pairing state restores completion on both sides without relay ownership.
+
+### External WAN Acceptance, 2026-10-05
+
+| Item | Observed Result |
+| --- | --- |
+| Inviter source | `951bce3448dc6dda552a4fa240f618a915c51fa8`, including the relay ownership fix |
+| External member | The same `nixos-pc` peer identified in the original failure |
+| Inviter operation | `2PFtpytTq-h26pkRNT5sRg` |
+| Approval | Accepted at 20:42:53 UTC; no extra route grants |
+| Inviter status | `completed`, `artifacts_ready=true`, no failure |
+| Discovery | `public_dht`; one handshake attempt and no handshake retries |
+| Selected transport | Inviter diagnostics report `direct` |
+| Effective membership | `nixos-pc` is active at `100.64.225.75` |
+| Overlay DNS | `nixos-pc.monarchic-runners.p2p-vpn.internal` resolves to `100.64.225.75` |
+| Overlay traffic | Five IPv4 ICMP replies, zero packet loss; verified after 21:43 UTC |
+| Joiner confirmation | User reported success; joiner operation JSON was not independently collected |
+
+#### Temporary Approval Watcher
+
+- Watched only this invitation and the expected authenticated peer ID.
+- Used a 30-minute invitation, bounded RPC calls and three-second polling.
+- Granted no extra prefixes and stopped successfully after approval.
+- Passed nine stub checks, including wrong-peer rejection and expiry.
+- Ran as a transient systemd service; no permanent module or policy changes.
+- Invitation code and secret material are intentionally omitted from this report.
+
+#### Evidence Limits
+
+- Membership, DNS and traffic establish that the external host joined successfully.
+- The selected transport was not a forced public circuit-relay path.
+- Public discovery alone does not prove which relay or hole-punch path was used.
+- The earlier EOF/reset failures remain separate, unexplained observations.
+- Rust suites and Nix builds were not repeated for this documentation-only update.
 
 ### Fresh WAN Attempt
 
