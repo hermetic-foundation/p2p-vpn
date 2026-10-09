@@ -216,6 +216,7 @@ let
           runHook preBuild
 
           cargo build \
+            --jobs "$NIX_BUILD_CORES" \
             -Z build-std=std,panic_abort \
             --target ${x86_64RustTarget} \
             --offline \
@@ -340,6 +341,8 @@ let
           export HOME="$TMPDIR/home"
           export ANDROID_USER_HOME="$TMPDIR/android-user-home"
           mkdir -p "$HOME" "$ANDROID_USER_HOME"
+          gradleFlagsArray+=(--max-workers "$NIX_BUILD_CORES")
+          export JAVA_TOOL_OPTIONS="-XX:ActiveProcessorCount=$NIX_BUILD_CORES"
         '';
 
         gradleBuildTask = ":app:assembleDebug";

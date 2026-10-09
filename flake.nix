@@ -5644,7 +5644,7 @@
                 echo "test=tun_namespace_ping_crosses_two_node_overlay"
               } > "$status_file"
               set -o pipefail
-              cargo test --test tun_namespace tun_namespace_ping_crosses_two_node_overlay -- --ignored --exact --nocapture 2>&1 | tee "$smoke_log"
+              RUST_TEST_THREADS="$NIX_BUILD_CORES" cargo test --jobs "$NIX_BUILD_CORES" --test tun_namespace tun_namespace_ping_crosses_two_node_overlay -- --ignored --exact --nocapture 2>&1 | tee "$smoke_log"
               {
                 echo "status=passed"
                 echo "test=tun_namespace_ping_crosses_two_node_overlay"
@@ -6028,7 +6028,7 @@
             ];
             buildPhase = ''
               runHook preBuild
-              cargo clippy --all-targets -- -D clippy::correctness -D clippy::suspicious -D clippy::perf
+              cargo clippy --jobs "$NIX_BUILD_CORES" --all-targets -- -D clippy::correctness -D clippy::suspicious -D clippy::perf
               runHook postBuild
             '';
             installPhase = ''
