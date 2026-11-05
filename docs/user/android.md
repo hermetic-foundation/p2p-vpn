@@ -43,6 +43,17 @@ The APK uses a public development signing key.
 
 Do not distribute it as a production release.
 
+## Prebuilt APK
+
+The v0.1.0 debug-signed APK (`arm64-v8a` and `x86_64`) is published as a
+release asset named `p2p-vpn-debug.apk`.
+
+SHA-256:
+
+```text
+e97d2bc03f8158bd35efc9e3b90b021893df4c1cc0af346db145d8346efff2ac
+```
+
 ## Install
 
 Enable developer options and USB debugging on the device.
