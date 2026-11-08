@@ -222,6 +222,44 @@ These samples direct further profiling toward networking and service-worker work
 They do not establish which operations caused energy drain, justify reduced
 reachability, or demonstrate any battery improvement.
 
+### Perfetto Energy Fallback
+
+The physical phone also completed a bounded `android.power` capability trace.
+The [preflight evidence](android-battery-device-preflight-2026-11-08.json)
+records its configuration, schemas, hashes and decoder checks.
+
+| Check | Result |
+| --- | --- |
+| Capture | Perfetto `51.2`; ten seconds; 1 MiB discard buffer; 30-second ADB watchdog |
+| Footprint | 1,422-byte trace; 68 KiB additional scratch; no SDK, emulator or native rebuild |
+| Battery source | Eleven charge/capacity/current/voltage samples; no average-current or energy-counter samples |
+| Hardware rails | One empty rails packet; zero rail descriptors and zero energy samples |
+| Decoder checks | Upstream v51.2 Protobuf messages; six synthetic controls; C++ text decode agrees |
+| Restoration | Trace session ended, remote copy removed, VPN remained off, encrypted profile unchanged |
+| Admission | Not an energy window; charging; no usable measured energy source returned |
+
+Reproduce the source selection using [Perfetto's power data source](https://perfetto.dev/docs/data-sources/battery-counters):
+
+1. Select the phone explicitly and keep `android.power` as the only data source.
+2. Use the ten-second configuration recorded in `perfetto_energy_probe`; poll battery counters every second.
+3. Enable hardware rails, but disable energy-estimation breakdowns and entity-state residency.
+4. Check the remote file size before pulling; reject captures over 2 MiB and retain a SHA-256-verified copy.
+5. Decode with the pinned message definitions, retaining absent fields rather than fabricating zero values.
+6. Confirm the session ended and remove only the probe's remote file.
+
+The [battery message](https://github.com/google/perfetto/blob/v51.2/protos/perfetto/trace/power/battery_counters.proto)
+and [rail message](https://github.com/google/perfetto/blob/v51.2/protos/perfetto/trace/power/power_rails.proto)
+are projected through TracePacket fields `38` and `40`, respectively.
+The local reader rejects compressed traces and empty/truncated inputs.
+
+This rules out the tested Perfetto source as an energy-measurement path on this
+setup, not the phone's hardware in every possible firmware or laboratory setup.
+Charge, current and voltage remain proxies; do not relabel their product as measured energy.
+
+The next baseline gate needs a verified energy-measurement method and cellular
+service. Runtime power optimizations remain pending that baseline; neither CPU
+results nor the restored LAN connection satisfy the 90% energy target.
+
 ## Optimization Candidates
 
 These are source-audit leads, not measured battery attribution or approved tradeoffs.
