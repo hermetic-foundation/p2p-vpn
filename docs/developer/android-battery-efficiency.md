@@ -92,6 +92,59 @@ ADB must be disconnected during cellular measurement; endpoint transport must be
 No identity, hostname, pairing code, address or private key is included.
 The endpoint is absent from release sources and retains the debug receiver's `DUMP` permission.
 
+### Bounded Capture Command
+
+With the complete measurement-enabled debug APK installed, run:
+
+```sh
+nix develop .#android -c bash scripts/android-power-capture.sh \
+  --serial "$serial" --output ./phone-power-capability.json
+```
+
+| Contract | Behavior |
+| --- | --- |
+| Selection | Requires one explicit ADB serial; never selects or connects another device |
+| Queries | Device readiness, SDK/model/ABI/OS metadata and one `power-status` request |
+| Mutations | No VPN start/stop, pairing, settings, permission grants or network changes |
+| Bounds | Ten seconds per request by default; at most 64 KiB per response |
+| Timeout override | `--rpc-timeout-seconds` accepts integers from 1 through 30 |
+| Output | New mode-0600 JSON file; existing files/symlinks and publication races are rejected |
+| Validation | Exact schema, numeric units/ranges, nullable properties and monotonic observation bounds |
+| Privacy | Excludes serials and VPN identities; rejects unexpected response fields |
+| Energy claims | Every capture sets `energy_window_eligible=false`; one endpoint is not a measurement window |
+
+`P2P_VPN_ADB` selects an existing ADB executable, matching the other Android tools.
+The wrapper retains Android `null` values; it does not turn unavailable energy
+into zero or convert CPU/current/charge readings into measured energy.
+
+`capabilities.energy_counter_reported=true` means only that Android returned a
+numeric energy counter. Counter resolution, physical accuracy, unplugged operation
+and whole-window stability still require separate device validation.
+
+The helper can record USB capability checks and emulator parser checks, but neither
+is physical battery acceptance. Model and OS build metadata identify the platform,
+not a unique device; operators must still keep matched runs on the same phone.
+
+Run the fake-ADB regression suite without touching any device:
+
+```sh
+bash tests/android-power-capture.sh
+```
+
+The Nix `android-e2e-structure` check also lints and runs this suite. It covers
+successful, null-counter, zero-counter, charging and emulator records; invalid
+schemas/metadata/clocks; oversized responses/timeouts; privacy and output races.
+
+The initial suite passes 31 cases locally and inside the Nix structure check.
+ShellCheck and shfmt pass. A malformed-value regression first reproduced jq
+echoing a private value; parser diagnostics are now suppressed and replaced with
+a bounded, value-free failure message.
+
+The broader check also exposed a pre-existing fixture publication race. Fixture
+JSON now becomes visible only after all relay/promotion fields are complete.
+The original unmodified check also passed once, consistent with a race rather
+than a deterministic failure; assertions and readiness deadlines are unchanged.
+
 ## Optimization Candidates
 
 These are source-audit leads, not measured battery attribution or approved tradeoffs.

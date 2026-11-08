@@ -459,6 +459,10 @@
                 shellcheck ${./scripts/android-resource-isolation.sh}
                 shellcheck ${./tests/android-resource-isolation.sh}
                 shellcheck ${./scripts/android-process-sample.sh}
+                shellcheck ${./scripts/android-power-capture.sh}
+                shellcheck ${./tests/android-power-capture.sh}
+                P2P_VPN_ANDROID_POWER_CAPTURE=${./scripts/android-power-capture.sh} \
+                  bash ${./tests/android-power-capture.sh}
                 shellcheck ${./scripts/android-resource-controls.sh}
                 shellcheck ${./tests/android-resource-power.sh}
                 shellcheck ${./tests/android-resource-sample.sh}
