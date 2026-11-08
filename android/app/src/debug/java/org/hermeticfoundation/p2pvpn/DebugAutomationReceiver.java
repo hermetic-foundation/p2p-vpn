@@ -37,6 +37,9 @@ public final class DebugAutomationReceiver extends BroadcastReceiver {
                 case "resource-status":
                     resourceStatus();
                     return;
+                case "power-status":
+                    respond(true, DebugPowerSnapshot.capture(context), null);
+                    return;
                 case "create-profile":
                     createProfile(context, intent);
                     return;

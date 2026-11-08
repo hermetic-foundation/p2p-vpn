@@ -13,6 +13,7 @@ Use these docs when changing, testing, or debugging `p2p-vpn`.
 | [Aggregate Ownership Audit](kademlia-final-ownership-audit.md) | Enforced limits, production query owners, compatibility, and final phase-1 evidence. |
 | [Recovery And Settling](kademlia-settling.md) | Phase-2 acceptance matrix, timer contracts, findings, and harness gaps. |
 | [Android Architecture](android.md) | Shared TUN, network isolation, VpnService, persistence, and recovery. |
+| [Android Battery Efficiency](android-battery-efficiency.md) | 10x target, physical-device measurement contract, and feature-preservation gates. |
 | [Feature Matrix](feature-matrix.md) | Current implementation status. |
 | [NixOS Module Design](nixos-module.md) | Modes, secret lifecycle, service contract, and tests. |
 | [Pairing Implementation](pairing.md) | Code PAKE, approval, durability, and proof commands. |
