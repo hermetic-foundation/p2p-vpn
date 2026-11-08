@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "kind": "android_battery_device_preflight",
+  "captured_at_utc": "2026-11-08T21:58:21Z",
+  "source_revision": "2b7a3ec506df1ed3b203ee56df3bbbedee4a8a41",
+  "runtime_baseline_revision": "8a302265",
+  "device": {
+    "model": "LE2125",
+    "product": "OnePlus9Pro",
+    "android_release_reported": "16",
+    "sdk": 36,
+    "abi": "arm64-v8a",
+    "physical": true,
+    "sim_state_reported": "ABSENT"
+  },
+  "installation": {
+    "package": "org.hermeticfoundation.p2pvpn.debug",
+    "apk_sha256": "873b7b5a06f1db65ee18486a32f593e39906d26aa5a4512e07496f69963e9ee0",
+    "installed_apk_hash_verified": true,
+    "in_place_update": true,
+    "encrypted_profile_hash_unchanged": true,
+    "data_cleared": false,
+    "pairing_performed": false
+  },
+  "power_capture": {
+    "raw_capture_sha256": "21cf5b24dfa40bd16f5742a4b534c99fd75cb24d96d06e875e37405e566c5188",
+    "energy_remaining_nwh": null,
+    "charge_remaining_uah": 450000,
+    "current_now_ua": -375,
+    "current_average_ua": null,
+    "capacity_percent": 10,
+    "battery_status": 2,
+    "plugged_sources": 2,
+    "voltage_mv": 4443,
+    "temperature_tenths_c": 320,
+    "screen_interactive": true,
+    "device_idle": false,
+    "powerstats_dump_has_data": false,
+    "battery_sysfs_readable_by_adb_shell": false
+  },
+  "startup": {
+    "enabled_networks": 1,
+    "underlay": "wifi",
+    "underlay_validated": true,
+    "connected_peer_paths": 0,
+    "phase": "starting",
+    "failure": "MembershipStateStore(Io(Unsupported: lock() not supported))",
+    "recovery_attempts_observed": 8,
+    "failed_runtime_disconnected_after_diagnosis": true
+  },
+  "energy_window_eligible": false,
+  "ineligible_reasons": [
+    "single_endpoint_only",
+    "physically_usb_powered_and_charging",
+    "fuel_gauge_energy_counter_unavailable",
+    "network_runtime_not_operational"
+  ],
+  "physical_energy_measured": false,
+  "battery_improvement_ratio": null,
+  "required_next_steps": [
+    "Verify portable directory locking on this physical phone",
+    "Freeze a working compatibility-corrected baseline before optimization",
+    "Provide a validated energy-measurement method and cellular service",
+    "Capture matched baseline, candidate and VPN-off energy windows"
+  ]
+}

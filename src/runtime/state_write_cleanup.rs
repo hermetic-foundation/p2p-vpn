@@ -29,7 +29,7 @@ pub(super) fn lock_and_retire(path: &Path) -> io::Result<Option<File>> {
         return Ok(None);
     };
     let directory = File::open(parent)?;
-    directory.lock()?;
+    lock_directory(&directory)?;
     let opened = directory.metadata()?;
     if metadata.dev() != opened.dev()
         || metadata.ino() != opened.ino()
@@ -69,6 +69,16 @@ pub(super) fn lock_and_retire(path: &Path) -> io::Result<Option<File>> {
         directory.sync_all()?;
     }
     Ok(Some(directory))
+}
+
+fn lock_directory(directory: &File) -> io::Result<()> {
+    // std::fs::File locking is unsupported by the pinned Android standard library.
+    loop {
+        match rustix::fs::flock(directory, rustix::fs::FlockOperation::LockExclusive) {
+            Err(rustix::io::Errno::INTR) => {}
+            result => return result.map_err(Into::into),
+        }
+    }
 }
 
 fn writer_suffix(suffix: &str) -> bool {
@@ -219,7 +229,10 @@ mod tests {
         private(&path, b"old selected authority");
         let owner = lock_and_retire(&path).unwrap().unwrap();
         let other = File::open(&directory).unwrap();
-        assert!(other.try_lock().is_err());
+        assert_eq!(
+            rustix::fs::flock(&other, rustix::fs::FlockOperation::NonBlockingLockExclusive),
+            Err(rustix::io::Errno::WOULDBLOCK)
+        );
         let temporary = directory.join(".state.json.123.456");
         private(&temporary, b"new selected authority");
         let (done, result) = mpsc::channel();
@@ -238,9 +251,67 @@ mod tests {
             b"new selected authority"
         );
         reader.join().unwrap();
-        other.try_lock().unwrap();
+        rustix::fs::flock(&other, rustix::fs::FlockOperation::NonBlockingLockExclusive).unwrap();
         assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
         drop(other);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn directory_lock_excludes_other_processes_and_releases_on_drop() {
+        const LOCK_CHILD: &str = "P2P_VPN_STATE_WRITE_LOCK_CHILD";
+        const LOCK_TEST: &str = "runtime::state_write_cleanup::tests::directory_lock_excludes_other_processes_and_releases_on_drop";
+        if let Ok(path) = std::env::var(LOCK_CHILD) {
+            let directory = File::open(path).unwrap();
+            let status = match rustix::fs::flock(
+                &directory,
+                rustix::fs::FlockOperation::NonBlockingLockExclusive,
+            ) {
+                Ok(()) => 0,
+                Err(rustix::io::Errno::WOULDBLOCK) => 17,
+                Err(error) => panic!("unexpected directory lock error: {error}"),
+            };
+            std::process::exit(status);
+        }
+        let directory = directory("process-lock");
+        let owner = lock_and_retire(&directory.join("state.json"))
+            .unwrap()
+            .unwrap();
+        let try_child = || {
+            Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", LOCK_TEST])
+                .env(LOCK_CHILD, &directory)
+                .status()
+                .unwrap()
+                .code()
+        };
+        assert_eq!(try_child(), Some(17));
+        drop(owner);
+        assert_eq!(try_child(), Some(0));
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn directory_lock_interoperates_with_standard_library_locks() {
+        let directory = directory("std-lock");
+        let owner = File::open(&directory).unwrap();
+        let other = File::open(&directory).unwrap();
+        lock_directory(&owner).unwrap();
+        assert!(matches!(
+            other.try_lock(),
+            Err(std::fs::TryLockError::WouldBlock)
+        ));
+        drop(owner);
+        other.lock().unwrap();
+        let next = File::open(&directory).unwrap();
+        assert_eq!(
+            rustix::fs::flock(&next, rustix::fs::FlockOperation::NonBlockingLockExclusive),
+            Err(rustix::io::Errno::WOULDBLOCK)
+        );
+        drop(other);
+        lock_directory(&next).unwrap();
+        drop(next);
         fs::remove_dir_all(directory).unwrap();
     }
 

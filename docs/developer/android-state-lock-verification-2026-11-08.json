@@ -1,0 +1,129 @@
+{
+  "schema_version": 1,
+  "kind": "android_state_lock_compatibility_verification",
+  "baseline_parent_revision": "2b7a3ec506df1ed3b203ee56df3bbbedee4a8a41",
+  "baseline_source_sha256": {
+    "Cargo.toml": "f94eedac332ecba809542f79043073718ef31886c0736080a79f446c5b314904",
+    "Cargo.lock": "8e84c18bea5599bac6a890215ae45da18dab2d0c667d719e31852a89d07c4ccb",
+    "src/runtime/state_write_cleanup.rs": "039731ae0225235c5037f765836ff9bab628ad0a3e2f68c1a5d03cb6616475cd"
+  },
+  "runtime_optimization": false,
+  "apk": {
+    "sha256": "b1359996a8fbab7ea8eec2fd4c0649dfe0ea6290bf9466145af8242bf58453a3",
+    "bytes": 19126556,
+    "abi": "arm64-v8a",
+    "scope": "phone_test_only",
+    "canonical_dual_abi_release_changed": false,
+    "v2_signature_verified": true,
+    "signer_certificate_sha256": "92b218d359c00ca24fbc97c385f47817b2f263f5a614ebe0c843158b52e03950",
+    "public_development_key": true,
+    "zipalign_16k_passed": true,
+    "installed_apk_hash_verified": true,
+    "encrypted_profile_hash_unchanged": true,
+    "data_reset_or_pairing_performed": false
+  },
+  "native": {
+    "derivation": "/nix/store/kvwnz6nd6ixsm1sc8bmzirxvrrm3pbzx-p2p-vpn-android-arm64-aarch64-unknown-linux-android-0.1.0.drv",
+    "output": "/nix/store/rp2fxrbnz4qw3yzx2f8ax8zwjhc53yrb-p2p-vpn-android-arm64-aarch64-unknown-linux-android-0.1.0",
+    "store_library_sha256": "39df52d890b73e8f577be6d99681237ffee7afb90b587757d85e176c1d895d25",
+    "packaged_library_sha256": "c218dd3eb640ea6849793d00f517213fbe95cbab3af6d40def5dce15de19e718",
+    "store_and_packaged_text_dump_sha256": "56aad7b6c1e66f9a0fcda955908c951471e4d5ef1b7f252d468b79ce20173d32",
+    "all_four_load_segments_16k_aligned": true,
+    "build_passed": true,
+    "cargo_release_seconds": 314,
+    "cargo_jobs": 2,
+    "warnings": 5
+  },
+  "verification": {
+    "directory_lock_tests_passed": 8,
+    "core_unit_tests_passed": 1456,
+    "core_unit_tests_failed": 0,
+    "core_unit_tests_ignored": 8,
+    "format_passed": true,
+    "repository_clippy_correctness_suspicious_perf_gate_passed": true,
+    "clippy_warnings_remain": true,
+    "stricter_all_warnings_denied_passed": false,
+    "stricter_lib_test_errors": 450,
+    "stricter_diagnostics_in_changed_lock_module": false,
+    "nix_rust_test_sources_passed": true,
+    "gradle_assembly_passed": true,
+    "gradle_seconds": 7,
+    "gradle_tasks_executed": 5,
+    "gradle_tasks_up_to_date": 44,
+    "java_unit_and_lint_results_reused": true,
+    "power_capture_fake_adb_cases_passed": 31,
+    "full_workspace_attempt": {
+      "passed": false,
+      "core_passed": 1455,
+      "core_failed": 1,
+      "failure": "code_pairing_response_preserves_delegated_inviter_trust_chain: two random fixture identities derived the same built-in IPv4 address",
+      "exact_rerun_passed": true,
+      "fixture_correction_is_separate_work": true
+    }
+  },
+  "physical_wifi_smoke": {
+    "network_phase": "running",
+    "underlay_validated": true,
+    "networks": 1,
+    "connected_overlay_peers_observed": 5,
+    "direct_quic_sessions_observed": 5,
+    "owned_quic_payload_packets_observed": 20,
+    "phone_to_linux_ipv4": { "sent": 5, "received": 5 },
+    "linux_to_phone_ipv4": { "sent": 5, "received": 5 },
+    "phone_to_linux_ipv6": { "sent": 5, "received": 5 },
+    "linux_to_phone_ipv6": { "sent": 5, "received": 5 },
+    "phone_overlay_hostname_resolved_on_linux": true,
+    "interrupted_followup_probe": {
+      "sent": 5,
+      "received": 2,
+      "usable_as_stability_evidence": false,
+      "reason": "The operator disconnected the VPN before this separate follow-up probe finished"
+    },
+    "manual_routing_or_pairing_changes": false,
+    "complete_feature_matrix_verified": false
+  },
+  "screen_off_cpu_diagnostic": {
+    "scope": "short_post_connect_profiling_not_energy_baseline",
+    "elapsed_ms": 107843,
+    "app_cpu_ms": 7965,
+    "one_core_cpu_percent": 7.385736672755765,
+    "process_identity_unchanged": true,
+    "screen_interactive_at_endpoints": [false, false],
+    "usb_powered_at_endpoints": [true, true],
+    "energy_counter_at_endpoints": [null, null],
+    "cached_counter_deltas": {
+      "kad_primary_dial_intents_dispatched": 73,
+      "kad_primary_query_requests": 74,
+      "outbound_path_probes_sent": 210
+    },
+    "cpu_before_capture_sha256": "cb56c45d0083337216d2a1f77f1aa3ef39618a368c2ae291f1855beeb39a6844",
+    "cpu_after_capture_sha256": "d52422f125bc464fc5b06c7657501b60b8c855f36297f1e65479347ebf7e007f"
+  },
+  "thread_cpu_diagnostic": {
+    "endpoint_host_interval_seconds": 100.075,
+    "clock_ticks_per_second": 100,
+    "before_threads": 30,
+    "after_threads": 30,
+    "matched_thread_identities": 30,
+    "matched_cpu_ticks": 718,
+    "tokio_worker_cpu_ticks": 504,
+    "runtime_named_thread_cpu_ticks": 175,
+    "tun_reader_and_writer_cpu_ticks": 5,
+    "scope": "CPU attribution proxy; not hardware wakeups or energy",
+    "before_sha256": "c1c7ec834de5a09ce100f126fb6275e362f5845ae49c03afb32b82610eaae8ba",
+    "after_sha256": "f5e38cae46796455cffed9dad8865b89be974bd18716160e14328d02e5bb7bc6"
+  },
+  "vpn_off_cpu_control": {
+    "elapsed_ms": 145422,
+    "app_cpu_ms": 44,
+    "one_core_cpu_percent": 0.030256769952276823,
+    "process_identity_unchanged": true,
+    "screen_off_and_usb_charging": true,
+    "scope": "CPU control only; disconnecting is not an optimization or battery-savings result",
+    "before_capture_sha256": "f389386323b27aafbf5e13bdd91976cf4cbe03a3af674e418a58fdbd5736a48e",
+    "after_capture_sha256": "d9382d6fdeee057fbf1a72b92476e6f253ae244e8dbf6259995f9bd1cb227065"
+  },
+  "physical_energy_measured": false,
+  "battery_improvement_ratio": null,
+  "goal_complete": false
+}

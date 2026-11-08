@@ -5,12 +5,12 @@
 | Item | State |
 | --- | --- |
 | Target | At least 90% less app-attributable connected-idle energy on Wi-Fi and cellular |
-| Baseline source | `8a302265`, plus measurement-only changes recorded with the capture |
-| Device baseline | Not captured; ADB lists no devices at the initial November 8 preflight |
+| Baseline source | `8a302265`, measurement helpers and portable state locking; freeze the corrected APK before optimization |
+| Device baseline | OnePlus 9 Pro capability capture completed; no supported energy counter reported |
 | Runtime optimizations | None yet; preserve baseline behavior until device measurements exist |
 | Power endpoint | Debug-only `power-status`; unit checks are not physical battery evidence |
 | Java verification | Normal Gradle unit, lint and instrumentation-assembly tasks now pass |
-| Native baseline APK | ARM64 phone-test APK built, signed and statically verified; not deployed |
+| Native baseline APK | Compatibility-corrected ARM64 APK installed; bidirectional IPv4/IPv6 and DNS smoke checks pass |
 | Completion | Open; CPU, emulator and estimated power results cannot satisfy the target |
 
 ## Measurement Contract
@@ -145,6 +145,70 @@ The broader check also exposed a pre-existing fixture publication race. Fixture
 JSON now becomes visible only after all relay/promotion fields are complete.
 The original unmodified check also passed once, consistent with a race rather
 than a deterministic failure; assertions and readiness deadlines are unchanged.
+
+## Physical Preflight, November 8
+
+[Preflight evidence](android-battery-device-preflight-2026-11-08.json) records
+capabilities and the rejected startup workload, not an energy baseline.
+
+| Check | Observation |
+| --- | --- |
+| Phone | OnePlus 9 Pro, model `LE2125`, Android 16 / API 36, ARM64 |
+| Installed APK | SHA-256 `873b7b5a06f1db65ee18486a32f593e39906d26aa5a4512e07496f69963e9ee0` |
+| Data preservation | In-place update; encrypted profile hash unchanged; no reset or pairing |
+| Existing topology | One enabled `personal-devices` network on validated Wi-Fi |
+| Device energy | `energy_remaining_nwh=null`; charge counter exists, average current is unavailable |
+| Other power access | `dumpsys powerstats` returns no data; shell cannot read battery sysfs |
+| Cellular | No SIM reported; no cellular series possible in the current device setup |
+| Measurement limits | USB-powered and charging; no valid discharge window or battery-savings claim |
+| Startup gate | Membership loading fails with `lock() not supported`; supervisor retries |
+
+The pinned Android standard library rejects `File::lock()` before networking starts.
+See the [upstream Rust issue](https://github.com/rust-lang/rust/issues/148325).
+A portable `rustix::fs::flock` correction retains advisory directory ownership,
+interrupted-call retries and release on descriptor close.
+
+This is a compatibility prerequisite, not an idle-power optimization.
+Freeze a working, compatibility-corrected APK before collecting baseline windows.
+Do not compare a connected candidate against this failed-startup workload.
+
+The phone remains useful for functional and CPU/wakeup/radio debugging.
+Charge counters and CPU proxies cannot establish the energy target; accepted energy
+comparisons still need a supported, validated counter or external power hardware.
+
+### Compatibility Verification
+
+[Verification evidence](android-state-lock-verification-2026-11-08.json) identifies
+the corrected APK, native library, source hashes, test results and diagnostic limits.
+
+| Check | Result |
+| --- | --- |
+| Storage locking | Eight tests pass, including cross-process exclusion, crash release and Linux standard-library interoperability |
+| Core Rust | 1,456 pass; eight ignored; format and repository Clippy safety/performance gates pass |
+| Android native | Pinned Nix ARM64 build passes; signature, 16 KiB alignment and packaged native code verified |
+| Deployment | In-place update; installed hash verified; original encrypted profile unchanged |
+| LAN smoke | Five peers discovered; 20/20 IPv4/IPv6 probes across both directions; phone hostname resolves |
+| Payload path | Owned QUIC packet counters increase; available TCP/UDP paths retained |
+| Energy acceptance | Still open; no supported energy counter or cellular service on this phone |
+
+The retained working APK is `b1359996a8fbab7ea8eec2fd4c0649dfe0ea6290bf9466145af8242bf58453a3`.
+It is a phone-test artifact, not a newly verified dual-ABI release.
+No identities, config defaults or authority rules changed.
+
+### Short CPU Diagnostic
+
+| Observation | Result / Limit |
+| --- | --- |
+| Screen-off interval | 107.843 seconds; process identity unchanged; USB charging throughout |
+| App process CPU | 7.965 CPU-seconds, about 7.39% of one core; not a steady-state energy baseline |
+| Public work | Cached counters show 73 dispatched DHT dial intents and 74 query requests |
+| Thread follow-up | 30 matched threads; 504/718 CPU ticks in Tokio workers, 175 in a runtime-named thread |
+| TUN workers | Reader/writer together use 5/718 CPU ticks; this does not quantify wakeup or radio energy |
+| VPN-off CPU control | 44 CPU-ms over 145.422 seconds, same process and charging/screen state; not an optimization result |
+
+These samples direct further profiling toward networking and service-worker work.
+They do not establish which operations caused energy drain, justify reduced
+reachability, or demonstrate any battery improvement.
 
 ## Optimization Candidates
 
