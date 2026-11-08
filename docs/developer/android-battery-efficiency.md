@@ -195,6 +195,18 @@ The retained working APK is `b1359996a8fbab7ea8eec2fd4c0649dfe0ea6290bf9466145af
 It is a phone-test artifact, not a newly verified dual-ABI release.
 No identities, config defaults or authority rules changed.
 
+The first full workspace run exposed random address collisions in an unrelated
+delegated-inviter test fixture. Its separate test-only correction selects distinct
+built-in addresses without relaxing production collision checks or trust assertions.
+
+| Follow-Up | Result |
+| --- | --- |
+| Complete workspace command | 1,821 pass, zero failures, 48 ignored; physical/privileged ignored cases remain open |
+| Static gates | Workspace Clippy correctness/suspicious/performance groups, format and Nix test-source check pass; style warnings remain |
+| Second phone connection | Five peers rediscovered; 5/5 IPv4 replies with owned-QUIC payload traffic |
+| Device restoration | Original disconnected state restored; encrypted profile unchanged; foreground service and TUN/Tokio workers retired |
+| Retained global helpers | One `async-io` and one `futures-timer` thread remain; the separate VPN-off CPU control is recorded below |
+
 ### Short CPU Diagnostic
 
 | Observation | Result / Limit |

@@ -28897,9 +28897,23 @@ mod tests {
 
     #[test]
     fn code_pairing_response_preserves_delegated_inviter_trust_chain() {
-        let root = NodeIdentity::generate_ed25519().expect("root identity");
-        let inviter = NodeIdentity::generate_ed25519().expect("inviter identity");
-        let joiner = NodeIdentity::generate_ed25519().expect("joiner identity");
+        let mut addresses = HashSet::new();
+        // This tests trust-chain compaction, not random built-in address collisions.
+        let mut identity = || {
+            (0..128)
+                .find_map(|_| {
+                    let identity = NodeIdentity::generate_ed25519().expect("fixture identity");
+                    addresses
+                        .insert(builtin_ipv4(
+                            identity.peer_id.parse().expect("fixture peer"),
+                        ))
+                        .then_some(identity)
+                })
+                .expect("distinct fixture address within attempt limit")
+        };
+        let root = identity();
+        let inviter = identity();
+        let joiner = identity();
         let joiner_peer = joiner.peer_id.parse().expect("joiner peer");
         let mut config = config_with_peer(&inviter, joiner_peer);
         let root_record = issue_membership_record_at(
@@ -28932,7 +28946,7 @@ mod tests {
         .expect("inviter grant");
         config.network.member_records = vec![root_record, inviter_record];
         for offset in 0..MAX_PAIRING_MEMBERSHIP_RECORDS {
-            let member = NodeIdentity::generate_ed25519().expect("existing member");
+            let member = identity();
             config.network.member_records.push(
                 issue_membership_record_at(
                     &root,

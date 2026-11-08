@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
   "kind": "android_state_lock_compatibility_verification",
+  "working_baseline_revision": "eec88da9e6d437c6fa241c752dd16e0aaef6b748",
   "baseline_parent_revision": "2b7a3ec506df1ed3b203ee56df3bbbedee4a8a41",
   "baseline_source_sha256": {
     "Cargo.toml": "f94eedac332ecba809542f79043073718ef31886c0736080a79f446c5b314904",
@@ -122,6 +123,36 @@
     "scope": "CPU control only; disconnecting is not an optimization or battery-savings result",
     "before_capture_sha256": "f389386323b27aafbf5e13bdd91976cf4cbe03a3af674e418a58fdbd5736a48e",
     "after_capture_sha256": "d9382d6fdeee057fbf1a72b92476e6f253ae244e8dbf6259995f9bd1cb227065"
+  },
+  "followup": {
+    "fixture_correction": "Select distinct built-in IPv4 addresses for the delegated inviter trust-chain test",
+    "fixture_attempt_limit_per_identity": 128,
+    "production_route_collision_checks_changed": false,
+    "trust_chain_assertions_changed": false,
+    "workspace_test_suites": 10,
+    "workspace_tests_passed": 1821,
+    "workspace_tests_failed": 0,
+    "workspace_tests_ignored": 48,
+    "workspace_test_log_sha256": "afda615754eee1ecbd8f6c6fa9c1b96a2dbb4f3086a54006082f05a1bf3ff6e7",
+    "workspace_clippy_repository_gates_passed": true,
+    "clippy_style_warnings_remain": true,
+    "workspace_clippy_log_sha256": "d3d1ded3a2fa2e8ec918f364f17f1b6eae74429b25b037a807032ba8a40794ee",
+    "format_passed": true,
+    "nix_rust_test_sources_passed": true,
+    "nix_rust_test_sources_derivation": "/nix/store/wmkywxmp698g6c1dwm2i149zzz43qsnk-p2p-vpn-rust-test-sources.drv",
+    "phone_second_connection_cycle": {
+      "overlay_peers": 5,
+      "linux_to_phone_ipv4_sent": 5,
+      "linux_to_phone_ipv4_received": 5,
+      "owned_quic_payload_packets_observed": 5,
+      "probe_finished_before_disconnect": true
+    },
+    "phone_original_disconnected_state_restored": true,
+    "phone_foreground_service_remaining": false,
+    "phone_tun_and_tokio_workers_remaining": 0,
+    "process_global_async_io_and_futures_timer_threads_remaining": 2,
+    "encrypted_profile_hash_unchanged": true,
+    "native_apk_rebuilt_for_test_only_fixture_correction": false
   },
   "physical_energy_measured": false,
   "battery_improvement_ratio": null,
