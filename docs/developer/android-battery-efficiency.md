@@ -9,6 +9,7 @@
 | Device baseline | Not captured; ADB lists no devices at the initial November 8 preflight |
 | Runtime optimizations | None yet; preserve baseline behavior until device measurements exist |
 | Power endpoint | Debug-only `power-status`; unit checks are not physical battery evidence |
+| Java verification | Normal Gradle unit, lint and instrumentation-assembly tasks now pass |
 | Completion | Open; CPU, emulator and estimated power results cannot satisfy the target |
 
 ## Measurement Contract
@@ -98,8 +99,11 @@ These are source-audit leads, not measured battery attribution or approved trade
 | Owner | Existing Work | Required Investigation |
 | --- | --- | --- |
 | Shared Android TUN reader | `poll` timeout every 250 ms | Cancellable blocking readiness without changing stop/error semantics |
+| Shared Android TUN writer | Condition-variable timeout every 250 ms | Queue/close notifications without periodic empty-queue wakeups |
 | Java service | Native health snapshot every two seconds | Event-driven state/failure delivery, retaining recovery and permission checks |
+| Native supervisor | Health and peer-snapshot refresh every five seconds | Preserve failure detection while attributing repeated status work |
 | Membership checkpoints | One-second maintenance tick per active runtime | Next-deadline scheduling with unchanged mutation/expiry bounds |
+| Wi-Fi discovery | Multicast lock held while connected; separate pairing lock | Measure radio impact before changing LAN-first discovery behavior |
 | Public networking | Discovery, dialing, relay and connection maintenance | Actual radio bursts, failed retries and settled-peer behavior |
 | Multi-network supervisor | Per-network runtime/cache ownership | Duplicate idle work without merging security or routing authority |
 
@@ -144,13 +148,58 @@ Do not lengthen recovery deadlines after observing failures or trade functionali
 The validation fallback uses the existing pinned JDK/SDK, generated resource jar,
 JUnit `4.13.2`, and JSON `20250517` verified against `nix/android-gradle-deps.json`.
 It avoids SDK downloads, native cross-compilation and an emulator image rebuild.
-The Gradle/lint/package gates remain outstanding, not replaced by host compilation.
 
-Restore the pinned Gradle artifacts, then run the normal verification without
-changing dependency versions:
+Those initial host checks did not replace Gradle, lint or package verification.
+The subsequent section records the restored Java gates; native APK packaging is still open.
+
+With the pinned Gradle artifacts available, the normal verification command is:
 
 ```sh
 nix develop .#android -c gradle -p android \
   --offline --no-daemon --max-workers=2 -Dorg.gradle.parallel=false \
   :app:testDebugUnitTest :app:lintDebug :app:assembleDebugAndroidTest
 ```
+
+## Restored Gradle Verification, November 8
+
+[Portable verification evidence](android-battery-verification-2026-11-08.json)
+records source, toolchain, dependency hashes and results. This closes the earlier
+Java build-verification gap, not the battery or device acceptance gates.
+
+| Check | Result |
+| --- | --- |
+| Source | `948e57bc`, including the measurement-only endpoint |
+| Dependencies | 327 Maven artifacts verified against the unchanged Nix Gradle lock |
+| Downloads | Sequential, capped at 1 MiB/s; 283 fetched and 44 reused |
+| Artifact storage | 240,865,130 bytes, below the frozen 256 MiB cap |
+| Toolchain | Existing Nix JDK 17, API 37 SDK and Gradle 9.5.1 wrapper |
+| Build isolation | Offline after restore; local Maven mirror; two workers and two JVM processors |
+| Gradle result | Successful in 18 seconds; 24 tasks executed, one from cache |
+| Unit XML | 35 suites, 156 tests; zero failures, errors or skipped tests |
+| Lint XML | Zero errors; seven warnings in unchanged resources |
+| Instrumentation APK | Assembly passes; no instrumentation test ran on a device |
+| Main VPN APK / JNI | Not built or deployed; fresh native staging remains required |
+| Device / energy | No device attached; no energy measurement or efficiency claim |
+
+The warnings concern launcher shape, pluralization and an input label, not the
+power endpoint. Existing compiled native merge outputs were not valid source
+inputs; do not deploy a Java-only APK as a VPN baseline.
+
+### Local Replay
+
+The temporary mirror and its init script are under
+`/tmp/p2p-vpn-battery-build-Qm1dQ1k2`. They are build inputs, not app configuration.
+The normal Nix build remains the supported APK packaging workflow.
+
+```sh
+JAVA_TOOL_OPTIONS=-XX:ActiveProcessorCount=2 \
+  ./android/gradlew -p android --offline --no-daemon --max-workers=2 \
+  -Dorg.gradle.parallel=false '-Dorg.gradle.jvmargs=-Xmx1g -Dfile.encoding=UTF-8' \
+  -Pandroid.aapt2FromMavenOverride="$ANDROID_HOME/build-tools/37.0.0/aapt2" \
+  --init-script /tmp/p2p-vpn-battery-build-Qm1dQ1k2/local-repository.gradle \
+  :app:testDebugUnitTest :app:lintDebug :app:assembleDebugAndroidTest
+```
+
+Use the pinned JDK/SDK environment from `nix/android.nix`. The replay does not
+rebuild the SDK, download an emulator image or compile native Rust libraries.
+Deleting the mirror requires restoring the locked artifacts before this replay.

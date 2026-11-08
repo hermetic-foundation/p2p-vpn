@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "kind": "android_battery_measurement_build_verification",
+  "source_revision": "948e57bc071c1a0aa55af1759e13154cfc512ae8",
+  "device_used": false,
+  "physical_energy_measured": false,
+  "battery_improvement_ratio": null,
+  "dependencies": {
+    "lock_path": "nix/android-gradle-deps.json",
+    "lock_sha256": "506735c65017db0df046d42cd8ad63dfda3ec32ca1761b31362ec34bbba1091a",
+    "verified_maven_artifacts": 327,
+    "fetched": 283,
+    "reused": 44,
+    "bytes": 240865130,
+    "byte_cap": 268435456,
+    "download_bytes_per_second_cap": 1048576,
+    "concurrent_downloads": 1,
+    "restore_helper_sha256": "8894889282f7ae3a10062e21dce8717ae91b716fe44b34a26dcda13bfc5af872",
+    "gradle_init_sha256": "7722006dcaf013f0c6d3b2c69cefc9e39953354fc876c1a50fb486c938039fb9"
+  },
+  "toolchain": {
+    "gradle": "9.5.1",
+    "android_gradle_plugin": "9.3.2",
+    "jdk": "17.0.20+8",
+    "android_compile_sdk": 37,
+    "android_build_tools": "37.0.0",
+    "gradle_workers": 2,
+    "jvm_active_processors": 2,
+    "gradle_heap_mib": 1024
+  },
+  "gradle": {
+    "offline": true,
+    "success": true,
+    "elapsed_seconds_reported": 18,
+    "tasks_executed": 24,
+    "tasks_from_cache": 1,
+    "tasks_up_to_date": 37,
+    "tasks": [
+      ":app:testDebugUnitTest",
+      ":app:lintDebug",
+      ":app:assembleDebugAndroidTest"
+    ]
+  },
+  "unit_tests": {
+    "suites": 35,
+    "tests": 156,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "power_snapshot_tests": 9,
+    "power_snapshot_xml_sha256": "b7c7003df4c64b5572b4a67fc1aa1b1bc7bd2da043b962c91c29d45aba50844f"
+  },
+  "lint": {
+    "errors": 0,
+    "warnings": 7,
+    "warning_rules": ["IconLauncherShape", "LabelFor", "PluralsCandidate"],
+    "xml_sha256": "c000d94cca0dc91693552a0868fcabfd884e5d0997d385813ef571d631316be6"
+  },
+  "instrumentation": {
+    "assembled": true,
+    "executed": false,
+    "apk_sha256": "319170af6e2cadeeabfe7d813d75c0be5a9f6067d2c94b75489509b97682c0cd"
+  },
+  "main_vpn_apk_built": false,
+  "native_build_repeated": false,
+  "deployed": false,
+  "remaining_acceptance": [
+    "Stage current native libraries and build a complete baseline APK",
+    "Establish physical counter support and uncertainty",
+    "Capture matched Wi-Fi, cellular and VPN-off baseline windows",
+    "Implement profile-driven runtime optimizations",
+    "Measure the 90 percent energy reduction and pass all feature gates"
+  ]
+}
