@@ -831,20 +831,16 @@
                           host_forward_port: 42304,
                           guest_listen_port: 42304
                         }
-                      } else {} end)' > "$state_dir/fixture.json"
-                    if [[ "$path_mode" == relay-only || "$path_mode" == relay-to-direct ]]; then
-                      jq '. + {
+                      } else {} end) +
+                      (if ($path_mode == "relay-only" or $path_mode == "relay-to-direct") then {
                         relay: {
                           android_reservation: "/ip4/10.0.2.2/tcp/42300/p2p/12D3KooWFakeBootstrapPeer/p2p-circuit"
                         }
-                      }' "$state_dir/fixture.json" > "$state_dir/fixture.json.updated"
-                      mv "$state_dir/fixture.json.updated" "$state_dir/fixture.json"
-                    fi
-                    if [[ "$path_mode" == relay-to-direct ]]; then
-                      jq '. + {promotion: {direct_path: "tcp_stream"}}' \
-                        "$state_dir/fixture.json" > "$state_dir/fixture.json.updated"
-                      mv "$state_dir/fixture.json.updated" "$state_dir/fixture.json"
-                    fi
+                      } else {} end) +
+                      (if $path_mode == "relay-to-direct" then {
+                        promotion: {direct_path: "tcp_stream"}
+                      } else {} end)' > "$state_dir/fixture.json.pending"
+                    mv "$state_dir/fixture.json.pending" "$state_dir/fixture.json"
                     printf 'private state: %s code ABCD-EFGH-JKLM-NPQR\n' "$state_dir"
                     printf 'ControlCapabilities { membership_tag: Some("secret-tag"), owned_quic_packet_plane_certificate_der: Some([1, 2]), member_public_key: "secret-key", signature: "secret-signature" }\n'
                     printf 'underlay 192.0.2.44 [fd00::44]:42300 /dns4/private.example/udp/42300\n'
