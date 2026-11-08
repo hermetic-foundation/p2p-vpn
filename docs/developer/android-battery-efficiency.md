@@ -10,6 +10,7 @@
 | Runtime optimizations | None yet; preserve baseline behavior until device measurements exist |
 | Power endpoint | Debug-only `power-status`; unit checks are not physical battery evidence |
 | Java verification | Normal Gradle unit, lint and instrumentation-assembly tasks now pass |
+| Native baseline APK | ARM64 phone-test APK built, signed and statically verified; not deployed |
 | Completion | Open; CPU, emulator and estimated power results cannot satisfy the target |
 
 ## Measurement Contract
@@ -256,3 +257,56 @@ JAVA_TOOL_OPTIONS=-XX:ActiveProcessorCount=2 \
 Use the pinned JDK/SDK environment from `nix/android.nix`. The replay does not
 rebuild the SDK, download an emulator image or compile native Rust libraries.
 Deleting the mirror requires restoring the locked artifacts before this replay.
+
+## ARM64 Baseline APK, November 8
+
+[Build evidence](android-battery-baseline-2026-11-08.json) records the APK, JNI,
+source and verification facts. This is a phone-test artifact, not a new dual-ABI
+release and not physical battery or feature-preservation evidence.
+
+| Item | Result |
+| --- | --- |
+| Runtime source | Unchanged from `8a302265`; no battery optimization in this baseline |
+| Measurement hook | Android Java source from `948e57bc` |
+| Build tree | `d198b2cb`; subsequent changes only affect tooling and documentation |
+| Native package | Pinned Nix ARM64 derivation passes; release compilation takes 359 seconds |
+| Native limits | One Nix job, two Cargo jobs/cores, existing sub-10-Mbps download cap, 2,400-second watchdog |
+| Native warnings | Five nonfatal warnings; target compilation is not device execution |
+| Java packaging | Offline Gradle assembly passes in 16 seconds; unit/lint results reused as up-to-date |
+| Unit / lint reports | 156 tests without failures/skips; zero lint errors and seven resource warnings |
+| Architecture | `arm64-v8a`, ELF64 AArch64, minimum Android API 26, target API 37 |
+| Signature | Public repository development key; APK v2 signature verifies |
+| Alignment | All four native LOAD segments align to 16 KiB; APK zip alignment check passes |
+| JNI provenance | Packaged bytes match Gradle's stripped output; native `.text` dumps match before/after stripping |
+| Artifact | 19,125,268 bytes; private mode-0600 retained copy |
+| Deployment / measurements | None; ADB still reports no devices |
+
+### Local Artifact
+
+```text
+/home/midischwarz12/.cache/p2p-vpn/battery-baselines/873b7b5a06f1db65ee18486a32f593e39906d26aa5a4512e07496f69963e9ee0/p2p-vpn-baseline-arm64.apk
+```
+
+SHA-256:
+
+```text
+873b7b5a06f1db65ee18486a32f593e39906d26aa5a4512e07496f69963e9ee0
+```
+
+The normal Nix APK output still supports both configured ABIs. This test build
+uses only the current-source ARM64 library to avoid an unnecessary emulator build.
+No host service, personal flake, VPN profile, key or network configuration changed.
+
+The private cache retains one content-addressed baseline APK, not a directory
+of dated copies. Temporary measurement artifacts remain subject to the capture budget.
+
+### Next Required Input
+
+1. Attach the intended physical Android phone with authorized USB debugging.
+2. Install the retained APK in place without clearing profiles or pairing state.
+3. Run the bounded capability capture and verify the actual energy counter behavior.
+4. Select and validate an unplugged measurement method for Wi-Fi and cellular.
+5. Capture the frozen baseline before making runtime optimizations.
+
+The goal is not complete. Missing physical-device access prevents establishing
+the baseline and ranking actual energy costs; emulator/CPU results cannot replace it.
