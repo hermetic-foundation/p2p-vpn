@@ -10,10 +10,95 @@
 | Runtime optimizations | Sort keys cached, unconsumed metric parsing removed and duplicate pairing writes skipped; no measured battery gain |
 | Power endpoint | Debug-only `power-status`; unit checks are not physical battery evidence |
 | Java verification | Normal Gradle unit, lint and instrumentation-assembly tasks now pass |
-| Native baseline APK | Compatibility-corrected ARM64 APK installed; bidirectional IPv4/IPv6 and DNS smoke checks pass |
-| Completion | Open; CPU, emulator and estimated power results cannot satisfy the target |
+| Native APKs | Working ARM64 baseline retained; current candidate installed; earlier bidirectional IPv4/IPv6 and DNS smoke checks pass |
+| Per-app feedback | Android `BatteryUsageStats` estimates can compare APKs; unsupported raw energy counters do not prevent this |
+| First per-app comparison | One matched Wi-Fi pair completed; no detectable improvement; 10x target remains open |
 
-## Measurement Contract
+## Per-App Feedback First
+
+Use Android's built-in per-app consumption report before making further battery
+optimizations. Compare the retained original APK with the candidate on the same
+phone; do not substitute reduced CPU, allocations or file writes for this result.
+
+| Quantity | Calculation / Requirement |
+| --- | --- |
+| Metric | Android-attributed app consumption in mAh per hour |
+| Window consumption | End UID mAh minus start UID mAh; not the cumulative historical total |
+| Rate | Window mAh divided by elapsed hours |
+| Comparison | Candidate rate divided by original rate; `0.10` corresponds to 90% lower reported consumption |
+| Scope | Same UID and unchanged statistics-reset epoch; reject resets and negative deltas |
+| Conditions | Same phone, enabled networks, peer count, underlay and screen state |
+| Components | Record which components Android actually attributes; missing CPU energy is not zero CPU cost |
+| Resolution | Retain endpoint precision; do not claim a small difference below report rounding or run variability |
+| Replication | A short first pair is exploratory; repeat and alternate build order before claiming sustained savings |
+
+Read the current report without clearing battery history:
+
+```sh
+package=org.hermeticfoundation.p2pvpn.debug
+adb -s "$serial" shell dumpsys batterystats --sync
+adb -s "$serial" shell dumpsys batterystats --usage --model power-profile "$package"
+adb -s "$serial" shell dumpsys batterystats -c "$package"
+```
+
+Select the package's UID explicitly. On this phone, `--usage` still prints other
+UIDs despite the package argument; retain only the target block and global reset
+metadata. Parse checkin data as CSV rather than splitting strings manually.
+
+The first comparison uses five-minute settling and ten-minute idle windows for
+each APK. Check Android's cumulative screen-off time at both endpoints, not just
+one screen-state sample. Reject a window interrupted by a screen wake-up.
+
+### USB Accounting
+
+| Setting | Behavior |
+| --- | --- |
+| Physical connection | USB remains attached and supplies power |
+| Accounting | Temporary `dumpsys battery unplug` enables battery-only accounting; it does not disconnect power |
+| History | Temporarily enable `batterystats enable no-auto-reset` to preserve the existing reset scope |
+| Restoration | Always run `dumpsys battery reset` and restore the prior no-auto-reset setting, including on interruption |
+| Interpretation | Report Android's attributed estimates, not physical battery discharge or total-phone battery life |
+
+Do not reset battery history, uninstall the app, erase its profile or change
+membership for a comparison. Preserve the APK hashes, endpoint reports, elapsed
+times, active topology and rejected windows.
+
+Android documents [per-UID battery reporting](https://developer.android.com/tools/dumpsys)
+and [activity-based power estimation](https://source.android.com/docs/core/power).
+Missing raw counters or cellular service does not block Wi-Fi attribution tests.
+Full-device discharge validation below is a separate measurement level.
+
+### First Comparison, November 8
+
+[Structured results](android-per-app-battery-2026-11-08.json) retain the APK
+identities, endpoint values, times, capture hashes and rounding bounds.
+
+| Android Report | Original APK | Current APK |
+| --- | --- | --- |
+| Rounded cumulative UID mAh | `12.8` to `13.1` | `13.3` to `13.7` |
+| UID consumption rate | About `1.8 mAh/hour` | About `2.4 mAh/hour` |
+| Finer screen-off Wi-Fi rate | About `1.88 mAh/hour` | About `1.88 mAh/hour` |
+| Window duration | `600.87 seconds` | `600.86 seconds` |
+| Peers / owned QUIC sessions | `5 / 5` at both endpoints | `5 / 5` at both endpoints |
+| Accounted screen-on time | `0 ms` | `0 ms` |
+
+The rounded UID totals suggest 33% higher candidate consumption, but their
+`0.1 mAh` endpoint precision is too coarse to establish that regression. The
+finer Wi-Fi breakdown shows no detectable change. Neither shows a 10x gain.
+
+- One interrupted screen-on attempt was excluded; the restarted pair stayed screen-off.
+- CPU time was recorded, but Android reported no CPU energy; missing active/frequency tables limit attribution.
+- Normal battery reporting, disconnected VPN and screen-off state were restored; the encrypted profile was unchanged.
+- No performance code changed; app data was preserved and no new members were paired.
+
+Next, retain higher-precision Android UID consumption and repeat with alternating
+build order. Do not treat the short pair, display-rounding bounds or Wi-Fi-only
+breakdown as a precise whole-app battery-life improvement.
+
+## Full-Device Discharge Validation
+
+These controls apply to separate physical-discharge cross-checks, not as
+prerequisites for the per-app Android feedback loop above.
 
 ### Workloads
 
@@ -172,9 +257,9 @@ This is a compatibility prerequisite, not an idle-power optimization.
 Freeze a working, compatibility-corrected APK before collecting baseline windows.
 Do not compare a connected candidate against this failed-startup workload.
 
-The phone remains useful for functional and CPU/wakeup/radio debugging.
-Charge counters and CPU proxies cannot establish the energy target; accepted energy
-comparisons still need a supported, validated counter or external power hardware.
+The phone supports functional and CPU/wakeup/radio debugging and Android's per-app
+battery-attribution comparisons. Unsupported raw energy counters do not prevent
+that feedback loop. Keep attributed estimates separate from full-device discharge.
 
 ### Compatibility Verification
 
@@ -256,9 +341,9 @@ This rules out the tested Perfetto source as an energy-measurement path on this
 setup, not the phone's hardware in every possible firmware or laboratory setup.
 Charge, current and voltage remain proxies; do not relabel their product as measured energy.
 
-Energy acceptance still needs a verified measurement method and cellular series.
-That does not block useful Wi-Fi profiling or compatibility-preserving CPU work.
-Retain the original APK for future matched energy tests; CPU results do not satisfy the target.
+Retain the original APK for matched per-app battery comparisons. The tested
+Perfetto source is not required for Android's own attribution reports. Additional
+CPU work must follow a battery comparison rather than replace it.
 
 ### Settled Wi-Fi CPU Profiling
 
