@@ -7,7 +7,7 @@
 | Target | At least 90% less app-attributable connected-idle energy on Wi-Fi and cellular |
 | Baseline source | Working runtime `eec88da9`; corrected ARM64 APK retained before CPU changes |
 | Device baseline | OnePlus 9 Pro capability capture completed; no supported energy counter reported |
-| Runtime optimizations | Relay snapshot sort keys cached; unconsumed metric parsing removed; no battery-savings claim |
+| Runtime optimizations | Sort keys cached, unconsumed metric parsing removed and duplicate pairing writes skipped; no measured battery gain |
 | Power endpoint | Debug-only `power-status`; unit checks are not physical battery evidence |
 | Java verification | Normal Gradle unit, lint and instrumentation-assembly tasks now pass |
 | Native baseline APK | Compatibility-corrected ARM64 APK installed; bidirectional IPv4/IPv6 and DNS smoke checks pass |
@@ -287,7 +287,7 @@ text order. Temporary keys are bounded by the existing 64-infrastructure-peer ca
 - No longer-lived cache or stale address/connection state is introduced.
 - No discovery interval, LAN preference, recovery, persistence or authority behavior changes.
 - Regression coverage compares legacy order at capacity, changed addresses, removal and reverse insertion order.
-- Repeated pairing-state writes remain a separate investigation; Java parsing is addressed below.
+- Pairing-state writes and Java parsing are addressed in separate follow-ups below.
 
 #### Comparison Result
 
@@ -316,7 +316,7 @@ For the same 64-entry synthetic input, cached sorting reduces key encodings from
 | Restoration | Original disconnected state restored; native TUN/Tokio workers and owned remote traces retired |
 | Acceptance | No measured energy gain or full feature/non-regression claim; cellular and sustained energy gates remain open |
 
-Next, investigate idle pairing-state writes and avoid unconsumed status snapshots.
+Remaining work includes unconsumed status snapshots and public-network costs.
 Preserve crash durability, malformed-input handling and discovery/recovery behavior.
 
 After disconnection, the unchanged debug receiver cannot cold-start an idle
@@ -379,6 +379,45 @@ The bounded host probe uses JDK 17's `jdk.JavaExceptionThrow`, filtered to parse
 stack frames. Each case has a 20-second watchdog and a 1 MiB trace cap.
 No profiler runs on the phone during the functional smoke checks.
 
+### Pairing-State Write Follow-Up
+
+[Write evidence](android-pairing-writes-2026-11-08.json) records a shared-runtime
+optimization. The one-second pairing tick remains unchanged, but saving an already
+committed, unchanged state no longer encrypts, replaces and syncs the file again.
+
+| Requirement | Implementation |
+| --- | --- |
+| Durability | Only a successful file sync and confirmed parent sync seed a reusable hint |
+| Visibility | Loading state never seeds that hint; failed saves and removal invalidate it |
+| Selection | File and protected-directory identity, permissions and ownership must still match |
+| Content | Bounded, non-following/nonblocking reads recheck the stored ciphertext digest |
+| Concurrency | Per-store mutex and existing directory lock cover comparison or commit |
+| Confidentiality | Hint holds two digests and metadata, not plaintext; it is omitted from diagnostics |
+| Compatibility | Existing formats, keys, nonce generation, expiry, cancellation and protocol behavior remain |
+| Unsupported sync | Existing success behavior remains, but unsupported parent sync never enables deduplication |
+| Legacy storage | Unprotected directories retain unconditional writes |
+
+Real state changes still follow file sync, atomic rename and parent sync before
+acknowledgement. The optimization does not suppress pairing maintenance, discovery,
+route recovery or data traffic, and it does not remove the one-second wakeup.
+
+| Verification | Result / Limit |
+| --- | --- |
+| Store regressions | 28 pass, including 16 new cases for durability, corruption, replacement, ownership and concurrency |
+| Full Rust workspace | 1,838 pass, zero failures, 48 ignored; format, repository Clippy gates and Nix test-source checks pass |
+| Clippy scope | Pedantic warnings remain, including intentional omission of the private hint from `Debug` |
+| Phone baseline | Six idle samples contain six different ciphertexts/inode versions |
+| Phone candidate | All six idle samples retain the same file while five peers and QUIC sessions remain connected |
+| Mutation controls | Opening an invitation, canceling via disconnect and reconnecting each produce genuine persisted changes |
+| Restart idle | Six more samples remain unchanged after reconnect; canceled pairing does not reappear in the app |
+| Traffic | 20/20 bidirectional IPv4/IPv6 probes and DNS pass; five more replies pass after cancellation/reconnect |
+| Deployment | ARM64 Nix build and offline APK assembly pass; signature/alignment verified; encrypted profile unchanged |
+| Cleanup | Owned invitation canceled; original disconnected/screen-off state restored; approximately 560 KiB of captures |
+
+These are file-I/O and functional checks, not energy or long-duration acceptance.
+The phone still reports no energy counter while USB powered. No battery-life
+percentage, extra operating hours or 10x improvement is established by these results.
+
 ## Optimization Candidates
 
 These are investigation leads, not measured battery attribution or approved tradeoffs.
@@ -390,6 +429,7 @@ These are investigation leads, not measured battery attribution or approved trad
 | Java service | Native health snapshot every two seconds | Event-driven state/failure delivery, retaining recovery and permission checks |
 | Native supervisor | Health and peer-snapshot refresh every five seconds | Preserve failure detection while attributing repeated status work |
 | Membership checkpoints | One-second maintenance tick per active runtime | Next-deadline scheduling with unchanged mutation/expiry bounds |
+| Code-pairing store | Duplicate committed writes now skipped; one-second tick retained | Attribute remaining timer/serialization costs without weakening durability |
 | Wi-Fi discovery | Multicast lock held while connected; separate pairing lock | Measure radio impact before changing LAN-first discovery behavior |
 | Public networking | Discovery, dialing, relay and connection maintenance | Actual radio bursts, failed retries and settled-peer behavior |
 | Multi-network supervisor | Per-network runtime/cache ownership | Duplicate idle work without merging security or routing authority |

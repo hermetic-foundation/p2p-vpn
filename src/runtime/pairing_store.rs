@@ -1,8 +1,9 @@
 use std::{
     fs::{self, File, OpenOptions},
-    io::{self, Write as _},
-    os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _},
+    io::{self, Read as _, Write as _},
+    os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _},
     path::{Path, PathBuf},
+    sync::{Mutex, MutexGuard},
 };
 
 use chacha20poly1305::{
@@ -11,7 +12,7 @@ use chacha20poly1305::{
 };
 use hkdf::Hkdf;
 use rand_core::{OsRng, RngCore as _};
-use sha2_010::Sha256;
+use sha2_010::{Digest as _, Sha256};
 
 pub const MAX_PAIRING_STATE_BYTES: usize = 512 * 1024;
 pub const PAIRING_MEMBERSHIP_KEY_FILE: &str = "membership.key";
@@ -30,6 +31,14 @@ const MAX_PAIRING_STATE_FILE_BYTES: usize = MAX_PAIRING_STATE_BYTES
 pub struct PairingStateStore {
     path: PathBuf,
     encryption_key: Option<[u8; PAIRING_STATE_KEY_BYTES]>,
+    last_durable: Mutex<Option<DurablePairingState>>,
+}
+
+struct DurablePairingState {
+    plaintext_digest: [u8; 32],
+    stored_digest: [u8; 32],
+    metadata: fs::Metadata,
+    directory: fs::Metadata,
 }
 
 impl std::fmt::Debug for PairingStateStore {
@@ -56,6 +65,7 @@ impl PairingStateStore {
         Self {
             path: path.into(),
             encryption_key: None,
+            last_durable: Mutex::new(None),
         }
     }
 
@@ -80,6 +90,7 @@ impl PairingStateStore {
         Ok(Self {
             path: path.into(),
             encryption_key: Some(encryption_key),
+            last_durable: Mutex::new(None),
         })
     }
 
@@ -130,10 +141,11 @@ impl PairingStateStore {
     fn save_with_parent_sync(
         &self,
         bytes: &[u8],
-        sync_parent: impl FnOnce(&Path) -> io::Result<()>,
+        sync_parent: impl FnOnce(&Path) -> io::Result<bool>,
     ) -> Result<(), PairingStateStoreError> {
+        let mut last_durable = self.lock_durable_state();
+        let previous = last_durable.take();
         validate_length(bytes.len())?;
-        let stored = self.seal(bytes)?;
         let parent = self
             .path
             .parent()
@@ -142,10 +154,25 @@ impl PairingStateStore {
         if !parent_metadata.is_dir() || parent_metadata.file_type().is_symlink() {
             return Err(PairingStateStoreError::UnsafeParent(parent.to_path_buf()));
         }
+        let write_owner = super::state_write_cleanup::lock_and_retire(&self.path)?;
+        let directory = write_owner.as_ref().and_then(|owner| owner.metadata().ok());
         if let Ok(metadata) = fs::symlink_metadata(&self.path) {
             validate_state_file(&self.path, &metadata)?;
         }
-        let _write_owner = super::state_write_cleanup::lock_and_retire(&self.path)?;
+
+        let plaintext_digest = Sha256::digest(bytes).into();
+        // A read proves visibility, not durability. Only a completed save can seed this hint.
+        if previous.as_ref().is_some_and(|durable| {
+            directory
+                .as_ref()
+                .is_some_and(|metadata| same_directory_owner(metadata, &durable.directory))
+                && durable.plaintext_digest == plaintext_digest
+                && self.matches_durable_file(durable, parent).unwrap_or(false)
+        }) {
+            *last_durable = previous;
+            return Ok(());
+        }
+        let stored = self.seal(bytes)?;
 
         let file_name = self
             .path
@@ -173,13 +200,69 @@ impl PairingStateStore {
             let _ = fs::remove_file(&temporary_path);
             return Err(PairingStateStoreError::Io(error));
         }
-        drop(temporary);
         if let Err(error) = fs::rename(&temporary_path, &self.path) {
+            drop(temporary);
             let _ = fs::remove_file(&temporary_path);
             return Err(PairingStateStoreError::Io(error));
         }
-        sync_parent(parent)?;
+        let parent_synced = sync_parent(parent)?;
+        if parent_synced && let (Some(directory), Ok(metadata)) = (directory, temporary.metadata())
+        {
+            *last_durable = Some(DurablePairingState {
+                plaintext_digest,
+                stored_digest: Sha256::digest(&stored).into(),
+                metadata,
+                directory,
+            });
+        }
         Ok(())
+    }
+
+    fn lock_durable_state(&self) -> MutexGuard<'_, Option<DurablePairingState>> {
+        self.last_durable.lock().unwrap_or_else(|error| {
+            let mut state = error.into_inner();
+            *state = None;
+            self.last_durable.clear_poison();
+            state
+        })
+    }
+
+    fn matches_durable_file(
+        &self,
+        durable: &DurablePairingState,
+        parent: &Path,
+    ) -> io::Result<bool> {
+        let file = File::from(rustix::fs::open(
+            &self.path,
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::NONBLOCK
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )?);
+        if !same_file_version(&file.metadata()?, &durable.metadata) {
+            return Ok(false);
+        }
+        // Also check ciphertext, including on filesystems with coarse timestamps.
+        let mut reader = file.take(durable.metadata.len().saturating_add(1));
+        let mut digest = Sha256::new();
+        let mut buffer = [0_u8; 4096];
+        let mut length = 0_u64;
+        loop {
+            let read = reader.read(&mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            length += read as u64;
+            digest.update(&buffer[..read]);
+        }
+        let stored_digest: [u8; 32] = digest.finalize().into();
+        let directory = fs::symlink_metadata(parent)?;
+        Ok(length == durable.metadata.len()
+            && stored_digest == durable.stored_digest
+            && same_file_version(&reader.get_ref().metadata()?, &durable.metadata)
+            && same_file_version(&fs::symlink_metadata(&self.path)?, &durable.metadata)
+            && same_directory_owner(&directory, &durable.directory))
     }
 
     fn seal(&self, plaintext: &[u8]) -> Result<Vec<u8>, PairingStateStoreError> {
@@ -241,6 +324,8 @@ impl PairingStateStore {
     }
 
     pub fn remove(&self) -> Result<(), PairingStateStoreError> {
+        let mut last_durable = self.lock_durable_state();
+        *last_durable = None;
         match fs::remove_file(&self.path) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
@@ -249,24 +334,46 @@ impl PairingStateStore {
     }
 }
 
-fn sync_parent_directory(parent: &Path) -> io::Result<()> {
+fn same_file_version(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    left.dev() == right.dev()
+        && left.ino() == right.ino()
+        && left.len() == right.len()
+        && left.mode() == right.mode()
+        && left.uid() == right.uid()
+        && left.gid() == right.gid()
+        && left.nlink() == right.nlink()
+        && left.mtime() == right.mtime()
+        && left.mtime_nsec() == right.mtime_nsec()
+        && left.ctime() == right.ctime()
+        && left.ctime_nsec() == right.ctime_nsec()
+}
+
+fn same_directory_owner(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    left.dev() == right.dev()
+        && left.ino() == right.ino()
+        && left.mode() == right.mode()
+        && left.uid() == right.uid()
+        && left.gid() == right.gid()
+}
+
+fn sync_parent_directory(parent: &Path) -> io::Result<bool> {
     let directory = match File::open(parent) {
         Ok(directory) => directory,
         Err(error) => return handle_directory_sync_error(error),
     };
     match directory.sync_all() {
-        Ok(()) => Ok(()),
+        Ok(()) => Ok(true),
         Err(error) => handle_directory_sync_error(error),
     }
 }
 
-fn handle_directory_sync_error(error: io::Error) -> io::Result<()> {
+fn handle_directory_sync_error(error: io::Error) -> io::Result<bool> {
     // Some Unix filesystems reject directory fsync with EINVAL rather than ENOTSUP.
     if matches!(
         error.kind(),
         io::ErrorKind::InvalidInput | io::ErrorKind::Unsupported
     ) {
-        Ok(())
+        Ok(false)
     } else {
         Err(error)
     }
@@ -391,6 +498,389 @@ mod tests {
         fs::create_dir(&path).expect("test directory");
         fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).expect("directory mode");
         path
+    }
+
+    fn encrypted_store(directory: &Path) -> PairingStateStore {
+        PairingStateStore::encrypted(
+            directory.join("pairing.json"),
+            "private-identity-material",
+            "runner-mesh",
+            "local-peer",
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn unchanged_saves_retain_the_durable_file_without_another_sync() {
+        for encrypted in [false, true] {
+            let directory = test_directory(if encrypted {
+                "same-encrypted"
+            } else {
+                "same-plain"
+            });
+            let store = if encrypted {
+                encrypted_store(&directory)
+            } else {
+                PairingStateStore::new(directory.join("pairing.json"))
+            };
+            store.save(b"durable state").unwrap();
+            let initial = fs::read(store.path()).unwrap();
+            let metadata = fs::metadata(store.path()).unwrap();
+            let syncs = Cell::new(0);
+            for _ in 0..32 {
+                store
+                    .save_with_parent_sync(b"durable state", |parent| {
+                        syncs.set(syncs.get() + 1);
+                        sync_parent_directory(parent)
+                    })
+                    .unwrap();
+            }
+            assert_eq!(syncs.get(), 0);
+            assert_eq!(fs::read(store.path()).unwrap(), initial);
+            assert!(same_file_version(
+                &fs::metadata(store.path()).unwrap(),
+                &metadata
+            ));
+            assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
+            fs::remove_dir_all(directory).unwrap();
+        }
+    }
+
+    #[test]
+    fn changed_payloads_and_rollbacks_each_commit_before_becoming_reusable() {
+        let directory = test_directory("changed-payloads");
+        let store = encrypted_store(&directory);
+        let syncs = Cell::new(0);
+        for state in [b"state A", b"state A", b"state B", b"state B", b"state A"] {
+            store
+                .save_with_parent_sync(state, |parent| {
+                    syncs.set(syncs.get() + 1);
+                    sync_parent_directory(parent)
+                })
+                .unwrap();
+            assert_eq!(store.load().unwrap().unwrap(), state);
+        }
+        assert_eq!(syncs.get(), 3);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn visible_state_after_failed_sync_requires_a_successful_retry() {
+        let directory = test_directory("visible-not-durable");
+        let store = encrypted_store(&directory);
+        store.save(b"state A").unwrap();
+        assert!(
+            store
+                .save_with_parent_sync(b"state B", |_| {
+                    Err(io::Error::from(io::ErrorKind::PermissionDenied))
+                })
+                .is_err()
+        );
+        assert_eq!(store.load().unwrap().unwrap(), b"state B");
+        assert!(store.lock_durable_state().is_none());
+        let syncs = Cell::new(0);
+        for state in [b"state B", b"state B", b"state A"] {
+            store
+                .save_with_parent_sync(state, |parent| {
+                    syncs.set(syncs.get() + 1);
+                    sync_parent_directory(parent)
+                })
+                .unwrap();
+        }
+        assert_eq!(syncs.get(), 2);
+        assert_eq!(store.load().unwrap().unwrap(), b"state A");
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn loads_and_new_store_owners_do_not_establish_durability() {
+        let directory = test_directory("new-owner");
+        let first = encrypted_store(&directory);
+        first.save(b"state").unwrap();
+        let second = encrypted_store(&directory);
+        assert_eq!(second.load().unwrap().unwrap(), b"state");
+        assert!(second.lock_durable_state().is_none());
+        let syncs = Cell::new(0);
+        for store in [&second, &second, &first] {
+            store
+                .save_with_parent_sync(b"state", |parent| {
+                    syncs.set(syncs.get() + 1);
+                    sync_parent_directory(parent)
+                })
+                .unwrap();
+        }
+        assert_eq!(syncs.get(), 2);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn ciphertext_is_checked_even_when_file_metadata_matches() {
+        let directory = test_directory("coarse-metadata");
+        let store = encrypted_store(&directory);
+        store.save(b"state").unwrap();
+        let mut damaged = fs::read(store.path()).unwrap();
+        *damaged.last_mut().unwrap() ^= 1;
+        fs::write(store.path(), damaged).unwrap();
+        // Model a filesystem where an in-place change has indistinguishable timestamps.
+        store.lock_durable_state().as_mut().unwrap().metadata = fs::metadata(store.path()).unwrap();
+        let syncs = Cell::new(0);
+        store
+            .save_with_parent_sync(b"state", |parent| {
+                syncs.set(syncs.get() + 1);
+                sync_parent_directory(parent)
+            })
+            .unwrap();
+        assert_eq!(syncs.get(), 1);
+        assert_eq!(store.load().unwrap().unwrap(), b"state");
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn durable_read_hint_does_not_follow_symbolic_links() {
+        let directory = test_directory("hint-no-follow");
+        let store = encrypted_store(&directory);
+        store.save(b"state").unwrap();
+        let target = directory.join("target");
+        fs::rename(store.path(), &target).unwrap();
+        symlink(&target, store.path()).unwrap();
+        {
+            let hint = store.lock_durable_state();
+            assert!(
+                store
+                    .matches_durable_file(hint.as_ref().unwrap(), &directory)
+                    .is_err()
+            );
+        }
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn a_replaced_parent_directory_requires_a_new_commit() {
+        let directory = test_directory("changed-parent");
+        let displaced = directory.with_extension("old");
+        let store = encrypted_store(&directory);
+        store.save(b"state").unwrap();
+        fs::rename(&directory, &displaced).unwrap();
+        fs::create_dir(&directory).unwrap();
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::rename(displaced.join("pairing.json"), store.path()).unwrap();
+        // Isolate directory identity from the inode's separately checked timestamps.
+        store.lock_durable_state().as_mut().unwrap().metadata = fs::metadata(store.path()).unwrap();
+        let syncs = Cell::new(0);
+        store
+            .save_with_parent_sync(b"state", |parent| {
+                syncs.set(syncs.get() + 1);
+                sync_parent_directory(parent)
+            })
+            .unwrap();
+        assert_eq!(syncs.get(), 1);
+        fs::remove_dir_all(directory).unwrap();
+        fs::remove_dir(displaced).unwrap();
+    }
+
+    #[test]
+    fn parent_permission_changes_invalidate_the_durable_hint() {
+        let directory = test_directory("parent-permissions");
+        let store = encrypted_store(&directory);
+        store.save(b"state").unwrap();
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o500)).unwrap();
+        {
+            let hint = store.lock_durable_state();
+            assert!(
+                !store
+                    .matches_durable_file(hint.as_ref().unwrap(), &directory)
+                    .unwrap()
+            );
+        }
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn externally_replaced_or_deleted_files_are_committed_again() {
+        let directory = test_directory("external-replacement");
+        let store = encrypted_store(&directory);
+        store.save(b"state").unwrap();
+        let replacement = directory.join("replacement");
+        fs::write(&replacement, fs::read(store.path()).unwrap()).unwrap();
+        fs::set_permissions(&replacement, fs::Permissions::from_mode(0o600)).unwrap();
+        fs::rename(replacement, store.path()).unwrap();
+        let syncs = Cell::new(0);
+        store
+            .save_with_parent_sync(b"state", |parent| {
+                syncs.set(syncs.get() + 1);
+                sync_parent_directory(parent)
+            })
+            .unwrap();
+        fs::remove_file(store.path()).unwrap();
+        store
+            .save_with_parent_sync(b"state", |parent| {
+                syncs.set(syncs.get() + 1);
+                sync_parent_directory(parent)
+            })
+            .unwrap();
+        assert_eq!(syncs.get(), 2);
+        assert_eq!(store.load().unwrap().unwrap(), b"state");
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn reusable_state_does_not_bypass_permissions_or_symlink_checks() {
+        let directory = test_directory("cached-safety");
+        let store = encrypted_store(&directory);
+        store.save(b"state").unwrap();
+        fs::set_permissions(store.path(), fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(matches!(
+            store.save(b"state"),
+            Err(PairingStateStoreError::PermissiveMode { .. })
+        ));
+        assert!(store.lock_durable_state().is_none());
+        fs::set_permissions(store.path(), fs::Permissions::from_mode(0o600)).unwrap();
+        store.save(b"state").unwrap();
+        let target = directory.join("target");
+        fs::rename(store.path(), &target).unwrap();
+        symlink(&target, store.path()).unwrap();
+        assert!(matches!(
+            store.save(b"state"),
+            Err(PairingStateStoreError::UnsafeFile(_))
+        ));
+        assert!(store.lock_durable_state().is_none());
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn owner_only_permission_changes_are_repaired_before_reuse() {
+        let directory = test_directory("owner-only-changed-mode");
+        let store = encrypted_store(&directory);
+        for mode in [0o400, 0o200] {
+            store.save(b"state").unwrap();
+            fs::set_permissions(store.path(), fs::Permissions::from_mode(mode)).unwrap();
+            let syncs = Cell::new(0);
+            store
+                .save_with_parent_sync(b"state", |parent| {
+                    syncs.set(syncs.get() + 1);
+                    sync_parent_directory(parent)
+                })
+                .unwrap();
+            assert_eq!(syncs.get(), 1);
+            assert_eq!(fs::metadata(store.path()).unwrap().mode() & 0o777, 0o600);
+        }
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn a_poisoned_hint_is_discarded_instead_of_acknowledging_an_old_commit() {
+        let directory = test_directory("poisoned-hint");
+        let store = encrypted_store(&directory);
+        store.save(b"state").unwrap();
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _hint = store.lock_durable_state();
+                panic!("interrupted save owner");
+            }))
+            .is_err()
+        );
+        let syncs = Cell::new(0);
+        for _ in 0..2 {
+            store
+                .save_with_parent_sync(b"state", |parent| {
+                    syncs.set(syncs.get() + 1);
+                    sync_parent_directory(parent)
+                })
+                .unwrap();
+        }
+        assert_eq!(syncs.get(), 1);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn concurrent_identical_saves_share_one_completed_commit() {
+        use std::sync::{
+            Arc, Barrier,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        let directory = test_directory("concurrent-same-state");
+        let store = Arc::new(encrypted_store(&directory));
+        let ready = Arc::new(Barrier::new(8));
+        let syncs = Arc::new(AtomicUsize::new(0));
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                let store = Arc::clone(&store);
+                let ready = Arc::clone(&ready);
+                let syncs = Arc::clone(&syncs);
+                scope.spawn(move || {
+                    ready.wait();
+                    store
+                        .save_with_parent_sync(b"state", |parent| {
+                            syncs.fetch_add(1, Ordering::SeqCst);
+                            sync_parent_directory(parent)
+                        })
+                        .unwrap();
+                });
+            }
+        });
+        assert_eq!(syncs.load(Ordering::SeqCst), 1);
+        assert_eq!(store.load().unwrap().unwrap(), b"state");
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn unprotected_legacy_directories_never_skip_a_save() {
+        let directory = test_directory("unprotected-directory");
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o777)).unwrap();
+        let store = encrypted_store(&directory);
+        let syncs = Cell::new(0);
+        for _ in 0..2 {
+            store
+                .save_with_parent_sync(b"state", |parent| {
+                    syncs.set(syncs.get() + 1);
+                    sync_parent_directory(parent)
+                })
+                .unwrap();
+        }
+        assert_eq!(syncs.get(), 2);
+        assert!(store.lock_durable_state().is_none());
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn unsupported_parent_sync_remains_successful_but_never_seeds_a_durable_hint() {
+        let directory = test_directory("unsupported-parent-sync");
+        let store = encrypted_store(&directory);
+        let syncs = Cell::new(0);
+        for _ in 0..2 {
+            store
+                .save_with_parent_sync(b"state", |_| {
+                    syncs.set(syncs.get() + 1);
+                    Ok(false)
+                })
+                .unwrap();
+            assert!(store.lock_durable_state().is_none());
+            assert_eq!(store.load().unwrap().unwrap(), b"state");
+        }
+        assert_eq!(syncs.get(), 2);
+        store.save(b"state").unwrap();
+        store
+            .save_with_parent_sync(b"state", |_| {
+                syncs.set(syncs.get() + 1);
+                Ok(false)
+            })
+            .unwrap();
+        assert_eq!(syncs.get(), 2);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn removing_state_invalidates_the_previous_commit() {
+        let directory = test_directory("remove-invalidates");
+        let store = encrypted_store(&directory);
+        store.save(b"state").unwrap();
+        store.remove().unwrap();
+        assert!(store.lock_durable_state().is_none());
+        store.save(b"state").unwrap();
+        assert_eq!(store.load().unwrap().unwrap(), b"state");
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
@@ -550,7 +1040,7 @@ mod tests {
                     .expect("read parent entries");
                 assert_eq!(entries.len(), 1);
                 assert_eq!(entries[0].path(), path);
-                Ok(())
+                Ok(true)
             })
             .expect("save");
 
@@ -599,8 +1089,10 @@ mod tests {
 
     #[test]
     fn pairing_state_ignores_only_unsupported_directory_sync_errors() {
-        assert!(handle_directory_sync_error(io::Error::from(io::ErrorKind::Unsupported)).is_ok());
-        assert!(handle_directory_sync_error(io::Error::from(io::ErrorKind::InvalidInput)).is_ok());
+        assert!(!handle_directory_sync_error(io::Error::from(io::ErrorKind::Unsupported)).unwrap());
+        assert!(
+            !handle_directory_sync_error(io::Error::from(io::ErrorKind::InvalidInput)).unwrap()
+        );
 
         let error = handle_directory_sync_error(io::Error::from(io::ErrorKind::PermissionDenied))
             .expect_err("permission failure must remain visible");
