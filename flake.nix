@@ -372,6 +372,7 @@
             ./scripts/android-battery-decode.proto
             ./scripts/android-cellular-compare.py
             ./scripts/android-cellular-capture.py
+            ./scripts/android-battery-paired.py
           ];
         };
         androidBatteryDecoder = pkgs.writeShellApplication {
@@ -456,6 +457,29 @@
               ruff check ${androidBatterySources}/android-cellular-capture.py ${./tests/android-cellular-capture.py}
               ruff format --check ${androidBatterySources}/android-cellular-capture.py ${./tests/android-cellular-capture.py}
               python3 ${./tests/android-cellular-capture.py}
+              touch "$out"
+            '';
+        androidBatteryPaired = pkgs.writeShellApplication {
+          name = "p2p-vpn-android-battery-paired";
+          runtimeInputs = [
+            androidBatteryPython
+            pkgs.protobuf
+            pkgs.android-tools
+          ];
+          text = ''
+            export PYTHONDONTWRITEBYTECODE=1
+            exec python3 ${androidBatterySources}/android-battery-paired.py "$@"
+          '';
+        };
+        androidBatteryPairedTests =
+          pkgs.runCommand "p2p-vpn-android-battery-paired-tests"
+            {
+              nativeBuildInputs = [ androidBatteryPython ];
+            }
+            ''
+              export PYTHONDONTWRITEBYTECODE=1
+              export P2P_VPN_BATTERY_PAIRED=${androidBatterySources}/android-battery-paired.py
+              python3 ${./tests/android-battery-paired.py}
               touch "$out"
             '';
         androidE2eRuntime =
@@ -5847,6 +5871,7 @@
           android-battery-decode = androidBatteryDecoder;
           android-cellular-compare = androidCellularCompare;
           android-cellular-capture = androidCellularCapture;
+          android-battery-paired = androidBatteryPaired;
           android-native = android.androidNative;
           android-native-arm64 = android.androidNativeArm64;
           android-native-x86_64 = android.androidNativeX86_64;
@@ -6228,6 +6253,7 @@
           android-battery-decode = androidBatteryDecoderTests;
           android-cellular-compare = androidCellularCompareTests;
           android-cellular-capture = androidCellularCaptureTests;
+          android-battery-paired = androidBatteryPairedTests;
           android = android.androidCheck;
           android-device-audit-structure = androidDeviceAuditStructure;
           android-e2e-fixture = androidE2eFixture;
