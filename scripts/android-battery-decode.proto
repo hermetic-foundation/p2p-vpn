@@ -1,0 +1,32 @@
+syntax = "proto2";
+package p2pvpn.battery;
+
+// Wire projection, not a replacement Android schema:
+// AOSP android16-release core/proto/android/{service,os}/batterystats.proto.
+// Omitted app/process fields stay private and are never included in JSON output.
+message ServiceDump { optional Stats batterystats = 1; }
+message Stats {
+  optional int32 report_version = 1;
+  optional int64 parcel_version = 2;
+  repeated Uid uids = 5;
+  optional System system = 6;
+}
+message Uid {
+  optional int32 uid = 1;
+  optional PowerUse power_use_item = 18;
+}
+message PowerUse {
+  optional double computed_power_mah = 1;
+  optional double screen_power_mah = 3;
+}
+message System { optional Battery battery = 1; }
+message Battery {
+  optional int64 start_clock_time_ms = 1;
+  optional int64 start_count = 2;
+  optional int64 total_realtime_ms = 3;
+  optional int64 total_uptime_ms = 4;
+  optional int64 battery_realtime_ms = 5;
+  optional int64 battery_uptime_ms = 6;
+  optional int64 screen_off_realtime_ms = 7;
+  optional int64 screen_off_uptime_ms = 8;
+}

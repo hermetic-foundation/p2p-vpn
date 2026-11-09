@@ -49,6 +49,48 @@ The first comparison uses five-minute settling and ten-minute idle windows for
 each APK. Check Android's cumulative screen-off time at both endpoints, not just
 one screen-state sample. Reject a window interrupted by a screen wake-up.
 
+### Full-Precision Decoder
+
+The binary Android report retains UID mAh as a double. Decode it before
+subtracting endpoints; the formatted text can lose a meaningful window's
+precision. The host-only decoder uses the standard Protobuf library.
+
+| Property | Contract |
+| --- | --- |
+| Nix package / check | `android-battery-decode` |
+| Supported projection | Android report version `36`, parcel version `216` |
+| Bounds | At most 2 MiB of input and 20 seconds; unsupported or malformed input fails |
+| Output | Selected UID only, full-precision mAh, reset/screen clocks and report hash |
+| Missing attribution | JSON `null`, not fabricated zero; duplicate UIDs are rejected |
+| Phone mutations | None; the decoder does not run ADB or alter battery/VPN settings |
+| Interpretation | Android attribution, not a hardware energy counter or one-point battery comparison |
+
+Realize the tool before any timed window. Look up the app's numeric UID on the
+selected phone; do not reuse another phone's UID.
+
+```sh
+decoder=$(nix build .#android-battery-decode --no-link --print-out-paths)
+adb -s "$serial" shell cmd package list packages -U org.hermeticfoundation.p2pvpn.debug
+```
+
+With `uid` set to that package's numeric UID, capture each endpoint:
+
+```sh
+set -euo pipefail
+set -C
+umask 077
+timeout --kill-after=1s 20s adb -s "$serial" exec-out dumpsys batterystats \
+  --proto org.hermeticfoundation.p2pvpn.debug |
+  "$decoder/bin/p2p-vpn-android-battery-decode" --uid "$uid" > endpoint.json
+```
+
+Use a new endpoint filename each time. Compare only unchanged UID/reset/version
+scopes and matching workloads; require a fully screen-off interval. Keep report
+types consistent: binary and `--usage` cumulative totals need not share a scope.
+
+Removing display rounding does not improve Android's underlying model accuracy
+or fill missing CPU attribution. The tool is independent of the app APK.
+
 ### USB Accounting
 
 | Setting | Behavior |

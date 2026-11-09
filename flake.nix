@@ -352,6 +352,39 @@
             exec bash ${./scripts/debug-bundle.sh} "$@"
           '';
         };
+        androidBatteryPython = pkgs.python3.withPackages (ps: [ ps.protobuf ]);
+        androidBatterySources = lib.fileset.toSource {
+          root = ./scripts;
+          fileset = lib.fileset.unions [
+            ./scripts/android-battery-decode.py
+            ./scripts/android-battery-decode.proto
+          ];
+        };
+        androidBatteryDecoder = pkgs.writeShellApplication {
+          name = "p2p-vpn-android-battery-decode";
+          runtimeInputs = [
+            androidBatteryPython
+            pkgs.protobuf
+          ];
+          text = ''
+            export PYTHONDONTWRITEBYTECODE=1
+            exec python3 ${androidBatterySources}/android-battery-decode.py "$@"
+          '';
+        };
+        androidBatteryDecoderTests =
+          pkgs.runCommand "p2p-vpn-android-battery-decode-tests"
+            {
+              nativeBuildInputs = [
+                androidBatteryPython
+                pkgs.protobuf
+              ];
+            }
+            ''
+              export PYTHONDONTWRITEBYTECODE=1
+              export P2P_VPN_BATTERY_DECODER=${androidBatterySources}/android-battery-decode.py
+              python3 ${./tests/android-battery-decode.py}
+              touch "$out"
+            '';
         androidE2eRuntime =
           if androidSupported then
             pkgs.writeShellApplication {
@@ -5734,6 +5767,7 @@
               '';
         }
         // lib.optionalAttrs androidSupported {
+          android-battery-decode = androidBatteryDecoder;
           android-native = android.androidNative;
           android-native-arm64 = android.androidNativeArm64;
           android-native-x86_64 = android.androidNativeX86_64;
@@ -6053,6 +6087,7 @@
               '';
         }
         // lib.optionalAttrs androidSupported {
+          android-battery-decode = androidBatteryDecoderTests;
           android = android.androidCheck;
           android-device-audit-structure = androidDeviceAuditStructure;
           android-e2e-fixture = androidE2eFixture;
