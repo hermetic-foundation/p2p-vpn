@@ -58,6 +58,10 @@ final class RuntimeDiagnostics {
             if (separator <= 0 || separator == line.length() - 1) {
                 continue;
             }
+            int index = metricIndex(line.substring(0, separator));
+            if (index < 0) {
+                continue;
+            }
             long value;
             try {
                 value = Long.parseLong(line.substring(separator + 1));
@@ -67,11 +71,8 @@ final class RuntimeDiagnostics {
             if (value < 0) {
                 continue;
             }
-            int index = metricIndex(line.substring(0, separator));
-            if (index >= 0) {
-                values[index] =
-                        index == 3 ? Math.max(values[index], value) : saturatingAdd(values[index], value);
-            }
+            values[index] =
+                    index == 3 ? Math.max(values[index], value) : saturatingAdd(values[index], value);
         }
         return new RuntimeDiagnostics(values);
     }

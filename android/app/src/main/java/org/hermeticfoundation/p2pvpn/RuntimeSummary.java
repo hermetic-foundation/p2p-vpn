@@ -91,58 +91,56 @@ final class RuntimeSummary {
             if (separator <= 0 || separator == line.length() - 1) {
                 continue;
             }
-            long value;
-            try {
-                value = Long.parseLong(line.substring(separator + 1));
-            } catch (NumberFormatException ignored) {
-                continue;
-            }
-            if (value < 0) {
-                continue;
-            }
             switch (line.substring(0, separator)) {
                 case "path_peers_with_supported_path":
-                    connectedPeers = saturatingAdd(connectedPeers, value);
+                    connectedPeers = saturatingAdd(connectedPeers, metricValue(line, separator));
                     break;
                 case "path_healthy_direct_udp_datagram_paths":
-                    directUdpDatagramPaths = saturatingAdd(directUdpDatagramPaths, value);
+                    directUdpDatagramPaths =
+                            saturatingAdd(directUdpDatagramPaths, metricValue(line, separator));
                     break;
                 case "path_healthy_direct_quic_datagram_paths":
-                    directQuicDatagramPaths = saturatingAdd(directQuicDatagramPaths, value);
+                    directQuicDatagramPaths =
+                            saturatingAdd(directQuicDatagramPaths, metricValue(line, separator));
                     break;
                 case "path_healthy_direct_quic_stream_paths":
-                    directQuicStreamPaths = saturatingAdd(directQuicStreamPaths, value);
+                    directQuicStreamPaths =
+                            saturatingAdd(directQuicStreamPaths, metricValue(line, separator));
                     break;
                 case "path_healthy_direct_tcp_stream_paths":
-                    directTcpStreamPaths = saturatingAdd(directTcpStreamPaths, value);
+                    directTcpStreamPaths =
+                            saturatingAdd(directTcpStreamPaths, metricValue(line, separator));
                     break;
                 case "path_healthy_relay_paths":
-                    relayPaths = saturatingAdd(relayPaths, value);
+                    relayPaths = saturatingAdd(relayPaths, metricValue(line, separator));
                     break;
                 case "public_routing_peers":
-                    publicRoutingPeers = saturatingAdd(publicRoutingPeers, value);
+                    publicRoutingPeers =
+                            saturatingAdd(publicRoutingPeers, metricValue(line, separator));
                     break;
                 case "packet_plane_quic_sessions":
-                    packetPlaneQuicSessions = saturatingAdd(packetPlaneQuicSessions, value);
+                    packetPlaneQuicSessions =
+                            saturatingAdd(packetPlaneQuicSessions, metricValue(line, separator));
                     break;
                 case "outbound_quic_datagram_packets":
                     outboundQuicDatagramPackets =
-                            saturatingAdd(outboundQuicDatagramPackets, value);
+                            saturatingAdd(outboundQuicDatagramPackets, metricValue(line, separator));
                     break;
                 case "outbound_owned_quic_datagram_packets":
                     outboundOwnedQuicDatagramPackets =
-                            saturatingAdd(outboundOwnedQuicDatagramPackets, value);
+                            saturatingAdd(outboundOwnedQuicDatagramPackets, metricValue(line, separator));
                     break;
                 case "outbound_owned_udp_datagram_packets":
                     outboundOwnedUdpDatagramPackets =
-                            saturatingAdd(outboundOwnedUdpDatagramPackets, value);
+                            saturatingAdd(outboundOwnedUdpDatagramPackets, metricValue(line, separator));
                     break;
                 case "outbound_direct_tcp_stream_fallback_packets":
                     outboundDirectTcpStreamPackets =
-                            saturatingAdd(outboundDirectTcpStreamPackets, value);
+                            saturatingAdd(outboundDirectTcpStreamPackets, metricValue(line, separator));
                     break;
                 case "path_promotions_to_direct":
-                    pathPromotionsToDirect = saturatingAdd(pathPromotionsToDirect, value);
+                    pathPromotionsToDirect =
+                            saturatingAdd(pathPromotionsToDirect, metricValue(line, separator));
                     break;
                 default:
                     break;
@@ -172,6 +170,14 @@ final class RuntimeSummary {
                 directPaths,
                 relayPaths,
                 publicRoutingPeers);
+    }
+
+    private static long metricValue(String line, int separator) {
+        try {
+            return Math.max(0, Long.parseLong(line.substring(separator + 1)));
+        } catch (NumberFormatException ignored) {
+            return 0;
+        }
     }
 
     private static long saturatingAdd(long left, long right) {

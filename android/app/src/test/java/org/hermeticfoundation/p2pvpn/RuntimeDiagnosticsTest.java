@@ -75,6 +75,30 @@ public final class RuntimeDiagnosticsTest {
     }
 
     @Test
+    public void ignoresTextMetadataAndPreservesKnownCounterBoundaries() {
+        RuntimeDiagnostics diagnostics = RuntimeDiagnostics.fromLines(Arrays.asList(
+                "runtime_phase running",
+                "relay_infrastructure_peer synthetic address synthetic connected false",
+                "future_counter 18446744073709551615",
+                "queue_queued_packets_suffix 999",
+                " queue_queued_packets 999",
+                "queue_queued_packets  999",
+                "queue_queued_packets 999 ",
+                "queue_queued_packets 18446744073709551615",
+                "queue_queued_packets -1",
+                "queue_queued_packets +2",
+                "queue_queued_packets 3",
+                "queue_oldest_packet_age_millis 8",
+                "queue_oldest_packet_age_millis 5",
+                "queue_dropped_packets " + Long.MAX_VALUE,
+                "queue_dropped_packets 1"));
+
+        assertEquals(5, diagnostics.queueQueuedPackets);
+        assertEquals(8, diagnostics.queueOldestPacketAgeMillis);
+        assertEquals(Long.MAX_VALUE, diagnostics.queueDroppedPackets);
+    }
+
+    @Test
     public void aggregatesIndependentNetworksAndKeepsOldestQueueAge() {
         RuntimeDiagnostics diagnostics =
                 RuntimeDiagnostics.fromLines(

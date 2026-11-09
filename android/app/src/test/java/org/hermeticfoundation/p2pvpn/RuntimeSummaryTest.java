@@ -129,6 +129,27 @@ public final class RuntimeSummaryTest {
     }
 
     @Test
+    public void ignoresTextMetadataAndPreservesKnownCounterBoundaries() {
+        RuntimeSummary summary = RuntimeSummary.fromLines(Arrays.asList(
+                "runtime_phase running",
+                "relay_infrastructure_peer synthetic address synthetic connected false",
+                "future_counter 18446744073709551615",
+                "path_peers_with_supported_path_suffix 999",
+                " path_peers_with_supported_path 999",
+                "path_peers_with_supported_path  999",
+                "path_peers_with_supported_path 999 ",
+                "path_peers_with_supported_path 18446744073709551615",
+                "path_peers_with_supported_path -1",
+                "path_peers_with_supported_path +2",
+                "path_peers_with_supported_path 3",
+                "packet_plane_quic_sessions " + Long.MAX_VALUE,
+                "packet_plane_quic_sessions 1"));
+
+        assertEquals(5, summary.connectedPeers);
+        assertEquals(Long.MAX_VALUE, summary.packetPlaneQuicSessions);
+    }
+
+    @Test
     public void aggregatesRepeatedMetricsFromIndependentNetworks() {
         RuntimeSummary summary =
                 RuntimeSummary.fromLines(

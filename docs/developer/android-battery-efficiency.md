@@ -7,7 +7,7 @@
 | Target | At least 90% less app-attributable connected-idle energy on Wi-Fi and cellular |
 | Baseline source | Working runtime `eec88da9`; corrected ARM64 APK retained before CPU changes |
 | Device baseline | OnePlus 9 Pro capability capture completed; no supported energy counter reported |
-| Runtime optimizations | Relay snapshot sort keys cached; whole-app CPU comparison inconclusive; no battery-savings claim |
+| Runtime optimizations | Relay snapshot sort keys cached; unconsumed metric parsing removed; no battery-savings claim |
 | Power endpoint | Debug-only `power-status`; unit checks are not physical battery evidence |
 | Java verification | Normal Gradle unit, lint and instrumentation-assembly tasks now pass |
 | Native baseline APK | Compatibility-corrected ARM64 APK installed; bidirectional IPv4/IPv6 and DNS smoke checks pass |
@@ -287,7 +287,7 @@ text order. Temporary keys are bounded by the existing 64-infrastructure-peer ca
 - No longer-lived cache or stale address/connection state is introduced.
 - No discovery interval, LAN preference, recovery, persistence or authority behavior changes.
 - Regression coverage compares legacy order at capacity, changed addresses, removal and reverse insertion order.
-- Repeated pairing-state writes and Java parsing remain separate follow-up investigations.
+- Repeated pairing-state writes remain a separate investigation; Java parsing is addressed below.
 
 #### Comparison Result
 
@@ -316,8 +316,7 @@ For the same 64-entry synthetic input, cached sorting reduces key encodings from
 | Restoration | Original disconnected state restored; native TUN/Tokio workers and owned remote traces retired |
 | Acceptance | No measured energy gain or full feature/non-regression claim; cellular and sustained energy gates remain open |
 
-Next, investigate idle pairing-state writes and avoid unconsumed status work.
-Metric parsers also attempt numeric conversion before filtering unknown names.
+Next, investigate idle pairing-state writes and avoid unconsumed status snapshots.
 Preserve crash durability, malformed-input handling and discovery/recovery behavior.
 
 After disconnection, the unchanged debug receiver cannot cold-start an idle
@@ -358,6 +357,27 @@ sampling without root. Filter samples to the app, not the machine-wide total.
 For Java attribution, use `am profile start --sampling 10000 --clock-type dual`
 and stop it with a host watchdog. Record the actual trace-header duration.
 Do not interpret parked-thread wall time or nested sampled durations as CPU.
+
+### Metric Parsing Follow-Up
+
+The [parsing evidence](android-metric-parsing-2026-11-08.json) records a separate,
+Java-only change. Both parsers now recognize consumed metric names before numeric
+conversion, avoiding exceptions for ordinary text metadata and unknown counters.
+
+| Check | Result / Limit |
+| --- | --- |
+| Unknown metadata probe | 100 synthetic dual-parser iterations: 800 baseline format exceptions, zero candidate exceptions |
+| Malformed control | Known invalid values remain rejected; 200 candidate exceptions instead of parsing each unknown name too |
+| Compatibility | Negative/overflow/whitespace handling, saturating sums, multi-network aggregation and queue-age maximum preserved |
+| Android verification | 158 unit tests pass, including two new boundary regressions; lint has zero errors and seven existing warnings |
+| Packaging | Offline APK assembly passes with the unchanged ARM64 native library; no new SDK, emulator or native rebuild |
+| Phone smoke | In-place update; unchanged profile; five peers/QUIC sessions; 20/20 bidirectional IPv4/IPv6 probes and DNS pass |
+| Cleanup | Original disconnected/screen-off state restored; native workers retired; approximately 536 KiB of extra host capture data |
+| Acceptance | Host exception counts are not measured phone CPU, radio energy or battery savings; the full target remains open |
+
+The bounded host probe uses JDK 17's `jdk.JavaExceptionThrow`, filtered to parser
+stack frames. Each case has a 20-second watchdog and a 1 MiB trace cap.
+No profiler runs on the phone during the functional smoke checks.
 
 ## Optimization Candidates
 

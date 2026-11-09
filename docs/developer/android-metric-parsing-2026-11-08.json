@@ -1,0 +1,120 @@
+{
+  "schema_version": 1,
+  "kind": "android_metric_parsing_optimization",
+  "local_date": "2026-11-08",
+  "verified_at_utc": "2026-11-09T01:22:32Z",
+  "baseline_revision": "55a0bdef5964",
+  "baseline_source_sha256": {
+    "RuntimeSummary.java": "c988d0c9652d804469ecc2d7c940e80aff93bd3018cc9d070f5b922546de4b77",
+    "RuntimeDiagnostics.java": "884f4b1297f679af2145bc3e08ca61c1ad98de2265d292686f6cf930bd044fca"
+  },
+  "candidate_source_sha256": {
+    "RuntimeSummary.java": "dc54a23fd9be2336119eca4c7f50a9bb3dd3958095bb9e7f24417b41affc9afd",
+    "RuntimeDiagnostics.java": "cc892d3528b941e40b1fc0861650ad02513202567c760de32cb588abd7491367"
+  },
+  "change": "recognize_consumed_metric_names_before_attempting_numeric_conversion",
+  "unchanged_contract": [
+    "known_metric_names_and_public_counter_fields",
+    "ignored_unknown_metrics",
+    "negative_malformed_and_overflowing_known_values_ignored",
+    "saturating_sums_and_multi_network_aggregation",
+    "maximum_oldest_queue_age",
+    "discovery_recovery_poll_intervals_and_authentication"
+  ],
+  "host_exception_probe": {
+    "scope": "synthetic_component_not_phone_cpu_or_energy",
+    "jdk": "OpenJDK_17.0.20+8",
+    "jdk_event": "jdk.JavaExceptionThrow",
+    "event_filter": "NumberFormatException_with_RuntimeSummary_or_RuntimeDiagnostics_stack_frame",
+    "iterations_per_case": 100,
+    "parsers_per_iteration": 2,
+    "warmup_iterations_before_recording": 10,
+    "watchdog_seconds_per_case": 20,
+    "maximum_trace_bytes_per_case": 1048576,
+    "unknown_case": {
+      "lines": [
+        "runtime_network synthetic",
+        "runtime_phase running",
+        "relay_infrastructure_peer synthetic address synthetic connected false",
+        "future_counter 18446744073709551615"
+      ],
+      "baseline_exceptions": 800,
+      "candidate_exceptions": 0,
+      "baseline_trace_bytes": 120063,
+      "candidate_trace_bytes": 106169,
+      "baseline_trace_sha256": "d40b0df11aaea814b9e9dff7d326a56db0e25e6c6e3d52982d145c66de8c07c1",
+      "candidate_trace_sha256": "1c13765495d40c3e5170c010b746c014e4db694cefce742af00c26fd0faa0277"
+    },
+    "known_malformed_control": {
+      "lines": ["public_routing_peers invalid", "queue_queued_packets invalid"],
+      "baseline_exceptions": 400,
+      "candidate_exceptions": 200,
+      "known_value_rejection_preserved": true,
+      "explanation": "each_candidate_parser_still_rejects_its_own_known_malformed_metric_but_no_longer_parses_the_other_parsers_unknown_metric",
+      "baseline_trace_bytes": 113686,
+      "candidate_trace_bytes": 110424,
+      "baseline_trace_sha256": "f160d3cd8bb2f62b43746201eaf7cd47a3dd173da2075afa03a865496016bbe6",
+      "candidate_trace_sha256": "5c9a074faeca89af7ffdba3f87aae9cb80ce72625d16af561dafead579983e9e"
+    },
+    "counter_outputs_verified": true,
+    "probe_source_sha256": "d18de4043204ccb3b25743c4948fd3c2a3b571f106e3889bed3f1e4db9a3bf40",
+    "device_exception_rate_or_battery_gain_claimed": false
+  },
+  "validation": {
+    "android_unit_tests_passed": 158,
+    "android_unit_failures": 0,
+    "android_unit_errors": 0,
+    "android_unit_skipped": 0,
+    "new_regressions": [
+      "RuntimeSummary_text_metadata_and_known_counter_boundaries",
+      "RuntimeDiagnostics_text_metadata_and_known_counter_boundaries"
+    ],
+    "covered_edges": ["unknown_text", "unknown_overflow", "metric_name_suffix", "leading_and_extra_whitespace", "negative_values", "leading_plus", "overflow", "repeated_known_values", "saturation", "queue_age_maximum"],
+    "offline_gradle_unit_lint_and_assembly_passed": true,
+    "gradle_elapsed_seconds_reported": 15,
+    "gradle_tasks_executed": 16,
+    "gradle_tasks_up_to_date": 33,
+    "lint_errors": 0,
+    "lint_existing_warnings": 7,
+    "rust_sources_and_native_library_unchanged": true,
+    "full_rust_suite_repeated_for_java_only_change": false,
+    "dual_abi_release_and_emulator_rebuilt": false,
+    "privileged_or_emulator_only_instrumentation_run_on_phone": false
+  },
+  "deployment": {
+    "device": "OnePlus_9_Pro_LE2125_API_36",
+    "underlay": "wifi",
+    "in_place_update": true,
+    "apk_sha256": "5782fc6ac0861fe61fc2482fb77bb217cb3fbaf4bb2d8aa2ea6ce47ec039d332",
+    "installed_hash_matches": true,
+    "packaged_native_sha256": "844d1a5b8cb336ab7e711dadbc4bfb039f66025debcd3beee9b6c0a20935c7ef",
+    "signature_and_16k_alignment_verified": true,
+    "encrypted_profile_hash_unchanged": true,
+    "new_pairing_or_reset": false,
+    "connected_peers": 5,
+    "owned_quic_sessions": 5,
+    "smoke": {
+      "ipv4_linux_to_android": {"sent": 5, "received": 5},
+      "ipv6_linux_to_android": {"sent": 5, "received": 5},
+      "ipv4_android_to_linux": {"sent": 5, "received": 5},
+      "ipv6_android_to_linux": {"sent": 5, "received": 5},
+      "dual_stack_dns_passed": true,
+      "owned_quic_outbound_packets": 20,
+      "inbound_accepted_packets": 20
+    },
+    "original_disconnected_state_restored": true,
+    "native_tokio_and_tun_workers_retired": true,
+    "screen_off_restored": true,
+    "footprint_additional_profiling_directory_kib_rounded": 536,
+    "new_sdk_ndk_or_emulator_downloads": false
+  },
+  "physical_energy_measured": false,
+  "accepted_energy_windows": 0,
+  "battery_improvement_ratio": null,
+  "remaining_work": [
+    "idle_pairing_state_rewrites_with_crash_durability_preserved",
+    "unused_status_snapshot_work_and_public_discovery_costs",
+    "controlled_whole_app_cpu_and_radio_comparisons",
+    "matched_wifi_cellular_energy_series_and_full_feature_preservation_gates"
+  ]
+}
