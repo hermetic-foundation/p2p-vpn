@@ -5,9 +5,9 @@
 | Item | State |
 | --- | --- |
 | Target | At least 90% less app-attributable connected-idle energy on Wi-Fi and cellular |
-| Baseline source | `8a302265`, measurement helpers and portable state locking; freeze the corrected APK before optimization |
+| Baseline source | Working runtime `eec88da9`; corrected ARM64 APK retained before CPU changes |
 | Device baseline | OnePlus 9 Pro capability capture completed; no supported energy counter reported |
-| Runtime optimizations | None yet; preserve baseline behavior until device measurements exist |
+| Runtime optimizations | Relay snapshot sort keys cached; whole-app CPU comparison inconclusive; no battery-savings claim |
 | Power endpoint | Debug-only `power-status`; unit checks are not physical battery evidence |
 | Java verification | Normal Gradle unit, lint and instrumentation-assembly tasks now pass |
 | Native baseline APK | Compatibility-corrected ARM64 APK installed; bidirectional IPv4/IPv6 and DNS smoke checks pass |
@@ -256,13 +256,112 @@ This rules out the tested Perfetto source as an energy-measurement path on this
 setup, not the phone's hardware in every possible firmware or laboratory setup.
 Charge, current and voltage remain proxies; do not relabel their product as measured energy.
 
-The next baseline gate needs a verified energy-measurement method and cellular
-service. Runtime power optimizations remain pending that baseline; neither CPU
-results nor the restored LAN connection satisfy the 90% energy target.
+Energy acceptance still needs a verified measurement method and cellular series.
+That does not block useful Wi-Fi profiling or compatibility-preserving CPU work.
+Retain the original APK for future matched energy tests; CPU results do not satisfy the target.
+
+### Settled Wi-Fi CPU Profiling
+
+[Structured evidence](android-wifi-cpu-profile-2026-11-08.json) separates quiet CPU
+windows from intrusive stack traces. These are diagnostic runs, not energy windows.
+The local date is November 8; the recorded UTC endpoints fall on November 9.
+
+| Observation | Result / Limit |
+| --- | --- |
+| Topology | One network, five connected overlay peers and five owned-QUIC sessions at every endpoint |
+| Settling | At least 350 seconds before three endpoint-only, screen-off 120-second windows |
+| Process CPU | 7.22%, 7.03% and 6.07% of one core; mean 6.78%; not energy |
+| Conditions | Same process/runtime generation; USB powered; full battery; not Doze |
+| Public networking | First cached interval adds 228 DHT query requests and 200 dispatched dial intents |
+| Native sampling | 151 app stack samples over about 30 seconds; 86 in Tokio workers, 50 in the Java service worker |
+| Native attribution | Relay snapshot sorting and Base58 encoding share 20 inclusive samples; pairing persistence also appears |
+| Java sampling | Status/peer parsing and metric-parsing exceptions observed; imported durations are wall time, not CPU |
+| Sampling limits | Eleven incomplete native unwinds; short statistical sample; no precise energy attribution |
+
+#### Narrow First Change
+
+Relay snapshots previously encoded each peer ID on repeated sort comparisons.
+`sort_by_cached_key` computes each text key once per snapshot, preserving the same
+text order. Temporary keys are bounded by the existing 64-infrastructure-peer cap.
+
+- No longer-lived cache or stale address/connection state is introduced.
+- No discovery interval, LAN preference, recovery, persistence or authority behavior changes.
+- Regression coverage compares legacy order at capacity, changed addresses, removal and reverse insertion order.
+- Repeated pairing-state writes and Java parsing remain separate follow-up investigations.
+
+#### Comparison Result
+
+| Window | Baseline One-Core CPU | Candidate One-Core CPU | Baseline / Candidate DHT Queries |
+| --- | --- | --- | --- |
+| 1 | 7.22% | 8.81% | 228 / 380 |
+| 2 | 7.03% | 6.81% | 42 / 195 |
+| 3 | 6.07% | 6.41% | 74 / 39 |
+| Mean CPU / Total Queries | 6.78% | 7.35% | 344 / 614 |
+
+All six endpoints per build retain five connected peers and five QUIC sessions.
+The candidate does **not** demonstrate a whole-app CPU gain. Live public-network
+work and temperatures differ; builds were not alternated. Retain every window.
+
+The host-only component probe uses six alternating-order batches of 32 sorts.
+For the same 64-entry synthetic input, cached sorting reduces key encodings from
+776 to 64 per sort with identical output. This is not Android battery evidence.
+
+| Validation | Result / Limit |
+| --- | --- |
+| Workspace | 1,822 pass; zero failures; 48 ignored; format, repository Clippy gates and Nix test-source check pass |
+| Packaging | Pinned ARM64 native build and offline Gradle assembly pass; unchanged Java unit/lint tasks stay up to date |
+| Deployment | In-place update; installed APK/native hashes, signature and 16 KiB alignment verified; profile unchanged |
+| Reachability | 20/20 bidirectional IPv4/IPv6 smoke probes, dual-stack DNS and ten further post-idle replies |
+| Payload | Owned-QUIC outbound and accepted inbound counters reach 30; no data-plane behavior changed |
+| Restoration | Original disconnected state restored; native TUN/Tokio workers and owned remote traces retired |
+| Acceptance | No measured energy gain or full feature/non-regression claim; cellular and sustained energy gates remain open |
+
+Next, investigate idle pairing-state writes and avoid unconsumed status work.
+Metric parsers also attempt numeric conversion before filtering unknown names.
+Preserve crash durability, malformed-input handling and discovery/recovery behavior.
+
+After disconnection, the unchanged debug receiver cannot cold-start an idle
+background service on this Android build (`BackgroundServiceStartNotAllowedException`).
+Cleanup uses the disconnect acknowledgement and native-worker retirement; improve this harness path separately.
+
+#### Reproduction
+
+1. Retain the original APK and record source/native/APK hashes before installing a candidate.
+2. Connect on Wi-Fi; wait at least five minutes and confirm the same enabled-network and peer/session counts.
+3. Use `android-power-capture.sh` only at each window boundary; retain process-start identity and cached runtime status.
+4. Record at least three 120-second quiet CPU windows with the screen off; do not run profilers inside them.
+5. Profile separately with the bounded configuration below; retain trace hashes and check loss/unwind errors.
+6. Analyze locally; verify APK/native symbol provenance, then remove only the owned remote trace files.
+
+```protobuf
+buffers { size_kb: 4096 fill_policy: DISCARD }
+duration_ms: 30000
+max_file_size_bytes: 8388608
+data_sources {
+  config {
+    name: "linux.perf"
+    perf_event_config {
+      timebase { counter: SW_CPU_CLOCK frequency: 99 timestamp_clock: PERF_CLOCK_MONOTONIC }
+      callstack_sampling {
+        scope { target_cmdline: "org.hermeticfoundation.p2pvpn.debug" }
+        kernel_frames: false
+      }
+    }
+  }
+}
+```
+
+Use an explicitly selected phone and a 50-second capture watchdog.
+Keep `security.perf_harden` unchanged; this debuggable app supports app-scoped
+sampling without root. Filter samples to the app, not the machine-wide total.
+
+For Java attribution, use `am profile start --sampling 10000 --clock-type dual`
+and stop it with a host watchdog. Record the actual trace-header duration.
+Do not interpret parked-thread wall time or nested sampled durations as CPU.
 
 ## Optimization Candidates
 
-These are source-audit leads, not measured battery attribution or approved tradeoffs.
+These are investigation leads, not measured battery attribution or approved tradeoffs.
 
 | Owner | Existing Work | Required Investigation |
 | --- | --- | --- |
@@ -296,8 +395,8 @@ Do not lengthen recovery deadlines after observing failures or trade functionali
 
 1. Verify endpoint availability and counter resolution on an explicitly selected physical device.
 2. Freeze device/topology metadata and quantitative traffic/recovery bounds before baseline capture.
-3. Capture matched Wi-Fi/cellular baseline and VPN-off controls before runtime changes.
-4. Rank actual CPU/wakeup/radio costs, then implement and regression-test each optimization.
+3. Capture matched Wi-Fi/cellular energy baseline and VPN-off controls using the retained original APK.
+4. Continue available Wi-Fi CPU/wakeup/radio profiling; implement and regression-test narrowly evidenced changes.
 5. Repeat physical measurements and all feature gates; publish raw hashes and structured summaries.
 
 ## Initial Validation, November 8

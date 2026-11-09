@@ -9527,7 +9527,7 @@ impl InfrastructurePeers {
                 connected: swarm.is_connected(peer),
             })
             .collect::<Vec<_>>();
-        peers.sort_by_key(|peer| peer.peer.to_string());
+        peers.sort_by_cached_key(|peer| peer.peer.to_string());
         RelayInfrastructureSnapshot { peers }
     }
 }
@@ -36740,6 +36740,47 @@ mod tests {
         assert_eq!(snapshot.auto_relay_infrastructure_candidates, 1);
         assert_eq!(snapshot.auto_relay_infrastructure_dial_attempts, 1);
         assert_eq!(snapshot.unauthorized_connections_dropped, 0);
+    }
+
+    #[tokio::test]
+    async fn relay_infrastructure_snapshot_preserves_text_order_and_current_addresses() {
+        let node = pairing_test_node(&NodeIdentity::generate_ed25519().unwrap());
+        let mut infrastructure = InfrastructurePeers::default();
+        assert!(infrastructure.snapshot(&node.swarm).peers.is_empty());
+
+        for index in 0..AUTO_RELAY_MAX_INFRASTRUCTURE_PEERS {
+            let peer = peer_id();
+            let address = format!("/ip4/127.0.0.1/tcp/{}", 4001 + index)
+                .parse()
+                .unwrap();
+            assert!(infrastructure.insert(peer, address));
+        }
+        let mut expected = infrastructure
+            .peers
+            .iter()
+            .map(|(peer, address)| RelayInfrastructurePeerSnapshot {
+                peer: *peer,
+                address: address.clone(),
+                connected: false,
+            })
+            .collect::<Vec<_>>();
+        expected.sort_by_key(|peer| peer.peer.to_string());
+        assert_eq!(infrastructure.snapshot(&node.swarm).peers, expected);
+
+        let changed_peer = expected[0].peer;
+        let changed_address: Multiaddr = "/ip4/127.0.0.1/tcp/9000".parse().unwrap();
+        assert!(infrastructure.insert(changed_peer, changed_address.clone()));
+        expected[0].address = changed_address;
+        let mut reverse_insertion = InfrastructurePeers::default();
+        for entry in expected.iter().rev() {
+            assert!(reverse_insertion.insert(entry.peer, entry.address.clone()));
+        }
+        assert_eq!(infrastructure.snapshot(&node.swarm).peers, expected);
+        assert_eq!(reverse_insertion.snapshot(&node.swarm).peers, expected);
+
+        assert!(infrastructure.remove(changed_peer));
+        expected.remove(0);
+        assert_eq!(infrastructure.snapshot(&node.swarm).peers, expected);
     }
 
     #[tokio::test]
