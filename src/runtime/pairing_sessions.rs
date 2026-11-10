@@ -4340,6 +4340,7 @@ fn pairing_approval_id(request: &PairingRequest) -> Result<String, serde_json::E
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     mod checkpoint_retirement;
 
     use std::net::Ipv4Addr;

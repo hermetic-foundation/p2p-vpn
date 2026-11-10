@@ -1662,7 +1662,9 @@ fn wire_error(error: CheckpointSyncError) -> RunnerError {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, os::unix::fs::PermissionsExt as _, path::PathBuf};
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::{fs, path::PathBuf};
 
     use crate::{
         config::Config,
@@ -1701,8 +1703,13 @@ mod tests {
                 "p2p-vpn-checkpoint-owner-{}-{name}",
                 std::process::id(),
             ));
-            fs::create_dir(&directory).unwrap();
-            fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+            #[cfg(unix)]
+            {
+                fs::create_dir(&directory).unwrap();
+                fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+            }
+            #[cfg(windows)]
+            crate::private_fs::ensure_private_directory(&directory).unwrap();
             let store = MembershipStateStore::new(directory.join("membership-state.json"));
             let credentials =
                 CheckpointCredentials::new(NetworkAnchor::new([45; 32]).unwrap(), vec![89; 32])
@@ -1917,10 +1924,13 @@ mod tests {
                         .unwrap()
                         .contains("old-local-name")
                 );
+                #[cfg(unix)]
                 assert_eq!(
                     fs::metadata(fixture.path()).unwrap().permissions().mode() & 0o777,
                     0o600
                 );
+                #[cfg(windows)]
+                crate::private_fs::validate_private(&fixture.path()).unwrap();
 
                 let mut forwarder = Forwarder::from_checkpoint_config(
                     &config,
@@ -2445,6 +2455,7 @@ mod tests {
         assert_eq!(fs::read(fixture.path()).unwrap(), before);
     }
 
+    #[cfg(unix)]
     #[test]
     fn solo_conversion_prewrite_failures_preserve_legacy_and_signed_approval() {
         let fixture = Fixture::new("solo-prewrite");
@@ -3306,6 +3317,7 @@ mod tests {
         assert_eq!(creator.last_handoff.failed, 1);
     }
 
+    #[cfg(unix)]
     #[test]
     fn rejected_or_unpersisted_remote_command_cannot_acknowledge_or_change_authority() {
         let fixture = Fixture::new("departure-failure");
@@ -3634,6 +3646,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn prewrite_failure_leaves_selected_authority_and_live_grants_unchanged() {
         let fixture = Fixture::new("prewrite-failure");
@@ -4814,8 +4827,13 @@ mod tests {
         let mut paths = Vec::new();
         for (index, identity) in identities.iter().enumerate() {
             let directory = fixture.directory.join(format!("node-{index}"));
-            fs::create_dir(&directory).unwrap();
-            fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+            #[cfg(unix)]
+            {
+                fs::create_dir(&directory).unwrap();
+                fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+            }
+            #[cfg(windows)]
+            crate::private_fs::ensure_private_directory(&directory).unwrap();
             let path = directory.join("membership-state.json");
             MembershipStateStore::new(path.clone())
                 .save_checkpoint(

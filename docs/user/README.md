@@ -8,6 +8,7 @@ Use these docs when you want to run `p2p-vpn`.
 | --- | --- |
 | [Quick Start](quick-start.md) | Start and code-pair a minimal NixOS overlay. |
 | [Android](android.md) | Build, manage networks, pair, connect, and recover the Android app. |
+| [Windows](windows.md) | Build and run the experimental native Windows CLI with Wintun. |
 | [Configuration](configuration.md) | Understand required config fields and common options. |
 | [NixOS Module](nixos.md) | Start from one native Nix option and run managed instances. |
 | [Pairing](pairing.md) | Pair by code, approve a peer, and install native Nix grants. |
@@ -22,11 +23,12 @@ Use these docs when you want to run `p2p-vpn`.
 
 | Requirement | Why |
 | --- | --- |
-| Linux/NixOS or Android | Run the Linux daemon or supported Android APK. |
+| Linux/NixOS, Android, or experimental Windows x64 | Run a daemon or the supported Android APK. |
 | `/dev/net/tun` | Required on Linux for packet forwarding. |
 | `CAP_NET_ADMIN` or root | Required on Linux to configure TUN. |
 | Android VPN approval | Required on Android to establish the TUN. |
-| Nix flakes | Build, test, and package every supported target. |
+| Windows elevation and Wintun | Required on Windows for the tunnel and durable state. |
+| Nix flakes or Windows Rust toolchain | Build and test the selected platform. |
 | Local identity | Generated automatically by the NixOS module. |
 | Peer authorization | Added through pairing or explicit peer settings. |
 

@@ -24,6 +24,10 @@ mod recovery_queries;
 pub mod remote;
 pub mod runner;
 pub mod service;
+#[cfg(unix)]
+mod state_write_cleanup;
+#[cfg(windows)]
+#[path = "state_write_cleanup_windows.rs"]
 mod state_write_cleanup;
 pub mod stream;
 pub mod tun;

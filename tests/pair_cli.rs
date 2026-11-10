@@ -1,3 +1,5 @@
+#![cfg(unix)]
+
 use std::{
     fs,
     io::{BufRead as _, BufReader, Read as _, Write as _},

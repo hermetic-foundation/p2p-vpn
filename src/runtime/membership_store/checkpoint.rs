@@ -284,22 +284,36 @@ impl MembershipStateStore {
     }
 
     pub(super) fn validate_checkpoint_parent(&self) -> Result<(), MembershipStateStoreError> {
-        use std::os::unix::fs::PermissionsExt as _;
-
-        let parent = self
-            .path
-            .parent()
-            .ok_or(MembershipStateStoreError::MissingParent)?;
-        let metadata = std::fs::symlink_metadata(parent)?;
-        if !metadata.is_dir()
-            || metadata.file_type().is_symlink()
-            || metadata.permissions().mode() & 0o022 != 0
+        #[cfg(windows)]
         {
-            return Err(MembershipStateStoreError::UnsafeParent(
-                parent.to_path_buf(),
-            ));
+            let parent = self
+                .path
+                .parent()
+                .ok_or(MembershipStateStoreError::MissingParent)?;
+            crate::private_fs::validate_private(parent)?;
+            // Require the volume-write privilege before publishing authority.
+            crate::private_fs::windows::open_parent_volume(parent)?;
+            Ok(())
         }
-        Ok(())
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            let parent = self
+                .path
+                .parent()
+                .ok_or(MembershipStateStoreError::MissingParent)?;
+            let metadata = std::fs::symlink_metadata(parent)?;
+            if !metadata.is_dir()
+                || metadata.file_type().is_symlink()
+                || metadata.permissions().mode() & 0o022 != 0
+            {
+                return Err(MembershipStateStoreError::UnsafeParent(
+                    parent.to_path_buf(),
+                ));
+            }
+            Ok(())
+        }
     }
 }
 
@@ -411,10 +425,17 @@ fn validate_checkpoint_length(length: usize) -> Result<(), MembershipStateStoreE
 }
 
 pub(super) fn sync_checkpoint_parent(parent: &std::path::Path) -> std::io::Result<()> {
-    std::fs::File::open(parent)?.sync_all()
+    #[cfg(unix)]
+    {
+        std::fs::File::open(parent)?.sync_all()
+    }
+    #[cfg(windows)]
+    {
+        crate::private_fs::windows::sync_parent_volume(parent)
+    }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use std::{
         fs,

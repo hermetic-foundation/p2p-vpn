@@ -1,7 +1,8 @@
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 use std::{
-    fs::{self, File, OpenOptions},
+    fs::{self, File},
     io::{self, Read as _, Write as _},
-    os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _},
     path::{Path, PathBuf},
 };
 
@@ -76,7 +77,14 @@ impl MembershipStateStore {
         let file = File::open(&self.path)?;
         let opened_metadata = file.metadata()?;
         validate_state_file(&self.path, &opened_metadata)?;
+        #[cfg(unix)]
         if metadata.dev() != opened_metadata.dev() || metadata.ino() != opened_metadata.ino() {
+            return Err(MembershipStateStoreError::FileChanged(self.path.clone()));
+        }
+        #[cfg(windows)]
+        if same_file::Handle::from_file(file.try_clone()?)?
+            != same_file::Handle::from_path(&self.path)?
+        {
             return Err(MembershipStateStoreError::FileChanged(self.path.clone()));
         }
         let opened_length = usize::try_from(opened_metadata.len())
@@ -143,14 +151,9 @@ impl MembershipStateStore {
             std::process::id(),
             u64::from_be_bytes(nonce)
         ));
-        let mut temporary = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&temporary_path)?;
+        let mut temporary = crate::private_fs::create_private_file(&temporary_path)?;
         if let Err(error) = temporary
-            .set_permissions(fs::Permissions::from_mode(0o600))
-            .and_then(|()| temporary.write_all(bytes))
+            .write_all(bytes)
             .and_then(|()| temporary.sync_all())
         {
             drop(temporary);
@@ -252,9 +255,14 @@ fn validate_state_file(
     if !metadata.is_file() || metadata.file_type().is_symlink() {
         return Err(MembershipStateStoreError::UnsafeFile(path.to_path_buf()));
     }
-    let mode = metadata.permissions().mode() & 0o777;
-    if mode & 0o077 != 0 {
-        return Err(MembershipStateStoreError::PermissiveMode { mode });
+    #[cfg(windows)]
+    crate::private_fs::validate_private(path)?;
+    #[cfg(unix)]
+    {
+        let mode = metadata.permissions().mode() & 0o777;
+        if mode & 0o077 != 0 {
+            return Err(MembershipStateStoreError::PermissiveMode { mode });
+        }
     }
     Ok(())
 }
@@ -267,6 +275,7 @@ fn validate_length(length: usize) -> Result<(), MembershipStateStoreError> {
     }
 }
 
+#[cfg(unix)]
 fn sync_parent_directory(parent: &Path) -> io::Result<()> {
     let directory = match File::open(parent) {
         Ok(directory) => directory,
@@ -278,6 +287,7 @@ fn sync_parent_directory(parent: &Path) -> io::Result<()> {
     }
 }
 
+#[cfg(unix)]
 fn handle_directory_sync_error(error: io::Error) -> io::Result<()> {
     if matches!(
         error.kind(),
@@ -429,7 +439,7 @@ impl From<crate::membership::checkpoint::CheckpointError> for MembershipStateSto
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use std::os::unix::fs::{PermissionsExt as _, symlink};
 
@@ -768,4 +778,9 @@ mod tests {
 
         fs::remove_dir_all(directory).expect("remove test directory");
     }
+}
+
+#[cfg(windows)]
+fn sync_parent_directory(_parent: &Path) -> io::Result<()> {
+    Ok(())
 }

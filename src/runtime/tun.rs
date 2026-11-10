@@ -2,14 +2,22 @@ use std::{
     fmt, fs, io,
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
     path::PathBuf,
-    process::{Command, ExitStatus},
+    process::ExitStatus,
 };
+
+#[cfg(not(windows))]
+use std::process::Command;
 
 #[cfg(target_os = "linux")]
 use std::io::{Read as _, Write as _};
 
 #[cfg(target_os = "linux")]
 mod readiness;
+
+#[cfg(windows)]
+mod windows;
+#[cfg(windows)]
+pub use windows::TunDevice;
 
 use crate::{
     PeerId,
@@ -355,6 +363,9 @@ impl TunRuntimeConfig {
 
     #[must_use]
     pub fn sysctl_commands(&self) -> Vec<SysctlCommand> {
+        #[cfg(windows)]
+        return Vec::new();
+        #[cfg(not(windows))]
         vec![
             SysctlCommand::set_interface(self.name.clone(), "rp_filter", "0"),
             SysctlCommand::set_interface(self.name.clone(), "accept_local", "1"),
@@ -368,6 +379,16 @@ impl TunRuntimeConfig {
             IpCidr::new(IpAddr::V6(self.addresses.ipv6), 128)
                 .expect("128 is a valid IPv6 prefix length"),
         )];
+
+        #[cfg(windows)]
+        commands.insert(
+            0,
+            IpCommand::addr_replace(
+                self.name.clone(),
+                IpCidr::new(IpAddr::V4(self.addresses.ipv4), 32)
+                    .expect("32 is a valid IPv4 prefix length"),
+            ),
+        );
 
         commands.extend(
             self.additional_addresses
@@ -675,12 +696,14 @@ struct IpDeletion {
 }
 
 #[derive(serde::Deserialize)]
+#[cfg(any(unix, test))]
 struct InterfaceAddressListing {
     ifname: String,
     addr_info: Vec<ListedAddress>,
 }
 
 #[derive(serde::Deserialize)]
+#[cfg(any(unix, test))]
 struct ListedAddress {
     local: IpAddr,
     prefixlen: u8,
@@ -793,10 +816,16 @@ impl IpCommand {
     }
 
     pub fn execute(&self) -> Result<ExitStatus, io::Error> {
+        #[cfg(windows)]
+        return self.execute_windows();
+        #[cfg(not(windows))]
         Command::new("ip").args(&self.args).status()
     }
 
     pub(crate) fn deletion_is_absent(&self) -> io::Result<bool> {
+        #[cfg(windows)]
+        return self.deletion_is_absent_windows();
+        #[cfg(not(windows))]
         self.deletion_is_absent_with(|args| {
             let output = Command::new("ip").args(args).output()?;
             if !output.status.success() {
@@ -809,6 +838,7 @@ impl IpCommand {
         })
     }
 
+    #[cfg(any(unix, test))]
     fn deletion_is_absent_with(
         &self,
         mut query: impl FnMut(&[String]) -> io::Result<Vec<u8>>,
@@ -851,6 +881,9 @@ impl IpCommand {
 
 impl fmt::Display for IpCommand {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        #[cfg(windows)]
+        return self.display_windows(formatter);
+        #[cfg(not(windows))]
         write!(formatter, "ip {}", self.args.join(" "))
     }
 }

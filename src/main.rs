@@ -1,9 +1,10 @@
+#[cfg(unix)]
+use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
 use std::{
     collections::{BTreeSet, HashSet},
-    fs::{self, OpenOptions},
+    fs,
     io::{self, Write as _},
     net::{IpAddr, SocketAddr, UdpSocket},
-    os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _},
     path::{Path, PathBuf},
     str::FromStr,
     time::{Duration, Instant},
@@ -944,9 +945,36 @@ struct DaemonTarget {
     timeout_seconds: u64,
 }
 
-#[tokio::main]
+fn main() -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        // The CLI dispatch future exceeds Windows' 1 MiB executable stack in
+        // unoptimized builds. Keep its construction and polling on a sized thread.
+        return std::thread::Builder::new()
+            .name("p2p-vpn-cli".to_owned())
+            .stack_size(16 * 1024 * 1024)
+            .spawn(run_cli_runtime)
+            .map_err(|error| format!("failed to start CLI thread: {error}"))?
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+    }
+    #[cfg(not(windows))]
+    run_cli_runtime()
+}
+
+fn run_cli_runtime() -> Result<(), String> {
+    let mut builder = tokio::runtime::Builder::new_multi_thread();
+    builder.enable_all();
+    #[cfg(windows)]
+    builder.thread_stack_size(8 * 1024 * 1024);
+    builder
+        .build()
+        .map_err(|error| format!("failed to start runtime: {error}"))?
+        .block_on(Box::pin(run_cli()))
+}
+
 #[allow(clippy::too_many_lines)]
-async fn main() -> Result<(), String> {
+async fn run_cli() -> Result<(), String> {
     let cli = Cli::parse();
 
     match cli.command {
@@ -2094,21 +2122,16 @@ fn keygen(output: &Path, force: bool) -> Result<(), String> {
         }
     }
 
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(output)
-        .map_err(|error| {
-            if error.kind() == std::io::ErrorKind::AlreadyExists {
-                format!(
-                    "{} already exists; pass --force to replace it",
-                    output.display()
-                )
-            } else {
-                format!("failed to create {}: {error}", output.display())
-            }
-        })?;
+    let mut file = p2p_vpn::private_fs::create_private_file(output).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::AlreadyExists {
+            format!(
+                "{} already exists; pass --force to replace it",
+                output.display()
+            )
+        } else {
+            format!("failed to create {}: {error}", output.display())
+        }
+    })?;
     writeln!(file, "{}", identity.private_key)
         .map_err(|error| format!("failed to write {}: {error}", output.display()))?;
     file.sync_all()
@@ -2699,7 +2722,7 @@ fn write_json_output<T: Serialize>(
     if output.to_string_lossy() == "-" {
         println!("{rendered}");
     } else {
-        fs::write(output, format!("{rendered}\n"))
+        write_output_file(output, format!("{rendered}\n"))
             .map_err(|error| format!("failed to write {}: {error}", output.display()))?;
         println!("wrote {}", output.display());
     }
@@ -2793,7 +2816,7 @@ fn init_config(args: InitConfigArgs) -> Result<(), String> {
     if args.output.to_string_lossy() == "-" {
         println!("{rendered}");
     } else {
-        fs::write(&args.output, format!("{rendered}\n"))
+        write_output_file(&args.output, format!("{rendered}\n"))
             .map_err(|error| format!("failed to write {}: {error}", args.output.display()))?;
         println!("wrote {}", args.output.display());
         println!(
@@ -2843,7 +2866,7 @@ fn invite_export(
     if output.to_string_lossy() == "-" {
         println!("{rendered}");
     } else {
-        fs::write(output, format!("{rendered}\n"))
+        write_output_file(output, format!("{rendered}\n"))
             .map_err(|error| format!("failed to write {}: {error}", output.display()))?;
         println!("wrote {}", output.display());
         println!("invite network: {}", invite.payload.network_name);
@@ -2892,7 +2915,7 @@ fn invite_import(args: InviteImportArgs) -> Result<(), String> {
     if args.output.to_string_lossy() == "-" {
         println!("{rendered}");
     } else {
-        fs::write(&args.output, format!("{rendered}\n"))
+        write_output_file(&args.output, format!("{rendered}\n"))
             .map_err(|error| format!("failed to write {}: {error}", args.output.display()))?;
         println!("wrote {}", args.output.display());
         println!(
@@ -3059,7 +3082,7 @@ async fn pair_daemon_artifacts(
         eprintln!("pairing receipt: {}", artifacts.receipt.transcript_sha256);
         println!("{rendered}");
     } else {
-        fs::write(output, format!("{rendered}\n"))
+        write_output_file(output, format!("{rendered}\n"))
             .map_err(|error| format!("failed to write {}: {error}", output.display()))?;
         println!("wrote {}", output.display());
         println!("pairing operation: {operation_id}");
@@ -3469,7 +3492,7 @@ fn pair_offer(args: PairOfferArgs) -> Result<(), String> {
     if args.output.to_string_lossy() == "-" {
         println!("{uri}");
     } else {
-        fs::write(&args.output, format!("{uri}\n"))
+        write_output_file(&args.output, format!("{uri}\n"))
             .map_err(|error| format!("failed to write {}: {error}", args.output.display()))?;
         println!("wrote {}", args.output.display());
         println!("pairing network: {}", offer.payload.network_name);
@@ -3858,7 +3881,7 @@ fn write_pairing_config(
     } else if output.to_string_lossy() == "-" {
         println!("{rendered}");
     } else {
-        fs::write(output, format!("{rendered}\n"))
+        write_output_file(output, format!("{rendered}\n"))
             .map_err(|error| format!("failed to write {}: {error}", output.display()))?;
         println!("wrote {}", output.display());
         println!(
@@ -3912,7 +3935,7 @@ fn write_pairing_nixos_module(
     if output.to_string_lossy() == "-" {
         println!("{rendered}");
     } else {
-        fs::write(output, format!("{rendered}\n"))
+        write_output_file(output, format!("{rendered}\n"))
             .map_err(|error| format!("failed to write {}: {error}", output.display()))?;
         println!("wrote {}", output.display());
     }
@@ -3964,6 +3987,7 @@ fn write_pairing_nixos_secret_files(
     })
 }
 
+#[cfg(unix)]
 fn ensure_private_directory(path: &Path) -> Result<(), String> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => {
@@ -3973,12 +3997,14 @@ fn ensure_private_directory(path: &Path) -> Result<(), String> {
                     path.display()
                 ));
             }
-            let mode = metadata.permissions().mode() & 0o777;
-            if mode & 0o077 != 0 {
-                return Err(format!(
-                    "paired-key directory {} has mode {mode:04o}; use an owner-only directory",
-                    path.display()
-                ));
+            {
+                let mode = metadata.permissions().mode() & 0o777;
+                if mode & 0o077 != 0 {
+                    return Err(format!(
+                        "paired-key directory {} has mode {mode:04o}; use an owner-only directory",
+                        path.display()
+                    ));
+                }
             }
             Ok(())
         }
@@ -3998,6 +4024,11 @@ fn ensure_private_directory(path: &Path) -> Result<(), String> {
     }
 }
 
+#[cfg(windows)]
+fn ensure_private_directory(path: &Path) -> Result<(), String> {
+    p2p_vpn::private_fs::ensure_private_directory(path).map_err(|e| e.to_string())
+}
+
 fn write_secret_file(path: &Path, value: &str, force: bool) -> Result<(), String> {
     if !force {
         if let Some(existing) = read_private_secret_file(path)? {
@@ -4010,11 +4041,7 @@ fn write_secret_file(path: &Path, value: &str, force: bool) -> Result<(), String
                 path.display()
             ));
         }
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(path)
+        let mut file = p2p_vpn::private_fs::create_private_file(path)
             .map_err(|error| format!("failed to create {}: {error}", path.display()))?;
         if let Err(error) = file.write_all(format!("{value}\n").as_bytes()) {
             drop(file);
@@ -4033,12 +4060,7 @@ fn write_secret_file(path: &Path, value: &str, force: bool) -> Result<(), String
     for attempt in 0..100_u8 {
         let candidate =
             path.with_file_name(format!(".{file_name}.{}.{}", std::process::id(), attempt));
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&candidate)
-        {
+        match p2p_vpn::private_fs::create_private_file(&candidate) {
             Ok(file) => {
                 temporary = Some((candidate, file));
                 break;
@@ -4085,12 +4107,17 @@ fn read_private_secret_file(path: &Path) -> Result<Option<String>, String> {
             path.display()
         ));
     }
-    let mode = metadata.permissions().mode() & 0o777;
-    if mode & 0o077 != 0 {
-        return Err(format!(
-            "secret file {} has mode {mode:04o}; use an owner-only file",
-            path.display()
-        ));
+    #[cfg(windows)]
+    p2p_vpn::private_fs::validate_private(path).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        let mode = metadata.permissions().mode() & 0o777;
+        if mode & 0o077 != 0 {
+            return Err(format!(
+                "secret file {} has mode {mode:04o}; use an owner-only file",
+                path.display()
+            ));
+        }
     }
     fs::read_to_string(path)
         .map(Some)
@@ -6797,7 +6824,7 @@ fn write_bootstrap_check_report(
 
     let rendered = serde_json::to_string_pretty(&bootstrap_check_report_file_json(args, report))
         .map_err(|error| format!("failed to encode bootstrap check report: {error}"))?;
-    fs::write(output, format!("{rendered}\n"))
+    write_output_file(output, format!("{rendered}\n"))
         .map_err(|error| format!("failed to write {}: {error}", output.display()))?;
     println!("wrote {}", output.display());
 
@@ -7024,7 +7051,7 @@ fn write_public_dcutr_listen_report(
         error,
     ))
     .map_err(|error| format!("failed to encode public dcutr listen report: {error}"))?;
-    fs::write(output, format!("{rendered}\n"))
+    write_output_file(output, format!("{rendered}\n"))
         .map_err(|error| format!("failed to write {}: {error}", output.display()))?;
     println!("wrote {}", output.display());
 
@@ -7046,7 +7073,7 @@ fn write_public_dcutr_listener_descriptor(
     descriptor.validate()?;
     let rendered = serde_json::to_string_pretty(descriptor)
         .map_err(|error| format!("failed to encode public dcutr listener descriptor: {error}"))?;
-    fs::write(output, format!("{rendered}\n"))
+    write_output_file(output, format!("{rendered}\n"))
         .map_err(|error| format!("failed to write {}: {error}", output.display()))?;
     println!("wrote {}", output.display());
 
@@ -7105,7 +7132,7 @@ fn write_public_dcutr_dial_report(
     let rendered =
         serde_json::to_string_pretty(&public_dcutr_dial_report_json(args, descriptor, report))
             .map_err(|error| format!("failed to encode public dcutr dial report: {error}"))?;
-    fs::write(output, format!("{rendered}\n"))
+    write_output_file(output, format!("{rendered}\n"))
         .map_err(|error| format!("failed to write {}: {error}", output.display()))?;
     println!("wrote {}", output.display());
 
@@ -7232,7 +7259,7 @@ fn write_public_relay_probe_report(
         report,
     ))
     .map_err(|error| format!("failed to encode public relay report: {error}"))?;
-    fs::write(output, format!("{rendered}\n"))
+    write_output_file(output, format!("{rendered}\n"))
         .map_err(|error| format!("failed to write {}: {error}", output.display()))?;
     println!("wrote {}", output.display());
 
@@ -7799,7 +7826,7 @@ fn write_config_output(config: &Config, output: &Path, force: bool) -> Result<()
     if output.to_string_lossy() == "-" {
         println!("{rendered}");
     } else {
-        fs::write(output, format!("{rendered}\n"))
+        write_output_file(output, format!("{rendered}\n"))
             .map_err(|error| format!("failed to write {}: {error}", output.display()))?;
         println!("wrote {}", output.display());
         println!(
@@ -7977,7 +8004,7 @@ fn write_public_relay_candidates(
             println!("{rendered}");
         }
     } else {
-        fs::write(output, format!("{rendered}\n"))
+        write_output_file(output, format!("{rendered}\n"))
             .map_err(|error| format!("failed to write {}: {error}", output.display()))?;
         println!("wrote {}", output.display());
     }
@@ -7999,7 +8026,7 @@ fn write_public_relay_scan_report(
 
     let rendered = serde_json::to_string_pretty(&public_relay_scan_report_json(args, report))
         .map_err(|error| format!("failed to encode public relay scan report: {error}"))?;
-    fs::write(output, format!("{rendered}\n"))
+    write_output_file(output, format!("{rendered}\n"))
         .map_err(|error| format!("failed to write {}: {error}", output.display()))?;
     println!("wrote {}", output.display());
 
@@ -9682,7 +9709,7 @@ async fn up(
     let sysctl_commands = runtime.sysctl_commands();
     let commands = runtime.route_commands();
     if dry_run {
-        println!("dry-run: would create Linux TUN interface and run:");
+        println!("dry-run: would create the platform TUN interface and run:");
         for command in &sysctl_commands {
             println!("{command}");
         }
@@ -9748,7 +9775,7 @@ async fn up(
     let metrics_interval = metrics_interval_seconds.map(Duration::from_secs);
     Box::pin(runner::run_config_until_with_runtime_platform(
         config,
-        runner::RuntimePlatform::new(device.into_packet_io(), runner::LinuxTunRoutes)
+        runner::RuntimePlatform::new(device.into_packet_io(), runner::NativeTunRoutes)
             .with_installed_tun(runtime),
         metrics_interval,
         control_socket,
@@ -10989,6 +11016,7 @@ mod tests {
         assert!(force);
     }
 
+    #[cfg(unix)]
     #[test]
     fn keygen_writes_private_key_with_owner_only_permissions() {
         let output = temp_config_path("p2p-vpn-keygen");
@@ -15094,6 +15122,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn paired_secret_replacement_does_not_follow_symlinks() {
         let output = temp_config_path("p2p-vpn-paired-secret");
@@ -15161,6 +15190,7 @@ mod tests {
         fs::remove_dir(state_dir).expect("remove state directory");
     }
 
+    #[cfg(unix)]
     #[test]
     fn nixos_pair_accept_rejects_permissive_existing_identity() {
         let state_dir = temp_config_path("p2p-vpn-pair-permissive-identity");
@@ -15187,6 +15217,7 @@ mod tests {
         fs::remove_dir(state_dir).expect("remove state directory");
     }
 
+    #[cfg(unix)]
     #[test]
     fn paired_secret_directory_rejects_permissive_existing_paths_without_chmod() {
         let directory = temp_config_path("p2p-vpn-paired-secret-directory");
@@ -18257,5 +18288,34 @@ mod tests {
                 .expect("clock after epoch")
                 .as_nanos()
         ))
+    }
+}
+
+fn write_output_file(path: &Path, bytes: impl AsRef<[u8]>) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        fs::write(path, bytes)
+    }
+    #[cfg(windows)]
+    {
+        static OUTPUT_NONCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let candidate = path.with_file_name(format!(
+            ".{}.{}.{}",
+            path.file_name()
+                .ok_or_else(|| io::Error::other("output has no file name"))?
+                .to_string_lossy(),
+            std::process::id(),
+            OUTPUT_NONCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let mut file = p2p_vpn::private_fs::create_private_file(&candidate)?;
+        let result = file
+            .write_all(bytes.as_ref())
+            .and_then(|()| file.sync_all());
+        drop(file);
+        if let Err(error) = result.and_then(|()| fs::rename(&candidate, path)) {
+            let _ = fs::remove_file(&candidate);
+            return Err(error);
+        }
+        Ok(())
     }
 }

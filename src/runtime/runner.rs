@@ -139,7 +139,7 @@ use crate::{
     wire::{Frame, PayloadType},
 };
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", windows, test))]
 use crate::runtime::tun::IpCommand;
 #[cfg(target_os = "linux")]
 use crate::runtime::tun::TunDevice;
@@ -847,12 +847,15 @@ impl RuntimePlatform {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", windows))]
 #[derive(Clone, Copy, Debug, Default)]
-pub struct LinuxTunRoutes;
+pub struct NativeTunRoutes;
 
 #[cfg(target_os = "linux")]
-impl TunRouteController for LinuxTunRoutes {
+pub use NativeTunRoutes as LinuxTunRoutes;
+
+#[cfg(any(target_os = "linux", windows))]
+impl TunRouteController for NativeTunRoutes {
     fn reconcile(
         &mut self,
         _installed: &TunRuntimeConfig,
@@ -9051,8 +9054,9 @@ fn ordinary_peer_dial_uses_fresh_port(
                 && address
                     .iter()
                     .any(|protocol| matches!(protocol, Protocol::Tcp(_)))
-                && first_ip_in_multiaddr(address)
-                    .is_some_and(|ip| networks.iter().any(|network| network.contains(ip)))
+                && first_ip_in_multiaddr(address).is_some_and(|ip| {
+                    ip.is_loopback() || networks.iter().any(|network| network.contains(ip))
+                })
         })
 }
 
@@ -17318,7 +17322,7 @@ fn commit_pairing_runtime_enrollment_with_route_update(
     Ok(remote_peer)
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", windows, test))]
 fn execute_tun_route_update(
     update: &TunRouteUpdate,
     mut execute: impl FnMut(&IpCommand) -> Result<(), RunnerError>,
@@ -17346,7 +17350,7 @@ fn execute_tun_route_update(
     Ok(())
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", windows))]
 fn execute_ip_command(command: &IpCommand) -> Result<(), RunnerError> {
     let status = command.execute().map_err(TunRuntimeError::Io)?;
     if status.success() {
@@ -19702,20 +19706,75 @@ async fn connect_packet_plane_quic_peer(
     binding: PacketPlaneQuicBinding,
     timeout_duration: Duration,
 ) -> Result<PacketPlaneQuicConnection, PacketPlaneNegotiationError> {
-    let endpoint = first_packet_plane_quic_endpoint(remote_capabilities)
-        .ok_or(PacketPlaneNegotiationError::MissingRemoteEndpoint)?;
+    let mut endpoints = remote_capabilities
+        .owned_quic_packet_endpoint_candidates
+        .iter()
+        .flat_map(|endpoint| resolve_packet_plane_endpoint_candidate(endpoint))
+        .collect::<Vec<_>>();
+    endpoints.sort_by_key(|endpoint| packet_endpoint_priority(*endpoint));
+    let mut seen = HashSet::new();
+    endpoints.retain(|endpoint| seen.insert(*endpoint));
+    if endpoints.is_empty() {
+        return Err(PacketPlaneNegotiationError::MissingRemoteEndpoint);
+    }
     let certificate = remote_capabilities
         .owned_quic_packet_plane_certificate_der
         .clone()
         .filter(|certificate| !certificate.is_empty())
         .ok_or(PacketPlaneNegotiationError::MissingRemoteEndpoint)?;
-    tokio::time::timeout(
-        timeout_duration,
-        connector.connect_bound(endpoint, CertificateDer::from(certificate), binding),
+    let certificate = CertificateDer::from(certificate);
+    let started = Instant::now();
+    // Preserve preferred-endpoint priority, but reserve half the existing
+    // connection budget for alternatives when several endpoints are advertised.
+    // Connect and accept directions must retain the same total deadline.
+    let preferred_budget = if endpoints.len() == 1 {
+        timeout_duration
+    } else {
+        timeout_duration / 2
+    };
+    let first = tokio::time::timeout(
+        preferred_budget,
+        connector.connect_bound(endpoints[0], certificate.clone(), binding),
+    )
+    .await;
+    let first_error = match first {
+        Ok(Ok(connection)) => return Ok(connection),
+        Ok(Err(error)) => PacketPlaneNegotiationError::Quic(packet_plane_quic_error_detail(&error)),
+        Err(_) => PacketPlaneNegotiationError::Quic("connect_timeout".to_owned()),
+    };
+    if endpoints.len() == 1 {
+        return Err(first_error);
+    }
+    // Candidates are bounded by the authenticated control capability limit.
+    // Race the alternatives within the remaining budget; a second dead address
+    // must not prevent a later healthy candidate from being attempted.
+    let alternatives = endpoints
+        .into_iter()
+        .skip(1)
+        .map(|endpoint| {
+            let certificate = certificate.clone();
+            Box::pin(async move {
+                connector
+                    .connect_bound(endpoint, certificate, binding)
+                    .await
+                    .map_err(|error| {
+                        PacketPlaneNegotiationError::Quic(packet_plane_quic_error_detail(&error))
+                    })
+            })
+        })
+        .collect::<Vec<_>>();
+    match tokio::time::timeout(
+        timeout_duration.saturating_sub(started.elapsed()),
+        futures::future::select_ok(alternatives),
     )
     .await
-    .map_err(|_| PacketPlaneNegotiationError::Quic("connect_timeout".to_owned()))?
-    .map_err(|error| PacketPlaneNegotiationError::Quic(packet_plane_quic_error_detail(&error)))
+    {
+        Ok(Ok((connection, _remaining))) => Ok(connection),
+        Ok(Err(error)) => Err(error),
+        Err(_) => Err(PacketPlaneNegotiationError::Quic(
+            "connect_timeout".to_owned(),
+        )),
+    }
 }
 
 async fn accept_packet_plane_quic_peer(
@@ -25084,7 +25143,11 @@ mod tests {
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&directory);
+        #[cfg(unix)]
         fs::create_dir_all(&directory).expect("pairing test directory");
+        #[cfg(windows)]
+        crate::private_fs::ensure_private_directory(&directory)
+            .expect("private pairing test directory");
         directory.join("pairing-state.json")
     }
 
@@ -25190,6 +25253,7 @@ mod tests {
             use crate::membership::checkpoint::{
                 CheckpointMember, CooperativeMembershipState, NetworkAnchor, SnapshotPolicy,
             };
+            #[cfg(unix)]
             use std::os::unix::fs::PermissionsExt as _;
 
             let wall = current_unix_seconds_lossy();
@@ -25199,7 +25263,10 @@ mod tests {
             );
             let path = test_pairing_state_path(&format!("checkpoint-approval-{}", local.peer_id));
             let directory = path.parent().unwrap().to_path_buf();
+            #[cfg(unix)]
             fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+            #[cfg(windows)]
+            crate::private_fs::ensure_private_directory(&directory).unwrap();
             let checkpoint_store =
                 MembershipStateStore::new(directory.join("membership-state.json"));
             let credentials =
@@ -35970,6 +36037,18 @@ mod tests {
             },
         ];
         let lan: Multiaddr = "/ip4/10.250.0.2/tcp/4001".parse().unwrap();
+        // Loopback is intentionally absent from advertised interface networks,
+        // but is still local for source-port reuse and TIME_WAIT collisions.
+        for address in [
+            "/ip4/127.0.0.1/tcp/4001",
+            "/ip4/127.0.0.2/tcp/4001",
+            "/ip6/::1/tcp/4001",
+        ] {
+            assert!(ordinary_peer_dial_uses_fresh_port(
+                &[address.parse().unwrap()],
+                &[]
+            ));
+        }
         assert!(ordinary_peer_dial_uses_fresh_port(
             std::slice::from_ref(&lan),
             &networks

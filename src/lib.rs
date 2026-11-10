@@ -185,3 +185,4 @@ mod tests {
         assert!(!PathKind::DirectQuicStream.requires_quic_datagrams());
     }
 }
+pub mod private_fs;

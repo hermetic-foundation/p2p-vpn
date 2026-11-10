@@ -83,6 +83,10 @@ impl MigrationArtifactStore {
         network_name: &str,
         configured_secret: Option<&[u8]>,
     ) -> Result<Option<MigrationArtifact>, MembershipStateStoreError> {
+        #[cfg(windows)]
+        if !self.path().try_exists()? {
+            return Ok(None);
+        }
         self.protected.validate_checkpoint_parent()?;
         let Some(bytes) = self.protected.read_bytes()? else {
             return Ok(None);
@@ -224,5 +228,5 @@ impl MigrationArtifactStore {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;

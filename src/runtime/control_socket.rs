@@ -6,7 +6,6 @@ use std::{
 use serde::{Deserialize, Serialize};
 use tokio::{
     io::{AsyncReadExt as _, AsyncWriteExt as _},
-    net::{UnixListener, UnixStream},
     sync::{mpsc, oneshot},
 };
 
@@ -15,6 +14,24 @@ use crate::{
     runtime::dns::{DnsLookupType, MAX_DNS_CONTROL_LIST_LIMIT},
     runtime::membership_migration::{MembershipMigrationRequest, MembershipMigrationStatus},
 };
+
+#[cfg(unix)]
+use tokio::net::{UnixListener as LocalListener, UnixStream as LocalStream};
+#[cfg(windows)]
+mod windows;
+#[cfg(windows)]
+use windows::{LocalListener, LocalStream};
+
+async fn connect_local(path: &Path) -> io::Result<LocalStream> {
+    #[cfg(unix)]
+    {
+        LocalStream::connect(path).await
+    }
+    #[cfg(windows)]
+    {
+        windows::connect(path).await
+    }
+}
 
 const STATUS_REQUEST: &[u8] = b"status\n";
 const STATE_REQUEST: &[u8] = b"state\n";
@@ -767,7 +784,7 @@ impl ControlSocket {
         path: impl Into<PathBuf>,
     ) -> io::Result<(Self, mpsc::Receiver<RuntimeControlRequest>)> {
         let path = path.into();
-        let listener = UnixListener::bind(&path)?;
+        let listener = LocalListener::bind(&path)?;
         let (tx, rx) = mpsc::channel(REQUEST_CHANNEL);
         let task = tokio::spawn(serve(listener, tx));
 
@@ -780,7 +797,7 @@ impl ControlSocket {
         handle: &RuntimeControlHandle,
     ) -> io::Result<Self> {
         let path = path.into();
-        let listener = UnixListener::bind(&path)?;
+        let listener = LocalListener::bind(&path)?;
         let task = tokio::spawn(serve(listener, handle.tx.clone()));
 
         Ok(Self { path, task })
@@ -795,6 +812,7 @@ impl ControlSocket {
 impl Drop for ControlSocket {
     fn drop(&mut self) {
         self.task.abort();
+        #[cfg(unix)]
         if let Err(error) = std::fs::remove_file(&self.path)
             && error.kind() != io::ErrorKind::NotFound
         {
@@ -806,7 +824,7 @@ impl Drop for ControlSocket {
     }
 }
 
-async fn serve(listener: UnixListener, tx: mpsc::Sender<RuntimeControlRequest>) {
+async fn serve(listener: LocalListener, tx: mpsc::Sender<RuntimeControlRequest>) {
     loop {
         match listener.accept().await {
             Ok((stream, _address)) => {
@@ -826,10 +844,15 @@ async fn serve(listener: UnixListener, tx: mpsc::Sender<RuntimeControlRequest>) 
 }
 
 async fn handle_connection(
-    mut stream: UnixStream,
+    mut stream: LocalStream,
     tx: mpsc::Sender<RuntimeControlRequest>,
 ) -> io::Result<()> {
-    let header = read_bounded_request(&mut stream).await?;
+    let header = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        read_bounded_request(&mut stream),
+    )
+    .await
+    .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "control request header timed out"))??;
     if header == NETWORK_PEERS_REQUEST {
         return handle_network_peers_connection(&mut stream, &tx).await;
     }
@@ -918,7 +941,7 @@ async fn handle_connection(
 }
 
 async fn handle_membership_mutation_connection(
-    stream: &mut UnixStream,
+    stream: &mut LocalStream,
     tx: &mpsc::Sender<RuntimeControlRequest>,
     member_peer: Option<String>,
 ) -> io::Result<()> {
@@ -950,7 +973,7 @@ async fn handle_membership_mutation_connection(
 }
 
 async fn handle_network_peers_connection(
-    stream: &mut UnixStream,
+    stream: &mut LocalStream,
     tx: &mpsc::Sender<RuntimeControlRequest>,
 ) -> io::Result<()> {
     let (respond_to, response) = oneshot::channel();
@@ -989,7 +1012,7 @@ async fn handle_network_peers_connection(
 }
 
 async fn handle_legacy_connection(
-    stream: &mut UnixStream,
+    stream: &mut LocalStream,
     tx: &mpsc::Sender<RuntimeControlRequest>,
     request: RequestKind,
 ) -> io::Result<()> {
@@ -1072,7 +1095,7 @@ async fn handle_legacy_connection(
 }
 
 async fn handle_pair_rpc_connection(
-    stream: &mut UnixStream,
+    stream: &mut LocalStream,
     tx: &mpsc::Sender<RuntimeControlRequest>,
     header: &[u8],
 ) -> io::Result<()> {
@@ -1103,7 +1126,16 @@ async fn handle_pair_rpc_connection(
     };
 
     let mut body = vec![0; length];
-    if stream.read_exact(&mut body).await.is_err() {
+    // Named pipes cannot half-close their write side. A client that leaves a
+    // truncated frame open must still receive an error and release the handler.
+    if !matches!(
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            stream.read_exact(&mut body)
+        )
+        .await,
+        Ok(Ok(_))
+    ) {
         return write_pair_rpc_response(
             stream,
             &PairRpcResponseEnvelope::error(
@@ -1155,7 +1187,7 @@ async fn handle_pair_rpc_connection(
 }
 
 async fn write_pair_rpc_response(
-    stream: &mut UnixStream,
+    stream: &mut LocalStream,
     response: &PairRpcResponseEnvelope,
 ) -> io::Result<()> {
     let mut body = serde_json::to_vec(response).map_err(invalid_data)?;
@@ -1170,7 +1202,7 @@ async fn write_pair_rpc_response(
     write_pair_rpc_frame(stream, &body).await
 }
 
-async fn write_pair_rpc_frame(stream: &mut UnixStream, body: &[u8]) -> io::Result<()> {
+async fn write_pair_rpc_frame(stream: &mut LocalStream, body: &[u8]) -> io::Result<()> {
     let header = format!("{PAIR_RPC_FRAME_PREFIX}{}\n", body.len());
     stream.write_all(header.as_bytes()).await?;
     stream.write_all(body).await
@@ -1255,7 +1287,7 @@ fn parse_dns_lookup_type(input: &str) -> Option<DnsLookupType> {
     }
 }
 
-async fn read_bounded_request(stream: &mut UnixStream) -> io::Result<Vec<u8>> {
+async fn read_bounded_request(stream: &mut LocalStream) -> io::Result<Vec<u8>> {
     let mut request = Vec::new();
     let mut byte = [0; 1];
     while request.len() < MAX_REQUEST_LEN {
@@ -1500,7 +1532,7 @@ pub async fn query_pair_rpc(
         )));
     }
 
-    let mut stream = tokio::time::timeout(timeout, UnixStream::connect(path))
+    let mut stream = tokio::time::timeout(timeout, connect_local(path))
         .await
         .map_err(|_| PairRpcQueryError::TimedOut)??;
     let header = format!("{PAIR_RPC_FRAME_PREFIX}{}\n", body.len());
@@ -1543,7 +1575,7 @@ async fn query_lines(
     timeout: std::time::Duration,
     request: &[u8],
 ) -> Result<Vec<String>, QueryError> {
-    let mut stream = tokio::time::timeout(timeout, UnixStream::connect(path))
+    let mut stream = tokio::time::timeout(timeout, connect_local(path))
         .await
         .map_err(|_| QueryError::TimedOut)??;
     tokio::time::timeout(timeout, stream.write_all(request))
@@ -1732,7 +1764,7 @@ mod tests {
     }
 
     async fn raw_exchange(path: &Path, request: &[u8]) -> Vec<u8> {
-        let mut stream = UnixStream::connect(path).await.expect("connect");
+        let mut stream = connect_local(path).await.expect("connect");
         stream.write_all(request).await.expect("write request");
         stream.shutdown().await.expect("shutdown request side");
         let mut response = Vec::new();
@@ -2094,7 +2126,7 @@ mod tests {
                 .contains("capability_secret")
         );
         let mut rx = responder.await.unwrap();
-        let mut malformed = UnixStream::connect(&path).await.unwrap();
+        let mut malformed = connect_local(&path).await.unwrap();
         malformed.write_all(b"membership-migration-v1 {\"method\":\"inspect\",\"capability_secret\":\"forbidden\"}\n").await.unwrap();
         let mut response = String::new();
         tokio::time::timeout(
@@ -2724,7 +2756,7 @@ mod tests {
     async fn pair_rpc_client_rejects_oversized_declared_response_before_reading_body() {
         let path = test_socket_path("rpc-oversized-declared-response");
         let _ = std::fs::remove_file(&path);
-        let listener = UnixListener::bind(&path).expect("test listener");
+        let listener = LocalListener::bind(&path).expect("test listener");
         let server = tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.expect("accept query");
             let header = read_bounded_request(&mut stream)
@@ -2755,6 +2787,7 @@ mod tests {
         assert!(matches!(error, PairRpcQueryError::InvalidResponse(_)));
 
         server.await.expect("server");
+        #[cfg(unix)]
         std::fs::remove_file(path).expect("remove test socket");
     }
 }

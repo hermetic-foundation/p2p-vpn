@@ -639,5 +639,5 @@ fn preserve_routes(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;

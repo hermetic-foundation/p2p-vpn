@@ -1,7 +1,8 @@
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 use std::{
-    fs::{self, File, OpenOptions},
+    fs::{self, File},
     io::{self, Read as _, Write as _},
-    os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _},
     path::{Path, PathBuf},
     sync::{Mutex, MutexGuard},
 };
@@ -39,6 +40,10 @@ struct DurablePairingState {
     stored_digest: [u8; 32],
     metadata: fs::Metadata,
     directory: fs::Metadata,
+    #[cfg(windows)]
+    file_identity: same_file::Handle,
+    #[cfg(windows)]
+    directory_identity: same_file::Handle,
 }
 
 impl std::fmt::Debug for PairingStateStore {
@@ -155,7 +160,13 @@ impl PairingStateStore {
             return Err(PairingStateStoreError::UnsafeParent(parent.to_path_buf()));
         }
         let write_owner = super::state_write_cleanup::lock_and_retire(&self.path)?;
+        #[cfg(unix)]
         let directory = write_owner.as_ref().and_then(|owner| owner.metadata().ok());
+        #[cfg(windows)]
+        let directory = {
+            let _ = &write_owner;
+            fs::metadata(parent).ok()
+        };
         if let Ok(metadata) = fs::symlink_metadata(&self.path) {
             validate_state_file(&self.path, &metadata)?;
         }
@@ -186,14 +197,9 @@ impl PairingStateStore {
             std::process::id(),
             u64::from_be_bytes(nonce)
         ));
-        let mut temporary = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&temporary_path)?;
+        let mut temporary = crate::private_fs::create_private_file(&temporary_path)?;
         if let Err(error) = temporary
-            .set_permissions(fs::Permissions::from_mode(0o600))
-            .and_then(|()| temporary.write_all(&stored))
+            .write_all(&stored)
             .and_then(|()| temporary.sync_all())
         {
             drop(temporary);
@@ -208,12 +214,19 @@ impl PairingStateStore {
         let parent_synced = sync_parent(parent)?;
         if parent_synced && let (Some(directory), Ok(metadata)) = (directory, temporary.metadata())
         {
-            *last_durable = Some(DurablePairingState {
-                plaintext_digest,
-                stored_digest: Sha256::digest(&stored).into(),
-                metadata,
-                directory,
-            });
+            let captured = (|| -> io::Result<DurablePairingState> {
+                Ok(DurablePairingState {
+                    plaintext_digest,
+                    stored_digest: Sha256::digest(&stored).into(),
+                    metadata,
+                    directory,
+                    #[cfg(windows)]
+                    file_identity: same_file::Handle::from_file(temporary.try_clone()?)?,
+                    #[cfg(windows)]
+                    directory_identity: same_file::Handle::from_path(parent)?,
+                })
+            })();
+            *last_durable = captured.ok();
         }
         Ok(())
     }
@@ -232,6 +245,7 @@ impl PairingStateStore {
         durable: &DurablePairingState,
         parent: &Path,
     ) -> io::Result<bool> {
+        #[cfg(unix)]
         let file = File::from(rustix::fs::open(
             &self.path,
             rustix::fs::OFlags::RDONLY
@@ -240,6 +254,14 @@ impl PairingStateStore {
                 | rustix::fs::OFlags::CLOEXEC,
             rustix::fs::Mode::empty(),
         )?);
+        #[cfg(windows)]
+        let file = File::open(&self.path)?;
+        #[cfg(windows)]
+        if same_file::Handle::from_file(file.try_clone()?)? != durable.file_identity
+            || same_file::Handle::from_path(parent)? != durable.directory_identity
+        {
+            return Ok(false);
+        }
         if !same_file_version(&file.metadata()?, &durable.metadata) {
             return Ok(false);
         }
@@ -334,6 +356,7 @@ impl PairingStateStore {
     }
 }
 
+#[cfg(unix)]
 fn same_file_version(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.dev() == right.dev()
         && left.ino() == right.ino()
@@ -348,6 +371,7 @@ fn same_file_version(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         && left.ctime_nsec() == right.ctime_nsec()
 }
 
+#[cfg(unix)]
 fn same_directory_owner(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.dev() == right.dev()
         && left.ino() == right.ino()
@@ -356,6 +380,7 @@ fn same_directory_owner(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         && left.gid() == right.gid()
 }
 
+#[cfg(unix)]
 fn sync_parent_directory(parent: &Path) -> io::Result<bool> {
     let directory = match File::open(parent) {
         Ok(directory) => directory,
@@ -367,6 +392,7 @@ fn sync_parent_directory(parent: &Path) -> io::Result<bool> {
     }
 }
 
+#[cfg(unix)]
 fn handle_directory_sync_error(error: io::Error) -> io::Result<bool> {
     // Some Unix filesystems reject directory fsync with EINVAL rather than ENOTSUP.
     if matches!(
@@ -383,9 +409,14 @@ fn validate_state_file(path: &Path, metadata: &fs::Metadata) -> Result<(), Pairi
     if !metadata.is_file() || metadata.file_type().is_symlink() {
         return Err(PairingStateStoreError::UnsafeFile(path.to_path_buf()));
     }
-    let mode = metadata.permissions().mode() & 0o777;
-    if mode & 0o077 != 0 {
-        return Err(PairingStateStoreError::PermissiveMode { mode });
+    #[cfg(windows)]
+    crate::private_fs::validate_private(path)?;
+    #[cfg(unix)]
+    {
+        let mode = metadata.permissions().mode() & 0o777;
+        if mode & 0o077 != 0 {
+            return Err(PairingStateStoreError::PermissiveMode { mode });
+        }
     }
     Ok(())
 }
@@ -480,7 +511,7 @@ impl From<io::Error> for PairingStateStoreError {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use std::{
         cell::Cell,
@@ -1169,4 +1200,24 @@ mod tests {
         ));
         fs::remove_dir_all(directory).expect("cleanup");
     }
+}
+
+#[cfg(windows)]
+fn same_file_version(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt as _;
+    left.len() == right.len()
+        && left.file_attributes() == right.file_attributes()
+        && left.creation_time() == right.creation_time()
+        && left.last_write_time() == right.last_write_time()
+}
+#[cfg(windows)]
+fn same_directory_owner(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt as _;
+    left.file_attributes() == right.file_attributes()
+        && left.creation_time() == right.creation_time()
+}
+#[cfg(windows)]
+fn sync_parent_directory(parent: &Path) -> io::Result<bool> {
+    crate::private_fs::windows::sync_parent_volume(parent)?;
+    Ok(true)
 }

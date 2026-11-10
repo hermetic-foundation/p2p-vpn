@@ -1,3 +1,5 @@
+#![cfg(target_os = "linux")]
+
 use std::{
     env,
     fmt::Write as _,

@@ -1,0 +1,95 @@
+{
+    "date":  "2026-11-10",
+    "platform":  "native Windows",
+    "test":  "relay::direct_link_loss_uses_relay_bridge_and_returns_to_direct",
+    "physical_adapter_changed":  false,
+    "public_internet_traversed":  false,
+    "real_circuit_relay_protocol":  true,
+    "manual_network_changed_calls":  0,
+    "packet_io":  "in-process TUN packet channels",
+    "relay_destination_reservation_prepared":  true,
+    "acceptance":  "10 consecutive fresh bidirectional packet pairs, required selected path and increasing required-path payload counters on both peers",
+    "runs":  [
+                 {
+                     "run":  "connection-recovery-relay-01",
+                     "passed":  true,
+                     "stages":  [
+                                    {
+                                        "stage":  "bridge_initial_direct",
+                                        "required_path":  "direct_tcp_stream",
+                                        "first_bidirectional_on_required_path_seconds":  0.0337959,
+                                        "qualified_seconds":  1.0101689,
+                                        "consecutive_fresh_bidirectional_pairs":  10
+                                    },
+                                    {
+                                        "stage":  "bridge_after_direct_link_loss",
+                                        "required_path":  "circuit_relay",
+                                        "first_bidirectional_on_required_path_seconds":  16.2100881,
+                                        "qualified_seconds":  17.1931769,
+                                        "consecutive_fresh_bidirectional_pairs":  10
+                                    },
+                                    {
+                                        "stage":  "bridge_after_direct_link_return",
+                                        "required_path":  "direct_tcp_stream",
+                                        "first_bidirectional_on_required_path_seconds":  11.8597419,
+                                        "qualified_seconds":  12.8401673,
+                                        "consecutive_fresh_bidirectional_pairs":  10
+                                    }
+                                ]
+                 },
+                 {
+                     "run":  "connection-recovery-relay-02",
+                     "passed":  true,
+                     "stages":  [
+                                    {
+                                        "stage":  "bridge_initial_direct",
+                                        "required_path":  "direct_tcp_stream",
+                                        "first_bidirectional_on_required_path_seconds":  0.0267643,
+                                        "qualified_seconds":  0.9997572,
+                                        "consecutive_fresh_bidirectional_pairs":  10
+                                    },
+                                    {
+                                        "stage":  "bridge_after_direct_link_loss",
+                                        "required_path":  "circuit_relay",
+                                        "first_bidirectional_on_required_path_seconds":  16.161705,
+                                        "qualified_seconds":  17.140377,
+                                        "consecutive_fresh_bidirectional_pairs":  10
+                                    },
+                                    {
+                                        "stage":  "bridge_after_direct_link_return",
+                                        "required_path":  "direct_tcp_stream",
+                                        "first_bidirectional_on_required_path_seconds":  11.9865403,
+                                        "qualified_seconds":  12.9640854,
+                                        "consecutive_fresh_bidirectional_pairs":  10
+                                    }
+                                ]
+                 },
+                 {
+                     "run":  "connection-recovery-relay-03",
+                     "passed":  true,
+                     "stages":  [
+                                    {
+                                        "stage":  "bridge_initial_direct",
+                                        "required_path":  "direct_tcp_stream",
+                                        "first_bidirectional_on_required_path_seconds":  0.0277171,
+                                        "qualified_seconds":  1.0105242,
+                                        "consecutive_fresh_bidirectional_pairs":  10
+                                    },
+                                    {
+                                        "stage":  "bridge_after_direct_link_loss",
+                                        "required_path":  "circuit_relay",
+                                        "first_bidirectional_on_required_path_seconds":  16.1646261,
+                                        "qualified_seconds":  17.1427454,
+                                        "consecutive_fresh_bidirectional_pairs":  10
+                                    },
+                                    {
+                                        "stage":  "bridge_after_direct_link_return",
+                                        "required_path":  "direct_tcp_stream",
+                                        "first_bidirectional_on_required_path_seconds":  11.8919188,
+                                        "qualified_seconds":  12.8704473,
+                                        "consecutive_fresh_bidirectional_pairs":  10
+                                    }
+                                ]
+                 }
+             ]
+}

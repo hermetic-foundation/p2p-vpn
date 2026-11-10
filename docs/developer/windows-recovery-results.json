@@ -1,0 +1,227 @@
+{
+  "date": "2026-11-10",
+  "platform": "native Windows 11 x64",
+  "runs": [
+    {
+      "raw_evidence_directory": "target/connection-recovery-quic-fixed-03",
+      "tcp_stages": [
+        {
+          "stage": "initial_primary",
+          "first_bidirectional_seconds": 0.030387,
+          "qualified_seconds": 1.0106828,
+          "probe_pairs_sent": 10,
+          "consecutive_fresh_bidirectional_pairs": 10
+        },
+        {
+          "stage": "hard_disconnect_to_changed_address",
+          "first_bidirectional_seconds": 11.1996143,
+          "qualified_seconds": 12.1742251,
+          "probe_pairs_sent": 28,
+          "consecutive_fresh_bidirectional_pairs": 10
+        },
+        {
+          "stage": "return_after_complete_outage",
+          "first_bidirectional_seconds": 7.4785806,
+          "qualified_seconds": 8.4480294,
+          "probe_pairs_sent": 22,
+          "consecutive_fresh_bidirectional_pairs": 10
+        },
+        {
+          "stage": "silent_blackhole_to_backup",
+          "first_bidirectional_seconds": 10.567234,
+          "qualified_seconds": 11.5440484,
+          "probe_pairs_sent": 27,
+          "consecutive_fresh_bidirectional_pairs": 10
+        },
+        {
+          "stage": "explicit_network_change_notification",
+          "first_bidirectional_seconds": 0.6158888,
+          "qualified_seconds": 1.5958893,
+          "probe_pairs_sent": 11,
+          "consecutive_fresh_bidirectional_pairs": 10
+        }
+      ],
+      "quic_stages": [
+        {
+          "consecutive_fresh_quic_pairs": 10,
+          "first_bidirectional_quic_seconds": 5.0589347,
+          "probe_pairs_sent": 56,
+          "qualified_seconds": 6.0370954,
+          "stage": "quic_initial_proxied_path"
+        },
+        {
+          "consecutive_fresh_bidirectional_pairs": 10,
+          "first_bidirectional_seconds": 19.2634156,
+          "probe_pairs_sent": 41,
+          "qualified_seconds": 20.2422435,
+          "stage": "quic_blackhole_any_transport_recovery"
+        },
+        {
+          "consecutive_fresh_quic_pairs": 10,
+          "first_bidirectional_quic_seconds": 23.819075,
+          "probe_pairs_sent": 229,
+          "qualified_seconds": 24.8014455,
+          "stage": "quic_alternate_endpoint_recovery"
+        },
+        {
+          "consecutive_fresh_quic_pairs": 10,
+          "first_bidirectional_quic_seconds": 3.9952107,
+          "probe_pairs_sent": 42,
+          "qualified_seconds": 4.9730544,
+          "stage": "quic_after_network_change_notification"
+        }
+      ],
+      "blackholed_udp_datagrams": 106,
+      "approximate_seconds_from_udp_blackhole_to_restored_quic": 44.0613185
+    },
+    {
+      "raw_evidence_directory": "target/connection-recovery-repeat-04",
+      "tcp_stages": [
+        {
+          "stage": "initial_primary",
+          "first_bidirectional_seconds": 0.0282501,
+          "qualified_seconds": 1.0070233,
+          "probe_pairs_sent": 10,
+          "consecutive_fresh_bidirectional_pairs": 10
+        },
+        {
+          "stage": "hard_disconnect_to_changed_address",
+          "first_bidirectional_seconds": 9.0258928,
+          "qualified_seconds": 10.0144711,
+          "probe_pairs_sent": 24,
+          "consecutive_fresh_bidirectional_pairs": 10
+        },
+        {
+          "stage": "return_after_complete_outage",
+          "first_bidirectional_seconds": 7.4497198000000004,
+          "qualified_seconds": 8.4326058,
+          "probe_pairs_sent": 22,
+          "consecutive_fresh_bidirectional_pairs": 10
+        },
+        {
+          "stage": "silent_blackhole_to_backup",
+          "first_bidirectional_seconds": 10.5691499,
+          "qualified_seconds": 11.5490946,
+          "probe_pairs_sent": 27,
+          "consecutive_fresh_bidirectional_pairs": 10
+        },
+        {
+          "stage": "explicit_network_change_notification",
+          "first_bidirectional_seconds": 0.6183617,
+          "qualified_seconds": 1.5925265,
+          "probe_pairs_sent": 11,
+          "consecutive_fresh_bidirectional_pairs": 10
+        }
+      ],
+      "quic_stages": [
+        {
+          "consecutive_fresh_quic_pairs": 10,
+          "first_bidirectional_quic_seconds": 5.0337403,
+          "probe_pairs_sent": 56,
+          "qualified_seconds": 6.0139093,
+          "stage": "quic_initial_proxied_path"
+        },
+        {
+          "consecutive_fresh_bidirectional_pairs": 10,
+          "first_bidirectional_seconds": 19.2420664,
+          "probe_pairs_sent": 41,
+          "qualified_seconds": 20.221392,
+          "stage": "quic_blackhole_any_transport_recovery"
+        },
+        {
+          "consecutive_fresh_quic_pairs": 10,
+          "first_bidirectional_quic_seconds": 23.8311033,
+          "probe_pairs_sent": 229,
+          "qualified_seconds": 24.8086308,
+          "stage": "quic_alternate_endpoint_recovery"
+        },
+        {
+          "consecutive_fresh_quic_pairs": 10,
+          "first_bidirectional_quic_seconds": 3.9694072,
+          "probe_pairs_sent": 46,
+          "qualified_seconds": 4.9446687,
+          "stage": "quic_after_network_change_notification"
+        }
+      ],
+      "blackholed_udp_datagrams": 106,
+      "approximate_seconds_from_udp_blackhole_to_restored_quic": 44.052495300000004
+    },
+    {
+      "raw_evidence_directory": "target/connection-recovery-repeat-05",
+      "tcp_stages": [
+        {
+          "stage": "initial_primary",
+          "first_bidirectional_seconds": 0.0314529,
+          "qualified_seconds": 1.0220428,
+          "probe_pairs_sent": 10,
+          "consecutive_fresh_bidirectional_pairs": 10
+        },
+        {
+          "stage": "hard_disconnect_to_changed_address",
+          "first_bidirectional_seconds": 9.0468979,
+          "qualified_seconds": 10.0260498,
+          "probe_pairs_sent": 24,
+          "consecutive_fresh_bidirectional_pairs": 10
+        },
+        {
+          "stage": "return_after_complete_outage",
+          "first_bidirectional_seconds": 7.4742171,
+          "qualified_seconds": 8.4485016,
+          "probe_pairs_sent": 22,
+          "consecutive_fresh_bidirectional_pairs": 10
+        },
+        {
+          "stage": "silent_blackhole_to_backup",
+          "first_bidirectional_seconds": 10.5533282,
+          "qualified_seconds": 11.5333219,
+          "probe_pairs_sent": 27,
+          "consecutive_fresh_bidirectional_pairs": 10
+        },
+        {
+          "stage": "explicit_network_change_notification",
+          "first_bidirectional_seconds": 0.6259058,
+          "qualified_seconds": 1.6003051,
+          "probe_pairs_sent": 11,
+          "consecutive_fresh_bidirectional_pairs": 10
+        }
+      ],
+      "quic_stages": [
+        {
+          "consecutive_fresh_quic_pairs": 10,
+          "first_bidirectional_quic_seconds": 5.0387339,
+          "probe_pairs_sent": 56,
+          "qualified_seconds": 6.0186266,
+          "stage": "quic_initial_proxied_path"
+        },
+        {
+          "consecutive_fresh_bidirectional_pairs": 10,
+          "first_bidirectional_seconds": 19.2417235,
+          "probe_pairs_sent": 41,
+          "qualified_seconds": 20.2217983,
+          "stage": "quic_blackhole_any_transport_recovery"
+        },
+        {
+          "consecutive_fresh_quic_pairs": 10,
+          "first_bidirectional_quic_seconds": 23.7222641,
+          "probe_pairs_sent": 228,
+          "qualified_seconds": 24.7012374,
+          "stage": "quic_alternate_endpoint_recovery"
+        },
+        {
+          "consecutive_fresh_quic_pairs": 10,
+          "first_bidirectional_quic_seconds": 3.9542026999999997,
+          "probe_pairs_sent": 46,
+          "qualified_seconds": 4.9293668,
+          "stage": "quic_after_network_change_notification"
+        }
+      ],
+      "blackholed_udp_datagrams": 106,
+      "approximate_seconds_from_udp_blackhole_to_restored_quic": 43.9440624
+    }
+  ],
+  "runs_passed": 3,
+  "scenarios_per_run": 2,
+  "physical_adapter_changed": false,
+  "packet_io": "in-process TUN packet channels",
+  "qualification": "10 consecutive fresh bidirectional probe pairs per recovery; QUIC stages also require per-direction owned QUIC packet counter growth"
+}
