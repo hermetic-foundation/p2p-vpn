@@ -239,6 +239,99 @@ mod tests {
     }
 
     #[cfg(feature = "battery-diagnostics")]
+    #[test]
+    fn diagnostic_pause_discards_routing_maintenance_dials_without_hiding_dispatches() {
+        use libp2p::{
+            core::{ConnectedPoint, Endpoint, transport::PortUse},
+            swarm::{
+                ConnectionId, FromSwarm, NetworkBehaviour, ToSwarm,
+                behaviour::ConnectionEstablished,
+            },
+        };
+        use std::{
+            task::{Context, Poll},
+            time::Duration,
+        };
+
+        for pause_before_routing_update in [false, true] {
+            let local = libp2p::identity::Keypair::ed25519_from_bytes([0; 32])
+                .unwrap()
+                .public()
+                .to_peer_id();
+            let mut config = super::super::p2p::controlled_kademlia_config(
+                libp2p::StreamProtocol::new("/test/kad"),
+            );
+            config
+                .set_periodic_bootstrap_interval(None)
+                .set_automatic_bootstrap_throttle(None);
+            let mut kad =
+                kad::Behaviour::with_config(local, kad::store::MemoryStore::new(local), config);
+            if pause_before_routing_update {
+                kad.pause_outbound_queries_for(Duration::from_mins(1));
+            }
+            let mut pending = false;
+            for index in 1u16..=256 {
+                let mut seed = [0; 32];
+                seed[..2].copy_from_slice(&index.to_le_bytes());
+                let peer = libp2p::identity::Keypair::ed25519_from_bytes(seed)
+                    .unwrap()
+                    .public()
+                    .to_peer_id();
+                let address: libp2p::Multiaddr = "/ip4/127.0.0.1/tcp/12345".parse().unwrap();
+                if matches!(
+                    kad.add_address(&peer, address.clone()),
+                    kad::RoutingUpdate::Failed
+                ) {
+                    // Only a connected newcomer probes a full bucket's disconnected incumbent.
+                    let endpoint = ConnectedPoint::Dialer {
+                        address: address.clone(),
+                        role_override: Endpoint::Dialer,
+                        port_use: PortUse::New,
+                    };
+                    kad.on_swarm_event(FromSwarm::ConnectionEstablished(ConnectionEstablished {
+                        peer_id: peer,
+                        connection_id: ConnectionId::new_unchecked(usize::from(index)),
+                        endpoint: &endpoint,
+                        failed_addresses: &[],
+                        other_established: 0,
+                    }));
+                    if matches!(kad.add_address(&peer, address), kad::RoutingUpdate::Pending) {
+                        pending = true;
+                        break;
+                    }
+                }
+            }
+            assert!(pending, "fixture must queue a full-bucket replacement dial");
+            kad.pause_outbound_queries_for(Duration::from_mins(1));
+            let waker = futures::task::noop_waker();
+            let mut cx = Context::from_waker(&waker);
+            let mut notifications = 0;
+            for _ in 0..1024 {
+                match kad.poll(&mut cx) {
+                    Poll::Ready(ToSwarm::Dial { .. }) => {
+                        panic!("paused DHT emitted a routing dial")
+                    }
+                    Poll::Ready(_) => notifications += 1,
+                    Poll::Pending => break,
+                }
+            }
+            assert!(notifications > 0, "non-dial notifications must still drain");
+            assert_eq!(kad.dial_queue_usage().dispatched, 0);
+            assert!(kad.dial_queue_usage().discarded > 0);
+            assert_eq!(kad.query_lifecycle_usage().requests, 0);
+            kad.pause_outbound_queries_for(Duration::ZERO);
+            kad.get_providers(kad::RecordKey::new(&b"diagnostic"));
+            for _ in 0..1024 {
+                let _ = kad.poll(&mut cx);
+            }
+            assert!(
+                kad.dial_queue_usage().dispatched > 0,
+                "ordinary queries must resume"
+            );
+        }
+    }
+
+    #[cfg(feature = "battery-diagnostics")]
     #[tokio::test]
     async fn diagnostic_pause_expires_automatically_and_wakes_query_progress() {
         use libp2p::swarm::{NetworkBehaviour, ToSwarm};

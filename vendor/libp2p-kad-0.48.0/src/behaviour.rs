@@ -3169,7 +3169,12 @@ where
 
         loop {
             // Drain queued events first.
-            if let Some(event) = self.queued_events.pop_front() {
+            let queued = if queries_paused {
+                self.queued_events.pop_front_without_dials()
+            } else {
+                self.queued_events.pop_front()
+            };
+            if let Some(event) = queued {
                 return Poll::Ready(event);
             }
 

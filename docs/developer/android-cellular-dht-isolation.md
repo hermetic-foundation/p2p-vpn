@@ -47,7 +47,9 @@ the acknowledged duration. `resource-status` exposes
 ## Intervention Boundary
 
 - Pause outbound query advancement, automatic bootstrap, and background job starts.
-- Preserve Kademlia connections, routing state, inbound request handling, and queued actions.
+- Suppress queued Kademlia dial actions, including full-bucket routing maintenance.
+- Preserve existing connections, routing state, inbound handling, and non-dial queued actions.
+- Suppressed dials count as discarded, never as dispatched intents.
 - Already dispatched requests can finish; use a fixed settling interval before measuring.
 - Other protocol policies remain unchanged; their resulting activity can change indirectly.
 - Query state remains bounded by existing resource limits and can expire during the pause.
@@ -139,3 +141,7 @@ The diagnostic APK's SHA-256 is
 No completed comparison exists from this attempt. It does not establish a
 DHT energy contribution, a battery improvement, or Saturday's historical cause.
 The background recorder passed a separate 20-second collection smoke test.
+
+The interrupted B interval also exposed ten routing-maintenance dial intents
+despite zero query request steps. A follow-up diagnostic-only fix discards
+queued DHT dials during the pause; the zero-dial acceptance rule is unchanged.

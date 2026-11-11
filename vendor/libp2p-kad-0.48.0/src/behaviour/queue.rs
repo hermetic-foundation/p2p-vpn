@@ -198,13 +198,26 @@ impl QueuedEvents {
     }
 
     pub(super) fn pop_front(&mut self) -> Option<ToSwarm<Event, HandlerIn>> {
-        self.events.pop_front().map(|(event, _reservation, bytes)| {
+        self.pop_front_with_dials(true)
+    }
+
+    pub(super) fn pop_front_without_dials(&mut self) -> Option<ToSwarm<Event, HandlerIn>> {
+        self.pop_front_with_dials(false)
+    }
+
+    fn pop_front_with_dials(&mut self, allow_dials: bool) -> Option<ToSwarm<Event, HandlerIn>> {
+        while let Some((event, _reservation, bytes)) = self.events.pop_front() {
             self.usage.bytes -= bytes;
             if matches!(&event, ToSwarm::Dial { .. }) {
+                if !allow_dials {
+                    self.dials.discarded = self.dials.discarded.saturating_add(1);
+                    continue;
+                }
                 self.dials.dispatched = self.dials.dispatched.saturating_add(1);
             }
-            event
-        })
+            return Some(event);
+        }
+        None
     }
 
     pub(super) fn iter(&self) -> impl Iterator<Item = &ToSwarm<Event, HandlerIn>> {
