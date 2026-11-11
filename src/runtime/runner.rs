@@ -2444,6 +2444,17 @@ where
                     .await
             }, if control_rx.is_some() => {
                 let request = match request {
+                    #[cfg(feature = "battery-diagnostics")]
+                    RuntimeControlRequest::DiagnosticDhtPause { seconds, respond_to } => {
+                        let duration = Duration::from_secs(u64::from(seconds.min(1800)));
+                        node.swarm.behaviour_mut().kad.pause_outbound_queries_for(duration);
+                        if let Some(kad) = node.swarm.behaviour_mut().pairing_kad.as_mut() {
+                            kad.pause_outbound_queries_for(duration);
+                        }
+                        let _ = respond_to.send(vec![format!("kad_diagnostic_pause_seconds {}", duration.as_secs())]);
+                        runtime_data_priority.record_other();
+                        continue;
+                    }
                     RuntimeControlRequest::NetworkChanged { respond_to } => {
                         if public_bootstrap_defaults {
                             public_discovery_holdoff_until =
@@ -6492,6 +6503,11 @@ fn handle_runtime_control_request(
             if respond_to.send(RuntimeNetworkChange::default()).is_err() {
                 eprintln!("runtime network change response receiver dropped");
             }
+            None
+        }
+        #[cfg(feature = "battery-diagnostics")]
+        RuntimeControlRequest::DiagnosticDhtPause { respond_to, .. } => {
+            let _ = respond_to.send(vec!["error diagnostic control unavailable".to_owned()]);
             None
         }
         RuntimeControlRequest::Shutdown { respond_to } => {

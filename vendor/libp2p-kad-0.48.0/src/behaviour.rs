@@ -132,6 +132,8 @@ pub struct Behaviour<TStore> {
     mode_update_turn: bool,
     no_events_waker: Option<Waker>,
 
+    diagnostic_query_pause: Option<futures_timer::Delay>,
+
     /// The record storage.
     store: TStore,
 
@@ -641,11 +643,29 @@ where
             mode_update_cursor: None,
             mode_update_turn: false,
             no_events_waker: None,
+            diagnostic_query_pause: None,
             bootstrap_status: bootstrap::Status::new(
                 config.periodic_bootstrap_interval,
                 config.automatic_bootstrap_throttle,
             ),
         }
+    }
+
+    /// Temporarily stops advancing outbound queries and starting background jobs.
+    /// Existing connections, inbound requests and already dispatched work remain
+    /// active. A zero duration resumes immediately; otherwise the pause expires
+    /// automatically. Intended for controlled energy diagnostics, not discovery policy.
+    pub fn pause_outbound_queries_for(&mut self, duration: Duration) {
+        self.diagnostic_query_pause =
+            (!duration.is_zero()).then(|| futures_timer::Delay::new(duration));
+        if let Some(waker) = self.no_events_waker.take() {
+            waker.wake();
+        }
+    }
+
+    /// Whether a diagnostic pause is still installed; expiry is processed by polling.
+    pub fn diagnostic_queries_paused(&self) -> bool {
+        self.diagnostic_query_pause.is_some()
     }
 
     /// Gets an iterator over immutable references to all running queries.
@@ -3108,7 +3128,13 @@ where
             }
         }
 
-        self.poll_background_jobs(cx, now);
+        let queries_paused = self.diagnostic_query_pause.as_mut().is_some_and(|delay| {
+            std::future::Future::poll(std::pin::Pin::new(delay), cx).is_pending()
+        });
+        if !queries_paused {
+            self.diagnostic_query_pause = None;
+            self.poll_background_jobs(cx, now);
+        }
 
         // Inbound work must not indefinitely defer terminal query ownership.
         // Flush only this query's prior progress before its terminal result.
@@ -3133,9 +3159,11 @@ where
         }
 
         // Poll bootstrap periodically and automatically.
-        if let Poll::Ready(()) = self.bootstrap_status.poll_next_bootstrap(cx) {
-            if let Err(e) = self.bootstrap() {
-                tracing::warn!("Failed to trigger bootstrap: {e}");
+        if !queries_paused {
+            if let Poll::Ready(()) = self.bootstrap_status.poll_next_bootstrap(cx) {
+                if let Err(e) = self.bootstrap() {
+                    tracing::warn!("Failed to trigger bootstrap: {e}");
+                }
             }
         }
 
@@ -3170,6 +3198,9 @@ where
 
             // Look for a finished query.
             loop {
+                if queries_paused {
+                    break;
+                }
                 match self.queries.poll(now, cx) {
                     QueryPoolState::Finished(q) => {
                         if let Some(event) = self.query_finished(q) {

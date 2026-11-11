@@ -1508,6 +1508,19 @@ mod android {
     }
 
     #[unsafe(no_mangle)]
+    pub extern "system" fn Java_org_hermeticfoundation_p2pvpn_NativeBridge_nativeDiagnosticDhtPause(
+        mut env: JNIEnv,
+        _class: JClass,
+        network_id: JString,
+        seconds: jint,
+    ) -> jstring {
+        jni_response(&mut env, |env| {
+            let network_id = read_string(env, &network_id)?;
+            diagnostic_dht_pause(&network_id, seconds)
+        })
+    }
+
+    #[unsafe(no_mangle)]
     pub extern "system" fn Java_org_hermeticfoundation_p2pvpn_NativeBridge_nativeRevokeMember(
         mut env: JNIEnv,
         _class: JClass,
@@ -2423,6 +2436,38 @@ mod android {
         })?;
         drop(runtime);
         block_on_control(control.revoke_member(member_peer))
+    }
+
+    #[cfg(not(feature = "battery-diagnostics"))]
+    fn diagnostic_dht_pause(
+        _network_id: &str,
+        _seconds: jint,
+    ) -> Result<serde_json::Value, String> {
+        Err("native library was built without battery-diagnostics".to_owned())
+    }
+
+    #[cfg(feature = "battery-diagnostics")]
+    fn diagnostic_dht_pause(network_id: &str, seconds: jint) -> Result<serde_json::Value, String> {
+        if !(0..=1800).contains(&seconds) {
+            return Err("diagnostic pause requires 0 to 1800 seconds".to_owned());
+        }
+        let runtime = RUNTIME.lock().unwrap_or_else(|error| error.into_inner());
+        let instance = runtime
+            .as_ref()
+            .ok_or_else(|| "p2p-vpn is not connected".to_owned())?;
+        let control = instance
+            .networks
+            .get(network_id)
+            .and_then(|network| network.control())
+            .ok_or_else(|| "requested network is not running".to_owned())?;
+        drop(runtime);
+        let seconds =
+            u16::try_from(seconds).map_err(|_| "invalid diagnostic duration".to_owned())?;
+        let lines = block_on_control(control.diagnostic_dht_pause(seconds))?;
+        if lines != [format!("kad_diagnostic_pause_seconds {seconds}")] {
+            return Err("diagnostic pause was not acknowledged".to_owned());
+        }
+        Ok(serde_json::json!({"seconds": seconds, "lines": lines}))
     }
 
     fn network_changed() -> Result<AndroidRuntimeNetworkChange, String> {

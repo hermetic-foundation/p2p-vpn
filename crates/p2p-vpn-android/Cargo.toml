@@ -8,6 +8,9 @@ description = "Android JNI bridge for p2p-vpn"
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+battery-diagnostics = ["p2p-vpn/battery-diagnostics"]
+
 [lints.rust]
 unsafe_code = "allow"
 

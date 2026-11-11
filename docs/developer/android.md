@@ -1162,6 +1162,7 @@ holds. It is absent from non-debug source sets.
 | --- | --- | --- |
 | `status` | None | Structured profile, VPN mode, connection, pairing, and path state |
 | `diagnostics` | None | Production aggregate-only diagnostic report |
+| `diagnostic-dht-pause` | Network UUID, `seconds` from 0 to 1800 | Feature-gated, temporary DHT isolation; [measurement contract](android-cellular-dht-isolation.md) |
 | `create-profile` | `network` | Queues normal encrypted profile creation |
 | `select-network` | Network UUID | Selects the identity used by pairing controls |
 | `set-network-enabled` | UUID and Boolean | Changes one collection entry's enabled flag |

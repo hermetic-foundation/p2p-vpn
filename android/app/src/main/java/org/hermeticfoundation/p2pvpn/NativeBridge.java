@@ -40,6 +40,8 @@ final class NativeBridge {
 
     static native String nativeNetworkChanged();
 
+    static native String nativeDiagnosticDhtPause(String networkId, int seconds);
+
     static native String nativeRevokeMember(String networkId, String memberPeer);
 
     static native String nativeResignMembership(String networkId);

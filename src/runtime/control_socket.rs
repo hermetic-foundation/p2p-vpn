@@ -552,6 +552,11 @@ pub enum RuntimeControlRequest {
     NetworkChanged {
         respond_to: oneshot::Sender<RuntimeNetworkChange>,
     },
+    #[cfg(feature = "battery-diagnostics")]
+    DiagnosticDhtPause {
+        seconds: u16,
+        respond_to: oneshot::Sender<Vec<String>>,
+    },
     Shutdown {
         respond_to: oneshot::Sender<Vec<String>>,
     },
@@ -698,6 +703,22 @@ impl RuntimeControlHandle {
         self.send(RuntimeControlRequest::NetworkChanged { respond_to })
             .await?;
         response.await.map_err(|_| runtime_response_dropped())
+    }
+
+    /// In-process only; never exposed through the network or Unix socket parser.
+    #[cfg(feature = "battery-diagnostics")]
+    pub async fn diagnostic_dht_pause(&self, seconds: u16) -> io::Result<Vec<String>> {
+        if seconds > 1800 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "diagnostic pause exceeds 1800 seconds",
+            ));
+        }
+        self.request_lines(|respond_to| RuntimeControlRequest::DiagnosticDhtPause {
+            seconds,
+            respond_to,
+        })
+        .await
     }
 
     pub async fn shutdown(&self) -> io::Result<Vec<String>> {
@@ -2168,6 +2189,35 @@ mod tests {
             .expect_err("oversized request rejected");
 
         assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[cfg(feature = "battery-diagnostics")]
+    #[tokio::test]
+    async fn diagnostic_pause_is_bounded_and_uses_the_in_process_channel() {
+        let (handle, mut receiver) = runtime_control_channel();
+        assert_eq!(
+            handle.diagnostic_dht_pause(1801).await.unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
+        assert!(receiver.rx.try_recv().is_err());
+        let reply = tokio::spawn(async move {
+            let Some(RuntimeControlRequest::DiagnosticDhtPause {
+                seconds,
+                respond_to,
+            }) = receiver.recv().await
+            else {
+                panic!("expected diagnostic request");
+            };
+            assert_eq!(seconds, 600);
+            respond_to
+                .send(vec!["kad_diagnostic_pause_seconds 600".to_owned()])
+                .unwrap();
+        });
+        assert_eq!(
+            handle.diagnostic_dht_pause(600).await.unwrap(),
+            vec!["kad_diagnostic_pause_seconds 600"]
+        );
+        reply.await.unwrap();
     }
 
     #[tokio::test]

@@ -27,6 +27,8 @@ impl KademliaResources {
 }
 
 struct DhtResources {
+    #[cfg(feature = "battery-diagnostics")]
+    diagnostic_paused: bool,
     routing: kad::RoutingUsage,
     queries: kad::QueryPoolUsage,
     lifecycle: kad::QueryLifecycleUsage,
@@ -42,6 +44,8 @@ struct DhtResources {
 impl DhtResources {
     fn capture(behaviour: &kad::Behaviour<kad::store::MemoryStore>) -> Self {
         Self {
+            #[cfg(feature = "battery-diagnostics")]
+            diagnostic_paused: behaviour.diagnostic_queries_paused(),
             routing: behaviour.routing_resource_usage(),
             queries: behaviour.query_pool_usage(),
             lifecycle: behaviour.query_lifecycle_usage(),
@@ -56,6 +60,11 @@ impl DhtResources {
     }
 
     fn extend_lines(&self, prefix: &str, lines: &mut Vec<String>) {
+        #[cfg(feature = "battery-diagnostics")]
+        lines.push(format!(
+            "{prefix}_diagnostic_paused {}",
+            usize::from(self.diagnostic_paused)
+        ));
         let handler = self.handlers.usage;
         let gauges = [
             ("present", 1),
@@ -187,6 +196,75 @@ impl DhtResources {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "battery-diagnostics")]
+    #[tokio::test]
+    async fn diagnostic_pause_stops_query_advancement_and_resumes_without_rebuilding() {
+        use libp2p::swarm::{NetworkBehaviour, ToSwarm};
+        use std::{
+            task::{Context, Poll},
+            time::Duration,
+        };
+
+        let local = libp2p::PeerId::random();
+        let remote = libp2p::PeerId::random();
+        let mut config =
+            super::super::p2p::controlled_kademlia_config(libp2p::StreamProtocol::new("/test/kad"));
+        config
+            .set_periodic_bootstrap_interval(None)
+            .set_automatic_bootstrap_throttle(None);
+        let mut kad =
+            kad::Behaviour::with_config(local, kad::store::MemoryStore::new(local), config);
+        kad.add_address(&remote, "/ip4/127.0.0.1/tcp/12345".parse().unwrap());
+        kad.get_providers(kad::RecordKey::new(&b"diagnostic"));
+        kad.pause_outbound_queries_for(Duration::from_mins(1));
+        let waker = futures::task::noop_waker();
+        let mut cx = Context::from_waker(&waker);
+        for _ in 0..32 {
+            assert!(!matches!(
+                kad.poll(&mut cx),
+                Poll::Ready(ToSwarm::Dial { .. } | ToSwarm::NotifyHandler { .. })
+            ));
+        }
+        assert_eq!(kad.query_lifecycle_usage().requests, 0);
+        assert!(kad.diagnostic_queries_paused());
+        assert!(kad.query_pool_usage().retained > 0);
+        kad.pause_outbound_queries_for(Duration::ZERO);
+        assert!(!kad.diagnostic_queries_paused());
+        for _ in 0..32 {
+            let _ = kad.poll(&mut cx);
+        }
+        assert!(kad.query_lifecycle_usage().requests > 0);
+        assert!(kad.dial_queue_usage().dispatched > 0);
+    }
+
+    #[cfg(feature = "battery-diagnostics")]
+    #[tokio::test]
+    async fn diagnostic_pause_expires_automatically_and_wakes_query_progress() {
+        use libp2p::swarm::{NetworkBehaviour, ToSwarm};
+        use std::{task::Poll, time::Duration};
+        let local = libp2p::PeerId::random();
+        let remote = libp2p::PeerId::random();
+        let mut kad = kad::Behaviour::new(local, kad::store::MemoryStore::new(local));
+        kad.add_address(&remote, "/ip4/127.0.0.1/tcp/12345".parse().unwrap());
+        kad.get_providers(kad::RecordKey::new(&b"diagnostic"));
+        kad.pause_outbound_queries_for(Duration::from_millis(20));
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            futures::future::poll_fn(|cx| match kad.poll(cx) {
+                Poll::Ready(ToSwarm::Dial { .. }) => Poll::Ready(()),
+                Poll::Ready(_) => {
+                    cx.waker().wake_by_ref();
+                    Poll::Pending
+                }
+                Poll::Pending => Poll::Pending,
+            }),
+        )
+        .await
+        .expect("pause timer must wake the behaviour without external traffic");
+        assert!(!kad.diagnostic_queries_paused());
+        assert!(kad.query_lifecycle_usage().requests > 0);
+    }
 
     #[test]
     fn reports_distinguish_absent_dht_and_unlimited_capacity() {
