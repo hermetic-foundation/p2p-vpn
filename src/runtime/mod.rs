@@ -20,6 +20,8 @@ pub mod pairing_code;
 pub mod pairing_sessions;
 pub mod pairing_store;
 pub mod pinned_packet_stream;
+#[cfg(feature = "battery-diagnostics")]
+mod probe_diagnostics;
 mod recovery_queries;
 pub mod remote;
 pub mod runner;

@@ -43,6 +43,9 @@ public final class DebugAutomationReceiver extends BroadcastReceiver {
                 case "diagnostic-dht-pause":
                     diagnosticDhtPause(intent);
                     return;
+                case "diagnostic-probe-pause":
+                    diagnosticProbePause(intent);
+                    return;
                 case "create-profile":
                     createProfile(context, intent);
                     return;
@@ -124,6 +127,20 @@ public final class DebugAutomationReceiver extends BroadcastReceiver {
         try {
             respond(true, NativeResponse.objectValue(
                     NativeBridge.nativeDiagnosticDhtPause(networkId, seconds)), null);
+        } catch (P2pVpnException error) {
+            respond(false, null, "diagnostic_control_unavailable");
+        }
+    }
+
+    private void diagnosticProbePause(Intent intent) throws JSONException {
+        int seconds = intent.getIntExtra("seconds", -1);
+        if (seconds < 0 || seconds > 1800) {
+            throw new IllegalArgumentException("invalid_pause_seconds");
+        }
+        String networkId = requiredExtra(intent, "network_id", 36);
+        try {
+            respond(true, NativeResponse.objectValue(
+                    NativeBridge.nativeDiagnosticProbePause(networkId, seconds)), null);
         } catch (P2pVpnException error) {
             respond(false, null, "diagnostic_control_unavailable");
         }

@@ -72,6 +72,8 @@ pub struct RuntimeMetrics {
     outbound_owned_udp_datagram_packets: AtomicU64,
     outbound_quic_datagram_unavailable_packets: AtomicU64,
     outbound_path_probes_sent: AtomicU64,
+    #[cfg(feature = "battery-diagnostics")]
+    diagnostic_probe_paused: AtomicU64,
     outbound_path_probe_acks_sent: AtomicU64,
     outbound_path_probe_failures: AtomicU64,
     packet_plane_sessions_expired: AtomicU64,
@@ -320,6 +322,12 @@ impl RuntimeMetrics {
     pub fn record_outbound_path_probe_sent(&self) {
         self.outbound_path_probes_sent
             .fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[cfg(feature = "battery-diagnostics")]
+    pub fn record_diagnostic_probe_pause(&self, active: bool) {
+        self.diagnostic_probe_paused
+            .store(u64::from(active), Ordering::Relaxed);
     }
 
     pub fn record_outbound_path_probe_ack_sent(&self) {
@@ -1203,6 +1211,10 @@ impl RuntimeMetrics {
             .outbound_quic_datagram_unavailable_packets
             .load(Ordering::Relaxed);
         snapshot.outbound_path_probes_sent = self.outbound_path_probes_sent.load(Ordering::Relaxed);
+        #[cfg(feature = "battery-diagnostics")]
+        {
+            snapshot.diagnostic_probe_paused = self.diagnostic_probe_paused.load(Ordering::Relaxed);
+        }
         snapshot.outbound_path_probe_acks_sent =
             self.outbound_path_probe_acks_sent.load(Ordering::Relaxed);
         snapshot.outbound_path_probe_failures =
@@ -1667,6 +1679,8 @@ pub struct RuntimeSnapshot {
     pub outbound_owned_udp_datagram_packets: u64,
     pub outbound_quic_datagram_unavailable_packets: u64,
     pub outbound_path_probes_sent: u64,
+    #[cfg(feature = "battery-diagnostics")]
+    pub diagnostic_probe_paused: u64,
     pub outbound_path_probe_acks_sent: u64,
     pub outbound_path_probe_failures: u64,
     pub packet_plane_sessions_expired: u64,
@@ -1860,6 +1874,11 @@ impl RuntimeSnapshot {
     #[must_use]
     pub fn lines(&self) -> Vec<String> {
         let mut lines = vec![
+            #[cfg(feature = "battery-diagnostics")]
+            format!(
+                "path_probe_diagnostic_paused {}",
+                self.diagnostic_probe_paused
+            ),
             format!("tun_read_packets {}", self.tun_read_packets),
             format!("tun_read_bytes {}", self.tun_read_bytes),
             format!("tun_write_packets {}", self.tun_write_packets),
@@ -3141,6 +3160,26 @@ mod tests {
         assert_eq!(
             snapshot.packet_plane_inbound_drop_trailing_bytes_datagrams,
             1
+        );
+    }
+
+    #[cfg(feature = "battery-diagnostics")]
+    #[test]
+    fn diagnostic_probe_pause_is_visible_in_cached_status_lines() {
+        let metrics = RuntimeMetrics::default();
+        metrics.record_diagnostic_probe_pause(true);
+        let snapshot = metrics.snapshot(QueueStats::default());
+        assert!(
+            snapshot
+                .lines()
+                .contains(&"path_probe_diagnostic_paused 1".to_owned())
+        );
+        metrics.record_diagnostic_probe_pause(false);
+        assert!(
+            metrics
+                .snapshot(QueueStats::default())
+                .lines()
+                .contains(&"path_probe_diagnostic_paused 0".to_owned())
         );
     }
 

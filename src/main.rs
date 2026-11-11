@@ -99,6 +99,16 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 #[allow(clippy::large_enum_variant)]
 enum Command {
+    #[cfg(feature = "battery-diagnostics")]
+    #[command(hide = true)]
+    DiagnosticProbePause {
+        #[arg(long)]
+        socket: PathBuf,
+        #[arg(long)]
+        peer: Option<String>,
+        #[arg(long, value_parser = clap::value_parser!(u16).range(0..=1800))]
+        seconds: u16,
+    },
     /// Generate shell completion definitions.
     Completions {
         #[arg(value_enum)]
@@ -1555,6 +1565,29 @@ async fn run_cli() -> Result<(), String> {
             force,
         } => membership_record_install(&config, &records, output.as_deref(), force),
         Command::MembershipRecordList { config } => membership_record_list(&config),
+        #[cfg(feature = "battery-diagnostics")]
+        Command::DiagnosticProbePause {
+            socket,
+            peer,
+            seconds,
+        } => {
+            let peer = peer
+                .map(|value| {
+                    value
+                        .parse::<PeerId>()
+                        .map_err(|error| format!("invalid diagnostic peer: {error:?}"))
+                })
+                .transpose()?;
+            let lines = p2p_vpn::runtime::control_socket::query_diagnostic_probe_pause(
+                &socket, peer, seconds,
+            )
+            .await
+            .map_err(|error| format!("{error:?}"))?;
+            for line in lines {
+                println!("{line}");
+            }
+            Ok(())
+        }
         Command::DaemonStatus {
             socket,
             timeout_seconds,
@@ -12277,6 +12310,55 @@ mod tests {
         assert!(require_auto_relay_infrastructure_peer);
         assert!(require_auto_relay_candidate);
         assert!(require_auto_relay_reservation);
+    }
+
+    #[cfg(feature = "battery-diagnostics")]
+    #[test]
+    fn cli_probe_diagnostic_requires_a_bounded_lease() {
+        for seconds in ["0", "1200", "1800"] {
+            let cli = Cli::try_parse_from([
+                "p2p-vpn",
+                "diagnostic-probe-pause",
+                "--socket",
+                "/tmp/test.sock",
+                "--seconds",
+                seconds,
+            ])
+            .unwrap();
+            assert!(matches!(
+                cli.command,
+                Command::DiagnosticProbePause { peer: None, .. }
+            ));
+        }
+        for seconds in ["-1", "1801", "65536"] {
+            assert!(
+                Cli::try_parse_from([
+                    "p2p-vpn",
+                    "diagnostic-probe-pause",
+                    "--socket",
+                    "/tmp/test.sock",
+                    "--seconds",
+                    seconds
+                ])
+                .is_err()
+            );
+        }
+    }
+
+    #[cfg(not(feature = "battery-diagnostics"))]
+    #[test]
+    fn cli_probe_diagnostic_is_absent_from_default_builds() {
+        assert!(
+            Cli::try_parse_from([
+                "p2p-vpn",
+                "diagnostic-probe-pause",
+                "--socket",
+                "/tmp/test.sock",
+                "--seconds",
+                "1200"
+            ])
+            .is_err()
+        );
     }
 
     #[test]

@@ -557,6 +557,12 @@ pub enum RuntimeControlRequest {
         seconds: u16,
         respond_to: oneshot::Sender<Vec<String>>,
     },
+    #[cfg(feature = "battery-diagnostics")]
+    DiagnosticProbePause {
+        peer: Option<crate::PeerId>,
+        seconds: u16,
+        respond_to: oneshot::Sender<Vec<String>>,
+    },
     Shutdown {
         respond_to: oneshot::Sender<Vec<String>>,
     },
@@ -724,6 +730,27 @@ impl RuntimeControlHandle {
     pub async fn shutdown(&self) -> io::Result<Vec<String>> {
         self.request_lines(|respond_to| RuntimeControlRequest::Shutdown { respond_to })
             .await
+    }
+
+    /// Local diagnostic control only; the lease is lost on restart.
+    #[cfg(feature = "battery-diagnostics")]
+    pub async fn diagnostic_probe_pause(
+        &self,
+        peer: Option<crate::PeerId>,
+        seconds: u16,
+    ) -> io::Result<Vec<String>> {
+        if seconds > 1800 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "diagnostic pause exceeds 1800 seconds",
+            ));
+        }
+        self.request_lines(|respond_to| RuntimeControlRequest::DiagnosticProbePause {
+            peer,
+            seconds,
+            respond_to,
+        })
+        .await
     }
 
     pub async fn pair_rpc(&self, request: PairRpcRequest) -> io::Result<PairRpcResponseEnvelope> {
@@ -942,6 +969,14 @@ async fn handle_connection(
         MTU_REQUEST => RequestKind::Mtu,
         CAPABILITIES_REQUEST => RequestKind::Capabilities,
         SHUTDOWN_REQUEST => RequestKind::Shutdown,
+        #[cfg(feature = "battery-diagnostics")]
+        header if header.starts_with(b"diagnostic-probe-pause ") => {
+            let Some((peer, seconds)) = parse_probe_pause(header) else {
+                stream.write_all(b"error invalid probe pause\n").await?;
+                return Ok(());
+            };
+            RequestKind::DiagnosticProbePause { peer, seconds }
+        }
         header if header.starts_with(b"dns ") => {
             let Some(request) = parse_dns_control_request(header) else {
                 stream.write_all(b"error invalid dns request\n").await?;
@@ -1104,6 +1139,16 @@ async fn handle_legacy_connection(
                 .map_err(|_| {
                     io::Error::new(io::ErrorKind::BrokenPipe, "runtime control loop stopped")
                 })?;
+        }
+        #[cfg(feature = "battery-diagnostics")]
+        RequestKind::DiagnosticProbePause { peer, seconds } => {
+            tx.send(RuntimeControlRequest::DiagnosticProbePause {
+                peer,
+                seconds,
+                respond_to,
+            })
+            .await
+            .map_err(|_| runtime_stopped())?;
         }
     }
     let lines = response
@@ -1276,6 +1321,30 @@ enum RequestKind {
     Capabilities,
     Dns(DnsControlRequest),
     Shutdown,
+    #[cfg(feature = "battery-diagnostics")]
+    DiagnosticProbePause {
+        peer: Option<crate::PeerId>,
+        seconds: u16,
+    },
+}
+
+#[cfg(feature = "battery-diagnostics")]
+fn parse_probe_pause(header: &[u8]) -> Option<(Option<crate::PeerId>, u16)> {
+    let text = std::str::from_utf8(header).ok()?.strip_suffix('\n')?;
+    let fields = text.split_ascii_whitespace().collect::<Vec<_>>();
+    let ["diagnostic-probe-pause", peer, seconds] = fields.as_slice() else {
+        return None;
+    };
+    let seconds = seconds.parse::<u16>().ok()?;
+    if seconds > 1800 {
+        return None;
+    }
+    let peer = if *peer == "all" {
+        None
+    } else {
+        Some(peer.parse().ok()?)
+    };
+    Some((peer, seconds))
 }
 
 fn parse_dns_control_request(header: &[u8]) -> Option<DnsControlRequest> {
@@ -1342,6 +1411,17 @@ pub async fn query_status(
     timeout: std::time::Duration,
 ) -> Result<Vec<String>, QueryError> {
     query_lines(path, timeout, STATUS_REQUEST).await
+}
+
+#[cfg(feature = "battery-diagnostics")]
+pub async fn query_diagnostic_probe_pause(
+    path: &Path,
+    peer: Option<crate::PeerId>,
+    seconds: u16,
+) -> Result<Vec<String>, QueryError> {
+    let target = peer.map_or_else(|| "all".to_owned(), |peer| peer.to_string());
+    let command = format!("diagnostic-probe-pause {target} {seconds}\n");
+    query_lines(path, std::time::Duration::from_secs(5), command.as_bytes()).await
 }
 
 pub async fn query_state(
@@ -2218,6 +2298,89 @@ mod tests {
             vec!["kad_diagnostic_pause_seconds 600"]
         );
         reply.await.unwrap();
+    }
+
+    #[cfg(feature = "battery-diagnostics")]
+    #[tokio::test]
+    async fn probe_pause_socket_is_bounded_and_targets_only_the_requested_peer() {
+        let peer = crate::PeerId::from_bytes([7; 32]);
+        let path = std::env::temp_dir().join(format!(
+            "p2p-vpn-probe-diagnostic-{}.sock",
+            std::process::id()
+        ));
+        let (socket, mut rx) = ControlSocket::bind(&path).unwrap();
+        for invalid in [
+            "all -1",
+            "all 1801",
+            "bogus 60",
+            "all 1 extra",
+            "all",
+            "all 65536",
+        ] {
+            let command = format!("diagnostic-probe-pause {invalid}\n");
+            assert!(
+                query_lines(&path, std::time::Duration::from_secs(1), command.as_bytes())
+                    .await
+                    .is_err()
+            );
+            assert!(rx.try_recv().is_err());
+        }
+        let responder = tokio::spawn(async move {
+            let Some(RuntimeControlRequest::DiagnosticProbePause {
+                peer: target,
+                seconds,
+                respond_to,
+            }) = rx.recv().await
+            else {
+                panic!("expected probe pause");
+            };
+            assert_eq!(target, Some(peer));
+            assert_eq!(seconds, 1200);
+            respond_to
+                .send(vec!["path_probe_diagnostic_pause_seconds 1200".to_owned()])
+                .unwrap();
+        });
+        let command = format!("diagnostic-probe-pause {peer} 1200\n");
+        assert_eq!(
+            query_lines(&path, std::time::Duration::from_secs(1), command.as_bytes())
+                .await
+                .unwrap(),
+            ["path_probe_diagnostic_pause_seconds 1200"]
+        );
+        responder.await.unwrap();
+        drop(socket);
+        assert!(!path.exists());
+        let (handle, mut receiver) = runtime_control_channel();
+        assert_eq!(
+            handle
+                .diagnostic_probe_pause(None, 1801)
+                .await
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+        assert!(receiver.rx.try_recv().is_err());
+    }
+
+    #[cfg(not(feature = "battery-diagnostics"))]
+    #[tokio::test]
+    async fn default_build_rejects_probe_diagnostic_socket_commands() {
+        let path = std::env::temp_dir().join(format!(
+            "p2p-vpn-no-probe-diagnostic-{}.sock",
+            std::process::id()
+        ));
+        let (socket, mut rx) = ControlSocket::bind(&path).unwrap();
+        assert!(
+            query_lines(
+                &path,
+                std::time::Duration::from_secs(1),
+                b"diagnostic-probe-pause all 1200\n"
+            )
+            .await
+            .is_err()
+        );
+        assert!(rx.try_recv().is_err());
+        drop(socket);
     }
 
     #[tokio::test]

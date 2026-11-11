@@ -2394,6 +2394,8 @@ where
                 }
             }
             _ = timers.path_probe.tick() => {
+                #[cfg(feature = "battery-diagnostics")]
+                metrics.record_diagnostic_probe_pause(path_probe_tracker.diagnostic_pause.active(Instant::now()));
                 expire_unconfirmed_path_probes(
                     &mut node.swarm,
                     &mut connection_epochs,
@@ -2444,6 +2446,16 @@ where
                     .await
             }, if control_rx.is_some() => {
                 let request = match request {
+                    #[cfg(feature = "battery-diagnostics")]
+                    RuntimeControlRequest::DiagnosticProbePause { peer, seconds, respond_to } => {
+                        let accepted = path_probe_tracker.diagnostic_pause.set(peer, seconds, Instant::now());
+                        metrics.record_diagnostic_probe_pause(path_probe_tracker.diagnostic_pause.active(Instant::now()));
+                        let lines = if accepted { vec![format!("path_probe_diagnostic_pause_seconds {seconds}")] }
+                            else { vec!["error invalid probe pause".to_owned()] };
+                        let _ = respond_to.send(lines);
+                        runtime_data_priority.record_other();
+                        continue;
+                    }
                     #[cfg(feature = "battery-diagnostics")]
                     RuntimeControlRequest::DiagnosticDhtPause { seconds, respond_to } => {
                         let duration = Duration::from_secs(u64::from(seconds.min(1800)));
@@ -4263,6 +4275,13 @@ async fn send_path_probes(
     let local_mtu = u16::try_from(forwarder.mtu()).unwrap_or(u16::MAX);
 
     for peer in peers {
+        #[cfg(feature = "battery-diagnostics")]
+        if path_probe_tracker
+            .diagnostic_pause
+            .blocks(peer, Instant::now())
+        {
+            continue;
+        }
         if !peer_capabilities.contains(peer) {
             continue;
         }
@@ -4610,6 +4629,8 @@ struct PendingPathProbe {
 #[derive(Debug, Default)]
 struct PathProbeTracker {
     pending: HashMap<u64, PendingPathProbe>,
+    #[cfg(feature = "battery-diagnostics")]
+    diagnostic_pause: super::probe_diagnostics::ProbePause,
 }
 
 impl PathProbeTracker {
@@ -6510,6 +6531,11 @@ fn handle_runtime_control_request(
             let _ = respond_to.send(vec!["error diagnostic control unavailable".to_owned()]);
             None
         }
+        #[cfg(feature = "battery-diagnostics")]
+        RuntimeControlRequest::DiagnosticProbePause { respond_to, .. } => {
+            let _ = respond_to.send(vec!["error diagnostic control unavailable".to_owned()]);
+            None
+        }
         RuntimeControlRequest::Shutdown { respond_to } => {
             if respond_to
                 .send(vec!["shutdown accepted".to_owned()])
@@ -7300,6 +7326,11 @@ fn extend_auto_relay_summary_lines(lines: &mut Vec<String>, snapshot: AutoRelayS
 }
 
 fn extend_runtime_discovery_summary_lines(lines: &mut Vec<String>, snapshot: &RuntimeSnapshot) {
+    #[cfg(feature = "battery-diagnostics")]
+    lines.push(format!(
+        "path_probe_diagnostic_paused {}",
+        snapshot.diagnostic_probe_paused
+    ));
     lines.extend([
         format!(
             "path_promotions_to_direct {}",
@@ -46030,6 +46061,49 @@ mod tests {
         let metrics = RuntimeMetrics::default();
         let mut packet_in_flight = PacketInFlight::new(256);
         let mut path_probe_tracker = PathProbeTracker::default();
+
+        #[cfg(feature = "battery-diagnostics")]
+        {
+            assert!(path_probe_tracker.diagnostic_pause.set(
+                Some(remote_overlay),
+                60,
+                Instant::now()
+            ));
+            send_path_probes(
+                &mut node.swarm,
+                &mut forwarder,
+                &mut paths,
+                &peer_capabilities,
+                Some(&sender_packet_plane),
+                None,
+                &mut packet_in_flight,
+                &mut path_probe_tracker,
+                &metrics,
+            )
+            .await;
+            assert_eq!(
+                metrics
+                    .snapshot(crate::queue::QueueStats::default())
+                    .outbound_path_probes_sent,
+                0
+            );
+            assert!(path_probe_tracker.pending.is_empty());
+            assert!(
+                timeout(
+                    TokioDuration::from_millis(30),
+                    receiver_packet_plane.recv_frame_from_peer(PeerId::from_libp2p(
+                        local_identity.peer_id.parse().unwrap()
+                    ))
+                )
+                .await
+                .is_err()
+            );
+            assert!(
+                path_probe_tracker
+                    .diagnostic_pause
+                    .set(None, 0, Instant::now())
+            );
+        }
 
         send_path_probes(
             &mut node.swarm,
