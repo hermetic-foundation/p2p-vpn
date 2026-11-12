@@ -7,6 +7,7 @@
 | Parent design | [Demand-driven lifecycle](demand-driven-lifecycle.md) |
 | Protocol | `/p2p-vpn/lifecycle/1` |
 | Version | 1 |
+| Implementation | Codec and scoped validation implemented; TCP/QUIC loopback tests pass |
 | Deployment | Not enabled or advertised until runner integration is ready |
 
 ## Capability Admission
@@ -34,8 +35,8 @@
 | Intent revision | 1 through `u64::MAX`; monotonic within an epoch |
 | Responder revision | 0 through `u64::MAX`; zero is valid before its first local revision |
 | Exchanges | One request/response per stream; close the write side after the frame |
-| Timeout | Ten seconds; bounded by request-response behavior |
-| Concurrency | Existing per-network configured control-stream budget |
+| Stream timeout | Ten seconds; bounded by request-response behavior after stream admission |
+| Concurrency | Per-connection stream cap; integration must enforce peer and network-wide budgets too |
 
 Reject oversized length before allocating the payload buffer. Reject truncated,
 empty, malformed, unsupported-version, unknown-field, and trailing-byte frames.
@@ -44,6 +45,10 @@ Validate outgoing objects before serialization or writing any frame bytes.
 Scope limits apply to this optional extension only. A configuration that cannot
 be represented must stay compatible/legacy; it must not become an invalid VPN
 configuration or silently lose routes.
+
+The codec does not bound libp2p's pending dial/request queues. The dispatcher
+must admit only authorized members, retain bounded pending requests, enforce
+expiry/cancellation and rate limits, and prune state on revocation.
 
 ## Message Layout
 
@@ -99,3 +104,34 @@ authorization/readiness and the model's still-current acknowledgement ticket.
 
 These checks establish a wire/authentication boundary, not public-relay
 reachability or the 10x battery result. Those remain separate completion gates.
+
+## Implemented Evidence
+
+| Check | Result | Limit |
+| --- | --- | --- |
+| Wire and capability tests | 23 passing tests | Not production runner integration |
+| Secure TCP and QUIC | Idle exchange, actual response-sent commit, reverse-direction wake | Loopback; virtual idle time, retained transport |
+| Unsupported lifecycle protocol | One failed negotiation; model stays legacy; existing control exchange still works | Test endpoint omits the protocol; not an archived old binary |
+| Authorization and scope | Current authority, exact transport peer, both epochs, membership tags, response correlation | Dispatcher must supply current context and recheck before effects |
+| Decoder regression | All reply variants reject extra fields, including the empty wake acknowledgement | Does not replace outer connection/stream admission |
+
+The live tests supply incoming-path readiness as a fixture fact. They do not
+prove reservation availability, retirement/re-establishment of real paths,
+30-minute dormancy, or energy savings. Request-rate admission remains pending.
+
+### Regression Validation
+
+| Check | Result |
+| --- | --- |
+| `cargo test --offline --locked --workspace --all-targets -- --test-threads=2 --quiet` | 1,898 passed; 48 existing opt-in exclusions |
+| Clippy workspace/all-targets | Required correctness, suspicious, and performance groups pass; advisory style warnings remain |
+| Formatting | Changed Rust files pass rustfmt |
+| Packaged-source evaluation | Nix package source contains the same lifecycle module/tests and control code |
+| Full Nix/Android package builds | Not rerun for this unregistered shared-library addition; no device deployment or energy result |
+
+Validation used cached Nix Cargo/Rust 1.97.1, two build jobs, no incremental
+compilation, and the existing build directory. Clippy 1.97.1 came from the signed
+binary cache; its 6 MiB transfer was capped below 10 Mbps. No SDK was downloaded.
+
+The locked development shell still needs uncached dependencies. These are
+manual cached-tool checks, not a successful full-flake verification claim.

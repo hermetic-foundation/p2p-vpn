@@ -13,6 +13,7 @@ use crate::{
     config::validate_packet_plane_endpoint_candidate,
     hostname::SignedHostnameRecord,
     membership::{MAX_MEMBERSHIP_RECORDS, SignedMembershipRecord},
+    runtime::lifecycle::Epoch,
     runtime::packet::PACKET_PROTOCOL,
     wire::{HEADER_LEN, WIRE_VERSION},
 };
@@ -67,6 +68,10 @@ pub struct ControlCapabilities {
     pub supports_quic_datagrams: bool,
     #[serde(default)]
     pub supports_native_quic_datagrams: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub supports_demand_lifecycle: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub demand_lifecycle_epoch: Option<[u8; 16]>,
     #[serde(default)]
     pub supports_owned_udp_packet_plane: bool,
     #[serde(default)]
@@ -113,6 +118,8 @@ impl ControlCapabilities {
             preferred_path: PathKind::DirectQuicStream.wire_name().to_owned(),
             supports_quic_datagrams: false,
             supports_native_quic_datagrams: false,
+            supports_demand_lifecycle: false,
+            demand_lifecycle_epoch: None,
             supports_owned_udp_packet_plane: false,
             supports_owned_quic_packet_plane: false,
             supports_bound_owned_quic_packet_plane: false,
@@ -127,6 +134,28 @@ impl ControlCapabilities {
             membership_record_count: 0,
             checkpoint: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_demand_lifecycle_epoch(mut self, epoch: Epoch) -> Self {
+        self.supports_demand_lifecycle = super::lifecycle::protocol::supported_scope(
+            &self.network_name,
+            self.membership_tag.as_deref(),
+        );
+        self.demand_lifecycle_epoch = self.supports_demand_lifecycle.then_some(epoch.as_bytes());
+        self
+    }
+
+    #[must_use]
+    pub fn demand_lifecycle_epoch(&self) -> Option<Epoch> {
+        (self.supports_demand_lifecycle
+            && super::lifecycle::protocol::supported_scope(
+                &self.network_name,
+                self.membership_tag.as_deref(),
+            ))
+        .then_some(self.demand_lifecycle_epoch)
+        .flatten()
+        .and_then(Epoch::new)
     }
 
     #[must_use]
@@ -349,6 +378,13 @@ pub struct PeerCapabilities {
 }
 
 impl PeerCapabilities {
+    #[must_use]
+    pub fn demand_lifecycle_epoch_for(&self, peer: PeerId) -> Option<Epoch> {
+        self.peers
+            .get(&peer)
+            .and_then(ControlCapabilities::demand_lifecycle_epoch)
+    }
+
     pub fn record(&mut self, peer: PeerId, capabilities: ControlCapabilities) {
         self.peers.insert(peer, capabilities);
     }
@@ -560,6 +596,10 @@ pub fn validate_capabilities(
     }
 
     None
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
 }
 
 fn validate_owned_quic_certificate_der(certificate: &[u8]) -> bool {

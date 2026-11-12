@@ -5,7 +5,7 @@
 | Item | Status |
 | --- | --- |
 | Decision | Separate incoming reachability from active per-peer data paths |
-| Runtime implementation | Policy model implemented; protocol/transport integration pending; existing eager behavior remains |
+| Runtime implementation | Policy model and bounded wire exchange tested; production integration pending; existing eager behavior remains |
 | Default configuration | Preserve minimal JSON and native NixOS workflows; no required new settings |
 | Platforms | Shared Rust policy; Android and Linux must cooperate |
 | Battery acceptance | Measured 10x idle-cellular efficiency with feature preservation; not yet demonstrated |
@@ -250,7 +250,9 @@ the production runtime. Evaluate a focused proof once the model stabilizes.
 | [Policy model](../../src/runtime/lifecycle.rs) | Fixed-size per-peer state; monotonic activity; epoch/revision-bound offers and acknowledgements | Not wired into the runner or any network send path |
 | [Model tests](../../src/runtime/lifecycle/tests.rs) | 32 tests, including 111,111 short bilateral event sequences | These model checks are not a production-runtime proof |
 | Idle delivery safety | Receiver waits for reply-sent confirmation; fresh demand/path change invalidates pending tickets | Dispatcher must authenticate, authorize, and bind actual transport events |
-| Compatibility | Legacy model never negotiates dormancy; unsupported protocol cancels pending quiet state | Wire capability/codec and old/new live-node checks pending |
+| [Wire exchange](demand-lifecycle-wire.md) | 23 tests: bounded codec, contextual authentication, epochs, scope, stale/revoked response rejection | Request-rate admission and production dispatch remain pending |
+| TCP/QUIC loopback | Idle commits after real response-sent; either endpoint can initiate wake | Virtual idle clock and fixture readiness; not long-idle or public-relay evidence |
+| Compatibility | Legacy defaults; unsupported protocol falls back in the model while existing control stays usable | Runner must enforce one fallback per epoch and expose legacy status |
 | Energy impact | No network behavior or device deployment changed in this step | All measured improvement and feature-preservation gates remain open |
 
 The model owns no heap allocations and retains at most one pending offer and

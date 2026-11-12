@@ -7,6 +7,8 @@
 
 use std::time::{Duration, Instant};
 
+pub mod protocol;
+
 pub const IDLE_AFTER: Duration = Duration::from_secs(45);
 pub const IDLE_EXCHANGE_TIMEOUT: Duration = Duration::from_secs(10);
 
