@@ -177,8 +177,14 @@ async fn initial_grace_stale_and_retiring_connections_are_fenced() {
     f.epochs.advance();
     assert!(!f.eligible(id));
     f.epochs.record_started(id);
+    assert!(!f.epochs.is_current(id));
+    assert!(!f.eligible(id), "late starts must not relabel stale paths");
+    let pending = ConnectionId::new_unchecked(602);
+    f.epochs.record_started(pending);
+    f.connections
+        .insert((f.peer, pending), endpoint("/ip4/127.0.0.1/tcp/9001"));
     assert!(
-        !f.eligible(id),
+        !f.eligible(pending),
         "an unestablished attempt has no control grace evidence"
     );
 }

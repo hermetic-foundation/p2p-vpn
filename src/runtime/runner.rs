@@ -13310,9 +13310,11 @@ impl ConnectionEpochs {
     }
 
     fn record_started(&mut self, connection_id: ConnectionId) {
-        self.connections.insert(connection_id, self.current);
-        self.established.remove(&connection_id);
-        self.retiring.remove(&connection_id);
+        // Admission and its delayed Swarm event describe the same unique attempt.
+        // Observing it again must not change its epoch or undo deliberate retirement.
+        self.connections
+            .entry(connection_id)
+            .or_insert(self.current);
     }
 
     fn record_established(&mut self, connection_id: ConnectionId) -> bool {
@@ -13322,11 +13324,12 @@ impl ConnectionEpochs {
     fn record_established_at(&mut self, connection_id: ConnectionId, now: Instant) -> bool {
         // Public callers may hand over a node with unobserved startup dials.
         // Runtime-owned starts are registered explicitly, so unknown IDs belong to epoch zero.
-        let is_current = *self.connections.entry(connection_id).or_insert(0) == self.current;
-        if is_current {
+        let is_usable = *self.connections.entry(connection_id).or_insert(0) == self.current
+            && !self.retiring.contains(&connection_id);
+        if is_usable {
             self.established.entry(connection_id).or_insert(now);
         }
-        is_current
+        is_usable
     }
 
     fn is_current(&self, connection_id: ConnectionId) -> bool {
@@ -40045,6 +40048,64 @@ mod tests {
     }
 
     #[test]
+    fn connection_epochs_late_start_cannot_relabel_an_old_network_attempt() {
+        let stale = ConnectionId::new_unchecked(1);
+        let fresh = ConnectionId::new_unchecked(2);
+        let mut epochs = ConnectionEpochs::default();
+        epochs.record_started(stale);
+        assert_eq!(epochs.advance(), 1);
+        for _ in 0..2 {
+            epochs.record_started(stale);
+            assert!(!epochs.is_current(stale));
+            assert!(!epochs.record_established(stale));
+            assert!(!epochs.established.contains_key(&stale));
+        }
+        epochs.record_started(fresh);
+        assert!(epochs.record_established(fresh));
+        assert!(epochs.is_usable(fresh));
+    }
+
+    #[test]
+    fn connection_epochs_late_start_and_success_cannot_revive_retired_attempts() {
+        let pending = ConnectionId::new_unchecked(1);
+        let established = ConnectionId::new_unchecked(2);
+        let mut epochs = ConnectionEpochs::default();
+        epochs.record_started(pending);
+        epochs.record_started(established);
+        assert!(epochs.record_established(established));
+        for id in [pending, established] {
+            epochs.mark_retiring(id);
+            for _ in 0..2 {
+                epochs.record_started(id);
+                assert!(epochs.is_current(id));
+                assert!(epochs.retiring.contains(&id));
+                assert!(!epochs.record_established(id));
+                assert!(!epochs.is_usable(id));
+            }
+        }
+        assert!(!epochs.established.contains_key(&pending));
+        epochs.remove(pending);
+        epochs.remove(established);
+        assert!(epochs.connections.is_empty());
+        assert!(epochs.established.is_empty());
+        assert!(epochs.retiring.is_empty());
+    }
+
+    #[test]
+    fn connection_epochs_duplicate_starts_preserve_initial_establishment_time() {
+        let id = ConnectionId::new_unchecked(1);
+        let opened = Instant::now();
+        let mut epochs = ConnectionEpochs::default();
+        epochs.record_started(id);
+        assert!(epochs.record_established_at(id, opened));
+        epochs.record_started(id);
+        assert!(epochs.is_usable(id));
+        assert_eq!(epochs.established.get(&id), Some(&opened));
+        assert!(epochs.record_established_at(id, opened + Duration::from_secs(5)));
+        assert_eq!(epochs.established.get(&id), Some(&opened));
+    }
+
+    #[test]
     fn connection_epoch_attempt_metric_excludes_established_connections() {
         let pending = ConnectionId::new_unchecked(1);
         let established = ConnectionId::new_unchecked(2);
@@ -40212,7 +40273,13 @@ mod tests {
                 panic!("connection event must not write packets");
             }
         }
-        for attempt in ["old_epoch", "current_epoch", "unobserved", "unobserved_old"] {
+        for attempt in [
+            "old_epoch",
+            "late_old_start",
+            "current_epoch",
+            "unobserved",
+            "unobserved_old",
+        ] {
             let mut backoff = PublicDiscoveryBackoff::from_bootstrap_defaults(true);
             let peer = *backoff.bootstrap_peers.iter().next().unwrap();
             let identity = NodeIdentity::generate_ed25519().unwrap();
@@ -40224,15 +40291,18 @@ mod tests {
             let stale = ConnectionId::new_unchecked(41);
             let replacement = ConnectionId::new_unchecked(42);
             let mut epochs = ConnectionEpochs::default();
-            epochs.record_started(stale);
+            if attempt != "current_epoch" {
+                epochs.record_started(stale);
+            }
             if attempt != "unobserved" {
                 epochs.advance();
             }
             match attempt {
-                "current_epoch" => epochs.record_started(stale),
+                "current_epoch" | "late_old_start" => epochs.record_started(stale),
                 "unobserved" | "unobserved_old" => epochs.remove(stale),
                 _ => {}
             }
+            assert_eq!(epochs.is_current(stale), attempt == "current_epoch");
             epochs.record_started(replacement);
             assert!(epochs.record_established(replacement));
             let address: Multiaddr = "/ip4/203.0.113.1/tcp/4001".parse().unwrap();
@@ -40457,7 +40527,12 @@ mod tests {
         );
 
         epochs.advance();
-        epochs.record_started(latest_outbound);
+        let new_epoch = ConnectionId::new_unchecked(4);
+        let endpoint = nonpreferred_connections
+            .remove(&(preferred, latest_outbound))
+            .unwrap();
+        nonpreferred_connections.insert((preferred, new_epoch), endpoint);
+        epochs.record_started(new_epoch);
         assert!(
             redundant_direct_connection_ids(
                 other,

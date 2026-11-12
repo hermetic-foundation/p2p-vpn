@@ -91,6 +91,7 @@ the bilateral lifecycle exchange.
 | Native reservation owner | Patched relay 0.21.1 exposes confirmed connection IDs from its existing maps |
 | Native connection preference | Explicit selection for future reservations/circuits; existing leases and renewal owners stay unchanged |
 | Mixed transport regression | `tests/relay_ownership.rs` checks QUIC-first default, TCP selection, renewal, fresh incoming payload, and owner closure |
+| Attempt epochs | Start observations preserve initial epoch, retirement, and establishment time; late success cannot admit stale/retired paths |
 | Runtime acquisition/readiness | Pending; production automatic reservations do not yet use the new selection API |
 | Sparse heartbeat and pruning | Pending |
 | Dormant control delivery and activation | Pending |
@@ -100,8 +101,14 @@ The mixed-transport test deliberately advertises a TCP circuit while keeping
 an existing QUIC connection. Without explicit selection, the confirmed owner
 is QUIC. The accessor makes this mismatch observable without trusting the address.
 
+Epoch regressions exercise repeated start events before/after a network change,
+retired pending/established attempts, normal fresh admission, and production
+event dispatch. Old failure events must not reapply new-network recovery backoff.
+
 ```sh
 cargo test --offline --locked --test relay_ownership
+cargo test --offline --locked --lib late_start
+cargo test --offline --locked --lib obsolete_outgoing_failure
 ```
 
 These are local transport and ownership tests, not Android, roaming, whole-VPN,
@@ -111,8 +118,9 @@ or battery acceptance evidence. The production lifecycle remains unadvertised.
 
 | Check | Result |
 | --- | --- |
-| Workspace/all targets | 1,950 passed; zero failed; 49 ignored |
+| Workspace/all targets | 1,954 passed; zero failed; 49 ignored, including the epoch/dispatch regressions |
 | Final mixed-transport scenarios | Both passed again after test-helper cleanup |
+| Focused epoch/dispatch/backoff | Passed; old events stay fenced and current failures retain normal backoff |
 | Clippy correctness/suspicious/performance | Passed for workspace/all targets; pre-existing advisory warnings remain |
 | Changed Rust formatting | Passed; pinned upstream formatting retained |
 | Nix source parity | Linux test inventory/source and relay patch matched; both Android source packages include the same patch |

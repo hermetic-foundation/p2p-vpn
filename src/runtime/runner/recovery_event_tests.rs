@@ -145,6 +145,54 @@ async fn failed_packet_connection_cannot_veto_fresh_opposite_role_connection() {
 struct UnusedPacketIo;
 
 #[tokio::test]
+async fn late_start_and_success_events_cannot_admit_stale_or_retired_paths() {
+    for scenario in ["old_epoch", "retired_pending", "retired_established"] {
+        let peer = Libp2pPeerId::random();
+        let overlay = PeerId::from_libp2p(peer);
+        let mut fixture = EventFixture::new(peer);
+        let connection_id = ConnectionId::new_unchecked(71);
+        fixture.epochs.record_started(connection_id);
+        if scenario == "retired_established" {
+            assert!(fixture.epochs.record_established(connection_id));
+        }
+        if scenario == "old_epoch" {
+            fixture.epochs.advance();
+        } else {
+            fixture.epochs.mark_retiring(connection_id);
+        }
+        fixture
+            .dispatch(SwarmEvent::Dialing {
+                peer_id: Some(peer),
+                connection_id,
+            })
+            .await;
+        assert!(!fixture.epochs.is_usable(connection_id), "{scenario}");
+        fixture
+            .dispatch(SwarmEvent::ConnectionEstablished {
+                peer_id: peer,
+                connection_id,
+                endpoint: ConnectedPoint::Dialer {
+                    address: "/ip4/127.0.0.1/tcp/42001".parse().unwrap(),
+                    role_override: libp2p::core::Endpoint::Dialer,
+                    port_use: libp2p::core::transport::PortUse::New,
+                },
+                num_established: std::num::NonZeroU32::new(1).unwrap(),
+                concurrent_dial_errors: None,
+                established_in: Duration::ZERO,
+            })
+            .await;
+        assert!(fixture.epochs.retiring.contains(&connection_id));
+        assert!(!fixture.epochs.is_usable(connection_id), "{scenario}");
+        assert!(fixture.active_connections.is_empty(), "{scenario}");
+        assert_eq!(
+            fixture.paths.candidates_for(overlay).count(),
+            0,
+            "{scenario}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn packet_failure_retirement_is_owned_current_and_preserves_replacements() {
     for scenario in [
         "io",
