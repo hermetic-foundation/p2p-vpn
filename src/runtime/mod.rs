@@ -8,6 +8,7 @@ pub mod control_socket;
 pub mod dns;
 pub mod forward;
 mod kademlia_resources;
+pub mod lifecycle;
 pub mod membership_migration;
 pub mod membership_store;
 mod membership_sync_history;

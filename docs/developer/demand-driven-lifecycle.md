@@ -5,7 +5,7 @@
 | Item | Status |
 | --- | --- |
 | Decision | Separate incoming reachability from active per-peer data paths |
-| Runtime implementation | Planned; existing eager behavior remains until integration is verified |
+| Runtime implementation | Policy model implemented; protocol/transport integration pending; existing eager behavior remains |
 | Default configuration | Preserve minimal JSON and native NixOS workflows; no required new settings |
 | Platforms | Shared Rust policy; Android and Linux must cooperate |
 | Battery acceptance | Measured 10x idle-cellular efficiency with feature preservation; not yet demonstrated |
@@ -238,6 +238,21 @@ raw battery reports. Idle signaling is not authority to change routes or members
 The repository has no current Lean project. Model invariants can be checked
 with exhaustive short Rust traces initially; this is not a formal proof of
 the production runtime. Evaluate a focused proof once the model stabilizes.
+
+### Implementation Progress
+
+| Component | Evidence | Remaining Boundary |
+| --- | --- | --- |
+| Protocol contract | Published before runtime edits | Operational assumptions still require verification |
+| [Policy model](../../src/runtime/lifecycle.rs) | Fixed-size per-peer state; monotonic activity; epoch/revision-bound offers and acknowledgements | Not wired into the runner or any network send path |
+| [Model tests](../../src/runtime/lifecycle/tests.rs) | 32 tests, including 111,111 short bilateral event sequences | These model checks are not a production-runtime proof |
+| Idle delivery safety | Receiver waits for reply-sent confirmation; fresh demand/path change invalidates pending tickets | Dispatcher must authenticate, authorize, and bind actual transport events |
+| Compatibility | Legacy model never negotiates dormancy; unsupported protocol cancels pending quiet state | Wire capability/codec and old/new live-node checks pending |
+| Energy impact | No network behavior or device deployment changed in this step | All measured improvement and feature-preservation gates remain open |
+
+The model owns no heap allocations and retains at most one pending offer and
+one pending reply. Table admission, revocation cleanup, attempt budgets, relay
+selection, and transport effects remain responsibilities of the integration.
 
 ## Completion Gates
 
