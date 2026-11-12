@@ -1,0 +1,451 @@
+{
+  "schema_version": 1,
+  "kind": "android_cellular_combined_maintenance_diagnostic",
+  "local_date": "2026-11-11",
+  "timezone": "America/Chicago",
+  "device": {
+    "model": "Pixel 8 Pro",
+    "os": "GrapheneOS",
+    "api": 37,
+    "uid": 10304
+  },
+  "diagnostic_apk_sha256": "9f3cac6c0a6229c7af9126a0d9f07f92d3a5b51ed5c5fc47b5ee2e0e33c6b1be",
+  "protocol": {
+    "settle_seconds": 300,
+    "capture_seconds": 600,
+    "underlay": "validated LTE; Wi-Fi disabled",
+    "screen": "off throughout all accepted captures",
+    "battery_accounting": "simulated unplug with physical USB attached; not battery discharge",
+    "temperature_source": "live battery temperature from thermal HAL, not frozen BatteryService value",
+    "session_guard": "reference pair uses boot UUID and overlapping monotonic session-origin intervals; retains wall-clock fields as metadata",
+    "physical_meter": "whole-phone modem and frontend energy rails; not per-app sensors",
+    "trace_processor_version": "Perfetto v59.1",
+    "trace_processor_sha256": "2434129a3af4dc9e2034a476f7b76447b490975213e301769310d3bd0d5d6458",
+    "collector_scope": "experiment-local harness; no production benchmark-script or CLI change"
+  },
+  "experiments": [
+    {
+      "id": "combined-3",
+      "complete": false,
+      "stopped_before": "A2",
+      "failure": "false-positive exact wall-clock epoch check after approximately -1.2s NTP correction; no completed reversal or off control",
+      "windows": [
+        {
+          "phase": "A1",
+          "start_utc": "2026-11-12T02:33:13.827478+00:00",
+          "start_local": "2026-11-11T20:33:13.827478-06:00",
+          "end_utc": "2026-11-12T02:43:18.257029+00:00",
+          "energy": {
+            "arm": "A1",
+            "context_valid": true,
+            "pause_effective": true,
+            "elapsed_ms": 604483,
+            "on_battery_elapsed_ms": 604483,
+            "uid_delta_mah": 50.280739,
+            "uid_mah_per_hour": 299.4470653434422,
+            "native_counter_deltas": {
+              "kad_primary_query_requests": 1785,
+              "kad_primary_dial_intents_dispatched": 1840,
+              "autonat_probes_scheduled": 483,
+              "outbound_path_probes_sent": 409,
+              "inbound_path_probes_accepted": 395,
+              "outbound_sent_packets": 0,
+              "inbound_accepted_packets": 0
+            },
+            "trace_bytes": 286732,
+            "trace_sha256": "a97a0fe4577fd30444b9d190776c31f6f7961f96277e09aabf7616874c691dc3",
+            "interpretation": "diagnostic ablation, not a production optimization"
+          },
+          "rails": {
+            "power.rails.modem": {
+              "name": "power.rails.modem",
+              "samples": 601,
+              "duration_seconds": 599.566,
+              "energy_joules": 650.56168,
+              "mean_mw": 1085.0543226267,
+              "counter_resets": 0,
+              "largest_gap_seconds": 1.162
+            },
+            "power.rails.radio.frontend": {
+              "name": "power.rails.radio.frontend",
+              "samples": 601,
+              "duration_seconds": 599.566,
+              "energy_joules": 109.49297,
+              "mean_mw": 182.62037874062239,
+              "counter_resets": 0,
+              "largest_gap_seconds": 1.162
+            }
+          },
+          "peer_counts": [
+            3,
+            4
+          ],
+          "signal_rsrp_dbm": [
+            [
+              -109
+            ],
+            [
+              -109
+            ]
+          ],
+          "battery_temperature_c": [
+            32.2,
+            33.2
+          ],
+          "android_idle_states": [
+            {
+              "mState": "IDLE",
+              "mLightState": "OVERRIDE"
+            },
+            {
+              "mState": "IDLE",
+              "mLightState": "OVERRIDE"
+            }
+          ],
+          "boundary_connectivity": [
+            {
+              "exit_code": 1,
+              "success": false,
+              "summary": [
+                "3 packets transmitted, 0 received, 100% packet loss, time 2038ms"
+              ]
+            },
+            {
+              "exit_code": 0,
+              "success": true,
+              "summary": [
+                "3 packets transmitted, 3 received, 0% packet loss, time 2005ms"
+              ]
+            }
+          ],
+          "screen_wakeups": 0,
+          "trace_errors_or_loss": []
+        },
+        {
+          "phase": "B",
+          "start_utc": "2026-11-12T02:48:36.009478+00:00",
+          "start_local": "2026-11-11T20:48:36.009478-06:00",
+          "end_utc": "2026-11-12T02:58:40.381980+00:00",
+          "energy": {
+            "arm": "B",
+            "context_valid": true,
+            "pause_effective": true,
+            "elapsed_ms": 604401,
+            "on_battery_elapsed_ms": 604401,
+            "uid_delta_mah": 39.513384,
+            "uid_mah_per_hour": 235.35398253808316,
+            "native_counter_deltas": {
+              "kad_primary_query_requests": 0,
+              "kad_primary_dial_intents_dispatched": 0,
+              "autonat_probes_scheduled": 134,
+              "outbound_path_probes_sent": 0,
+              "inbound_path_probes_accepted": 0,
+              "outbound_sent_packets": 0,
+              "inbound_accepted_packets": 0
+            },
+            "trace_bytes": 286616,
+            "trace_sha256": "0500db0bd1e83cb2b86ae8589d7e9da6c65dbf39c5e97e73fdb6d702d3d28a5a",
+            "interpretation": "diagnostic ablation, not a production optimization"
+          },
+          "rails": {
+            "power.rails.modem": {
+              "name": "power.rails.modem",
+              "samples": 601,
+              "duration_seconds": 599.43,
+              "energy_joules": 534.679062,
+              "mean_mw": 891.979150192683,
+              "counter_resets": 0,
+              "largest_gap_seconds": 1.16
+            },
+            "power.rails.radio.frontend": {
+              "name": "power.rails.radio.frontend",
+              "samples": 601,
+              "duration_seconds": 599.43,
+              "energy_joules": 67.276705,
+              "mean_mw": 112.23446440785413,
+              "counter_resets": 0,
+              "largest_gap_seconds": 1.16
+            }
+          },
+          "peer_counts": [
+            2,
+            4
+          ],
+          "signal_rsrp_dbm": [
+            [
+              -110
+            ],
+            [
+              -110
+            ]
+          ],
+          "battery_temperature_c": [
+            33.2,
+            33.1
+          ],
+          "android_idle_states": [
+            {
+              "mState": "IDLE",
+              "mLightState": "OVERRIDE"
+            },
+            {
+              "mState": "IDLE",
+              "mLightState": "OVERRIDE"
+            }
+          ],
+          "boundary_connectivity": [
+            {
+              "exit_code": 0,
+              "success": true,
+              "summary": [
+                "3 packets transmitted, 3 received, 0% packet loss, time 2002ms"
+              ]
+            },
+            {
+              "exit_code": 0,
+              "success": true,
+              "summary": [
+                "3 packets transmitted, 3 received, 0% packet loss, time 2005ms"
+              ]
+            }
+          ],
+          "screen_wakeups": 0,
+          "trace_errors_or_loss": []
+        }
+      ],
+      "collector_hashes": {
+        "runner_sha256": "6b0a2e3276b2478aee469ff3a433ec3a5989839904edefab29d716a25194a7e0",
+        "accounting_policy_sha256": "a2161616c17bb3145e0ee894747cb4ba13d8927fc0c3d22e71e7c2f5b765b3b6"
+      }
+    },
+    {
+      "id": "reference-1",
+      "complete": true,
+      "relationship": "fresh independent normal/off pair; not a continuation of combined-3",
+      "windows": [
+        {
+          "phase": "N",
+          "start_utc": "2026-11-12T03:20:23.498254+00:00",
+          "start_local": "2026-11-11T21:20:23.498254-06:00",
+          "end_utc": "2026-11-12T03:30:28.840765+00:00",
+          "energy": {
+            "arm": "N",
+            "context_valid": true,
+            "pause_effective": true,
+            "elapsed_ms": 605398,
+            "on_battery_elapsed_ms": 605398,
+            "uid_delta_mah": 49.654955,
+            "uid_mah_per_hour": 295.27325494963645,
+            "native_counter_deltas": {
+              "kad_primary_query_requests": 1846,
+              "kad_primary_dial_intents_dispatched": 1872,
+              "autonat_probes_scheduled": 571,
+              "outbound_path_probes_sent": 388,
+              "inbound_path_probes_accepted": 391,
+              "outbound_sent_packets": 0,
+              "inbound_accepted_packets": 0
+            },
+            "trace_bytes": 286654,
+            "trace_sha256": "22319b1300d39a61f84b0b7abb68a93488aebdbaa5e1bb754828a0ed9167f839",
+            "interpretation": "diagnostic ablation, not a production optimization"
+          },
+          "rails": {
+            "power.rails.modem": {
+              "name": "power.rails.modem",
+              "samples": 601,
+              "duration_seconds": 599.419,
+              "energy_joules": 637.83063,
+              "mean_mw": 1064.0814355233986,
+              "counter_resets": 0,
+              "largest_gap_seconds": 1.16
+            },
+            "power.rails.radio.frontend": {
+              "name": "power.rails.radio.frontend",
+              "samples": 601,
+              "duration_seconds": 599.419,
+              "energy_joules": 110.838422,
+              "mean_mw": 184.9097576152908,
+              "counter_resets": 0,
+              "largest_gap_seconds": 1.16
+            }
+          },
+          "peer_counts": [
+            3,
+            3
+          ],
+          "signal_rsrp_dbm": [
+            [
+              -107
+            ],
+            [
+              -107
+            ]
+          ],
+          "battery_temperature_c": [
+            32.1,
+            33.3
+          ],
+          "android_idle_states": [
+            {
+              "mState": "IDLE",
+              "mLightState": "OVERRIDE"
+            },
+            {
+              "mState": "IDLE",
+              "mLightState": "OVERRIDE"
+            }
+          ],
+          "boundary_connectivity": [
+            {
+              "exit_code": 0,
+              "success": true,
+              "summary": [
+                "3 packets transmitted, 1 received, 66% packet loss, time 2013ms"
+              ]
+            },
+            {
+              "exit_code": 0,
+              "success": true,
+              "summary": [
+                "3 packets transmitted, 3 received, 0% packet loss, time 2004ms"
+              ]
+            }
+          ],
+          "screen_wakeups": 0,
+          "trace_errors_or_loss": []
+        },
+        {
+          "phase": "C",
+          "start_utc": "2026-11-12T03:35:47.519885+00:00",
+          "start_local": "2026-11-11T21:35:47.519885-06:00",
+          "end_utc": "2026-11-12T03:45:52.695666+00:00",
+          "energy": {
+            "arm": "C",
+            "context_valid": true,
+            "pause_effective": true,
+            "elapsed_ms": 605168,
+            "on_battery_elapsed_ms": 605168,
+            "uid_delta_mah": 0.4119089999999943,
+            "uid_estimate_usable": true,
+            "uid_mah_per_hour": 2.450348333024845,
+            "native_counter_deltas": null,
+            "trace_bytes": 286498,
+            "trace_sha256": "ce9401137e2cd705765be398f672fdf15b951680ba901e4f566556cbee0be299",
+            "interpretation": "VPN-off physical reference; UID attribution can lag/reweight; OS-only sampling, no app broadcasts"
+          },
+          "rails": {
+            "power.rails.modem": {
+              "name": "power.rails.modem",
+              "samples": 601,
+              "duration_seconds": 599.453,
+              "energy_joules": 10.35621,
+              "mean_mw": 17.276100044540605,
+              "counter_resets": 0,
+              "largest_gap_seconds": 1.147
+            },
+            "power.rails.radio.frontend": {
+              "name": "power.rails.radio.frontend",
+              "samples": 601,
+              "duration_seconds": 599.453,
+              "energy_joules": 0.299696,
+              "mean_mw": 0.49994912028132316,
+              "counter_resets": 0,
+              "largest_gap_seconds": 1.147
+            }
+          },
+          "peer_counts": [
+            0,
+            0
+          ],
+          "signal_rsrp_dbm": [
+            [
+              -108
+            ],
+            [
+              -108
+            ]
+          ],
+          "battery_temperature_c": [
+            31.6,
+            29.3
+          ],
+          "android_idle_states": [
+            {
+              "mState": "IDLE",
+              "mLightState": "OVERRIDE"
+            },
+            {
+              "mState": "IDLE",
+              "mLightState": "OVERRIDE"
+            }
+          ],
+          "boundary_connectivity": [
+            {
+              "skipped": true,
+              "reason": "VPN intentionally off"
+            },
+            {
+              "skipped": true,
+              "reason": "VPN intentionally off"
+            }
+          ],
+          "screen_wakeups": 0,
+          "trace_errors_or_loss": []
+        }
+      ],
+      "collector_hashes": {
+        "runner_sha256": "55792184722784e8e362240b23f7140548d5c746605eec1a391a91fc610c864d",
+        "accounting_policy_sha256": "3bea4f58113352749df1354f59de701bdf959fa1bff813dcfb872356bae4e816"
+      }
+    }
+  ],
+  "descriptive_comparisons": {
+    "combined_pause_vs_first_normal": {
+      "app_percent_lower": 21.4038106307201,
+      "modem_percent_lower": 17.794055874236825,
+      "not_replicated_savings": true
+    },
+    "independent_off_control": {
+      "modem_percent_lower": 98.37643065015575,
+      "normal_to_off_modem_ratio": 61.59268774665711,
+      "app_off_estimate_is_residual_attribution": true,
+      "not_a_feature_preserving_optimization": true
+    }
+  },
+  "goal": {
+    "normal_app_baseline_mah_per_hour": 295.27325494963645,
+    "tenfold_target_mah_per_hour": 29.527325494963645,
+    "production_optimization_deployed": false,
+    "tenfold_improvement_demonstrated": false
+  },
+  "restoration": {
+    "original_apk_profile_and_os_vpn_settings_verified": true,
+    "battery_override_cleared": true,
+    "wifi_and_vpn_connected": true,
+    "overlay_ping": {
+      "exit_code": 0,
+      "success": true,
+      "summary": [
+        "3 packets transmitted, 3 received, 0% packet loss, time 2005ms"
+      ]
+    },
+    "linux_host_count": 4,
+    "all_linux_originals_verified": true,
+    "owned_runtime_overrides_timers_and_staging_removed": true
+  },
+  "validation": {
+    "collector_tests_passed": 17,
+    "battery_decoder_tests_passed": 14,
+    "rust_android_full_matrix_rerun": false,
+    "reason": "no production application source or APK changes in this follow-up"
+  },
+  "limitations": [
+    "Single fixed-order comparisons, not replicated savings acceptance",
+    "A1/B and normal/off are independent experiments; do not combine into a complete four-phase run",
+    "App mAh is attribution and can lag or reweight; off app estimate is not evidence of active execution",
+    "Screen-off and zero accepted/sent overlay payload packets do not identify exact maintenance protocols",
+    "Configured 5-second libp2p QUIC keepalive and 15-second libp2p ping intervals are unisolated candidates",
+    "Current diagnostics do not prove the exact cause of Saturday November 7 historical usage",
+    "Android idle state was sampled at window boundaries; mid-window idle transitions were not traced"
+  ]
+}

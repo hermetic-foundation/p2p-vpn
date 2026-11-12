@@ -14,6 +14,7 @@ Use these docs when changing, testing, or debugging `p2p-vpn`.
 | [Recovery And Settling](kademlia-settling.md) | Phase-2 acceptance matrix, timer contracts, findings, and harness gaps. |
 | [Android Architecture](android.md) | Shared TUN, network isolation, VpnService, persistence, and recovery. |
 | [Android Battery Efficiency](android-battery-efficiency.md) | 10x target, physical-device measurement contract, and feature-preservation gates. |
+| [Cellular Maintenance Isolation](android-cellular-combined-isolation.md) | Combined DHT/probe diagnostic, normal/off reference, and battery-accounting caveats. |
 | [Feature Matrix](feature-matrix.md) | Current implementation status. |
 | [NixOS Module Design](nixos-module.md) | Modes, secret lifecycle, service contract, and tests. |
 | [Pairing Implementation](pairing.md) | Code PAKE, approval, durability, and proof commands. |

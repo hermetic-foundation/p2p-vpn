@@ -1,5 +1,7 @@
 # Cellular Peer-Probe Isolation
 
+Follow-up: [combined DHT/probe isolation and VPN-off reference](android-cellular-combined-isolation.md).
+
 ## Purpose
 
 Test whether periodic peer probes contribute to the Pixel's idle cellular power.
