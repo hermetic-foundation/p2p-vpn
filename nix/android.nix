@@ -69,6 +69,7 @@ let
   rootLock = src + "/Cargo.lock";
   rootRustSource = src + "/src";
   kademliaSource = src + "/vendor/libp2p-kad-0.48.0";
+  relaySource = src + "/vendor/libp2p-relay-0.21.1";
   requestResponseSource = src + "/vendor/libp2p-request-response-0.29.0";
   allocationReviewSource = src + "/vendor/stats_alloc-0.1.10";
   androidCrate = src + "/crates/p2p-vpn-android";
@@ -79,6 +80,7 @@ let
     rootLock
     rootRustSource
     kademliaSource
+    relaySource
     requestResponseSource
     allocationReviewSource
     androidCrate
@@ -106,6 +108,7 @@ let
       rootLock
       rootRustSource
       kademliaSource
+      relaySource
       requestResponseSource
       allocationReviewSource
       androidCrate

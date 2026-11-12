@@ -83,3 +83,43 @@ the bilateral lifecycle exchange.
 | Recovery | Reservation/listener loss repairs automatically without application data |
 | Functional | Fresh incoming payload, active QUIC, relay fallback, membership/DNS/revocation, and roaming |
 | Energy | Fresh paired cellular measurements; connection/byte counts are not a 10x battery result |
+
+## Implementation Evidence
+
+| Component | Status |
+| --- | --- |
+| Native reservation owner | Patched relay 0.21.1 exposes confirmed connection IDs from its existing maps |
+| Native connection preference | Explicit selection for future reservations/circuits; existing leases and renewal owners stay unchanged |
+| Mixed transport regression | `tests/relay_ownership.rs` checks QUIC-first default, TCP selection, renewal, fresh incoming payload, and owner closure |
+| Runtime acquisition/readiness | Pending; production automatic reservations do not yet use the new selection API |
+| Sparse heartbeat and pruning | Pending |
+| Dormant control delivery and activation | Pending |
+| Cellular energy acceptance | Not measured for this lifecycle |
+
+The mixed-transport test deliberately advertises a TCP circuit while keeping
+an existing QUIC connection. Without explicit selection, the confirmed owner
+is QUIC. The accessor makes this mismatch observable without trusting the address.
+
+```sh
+cargo test --offline --locked --test relay_ownership
+```
+
+These are local transport and ownership tests, not Android, roaming, whole-VPN,
+or battery acceptance evidence. The production lifecycle remains unadvertised.
+
+### Validation: November 12, 2026
+
+| Check | Result |
+| --- | --- |
+| Workspace/all targets | 1,950 passed; zero failed; 49 ignored |
+| Final mixed-transport scenarios | Both passed again after test-helper cleanup |
+| Clippy correctness/suspicious/performance | Passed for workspace/all targets; pre-existing advisory warnings remain |
+| Changed Rust formatting | Passed; pinned upstream formatting retained |
+| Nix source parity | Linux test inventory/source and relay patch matched; both Android source packages include the same patch |
+| Android Nix formatting | Passed |
+| Full Nix build | Not run: offline dry run requires 493 uncached derivations, including bootstrap compilers |
+| APK/device/cellular tests | Not run for this change; no deployment or measured energy claim |
+
+Validation used the already-installed Nix Rust toolchain and existing shared
+target directory. The pinned archive matched its lockfile checksum; no toolchain
+or crate downloads were needed. The vendored tree is 368 KiB.
