@@ -164,6 +164,7 @@ use control_connection_retention::should_retain_control_connection;
 mod demand_lifecycle;
 use demand_lifecycle::{DemandLifecycle, LifecycleContext};
 mod dormant_paths;
+mod incoming_anchor;
 mod recovery_snapshot;
 use recovery_snapshot::ApplicationRecoverySnapshot;
 mod packet_endpoint_selection;
@@ -2192,13 +2193,10 @@ where
                     Some(&packet_plane),
                     packet_plane_quic.as_ref(),
                 );
-                expire_pending_auto_relay_reservations(
-                    &mut node.swarm,
-                    &mut auto_relay,
-                    &metrics,
-                    Instant::now(),
+                attempt_auto_relay_reservations(
+                    &mut node.swarm, &mut auto_relay, &metrics,
+                    &mut connection_epochs, &active_connections, &node.relay_peer_addresses,
                 );
-                attempt_auto_relay_reservations(&mut node.swarm, &mut auto_relay, &metrics);
                 handle_redial_tick(
                     &mut node,
                     &mut connection_epochs,
@@ -9199,6 +9197,14 @@ fn dial_known_peer_addresses(
     addresses: impl IntoIterator<Item = Multiaddr>,
     condition: PeerCondition,
 ) -> Result<(), DialError> {
+    connection_epochs.dial(swarm, known_peer_dial_options(peer, addresses, condition))
+}
+
+fn known_peer_dial_options(
+    peer: Libp2pPeerId,
+    addresses: impl IntoIterator<Item = Multiaddr>,
+    condition: PeerCondition,
+) -> DialOpts {
     let addresses = addresses
         .into_iter()
         .map(|address| peer_dial_address(peer, address))
@@ -9215,7 +9221,7 @@ fn dial_known_peer_addresses(
     } else {
         options
     };
-    connection_epochs.dial(swarm, options.build())
+    options.build()
 }
 
 fn ordinary_peer_dial_uses_fresh_port(
@@ -9361,7 +9367,7 @@ struct AutoRelayState {
     attempted_reservations: HashSet<(Libp2pPeerId, Multiaddr)>,
     pending_reservations: HashMap<Libp2pPeerId, PendingAutoRelayReservation>,
     accepted_reservation_peers: HashSet<Libp2pPeerId>,
-    reservation_listeners: HashMap<Libp2pPeerId, ListenerId>,
+    reservation_listeners: HashMap<Libp2pPeerId, AutoRelayListener>,
     retry_after: HashMap<Libp2pPeerId, Instant>,
     reservation_failures: HashMap<Libp2pPeerId, u8>,
 }
@@ -9370,6 +9376,13 @@ struct AutoRelayState {
 struct PendingAutoRelayReservation {
     address: Multiaddr,
     expires_at: Instant,
+    owned_dial: Option<ConnectionId>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct AutoRelayListener {
+    id: ListenerId,
+    connection: ConnectionId,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -9476,7 +9489,7 @@ impl AutoRelayState {
         let listeners = self
             .reservation_listeners
             .drain()
-            .map(|(_, id)| id)
+            .map(|(_, owner)| owner.id)
             .collect();
         self.candidates.clear();
         self.attempted_reservations.clear();
@@ -9510,7 +9523,16 @@ impl AutoRelayState {
         self.remove_candidate(peer)
     }
 
+    #[cfg(test)]
     fn next_reservation_targets(&mut self, now: Instant) -> Vec<(Libp2pPeerId, Multiaddr)> {
+        self.next_reservation_targets_excluding(now, |_| false)
+    }
+
+    fn next_reservation_targets_excluding(
+        &mut self,
+        now: Instant,
+        excluded: impl Fn(Libp2pPeerId) -> bool,
+    ) -> Vec<(Libp2pPeerId, Multiaddr)> {
         if self.policy.max_reservations == 0
             || self.reservation_slots() >= self.policy.max_reservations
         {
@@ -9519,7 +9541,8 @@ impl AutoRelayState {
 
         let mut targets = Vec::new();
         for (peer, address) in &self.candidates {
-            if self.accepted_reservation_peers.contains(peer)
+            if excluded(*peer)
+                || self.accepted_reservation_peers.contains(peer)
                 || self.pending_reservations.contains_key(peer)
             {
                 continue;
@@ -9539,6 +9562,7 @@ impl AutoRelayState {
                 PendingAutoRelayReservation {
                     address: address.clone(),
                     expires_at: now + AUTO_RELAY_RESERVATION_PENDING_TIMEOUT,
+                    owned_dial: None,
                 },
             );
             targets.push((*peer, address.clone()));
@@ -9561,18 +9585,31 @@ impl AutoRelayState {
         self.reservation_failures.remove(&peer);
     }
 
-    fn record_reservation_listener(&mut self, peer: Libp2pPeerId, listener_id: ListenerId) -> bool {
+    fn record_reservation_listener(
+        &mut self,
+        peer: Libp2pPeerId,
+        listener_id: ListenerId,
+        connection: ConnectionId,
+    ) -> bool {
         if !self.pending_reservations.contains_key(&peer)
             || self.reservation_listeners.contains_key(&peer)
         {
             return false;
         }
-        self.reservation_listeners.insert(peer, listener_id);
+        self.reservation_listeners.insert(
+            peer,
+            AutoRelayListener {
+                id: listener_id,
+                connection,
+            },
+        );
         true
     }
 
     fn owns_listener(&self, relay: Libp2pPeerId, listener_id: ListenerId) -> bool {
-        self.reservation_listeners.get(&relay) == Some(&listener_id)
+        self.reservation_listeners
+            .get(&relay)
+            .is_some_and(|owner| owner.id == listener_id)
     }
 
     #[cfg(test)]
@@ -9609,7 +9646,7 @@ impl AutoRelayState {
         let relay = self
             .reservation_listeners
             .iter()
-            .find_map(|(relay, tracked)| (*tracked == listener_id).then_some(*relay))?;
+            .find_map(|(relay, tracked)| (tracked.id == listener_id).then_some(*relay))?;
         let pending_address = self
             .pending_reservations
             .get(&relay)
@@ -9635,9 +9672,12 @@ impl AutoRelayState {
         let mut expired = Vec::with_capacity(expired_peers.len());
         for peer in expired_peers {
             if let Some(pending) = self.pending_reservations.remove(&peer) {
-                let listener_id = self.reservation_listeners.remove(&peer);
+                let listener_id = self
+                    .reservation_listeners
+                    .remove(&peer)
+                    .map(|owner| owner.id);
                 self.attempted_reservations
-                    .remove(&(peer, pending.address.clone()));
+                    .retain(|(attempted, _)| *attempted != peer);
                 self.retry_after
                     .insert(peer, now + self.policy.retry_interval());
                 expired.push((peer, pending.address, listener_id));
@@ -9976,62 +10016,23 @@ fn attempt_auto_relay_reservations(
     swarm: &mut Swarm<Behaviour>,
     auto_relay: &mut AutoRelayState,
     metrics: &RuntimeMetrics,
+    epochs: &mut ConnectionEpochs,
+    connections: &HashMap<(Libp2pPeerId, ConnectionId), ConnectedPoint>,
+    configured_relays: &[(Libp2pPeerId, Multiaddr)],
 ) {
-    attempt_auto_relay_reservations_at(swarm, auto_relay, metrics, Instant::now());
+    incoming_anchor::attempt_with_configured_at(
+        swarm,
+        auto_relay,
+        metrics,
+        epochs,
+        connections,
+        configured_relays,
+        Instant::now(),
+    );
 }
 
-fn attempt_auto_relay_reservations_at(
-    swarm: &mut Swarm<Behaviour>,
-    auto_relay: &mut AutoRelayState,
-    metrics: &RuntimeMetrics,
-    now: Instant,
-) {
-    for (relay_peer, relay_address) in auto_relay.next_reservation_targets(now) {
-        let reservation_address = relay_address.clone().with(Protocol::P2pCircuit);
-        metrics.record_auto_relay_reservation_attempt();
-        log_runtime_event(
-            LogLevel::Info,
-            "auto_relay_reservation_attempt",
-            &[
-                ("relay", &relay_peer.to_string()),
-                ("address", &reservation_address.to_string()),
-            ],
-        );
-        match swarm.listen_on(reservation_address.clone()) {
-            Ok(listener_id) => {
-                if !auto_relay.record_reservation_listener(relay_peer, listener_id) {
-                    swarm.remove_listener(listener_id);
-                    auto_relay.release_reservation_for_retry_after(relay_peer, now);
-                    metrics.record_auto_relay_reservation_failure();
-                    log_runtime_event(
-                        LogLevel::Warn,
-                        "auto_relay_reservation_state_conflict",
-                        &[
-                            ("relay", &relay_peer.to_string()),
-                            ("address", &reservation_address.to_string()),
-                            ("listener", &listener_id.to_string()),
-                        ],
-                    );
-                }
-            }
-            Err(error) => {
-                auto_relay.release_reservation_for_retry_after(relay_peer, now);
-                let evicted = auto_relay.record_reservation_failure(relay_peer);
-                metrics.record_auto_relay_reservation_failure();
-                log_runtime_event(
-                    LogLevel::Warn,
-                    "auto_relay_reservation_failed",
-                    &[
-                        ("relay", &relay_peer.to_string()),
-                        ("address", &reservation_address.to_string()),
-                        ("error", &format!("{error:?}")),
-                        ("evicted", &evicted.to_string()),
-                    ],
-                );
-            }
-        }
-    }
-}
+#[cfg(test)]
+use incoming_anchor::attempt_at as attempt_auto_relay_reservations_at;
 
 fn record_auto_relay_listener_termination(
     auto_relay: &mut AutoRelayState,
@@ -10079,20 +10080,19 @@ fn auto_relay_candidate_addresses(
     peer: Libp2pPeerId,
     info: &identify::Info,
     source: DiscoveredPeerAddressSource,
+    known: Option<&Multiaddr>,
 ) -> Vec<Multiaddr> {
     if !identify_protocols_include_relay_hop(&info.protocols) {
         return Vec::new();
     }
 
-    ranked_auto_relay_candidate_addresses(
+    incoming_anchor::candidate_addresses(
         peer,
         &info.listen_addrs,
+        known,
         &local_interface_networks(""),
         source,
     )
-    .into_iter()
-    .take(1)
-    .collect()
 }
 
 fn identify_protocols_include_relay_hop(protocols: &[libp2p::StreamProtocol]) -> bool {
@@ -10148,7 +10148,14 @@ fn ranked_auto_relay_candidate_addresses<'a>(
             }
             addresses
         });
-    candidates.sort_by_key(|address| auto_relay_candidate_address_rank(address, local_networks));
+    candidates.sort_by_key(|address| {
+        (
+            auto_relay_candidate_address_rank(address, local_networks),
+            !address
+                .iter()
+                .any(|protocol| matches!(protocol, Protocol::Tcp(_))),
+        )
+    });
     candidates
 }
 
@@ -13572,6 +13579,14 @@ async fn handle_swarm_event(
                         context.relay_server_enabled,
                         &endpoint,
                     );
+                    attempt_auto_relay_reservations(
+                        swarm,
+                        context.auto_relay,
+                        context.metrics,
+                        context.connection_epochs,
+                        context.active_connections,
+                        context.relay_addresses,
+                    );
                     log_runtime_event(
                         LogLevel::Info,
                         "relay_infrastructure_connection_established",
@@ -14218,14 +14233,18 @@ async fn handle_swarm_event(
                 if let Some(relay_base_address) =
                     relay_base_address_from_relayed_listen_address(&address)
                 {
-                    // Unlike peer-only acceptance, this event identifies the reservation owner.
-                    if context.auto_relay.owns_listener(relay, listener_id) {
-                        context.auto_relay.record_reservation_accepted(relay);
-                    }
                     context.relay_readiness.record_relay_listen_address(
                         relay,
                         listener_id,
                         relay_base_address,
+                    );
+                    incoming_anchor::confirm_if_ready(
+                        swarm,
+                        context.connection_epochs,
+                        context.active_connections,
+                        context.auto_relay,
+                        context.relay_readiness,
+                        relay,
                     );
                 }
                 dial_relay_ready_configured_peers(
@@ -22579,21 +22598,33 @@ fn handle_behaviour_event(
                 event,
             );
         }
-        BehaviourEvent::Relay(event) => handle_relay_event(
-            swarm,
-            context.connection_epochs,
-            context.forwarder,
-            context.relay_readiness,
-            context.paths,
-            context.relay_addresses,
-            context.configured_peer_addresses,
-            context.discovered_peer_addresses,
-            context.metrics,
-            context.public_discovery_quiet,
-            context.discovery,
-            context.kademlia_maintenance,
-            &event,
-        ),
+        BehaviourEvent::Relay(event) => {
+            handle_relay_event(
+                swarm,
+                context.connection_epochs,
+                context.forwarder,
+                context.relay_readiness,
+                context.paths,
+                context.relay_addresses,
+                context.configured_peer_addresses,
+                context.discovered_peer_addresses,
+                context.metrics,
+                context.public_discovery_quiet,
+                context.discovery,
+                context.kademlia_maintenance,
+                &event,
+            );
+            if let relay::client::Event::ReservationReqAccepted { relay_peer_id, .. } = event {
+                incoming_anchor::confirm_if_ready(
+                    swarm,
+                    context.connection_epochs,
+                    context.active_connections,
+                    context.auto_relay,
+                    context.relay_readiness,
+                    relay_peer_id,
+                );
+            }
+        }
         BehaviourEvent::RelayServer(event) => handle_relay_server_event(context.metrics, &event),
         BehaviourEvent::Dcutr(dcutr::Event {
             remote_peer_id,
@@ -22742,9 +22773,21 @@ fn handle_identify_received(
         identify_source,
         "identify",
     );
-    let auto_relay_candidates = auto_relay_candidate_addresses(peer_id, &info, identify_source);
-    let preserve_established_infrastructure_candidate =
-        context.infrastructure_peers.contains(peer_id);
+    let known_relay_address = context
+        .auto_relay
+        .candidates
+        .iter()
+        .find_map(|(owner, address)| (*owner == peer_id).then_some(address));
+    let auto_relay_candidates =
+        auto_relay_candidate_addresses(peer_id, &info, identify_source, known_relay_address);
+    let preserve_established_infrastructure_candidate = context
+        .auto_relay
+        .pending_reservations
+        .contains_key(&peer_id)
+        || context
+            .auto_relay
+            .accepted_reservation_peers
+            .contains(&peer_id);
     let pairing_routing_only = public_pairing_kademlia_routing
         && !overlay_kademlia_routing
         && !context.membership.allows(peer_id)
@@ -22920,7 +22963,14 @@ fn handle_identify_received(
             auto_relay_candidates,
         );
     }
-    attempt_auto_relay_reservations(swarm, context.auto_relay, context.metrics);
+    attempt_auto_relay_reservations(
+        swarm,
+        context.auto_relay,
+        context.metrics,
+        context.connection_epochs,
+        context.active_connections,
+        context.relay_addresses,
+    );
     if context.discovery.autonat && observed_addr.iter().next().is_some() {
         schedule_autonat_probe(swarm, context.metrics, &observed_addr);
     }
@@ -22995,9 +23045,8 @@ fn handle_autonat_event_monotonic_at(
                     kademlia_maintenance.record_started(query, now);
                 }
             }
-            if !public_discovery_quiet {
-                attempt_auto_relay_reservations(swarm, auto_relay, metrics);
-            }
+            // The always-running relay setup driver owns transport/epoch selection.
+            // AutoNAT status must not bypass that driver or couple incoming repair to payload demand.
             log_runtime_event(
                 LogLevel::Info,
                 "autonat_status_changed",
@@ -23691,8 +23740,19 @@ fn expire_pending_auto_relay_reservations(
     swarm: &mut Swarm<Behaviour>,
     auto_relay: &mut AutoRelayState,
     metrics: &RuntimeMetrics,
+    epochs: &mut ConnectionEpochs,
     now: Instant,
 ) {
+    for pending in auto_relay.pending_reservations.values() {
+        if now >= pending.expires_at
+            && let Some(id) = pending.owned_dial
+            && epochs.connections.contains_key(&id)
+            && !epochs.established.contains_key(&id)
+        {
+            epochs.mark_retiring(id);
+            swarm.close_connection(id);
+        }
+    }
     for (relay_peer, relay_address, listener_id) in auto_relay.expire_pending_reservations(now) {
         if let Some(listener_id) = listener_id {
             swarm.remove_listener(listener_id);
@@ -36670,7 +36730,11 @@ mod tests {
             state.next_reservation_targets(now),
             vec![(relay, address.clone())]
         );
-        assert!(state.record_reservation_listener(relay, listener_id));
+        assert!(state.record_reservation_listener(
+            relay,
+            listener_id,
+            ConnectionId::new_unchecked(1)
+        ));
         assert_eq!(
             state.release_listener_for_retry_after(listener_id, now),
             Some(ReleasedAutoRelayListener {
@@ -36708,7 +36772,11 @@ mod tests {
 
         assert!(state.record_candidate(relay, address.clone()));
         assert_eq!(state.next_reservation_targets(now), vec![(relay, address)]);
-        assert!(state.record_reservation_listener(relay, listener_id));
+        assert!(state.record_reservation_listener(
+            relay,
+            listener_id,
+            ConnectionId::new_unchecked(1)
+        ));
         state.record_reservation_accepted(relay);
 
         assert_eq!(
@@ -36742,7 +36810,11 @@ mod tests {
             vec![(relay, address.clone())]
         );
         let listener_id = ListenerId::next();
-        assert!(state.record_reservation_listener(relay, listener_id));
+        assert!(state.record_reservation_listener(
+            relay,
+            listener_id,
+            ConnectionId::new_unchecked(1)
+        ));
 
         assert_eq!(
             state.expire_pending_reservations(now + AUTO_RELAY_RESERVATION_PENDING_TIMEOUT),
@@ -36765,7 +36837,7 @@ mod tests {
 
     #[tokio::test]
     #[allow(clippy::too_many_lines)]
-    async fn auto_relay_synchronous_listen_failures_settle_for_twenty_four_hours() {
+    async fn auto_relay_synchronous_setup_failures_settle_for_twenty_four_hours() {
         for protocol in [
             PUBLIC_IPFS_KADEMLIA_PROTOCOL,
             crate::config::PRIVATE_KADEMLIA_PROTOCOL,
@@ -36777,6 +36849,8 @@ mod tests {
             });
             let metrics = RuntimeMetrics::default();
             let start = Instant::now();
+            let mut epochs = ConnectionEpochs::default();
+            let connections = HashMap::new();
             assert_eq!(auto_relay.policy.max_reservations, 2);
             assert_eq!(auto_relay.policy.retry_interval(), Duration::from_secs(30));
             assert_eq!(AUTO_RELAY_CANDIDATE_FAILURE_EVICTION_THRESHOLD, 2);
@@ -36824,6 +36898,8 @@ mod tests {
                         &mut node.swarm,
                         &mut auto_relay,
                         &metrics,
+                        &mut epochs,
+                        &connections,
                         now,
                     );
                     let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
@@ -36859,11 +36935,18 @@ mod tests {
                 }
             }
 
-            // A valid alternative can own a pending listener after eviction. The
-            // relay request is only queued; no polling, sockets, or network I/O.
+            // A valid alternative first owns a bounded transport dial, not a
+            // reservation listener. The swarm is still not polled.
             assert!(auto_relay.record_candidate(alternative, alternative_address.clone()));
             let now = start + Duration::from_secs(86_400);
-            attempt_auto_relay_reservations_at(&mut node.swarm, &mut auto_relay, &metrics, now);
+            attempt_auto_relay_reservations_at(
+                &mut node.swarm,
+                &mut auto_relay,
+                &metrics,
+                &mut epochs,
+                &connections,
+                now,
+            );
             assert_eq!(
                 auto_relay.candidates,
                 vec![(alternative, alternative_address.clone())]
@@ -36875,8 +36958,8 @@ mod tests {
                 pending.expires_at,
                 now + AUTO_RELAY_RESERVATION_PENDING_TIMEOUT
             );
-            assert_eq!(auto_relay.reservation_listeners.len(), 1);
-            assert!(auto_relay.reservation_listeners.contains_key(&alternative));
+            assert!(auto_relay.reservation_listeners.is_empty());
+            assert!(pending.owned_dial.is_some());
             assert_eq!(auto_relay.attempted_reservations.len(), 1);
             assert_eq!(auto_relay.reservation_slots(), 1);
             assert!(auto_relay.accepted_reservation_peers.is_empty());

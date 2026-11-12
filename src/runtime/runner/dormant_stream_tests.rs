@@ -227,6 +227,7 @@ async fn infrastructure_and_inner_circuit_dependencies_are_preserved() {
                     PendingAutoRelayReservation {
                         address,
                         expires_at: f.now + Duration::from_secs(30),
+                        owned_dial: None,
                     },
                 );
             }

@@ -144,6 +144,393 @@ async fn failed_packet_connection_cannot_veto_fresh_opposite_role_connection() {
 
 struct UnusedPacketIo;
 
+async fn incoming_anchor_test_relay() -> (P2pNode, Multiaddr, Multiaddr) {
+    let mut node = build_node(&HostConfig {
+        identity: NodeIdentity::generate_ed25519().unwrap(),
+        network_name: "lab".into(),
+        membership_tag: None,
+        mtu: 1280,
+        max_concurrent_control_streams: 8,
+        max_concurrent_packet_streams: 8,
+        listen_addresses: vec![
+            "/ip4/127.0.0.1/tcp/0".parse().unwrap(),
+            "/ip4/127.0.0.1/udp/0/quic-v1".parse().unwrap(),
+        ],
+        external_addresses: Vec::new(),
+        bootstrap_peers: Vec::new(),
+        known_peers: Vec::new(),
+        relay_reservations: Vec::new(),
+        relay_server: true,
+        relay_resources: crate::config::RelayResourceConfig::default(),
+        resources: crate::config::ResourceConfig::default(),
+        discovery: DiscoveryConfig {
+            mdns: false,
+            kademlia: false,
+            autonat: false,
+            dcutr: false,
+            ..DiscoveryConfig::default()
+        },
+    })
+    .unwrap();
+    let (mut tcp, mut quic) = (None, None);
+    while tcp.is_none() || quic.is_none() {
+        if let SwarmEvent::NewListenAddr { address, .. } = node.swarm.select_next_some().await {
+            node.swarm.add_external_address(address.clone());
+            let address = address.with(Protocol::P2p(node.local_peer_id));
+            if address.iter().any(|p| matches!(p, Protocol::Tcp(_))) {
+                tcp = Some(address);
+            } else if address.iter().any(|p| p == Protocol::QuicV1) {
+                quic = Some(address);
+            }
+        }
+    }
+    (node, tcp.unwrap(), quic.unwrap())
+}
+
+#[tokio::test]
+async fn automatic_incoming_anchor_uses_tcp_after_quic_and_accepts_fresh_relay_control() {
+    automatic_incoming_anchor_scenario(AnchorSetup::DialTcp).await;
+}
+
+#[tokio::test]
+async fn automatic_incoming_anchor_reuses_tcp_without_another_transport_dial() {
+    automatic_incoming_anchor_scenario(AnchorSetup::ReuseTcp).await;
+}
+
+#[tokio::test]
+async fn automatic_incoming_anchor_keeps_quic_fallback_and_accepts_fresh_relay_control() {
+    automatic_incoming_anchor_scenario(AnchorSetup::ReuseQuic).await;
+}
+
+#[tokio::test]
+async fn automatic_incoming_anchor_recovers_over_quic_after_real_tcp_failure() {
+    automatic_incoming_anchor_scenario(AnchorSetup::RecoverQuic).await;
+}
+
+#[tokio::test]
+async fn automatic_incoming_anchor_preserves_an_explicit_quic_reservation() {
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        Box::pin(async {
+            let (mut relay, tcp, quic) = incoming_anchor_test_relay().await;
+            let peer = relay.local_peer_id;
+            let mut fixture = EventFixture::new(Libp2pPeerId::random());
+            fixture.infrastructure.insert(peer, quic.clone());
+            fixture.relay_addresses.push((peer, quic.clone()));
+            fixture.auto_relay.record_candidate(peer, tcp);
+            let listener = fixture
+                .node
+                .swarm
+                .listen_on(quic.with(Protocol::P2pCircuit))
+                .unwrap();
+            fixture.configured_listeners.insert(listener);
+            while !fixture.readiness.relay_ready(peer) {
+                tokio::select! {
+                    _ = relay.swarm.select_next_some() => {},
+                    event = fixture.node.swarm.select_next_some() => fixture.dispatch(event).await,
+                }
+            }
+            for _ in 0..10 {
+                attempt_auto_relay_reservations(
+                    &mut fixture.node.swarm,
+                    &mut fixture.auto_relay,
+                    &fixture.metrics,
+                    &mut fixture.epochs,
+                    &fixture.active_connections,
+                    &fixture.relay_addresses,
+                );
+            }
+            assert!(fixture.configured_listeners.contains(&listener));
+            assert!(fixture.auto_relay.pending_reservations.is_empty());
+            assert!(fixture.auto_relay.reservation_listeners.is_empty());
+            assert_eq!(
+                fixture
+                    .metrics
+                    .snapshot(crate::queue::QueueStats::default())
+                    .auto_relay_reservation_attempts,
+                0
+            );
+            let id = fixture
+                .node
+                .swarm
+                .behaviour()
+                .relay
+                .confirmed_reservation_connections(peer)
+                .next()
+                .unwrap();
+            assert_eq!(
+                incoming_anchor::confirmed_connection(
+                    &fixture.node.swarm,
+                    &fixture.epochs,
+                    &fixture.active_connections,
+                    peer,
+                    id
+                ),
+                Some((id, PathKind::DirectQuicStream))
+            );
+        }),
+    )
+    .await
+    .expect("explicit reservation was replaced by automatic setup");
+}
+
+#[derive(Clone, Copy)]
+enum AnchorSetup {
+    DialTcp,
+    ReuseTcp,
+    ReuseQuic,
+    RecoverQuic,
+}
+
+async fn connect_anchor_fixture(
+    receiver: &mut EventFixture,
+    relay: &mut P2pNode,
+    address: Multiaddr,
+) -> ConnectionId {
+    let peer = relay.local_peer_id;
+    let options = DialOpts::peer_id(peer)
+        .condition(PeerCondition::Always)
+        .addresses(vec![address])
+        .build();
+    let id = options.connection_id();
+    receiver
+        .epochs
+        .dial(&mut receiver.node.swarm, options)
+        .unwrap();
+    while !receiver.active_connections.contains_key(&(peer, id)) {
+        tokio::select! {
+            _ = relay.swarm.select_next_some() => {},
+            event = receiver.node.swarm.select_next_some() => receiver.dispatch(event).await,
+        }
+    }
+    id
+}
+
+fn assert_anchor_readiness_fences(
+    receiver: &mut EventFixture,
+    relay: Libp2pPeerId,
+    id: ConnectionId,
+) {
+    let listener = receiver.auto_relay.reservation_listeners[&relay];
+    receiver.auto_relay.release_reservation_for_retry(relay);
+    receiver.auto_relay.next_reservation_targets(Instant::now());
+    assert!(receiver.auto_relay.record_reservation_listener(
+        relay,
+        listener.id,
+        listener.connection
+    ));
+    receiver
+        .auto_relay
+        .pending_reservations
+        .get_mut(&relay)
+        .unwrap()
+        .expires_at = Instant::now()
+        .checked_sub(Duration::from_millis(1))
+        .unwrap();
+    incoming_anchor::confirm_if_ready(
+        &receiver.node.swarm,
+        &receiver.epochs,
+        &receiver.active_connections,
+        &mut receiver.auto_relay,
+        &receiver.readiness,
+        relay,
+    );
+    assert!(
+        !receiver
+            .auto_relay
+            .accepted_reservation_peers
+            .contains(&relay),
+        "expired attempt cannot become ready"
+    );
+    receiver
+        .auto_relay
+        .pending_reservations
+        .get_mut(&relay)
+        .unwrap()
+        .expires_at = Instant::now() + AUTO_RELAY_RESERVATION_PENDING_TIMEOUT;
+    receiver
+        .auto_relay
+        .reservation_listeners
+        .get_mut(&relay)
+        .unwrap()
+        .id = ListenerId::next();
+    incoming_anchor::confirm_if_ready(
+        &receiver.node.swarm,
+        &receiver.epochs,
+        &receiver.active_connections,
+        &mut receiver.auto_relay,
+        &receiver.readiness,
+        relay,
+    );
+    assert!(
+        !receiver
+            .auto_relay
+            .accepted_reservation_peers
+            .contains(&relay),
+        "unowned listener cannot become ready"
+    );
+    receiver
+        .auto_relay
+        .reservation_listeners
+        .insert(relay, listener);
+    let unconfirmed = receiver
+        .active_connections
+        .keys()
+        .find_map(|(peer, candidate)| (*peer == relay && *candidate != id).then_some(*candidate))
+        .unwrap_or(ConnectionId::new_unchecked(999_999));
+    receiver
+        .auto_relay
+        .reservation_listeners
+        .get_mut(&relay)
+        .unwrap()
+        .connection = unconfirmed;
+    incoming_anchor::confirm_if_ready(
+        &receiver.node.swarm,
+        &receiver.epochs,
+        &receiver.active_connections,
+        &mut receiver.auto_relay,
+        &receiver.readiness,
+        relay,
+    );
+    assert!(
+        !receiver
+            .auto_relay
+            .accepted_reservation_peers
+            .contains(&relay),
+        "another connection to the same relay is not this reservation's owner"
+    );
+    receiver
+        .auto_relay
+        .reservation_listeners
+        .insert(relay, listener);
+    incoming_anchor::confirm_if_ready(
+        &receiver.node.swarm,
+        &receiver.epochs,
+        &receiver.active_connections,
+        &mut receiver.auto_relay,
+        &receiver.readiness,
+        relay,
+    );
+    assert!(
+        receiver
+            .auto_relay
+            .accepted_reservation_peers
+            .contains(&relay)
+    );
+    receiver.epochs.mark_retiring(id);
+    assert!(
+        incoming_anchor::confirmed_connection(
+            &receiver.node.swarm,
+            &receiver.epochs,
+            &receiver.active_connections,
+            relay,
+            id
+        )
+        .is_none()
+    );
+    receiver.epochs.retiring.remove(&id);
+    receiver.epochs.advance();
+    assert!(
+        incoming_anchor::confirmed_connection(
+            &receiver.node.swarm,
+            &receiver.epochs,
+            &receiver.active_connections,
+            relay,
+            id
+        )
+        .is_none()
+    );
+}
+
+async fn automatic_incoming_anchor_scenario(setup: AnchorSetup) {
+    tokio::time::timeout(Duration::from_secs(15), Box::pin(async {
+        let (mut relay, tcp, quic) = incoming_anchor_test_relay().await;
+        let relay_peer = relay.local_peer_id;
+        let mut sender = membership_sync_test_node(NodeIdentity::generate_ed25519().unwrap());
+        let mut receiver = EventFixture::new(sender.local_peer_id);
+        receiver.auto_relay.policy.max_reservations = 1;
+        receiver.infrastructure.insert(relay_peer, tcp.clone());
+        let quic_id = connect_anchor_fixture(&mut receiver, &mut relay, quic.clone()).await;
+        let reuse = match setup {
+            AnchorSetup::ReuseTcp => Some(connect_anchor_fixture(&mut receiver, &mut relay, tcp.clone()).await),
+            AnchorSetup::ReuseQuic => Some(quic_id),
+            AnchorSetup::RecoverQuic => Some(quic_id),
+            AnchorSetup::DialTcp => None,
+        };
+        let use_quic = matches!(setup, AnchorSetup::ReuseQuic | AnchorSetup::RecoverQuic);
+        let address = if use_quic {quic} else {tcp};
+        let candidate = if matches!(setup, AnchorSetup::RecoverQuic) {
+            let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = socket.local_addr().unwrap().port();
+            drop(socket);
+            format!("/ip4/127.0.0.1/tcp/{port}/p2p/{relay_peer}").parse().unwrap()
+        } else {address.clone()};
+        receiver.auto_relay.record_candidate(relay_peer, candidate);
+        attempt_auto_relay_reservations(&mut receiver.node.swarm, &mut receiver.auto_relay,
+            &receiver.metrics, &mut receiver.epochs, &receiver.active_connections, &[]);
+        let owned = receiver.auto_relay.pending_reservations[&relay_peer].owned_dial;
+        let owner = reuse.or(owned).unwrap();
+        assert_eq!(owned.is_some(), matches!(setup, AnchorSetup::DialTcp | AnchorSetup::RecoverQuic));
+        assert_eq!(receiver.auto_relay.reservation_listeners.is_empty(), owned.is_some());
+        let kind = if use_quic {PathKind::DirectQuicStream} else {PathKind::DirectTcpStream};
+        let mut tick = tokio::time::interval(Duration::from_millis(20));
+        while !receiver.auto_relay.accepted_reservation_peers.contains(&relay_peer) {
+            tokio::select! {
+                _ = relay.swarm.select_next_some() => {},
+                _ = tick.tick() => {
+                    // Exercise the configured retry boundary without a 30-second test sleep.
+                    let now = receiver.auto_relay.retry_after.get(&relay_peer).copied().unwrap_or_else(Instant::now);
+                    attempt_auto_relay_reservations_at(&mut receiver.node.swarm,
+                        &mut receiver.auto_relay, &receiver.metrics, &mut receiver.epochs, &receiver.active_connections, now);
+                },
+                event = receiver.node.swarm.select_next_some() => receiver.dispatch(event).await,
+            }
+        }
+        assert_eq!(incoming_anchor::confirmed_connection(&receiver.node.swarm, &receiver.epochs,
+            &receiver.active_connections, relay_peer, owner), Some((owner, kind)));
+        if matches!(setup, AnchorSetup::DialTcp) {
+            assert!(matches!(receiver.active_connections[&(relay_peer, owner)],
+                ConnectedPoint::Dialer {port_use: libp2p::core::transport::PortUse::New, ..}));
+        }
+        assert!(receiver.epochs.is_usable(quic_id), "TCP promotion must not destroy the old connection");
+        assert_eq!(receiver.auto_relay.reservation_slots(), 1);
+        let peer = receiver.node.local_peer_id;
+        sender.swarm.dial(address.with(Protocol::P2pCircuit).with(Protocol::P2p(peer))).unwrap();
+        let (mut request, mut relayed) = (None, false);
+        loop {
+            tokio::select! {
+                _ = relay.swarm.select_next_some() => {},
+                event = receiver.node.swarm.select_next_some() => receiver.dispatch(event).await,
+                event = sender.swarm.select_next_some() => match event {
+                    SwarmEvent::ConnectionEstablished {peer_id, endpoint, ..} if peer_id == peer => {
+                        assert!(endpoint.is_relayed());
+                        relayed = true;
+                        request = Some(sender.swarm.behaviour_mut().control.send_request(&peer,
+                            ControlRequest::Capabilities(ControlCapabilities::local("lab", None, 1280))));
+                    }
+                    SwarmEvent::Behaviour(BehaviourEvent::Control(request_response::Event::Message {
+                        peer: owner, message: Message::Response {request_id, response}, ..
+                    })) if Some(request_id) == request => {
+                        assert_eq!(owner, peer);
+                        assert!(matches!(response, ControlResponse::CapabilitiesAccepted(_)));
+                        assert!(relayed);
+                        break;
+                    }
+                    SwarmEvent::Behaviour(BehaviourEvent::Control(request_response::Event::Message {
+                        message: Message::Request {channel, ..}, ..
+                    })) => {
+                        sender.swarm.behaviour_mut().control.send_response(channel,
+                            ControlResponse::CapabilitiesAccepted(ControlCapabilities::local("lab", None, 1280))).unwrap();
+                    }
+                    SwarmEvent::OutgoingConnectionError {error, ..} => panic!("fresh incoming circuit failed: {error}"),
+                    _ => {},
+                }
+            }
+        }
+        assert_anchor_readiness_fences(&mut receiver, relay_peer, owner);
+    })).await.expect("automatic anchor and fresh inbound control deadline");
+}
+
 #[tokio::test]
 async fn late_start_and_success_events_cannot_admit_stale_or_retired_paths() {
     for scenario in ["old_epoch", "retired_pending", "retired_established"] {
@@ -339,6 +726,7 @@ struct EventFixture {
     paths: PathSet,
     capabilities: PeerCapabilities,
     readiness: RelayReadiness,
+    relay_addresses: Vec<(Libp2pPeerId, Multiaddr)>,
     auto_relay: AutoRelayState,
     backoff: PublicDiscoveryBackoff,
     discovered: DiscoveredPeerAddresses,
@@ -368,6 +756,7 @@ impl EventFixture {
             paths: PathSet::new(),
             capabilities: PeerCapabilities::default(),
             readiness: RelayReadiness::default(),
+            relay_addresses: Vec::new(),
             auto_relay: AutoRelayState::default(),
             backoff: PublicDiscoveryBackoff::from_bootstrap_defaults(true),
             discovered: DiscoveredPeerAddresses::default(),
@@ -412,7 +801,7 @@ impl EventFixture {
                 auto_relay: &mut self.auto_relay,
                 public_discovery_backoff: &mut self.backoff,
                 public_discovery_holdoff_active: false,
-                relay_addresses: &[],
+                relay_addresses: &self.relay_addresses,
                 configured_peer_addresses: &[],
                 configured_relay_reservation_listeners: &mut self.configured_listeners,
                 retiring_configured_relay_reservation_listeners: &mut self.retired_listeners,
@@ -458,7 +847,11 @@ impl EventFixture {
             vec![(relay, address.clone())]
         );
         let listener = ListenerId::next();
-        assert!(self.auto_relay.record_reservation_listener(relay, listener));
+        assert!(self.auto_relay.record_reservation_listener(
+            relay,
+            listener,
+            ConnectionId::new_unchecked(0)
+        ));
         self.auto_relay.record_reservation_accepted(relay);
         self.readiness.record_reservation_accepted(relay);
         listener
@@ -1155,8 +1548,12 @@ async fn old_relay_listener_close_preserves_replacement_and_current_close_allows
             "old listener removed replacement readiness"
         );
         assert_eq!(
-            fixture.auto_relay.reservation_listeners.get(&relay),
-            Some(&current)
+            fixture
+                .auto_relay
+                .reservation_listeners
+                .get(&relay)
+                .map(|owner| owner.id),
+            Some(current)
         );
         assert!(!fixture.auto_relay.retry_after.contains_key(&relay));
         fixture
@@ -1261,11 +1658,11 @@ async fn peer_only_relay_acceptance_cannot_consume_replacement_listener_deadline
         vec![(relay, address.clone())]
     );
     let current = ListenerId::next();
-    assert!(
-        fixture
-            .auto_relay
-            .record_reservation_listener(relay, current)
-    );
+    assert!(fixture.auto_relay.record_reservation_listener(
+        relay,
+        current,
+        ConnectionId::new_unchecked(0)
+    ));
     let deadline = fixture.auto_relay.pending_reservations[&relay].expires_at;
     fixture
         .dispatch(SwarmEvent::Behaviour(BehaviourEvent::Relay(
@@ -1297,13 +1694,45 @@ async fn peer_only_relay_acceptance_cannot_consume_replacement_listener_deadline
         })
         .await;
     assert!(
-        fixture
+        !fixture
+            .auto_relay
+            .accepted_reservation_peers
+            .contains(&relay),
+        "a cached listener event still lacks the native reservation owner"
+    );
+    assert_eq!(
+        fixture.auto_relay.pending_reservations[&relay].expires_at,
+        deadline
+    );
+    assert!(fixture.readiness.relay_ready(relay));
+    assert!(
+        incoming_anchor::confirmed_connection(
+            &fixture.node.swarm,
+            &fixture.epochs,
+            &fixture.active_connections,
+            relay,
+            ConnectionId::new_unchecked(0)
+        )
+        .is_none()
+    );
+    expire_pending_auto_relay_reservations(
+        &mut fixture.node.swarm,
+        &mut fixture.auto_relay,
+        &fixture.metrics,
+        &mut fixture.epochs,
+        deadline,
+    );
+    assert!(fixture.auto_relay.pending_reservations.is_empty());
+    assert!(
+        !fixture
             .auto_relay
             .accepted_reservation_peers
             .contains(&relay)
     );
-    assert!(!fixture.auto_relay.pending_reservations.contains_key(&relay));
-    assert!(fixture.readiness.relay_ready(relay));
+    assert_eq!(
+        fixture.auto_relay.retry_after[&relay],
+        deadline + fixture.auto_relay.policy.retry_interval()
+    );
 }
 
 #[tokio::test]
@@ -1681,11 +2110,11 @@ async fn configured_listener_loss_preserves_pending_automatic_replacement() {
             vec![(relay, address.clone())]
         );
         let pending = ListenerId::next();
-        assert!(
-            fixture
-                .auto_relay
-                .record_reservation_listener(relay, pending)
-        );
+        assert!(fixture.auto_relay.record_reservation_listener(
+            relay,
+            pending,
+            ConnectionId::new_unchecked(0)
+        ));
         let deadline = fixture.auto_relay.pending_reservations[&relay].expires_at;
         fixture
             .dispatch(if expiration {
@@ -1702,8 +2131,12 @@ async fn configured_listener_loss_preserves_pending_automatic_replacement() {
             })
             .await;
         assert_eq!(
-            fixture.auto_relay.reservation_listeners.get(&relay),
-            Some(&pending),
+            fixture
+                .auto_relay
+                .reservation_listeners
+                .get(&relay)
+                .map(|owner| owner.id),
+            Some(pending),
             "configured listener loss cancelled automatic replacement"
         );
         assert_eq!(
