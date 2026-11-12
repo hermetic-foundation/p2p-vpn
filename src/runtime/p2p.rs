@@ -30,6 +30,7 @@ use crate::{
             checkpoint::{self, CheckpointCodec},
             checkpoint_mutation::{self, CheckpointMutationCodec},
         },
+        lifecycle::protocol::{self as lifecycle, LifecycleCodec},
         packet::{self, PacketCodec},
         pairing::{self, PairingCodec},
         pairing_code::{self, PairingCodeCodec, PairingCodeV2Codec},
@@ -75,6 +76,7 @@ pub struct Behaviour {
     pub mdns: Toggle<mdns::tokio::Behaviour>,
     pub pairing_mdns: Toggle<mdns::tokio::Behaviour>,
     pub control: request_response::Behaviour<ControlCodec>,
+    pub lifecycle: request_response::Behaviour<LifecycleCodec>,
     pub checkpoint: request_response::Behaviour<CheckpointCodec>,
     pub checkpoint_mutation: request_response::Behaviour<CheckpointMutationCodec>,
     // SelectUpgrade gives the first matching handler priority. Keep this before
@@ -250,6 +252,7 @@ pub(crate) fn build_node_with_dial_observer(
                     mdns: mdns.into(),
                     pairing_mdns: None.into(),
                     control: control::behaviour(control_streams),
+                    lifecycle: lifecycle::behaviour(control_streams),
                     checkpoint: checkpoint::behaviour(control_streams),
                     checkpoint_mutation: checkpoint_mutation::behaviour(control_streams),
                     packet: packet::behaviour(mtu, packet_streams),

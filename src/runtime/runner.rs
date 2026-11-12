@@ -161,6 +161,8 @@ mod checkpoint_discovery;
 mod checkpoint_pairing;
 mod control_connection_retention;
 use control_connection_retention::should_retain_control_connection;
+mod demand_lifecycle;
+use demand_lifecycle::{DemandLifecycle, LifecycleContext};
 mod recovery_snapshot;
 use recovery_snapshot::ApplicationRecoverySnapshot;
 mod packet_endpoint_selection;
@@ -1467,6 +1469,17 @@ where
     .await
 }
 
+fn lifecycle_not_ready(_: Libp2pPeerId) -> super::lifecycle::Readiness {
+    super::lifecycle::Readiness {
+        incoming_path_available: false,
+        outstanding_work: true,
+    }
+}
+
+fn lifecycle_no_path(_: Libp2pPeerId) -> bool {
+    false
+}
+
 fn startup_tun_runtime(
     forwarder: &Forwarder,
     installed: Option<TunRuntimeConfig>,
@@ -1779,6 +1792,21 @@ where
             .with_owned_quic_packet_endpoint_candidates(packet_plane_quic_endpoint_candidates)
             .with_advertised_routes(forwarder.local_advertised_routes())
             .with_member_records(advertised_member_records(&forwarder));
+    let lifecycle_epoch = loop {
+        let mut bytes = [0; 16];
+        OsRng.fill_bytes(&mut bytes);
+        if let Some(epoch) = super::lifecycle::Epoch::new(bytes) {
+            break epoch;
+        }
+    };
+    let mut demand_lifecycle = DemandLifecycle::new(
+        lifecycle_epoch,
+        MAX_MEMBERSHIP_RECORDS.max(forwarder.configured_overlay_peers().count()),
+        resources.control_stream_limit(),
+        Instant::now(),
+    );
+    // Do not advertise quiet support until path retirement, demand hooks and
+    // verified incoming-path readiness are integrated. The wire handler is live.
     let owned_udp_packet_plane = packet_plane.primary_listener().is_some()
         && !local_capabilities.packet_endpoint_candidates.is_empty();
     let local_data_plane = local_packet_data_plane();
@@ -1857,6 +1885,14 @@ where
         "runtime_started",
         &[("network", &node.network_name)],
     );
+    log_runtime_event(
+        LogLevel::Info,
+        "peer_lifecycle_policy",
+        &[
+            ("mode", "passive"),
+            ("reason", "incoming_path_and_packet_gates_pending"),
+        ],
+    );
     tokio::pin!(shutdown);
 
     let mut checkpoint_discovery_retention =
@@ -1906,6 +1942,18 @@ where
             Instant::now(),
         )?;
         if packet_authorization_revision != Some(forwarder.authorization_revision()) {
+            demand_lifecycle.reconcile(
+                &LifecycleContext {
+                    forwarder: &forwarder,
+                    local: &local_capabilities,
+                    peers: &peer_capabilities,
+                    previous_tags: &previous_membership_tags,
+                    connections: &connection_epochs,
+                    readiness: &lifecycle_not_ready,
+                    usable_path: &lifecycle_no_path,
+                },
+                Instant::now(),
+            );
             reconcile_recovery_query_authorization(
                 &forwarder,
                 &mut queue_runtime.discovered_peer_addresses,
@@ -2394,6 +2442,15 @@ where
                 }
             }
             _ = timers.path_probe.tick() => {
+                demand_lifecycle.reconcile(&LifecycleContext {
+                    forwarder: &forwarder,
+                    local: &local_capabilities,
+                    peers: &peer_capabilities,
+                    previous_tags: &previous_membership_tags,
+                    connections: &connection_epochs,
+                    readiness: &lifecycle_not_ready,
+                    usable_path: &lifecycle_no_path,
+                }, Instant::now());
                 #[cfg(feature = "battery-diagnostics")]
                 metrics.record_diagnostic_probe_pause(path_probe_tracker.diagnostic_pause.active(Instant::now()));
                 expire_unconfirmed_path_probes(
@@ -2887,6 +2944,23 @@ where
                 }
             }
             event = node.swarm.select_next_some() => {
+                if let SwarmEvent::Behaviour(BehaviourEvent::Lifecycle(event)) = event {
+                    demand_lifecycle.handle_event(
+                        &mut node.swarm.behaviour_mut().lifecycle,
+                        &LifecycleContext {
+                            forwarder: &forwarder,
+                            local: &local_capabilities,
+                            peers: &peer_capabilities,
+                            previous_tags: &previous_membership_tags,
+                            connections: &connection_epochs,
+                            readiness: &lifecycle_not_ready,
+                            usable_path: &lifecycle_no_path,
+                        },
+                        event,
+                        Instant::now(),
+                    );
+                    continue;
+                }
                 if let SwarmEvent::Behaviour(BehaviourEvent::CheckpointMutation(event)) = event {
                     if !request_response_message_is_usable(&connection_epochs, &event, "checkpoint_mutation") {
                         if let Some(checkpoint) = &mut checkpoint_runtime {
@@ -2981,6 +3055,13 @@ where
                     }
                     continue;
                 }
+                let lifecycle_capability_peer = match &event {
+                    SwarmEvent::Behaviour(BehaviourEvent::Control(request_response::Event::Message {
+                        peer, message: Message::Request { request: ControlRequest::Capabilities(_), .. }
+                        | Message::Response { response: ControlResponse::CapabilitiesAccepted(_), .. }, ..
+                    })) => Some(*peer),
+                    _ => None,
+                };
                 handle_swarm_event(
                     &mut node.swarm,
                     SwarmEventContext {
@@ -3040,6 +3121,17 @@ where
                     },
                     event,
                 ).await?;
+                if let Some(peer) = lifecycle_capability_peer {
+                    demand_lifecycle.observe_peer(&LifecycleContext {
+                        forwarder: &forwarder,
+                        local: &local_capabilities,
+                        peers: &peer_capabilities,
+                        previous_tags: &previous_membership_tags,
+                        connections: &connection_epochs,
+                        readiness: &lifecycle_not_ready,
+                        usable_path: &lifecycle_no_path,
+                    }, peer, Instant::now());
+                }
                 reconcile_runtime_kademlia_scope(
                     &mut node,
                     &local_capabilities,

@@ -8,7 +8,7 @@
 | Protocol | `/p2p-vpn/lifecycle/1` |
 | Version | 1 |
 | Implementation | Codec and scoped validation implemented; TCP/QUIC loopback tests pass |
-| Deployment | Not enabled or advertised until runner integration is ready |
+| Deployment | Handler registered; quiet support remains disabled and unadvertised until activation is ready |
 
 ## Capability Admission
 
@@ -117,7 +117,8 @@ reachability or the 10x battery result. Those remain separate completion gates.
 
 The live tests supply incoming-path readiness as a fixture fact. They do not
 prove reservation availability, retirement/re-establishment of real paths,
-30-minute dormancy, or energy savings. Request-rate admission remains pending.
+30-minute dormancy, or energy savings. The [runner dispatcher](demand-lifecycle-dispatch.md)
+adds request-rate admission and commit checks; quiet activation remains pending.
 
 ### Regression Validation
 
