@@ -9363,7 +9363,7 @@ impl PublicDiscoveryBackoff {
 struct AutoRelayState {
     policy: AutoRelayConfig,
     reachability: AutoNatReachability,
-    candidates: Vec<(Libp2pPeerId, Multiaddr)>,
+    candidates: Vec<(Libp2pPeerId, Vec<Multiaddr>)>,
     attempted_reservations: HashSet<(Libp2pPeerId, Multiaddr)>,
     pending_reservations: HashMap<Libp2pPeerId, PendingAutoRelayReservation>,
     accepted_reservation_peers: HashSet<Libp2pPeerId>,
@@ -9455,6 +9455,36 @@ impl AutoRelayState {
     }
 
     fn record_candidate(&mut self, peer: Libp2pPeerId, address: Multiaddr) -> bool {
+        if self.candidate_addresses(peer).first() == Some(&address) {
+            return false;
+        }
+        self.record_candidate_addresses(peer, [address])
+    }
+
+    fn candidate_addresses(&self, peer: Libp2pPeerId) -> &[Multiaddr] {
+        self.candidates
+            .iter()
+            .find_map(|(owner, addresses)| (*owner == peer).then_some(addresses.as_slice()))
+            .unwrap_or_default()
+    }
+
+    fn record_candidate_addresses(
+        &mut self,
+        peer: Libp2pPeerId,
+        addresses: impl IntoIterator<Item = Multiaddr>,
+    ) -> bool {
+        let mut addresses_bounded = Vec::new();
+        for address in addresses {
+            if !addresses_bounded.contains(&address) {
+                addresses_bounded.push(address);
+            }
+            if addresses_bounded.len() == incoming_anchor::MAX_CANDIDATE_ADDRESSES {
+                break;
+            }
+        }
+        if addresses_bounded.is_empty() {
+            return false;
+        }
         if self.policy.max_candidates == 0 {
             return false;
         }
@@ -9463,11 +9493,11 @@ impl AutoRelayState {
             .iter_mut()
             .find(|(candidate_peer, _)| *candidate_peer == peer)
         {
-            if *existing_address == address {
+            if *existing_address == addresses_bounded {
                 return false;
             }
 
-            *existing_address = address;
+            *existing_address = addresses_bounded;
             if !self.accepted_reservation_peers.contains(&peer) {
                 if !self.pending_reservations.contains_key(&peer) {
                     self.attempted_reservations
@@ -9481,7 +9511,7 @@ impl AutoRelayState {
             return false;
         }
 
-        self.candidates.push((peer, address));
+        self.candidates.push((peer, addresses_bounded));
         true
     }
 
@@ -9540,7 +9570,8 @@ impl AutoRelayState {
         }
 
         let mut targets = Vec::new();
-        for (peer, address) in &self.candidates {
+        for (peer, addresses) in &self.candidates {
+            let address = &addresses[0];
             if excluded(*peer)
                 || self.accepted_reservation_peers.contains(peer)
                 || self.pending_reservations.contains_key(peer)
@@ -9809,12 +9840,15 @@ fn admit_discovered_relay_infrastructure_peer<'a>(
     }
 
     let local_networks = local_interface_networks("");
-    let Some(address) = best_auto_relay_candidate_address(peer, addresses, &local_networks, source)
-    else {
+    let advertised = addresses.into_iter().cloned().collect::<Vec<_>>();
+    let alternatives =
+        incoming_anchor::candidate_addresses(peer, &advertised, None, &local_networks, source);
+    let Some(address) = alternatives.first().cloned() else {
         return;
     };
 
-    if !infrastructure_peers.can_admit(peer) || !auto_relay.record_candidate(peer, address.clone())
+    if !infrastructure_peers.can_admit(peer)
+        || !auto_relay.record_candidate_addresses(peer, alternatives.clone())
     {
         return;
     }
@@ -9853,7 +9887,7 @@ fn admit_discovered_relay_infrastructure_peer<'a>(
         swarm,
         connection_epochs,
         peer,
-        std::iter::once(address.clone()),
+        alternatives,
         PeerCondition::DisconnectedAndNotDialing,
     ) {
         if matches!(error, DialError::DialPeerConditionFalse(_)) {
@@ -9997,8 +10031,9 @@ fn record_auto_relay_candidates(
     peer: Libp2pPeerId,
     addresses: impl IntoIterator<Item = Multiaddr>,
 ) {
-    for address in addresses {
-        if auto_relay.record_candidate(peer, address.clone()) {
+    let addresses = addresses.into_iter().collect::<Vec<_>>();
+    if auto_relay.record_candidate_addresses(peer, addresses) {
+        if let Some(address) = auto_relay.candidate_addresses(peer).first() {
             metrics.record_auto_relay_candidate();
             log_runtime_event(
                 LogLevel::Info,
@@ -10117,17 +10152,6 @@ fn auto_relay_candidate_address(peer: Libp2pPeerId, address: &Multiaddr) -> Opti
     }
 
     Some(peer_dial_address(peer, address.clone()))
-}
-
-fn best_auto_relay_candidate_address<'a>(
-    peer: Libp2pPeerId,
-    addresses: impl IntoIterator<Item = &'a Multiaddr>,
-    local_networks: &[LocalInterfaceNetwork],
-    source: DiscoveredPeerAddressSource,
-) -> Option<Multiaddr> {
-    ranked_auto_relay_candidate_addresses(peer, addresses, local_networks, source)
-        .into_iter()
-        .next()
 }
 
 fn ranked_auto_relay_candidate_addresses<'a>(
@@ -22773,11 +22797,7 @@ fn handle_identify_received(
         identify_source,
         "identify",
     );
-    let known_relay_address = context
-        .auto_relay
-        .candidates
-        .iter()
-        .find_map(|(owner, address)| (*owner == peer_id).then_some(address));
+    let known_relay_address = context.auto_relay.candidate_addresses(peer_id).first();
     let auto_relay_candidates =
         auto_relay_candidate_addresses(peer_id, &info, identify_source, known_relay_address);
     let preserve_established_infrastructure_candidate = context
@@ -36949,7 +36969,7 @@ mod tests {
             );
             assert_eq!(
                 auto_relay.candidates,
-                vec![(alternative, alternative_address.clone())]
+                vec![(alternative, vec![alternative_address.clone()])]
             );
             assert_eq!(auto_relay.pending_reservations.len(), 1);
             let pending = auto_relay.pending_reservations.get(&alternative).unwrap();

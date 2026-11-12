@@ -123,7 +123,7 @@ fn public_identify_cannot_replace_known_lan_with_wan_or_inject_private_addresses
             &networks,
             DiscoveredPeerAddressSource::PublicDiscovery
         ),
-        [known]
+        [known, public.clone()]
     );
     let old_public: Multiaddr = format!("/ip4/8.8.8.8/udp/4001/quic-v1/p2p/{peer}")
         .parse()
@@ -136,7 +136,89 @@ fn public_identify_cannot_replace_known_lan_with_wan_or_inject_private_addresses
             &networks,
             DiscoveredPeerAddressSource::PublicDiscovery
         ),
-        [public]
+        [public, old_public]
+    );
+}
+
+#[test]
+fn candidate_alternatives_are_bounded_deduplicated_and_interleave_transports_per_locality() {
+    let peer = Libp2pPeerId::random();
+    let other = Libp2pPeerId::random();
+    let addresses = [
+        format!("/ip4/8.8.8.8/tcp/4001/p2p/{peer}"),
+        format!("/ip4/8.8.8.8/tcp/4002/p2p/{peer}"),
+        format!("/ip4/8.8.8.8/tcp/4001/p2p/{peer}"),
+        format!("/ip4/8.8.8.8/udp/4001/quic-v1/p2p/{peer}"),
+        format!("/ip4/8.8.8.8/udp/4001/webrtc-direct/p2p/{peer}"),
+        format!("/ip4/8.8.8.8/tcp/4003/p2p/{other}"),
+        format!("/ip4/8.8.8.8/tcp/4004/p2p/{peer}"),
+    ]
+    .map(|address| address.parse::<Multiaddr>().unwrap());
+    let selected = candidate_addresses(
+        peer,
+        &addresses,
+        None,
+        &[],
+        DiscoveredPeerAddressSource::PublicDiscovery,
+    );
+    assert_eq!(
+        selected,
+        [
+            addresses[0].clone(),
+            addresses[3].clone(),
+            addresses[1].clone(),
+            addresses[6].clone()
+        ]
+    );
+    let mut state = AutoRelayState::new(AutoRelayConfig {
+        max_candidates: 1,
+        ..AutoRelayConfig::default()
+    });
+    assert!(state.record_candidate_addresses(peer, selected.clone()));
+    assert_eq!(state.candidates.len(), 1);
+    assert_eq!(state.candidate_addresses(peer), selected);
+    assert!(!state.record_candidate(peer, selected[0].clone()));
+    assert_eq!(state.candidate_addresses(peer), selected);
+    assert!(!state.record_candidate(other, address(other, "tcp/4001")));
+}
+
+#[test]
+fn owned_transport_fallback_accepts_only_authenticated_current_supported_connections() {
+    let peer = Libp2pPeerId::random();
+    let id = ConnectionId::new_unchecked(81);
+    let mut pending = PendingAutoRelayReservation {
+        address: address(peer, "tcp/4001"),
+        expires_at: Instant::now(),
+        owned_dial: Some(id),
+    };
+    let mut epochs = ConnectionEpochs::default();
+    epochs.record_started(id);
+    assert!(epochs.record_established(id));
+    let mut connections =
+        HashMap::from([((peer, id), endpoint(address(peer, "udp/4002/quic-v1")))]);
+    assert_eq!(
+        matching_connection(peer, &pending, &epochs, &connections),
+        Some(id)
+    );
+    pending.owned_dial = None;
+    assert_eq!(
+        matching_connection(peer, &pending, &epochs, &connections),
+        None
+    );
+    pending.owned_dial = Some(id);
+    connections = HashMap::from([(
+        (Libp2pPeerId::random(), id),
+        endpoint(address(peer, "udp/4002/quic-v1")),
+    )]);
+    assert_eq!(
+        matching_connection(peer, &pending, &epochs, &connections),
+        None
+    );
+    connections = HashMap::from([((peer, id), endpoint(address(peer, "udp/4002/quic-v1")))]);
+    epochs.mark_retiring(id);
+    assert_eq!(
+        matching_connection(peer, &pending, &epochs, &connections),
+        None
     );
 }
 

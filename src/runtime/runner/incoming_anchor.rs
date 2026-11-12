@@ -1,6 +1,8 @@
 //! Automatic relay acquisition uses actual authenticated connections, not advertised transports.
 use super::*;
 
+pub(super) const MAX_CANDIDATE_ADDRESSES: usize = 4;
+
 pub(super) fn candidate_addresses(
     peer: Libp2pPeerId,
     advertised: &[Multiaddr],
@@ -11,15 +13,36 @@ pub(super) fn candidate_addresses(
     // Validate remote advertisements before adding the already retained route.
     // A public Identify response cannot introduce a private address this way.
     let validated = ranked_auto_relay_candidate_addresses(peer, advertised, networks, source);
-    ranked_auto_relay_candidate_addresses(
+    let ranked = ranked_auto_relay_candidate_addresses(
         peer,
         validated.iter().chain(known),
         networks,
         DiscoveredPeerAddressSource::LocalDiscovery,
-    )
-    .into_iter()
-    .take(1)
-    .collect()
+    );
+    let mut result = Vec::new();
+    for locality in 0..=3 {
+        let mut tcp = ranked.iter().filter(|address| {
+            auto_relay_candidate_address_rank(address, networks) == locality
+                && transport_kind(address) == Some(PathKind::DirectTcpStream)
+        });
+        let mut quic = ranked.iter().filter(|address| {
+            auto_relay_candidate_address_rank(address, networks) == locality
+                && transport_kind(address) == Some(PathKind::DirectQuicStream)
+        });
+        loop {
+            let pair = [tcp.next(), quic.next()];
+            if pair.iter().all(Option::is_none) {
+                break;
+            }
+            for address in pair.into_iter().flatten() {
+                result.push(address.clone());
+                if result.len() == MAX_CANDIDATE_ADDRESSES {
+                    return result;
+                }
+            }
+        }
+    }
+    result
 }
 
 #[cfg(test)]
@@ -112,6 +135,20 @@ pub(super) fn attempt_with_configured_at(
                 epochs.mark_retiring(unused);
                 swarm.close_connection(unused);
             }
+            if pending.owned_dial == Some(id) {
+                // Native address fallback shares one token. Publish its successful route,
+                // not the first (possibly refused) address in the dial options.
+                pending.address = auto_relay_candidate_address(
+                    peer,
+                    connections[&(peer, id)].get_remote_address(),
+                )
+                .expect("selected direct transport is supported");
+                state
+                    .pending_reservations
+                    .get_mut(&peer)
+                    .expect("pending attempt")
+                    .address = pending.address.clone();
+            }
             let address = pending.address.with(Protocol::P2pCircuit);
             match swarm.listen_on(address) {
                 Ok(listener) if state.record_reservation_listener(peer, listener, id) => {
@@ -136,7 +173,9 @@ pub(super) fn attempt_with_configured_at(
                 failed(state, metrics, peer, now, "setup_connection_failed");
             }
         } else {
-            let opts = known_peer_dial_options(peer, [pending.address], PeerCondition::Always);
+            let addresses = state.candidate_addresses(peer);
+            let opts =
+                known_peer_dial_options(peer, addresses.iter().cloned(), PeerCondition::Always);
             let id = opts.connection_id();
             match epochs.dial(swarm, opts) {
                 Ok(()) => {
@@ -224,17 +263,18 @@ fn matching_connection(
                 && epochs.is_usable(*id)
                 && epochs.established.contains_key(id)
                 && !endpoint.is_relayed()
-                && transport_kind(address) == Some(desired)
+                && transport_kind(address).is_some()
                 && (pending.owned_dial == Some(*id)
-                    || first_ip_in_multiaddr(address)
-                        .is_some_and(|ip| first_ip_in_multiaddr(&pending.address) == Some(ip))
-                    || address
-                        .iter()
-                        .filter(|p| !matches!(p, Protocol::P2p(_)))
-                        .eq(pending
-                            .address
+                    || (transport_kind(address) == Some(desired)
+                        && (first_ip_in_multiaddr(address).is_some_and(|ip| {
+                            first_ip_in_multiaddr(&pending.address) == Some(ip)
+                        }) || address
                             .iter()
-                            .filter(|p| !matches!(p, Protocol::P2p(_))))))
+                            .filter(|p| !matches!(p, Protocol::P2p(_)))
+                            .eq(pending
+                                .address
+                                .iter()
+                                .filter(|p| !matches!(p, Protocol::P2p(_))))))))
             .then_some(*id)
         })
         .min()

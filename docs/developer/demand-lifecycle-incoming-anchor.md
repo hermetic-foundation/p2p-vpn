@@ -120,11 +120,13 @@ the bilateral lifecycle exchange.
 - Terminal failed dials do not accumulate retirement markers during later expiry.
 - Remote public Identify advertisements cannot inject a new private address into ranking.
 - After TCP failure/backoff, reuse a current authenticated QUIC connection when available.
+- Retain up to four validated alternatives per candidate; one native dial tries them sequentially.
+- Include QUIC before redundant TCP routes within a locality; preserve LAN-first ordering.
+- Cold fallback uses the same owned dial ID and deadline, with no pre-existing QUIC connection.
 - Transport fallback keeps the attempt deadline and clears per-peer attempt ownership on expiry.
 
 This does not yet implement sparse maintenance, idle surplus-connection pruning,
-or replenishment after complete candidate exhaustion. Learning/dialing transport
-alternatives without an existing QUIC connection also remains an activation gate.
+or replenishment after complete candidate exhaustion.
 
 The mixed-transport test deliberately advertises a TCP circuit while keeping
 an existing QUIC connection. Without explicit selection, the confirmed owner
@@ -144,8 +146,8 @@ cargo test --offline --locked --lib incoming_anchor
 These are local transport and ownership tests, not Android, roaming, whole-VPN,
 or battery acceptance evidence. The production lifecycle remains unadvertised.
 
-The production-dispatch scenarios cover TCP acquisition/reuse, QUIC reuse, and
-QUIC recovery after a real TCP refusal. They accept fresh incoming relayed control
+The production-dispatch scenarios cover TCP acquisition/reuse, QUIC reuse, cold
+QUIC fallback, and recovery after a real TCP refusal. They accept fresh incoming relayed control
 and reject expired, unowned-listener, wrong-connection, retiring, and stale-epoch proof.
 
 Separate scenarios verify that automatic setup does not replace an explicit QUIC

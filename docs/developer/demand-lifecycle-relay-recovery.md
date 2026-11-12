@@ -5,6 +5,9 @@
 Implementation contract for missing incoming paths and transport alternatives.
 The production demand lifecycle remains disabled until all activation gates pass.
 
+Transport alternatives are implemented. Demand-independent discovery remains
+pending; the validation contract below is not a claim that every gate has passed.
+
 ## Separation
 
 | Work | Owner | Idle Policy |

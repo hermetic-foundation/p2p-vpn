@@ -208,6 +208,11 @@ async fn automatic_incoming_anchor_recovers_over_quic_after_real_tcp_failure() {
 }
 
 #[tokio::test]
+async fn automatic_incoming_anchor_cold_tcp_failure_uses_quic_and_accepts_fresh_control() {
+    automatic_incoming_anchor_scenario(AnchorSetup::ColdQuic).await;
+}
+
+#[tokio::test]
 async fn automatic_incoming_anchor_preserves_an_explicit_quic_reservation() {
     tokio::time::timeout(
         Duration::from_secs(10),
@@ -280,6 +285,7 @@ enum AnchorSetup {
     ReuseTcp,
     ReuseQuic,
     RecoverQuic,
+    ColdQuic,
 }
 
 async fn connect_anchor_fixture(
@@ -450,27 +456,36 @@ async fn automatic_incoming_anchor_scenario(setup: AnchorSetup) {
         let mut receiver = EventFixture::new(sender.local_peer_id);
         receiver.auto_relay.policy.max_reservations = 1;
         receiver.infrastructure.insert(relay_peer, tcp.clone());
-        let quic_id = connect_anchor_fixture(&mut receiver, &mut relay, quic.clone()).await;
+        let quic_id = if matches!(setup, AnchorSetup::ColdQuic) {
+            assert!(receiver.active_connections.is_empty());
+            None
+        } else {
+            Some(connect_anchor_fixture(&mut receiver, &mut relay, quic.clone()).await)
+        };
         let reuse = match setup {
             AnchorSetup::ReuseTcp => Some(connect_anchor_fixture(&mut receiver, &mut relay, tcp.clone()).await),
-            AnchorSetup::ReuseQuic => Some(quic_id),
-            AnchorSetup::RecoverQuic => Some(quic_id),
-            AnchorSetup::DialTcp => None,
+            AnchorSetup::ReuseQuic | AnchorSetup::RecoverQuic => quic_id,
+            AnchorSetup::DialTcp | AnchorSetup::ColdQuic => None,
         };
-        let use_quic = matches!(setup, AnchorSetup::ReuseQuic | AnchorSetup::RecoverQuic);
+        let use_quic = matches!(setup, AnchorSetup::ReuseQuic | AnchorSetup::RecoverQuic | AnchorSetup::ColdQuic);
         let address = if use_quic {quic} else {tcp};
-        let candidate = if matches!(setup, AnchorSetup::RecoverQuic) {
+        let candidate = if matches!(setup, AnchorSetup::RecoverQuic | AnchorSetup::ColdQuic) {
             let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
             let port = socket.local_addr().unwrap().port();
             drop(socket);
             format!("/ip4/127.0.0.1/tcp/{port}/p2p/{relay_peer}").parse().unwrap()
         } else {address.clone()};
-        receiver.auto_relay.record_candidate(relay_peer, candidate);
+        let refused_route = candidate.clone();
+        if matches!(setup, AnchorSetup::ColdQuic) {
+            receiver.auto_relay.record_candidate_addresses(relay_peer, [candidate, address.clone()]);
+        } else {
+            receiver.auto_relay.record_candidate(relay_peer, candidate);
+        }
         attempt_auto_relay_reservations(&mut receiver.node.swarm, &mut receiver.auto_relay,
             &receiver.metrics, &mut receiver.epochs, &receiver.active_connections, &[]);
         let owned = receiver.auto_relay.pending_reservations[&relay_peer].owned_dial;
         let owner = reuse.or(owned).unwrap();
-        assert_eq!(owned.is_some(), matches!(setup, AnchorSetup::DialTcp | AnchorSetup::RecoverQuic));
+        assert_eq!(owned.is_some(), matches!(setup, AnchorSetup::DialTcp | AnchorSetup::RecoverQuic | AnchorSetup::ColdQuic));
         assert_eq!(receiver.auto_relay.reservation_listeners.is_empty(), owned.is_some());
         let kind = if use_quic {PathKind::DirectQuicStream} else {PathKind::DirectTcpStream};
         let mut tick = tokio::time::interval(Duration::from_millis(20));
@@ -492,7 +507,17 @@ async fn automatic_incoming_anchor_scenario(setup: AnchorSetup) {
             assert!(matches!(receiver.active_connections[&(relay_peer, owner)],
                 ConnectedPoint::Dialer {port_use: libp2p::core::transport::PortUse::New, ..}));
         }
-        assert!(receiver.epochs.is_usable(quic_id), "TCP promotion must not destroy the old connection");
+        if let Some(quic_id) = quic_id {
+            assert!(receiver.epochs.is_usable(quic_id), "TCP promotion must not destroy the old connection");
+        }
+        if matches!(setup, AnchorSetup::ColdQuic) {
+            assert_eq!(receiver.metrics.snapshot(crate::queue::QueueStats::default()).auto_relay_reservation_attempts, 1);
+            let peer = receiver.node.local_peer_id;
+            let refused = refused_route.with(Protocol::P2pCircuit).with(Protocol::P2p(peer));
+            let successful = address.clone().with(Protocol::P2pCircuit).with(Protocol::P2p(peer));
+            assert!(!receiver.node.swarm.external_addresses().any(|route| *route == refused), "failed primary route must not be advertised");
+            assert!(receiver.node.swarm.external_addresses().any(|route| *route == successful), "advertise the authenticated fallback route");
+        }
         assert_eq!(receiver.auto_relay.reservation_slots(), 1);
         let peer = receiver.node.local_peer_id;
         sender.swarm.dial(address.with(Protocol::P2pCircuit).with(Protocol::P2p(peer))).unwrap();
