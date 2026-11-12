@@ -95,7 +95,7 @@ the bilateral lifecycle exchange.
 | Runtime acquisition/readiness | Two-stage setup; the listener record retains its selected connection ID, which must be natively confirmed |
 | Explicit overrides | Automatic attempts exclude explicitly configured relay peer IDs, including while explicit setup is pending |
 | Automatic footprint | Existing default remains two; changing Rust/Nix defaults to one is pending |
-| Candidate exhaustion | Demand-independent replenishment of an exhausted candidate pool is pending |
+| Candidate exhaustion | Dedicated bounded native query ownership replenishes an empty pool independently of mesh quietness |
 | Sparse heartbeat and pruning | Pending |
 | Dormant control delivery and activation | Pending |
 | Cellular energy acceptance | Not measured for this lifecycle |
@@ -125,8 +125,9 @@ the bilateral lifecycle exchange.
 - Cold fallback uses the same owned dial ID and deadline, with no pre-existing QUIC connection.
 - Transport fallback keeps the attempt deadline and clears per-peer attempt ownership on expiry.
 
-This does not yet implement sparse maintenance, idle surplus-connection pruning,
-or replenishment after complete candidate exhaustion.
+This does not yet implement sparse maintenance or idle surplus-connection pruning.
+The [incoming recovery contract](demand-lifecycle-relay-recovery.md) records
+bounded query ownership, cold transport fallback, and empty-pool replenishment.
 
 The mixed-transport test deliberately advertises a TCP circuit while keeping
 an existing QUIC connection. Without explicit selection, the confirmed owner
@@ -154,6 +155,10 @@ Separate scenarios verify that automatic setup does not replace an explicit QUIC
 reservation and excludes explicit relay IDs before their reservations are ready.
 The TCP-failure scenario advances the injected retry clock, not native network timeouts.
 
+Separate native-discovery scenarios start from an empty candidate pool and from
+a real lost reservation. No application payload is needed to acquire a replacement;
+the replacement then accepts a fresh incoming relayed control request.
+
 ### Validation: November 12, 2026
 
 | Check | Result |
@@ -173,3 +178,36 @@ Validation used the already-installed Nix Rust toolchain and existing shared
 target directory. The pinned archive matched its lockfile checksum; no toolchain
 or crate downloads were needed. The shared target remains 5.6 GiB; no extra target
 directory was created. The vendored relay tree is 368 KiB.
+
+### Validation: Bounded Recovery
+
+| Check | Result |
+| --- | --- |
+| Workspace/all targets | 1,979 passed; zero failed; 49 ignored |
+| Focused incoming/lifecycle tests | 26 passed, including cold fallback, empty-pool discovery, replacement after actual relay loss, and public/private routing compatibility |
+| Scheduling | Four 24-hour simulations: public/private primary DHTs, fast completion/expiry; 309 starts each, one query maximum, zero capacity rejections |
+| Query cancellation | Ordinary suppression preserves incoming repair; incoming reset/expiry preserves publication and unrelated queries; native queued results are purged |
+| Provisional candidates | A candidate cannot cancel the running lookup; no extra lookup starts before readiness, expiry, or candidate exhaustion |
+| Identify compatibility | AutoNAT-only private routing bootstrap stays connected; public-primary and dual-protocol peers retain public-pairing addresses without mesh redial entries or VPN authority |
+| Native transport | TCP refusal falls back to QUIC under one dial ID; the failed TCP route is not advertised |
+| Clippy | Workspace/all targets passed correctness, suspicious-code, and performance groups; advisory warnings remain |
+| Rust formatting | Workspace check passed |
+| Nix source parity | Linux and both Android source packages contain the exact runtime sources and new recovery modules |
+| Shared build storage | 5.6 GiB, reusing the existing target with two build jobs and incremental compilation disabled |
+| Full Nix/APK/device/cellular | Not run for this increment; no deployments or energy claims |
+
+```sh
+cargo test --offline --locked --workspace --all-targets -- --test-threads=2 --quiet
+cargo clippy --offline --locked --workspace --all-targets -- \
+  -D clippy::correctness -D clippy::suspicious -D clippy::perf
+cargo fmt --all -- --check
+```
+
+- Run builds and tests serially against the shared target.
+- An earlier overlapping build replaced a running test executable; two self-spawning tests hit `ENOENT`.
+- Both passed unchanged in the final serial workspace run.
+- The first discovery fixture inherited public bootstrap seeds; the final socket tests replace both the bootstrap list and native address book with an isolated local seed.
+
+Remaining activation gates include sparse maintenance, idle connection pruning,
+event-driven dormant control delivery, wake/roaming validation, and matched
+replicated cellular measurements. The lifecycle remains unadvertised.

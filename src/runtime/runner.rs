@@ -165,6 +165,7 @@ mod demand_lifecycle;
 use demand_lifecycle::{DemandLifecycle, LifecycleContext};
 mod dormant_paths;
 mod incoming_anchor;
+mod incoming_recovery;
 mod recovery_snapshot;
 use recovery_snapshot::ApplicationRecoverySnapshot;
 mod packet_endpoint_selection;
@@ -1551,6 +1552,7 @@ where
             Instant::now(),
         );
     let mut auto_relay = AutoRelayState::new(auto_relay_config);
+    auto_relay.exclude_configured_relays(&node.relay_peer_addresses);
     let mut public_discovery_backoff =
         PublicDiscoveryBackoff::from_bootstrap_defaults(public_bootstrap_defaults);
     let mut infrastructure_peers = InfrastructurePeers::default();
@@ -2197,6 +2199,16 @@ where
                     &mut node.swarm, &mut auto_relay, &metrics,
                     &mut connection_epochs, &active_connections, &node.relay_peer_addresses,
                 );
+                incoming_recovery::drive(&mut node, incoming_recovery::RecoveryContext {
+                    state: &mut auto_relay,
+                    maintenance: &mut kademlia_maintenance,
+                    readiness: &relay_readiness,
+                    epochs: &connection_epochs,
+                    connections: &active_connections,
+                    backoff: &public_discovery_backoff,
+                    holdoff_until: public_discovery_holdoff_until,
+                    metrics: &metrics,
+                }, Instant::now());
                 handle_redial_tick(
                     &mut node,
                     &mut connection_epochs,
@@ -3265,6 +3277,7 @@ fn refresh_dns_zone_if_needed(
 
 #[derive(Debug)]
 struct KademliaMaintenance {
+    incoming: incoming_recovery::IncomingRecovery,
     next_due: Instant,
     started_at: Option<Instant>,
     queries: HashSet<kad::QueryId>,
@@ -3278,6 +3291,7 @@ struct KademliaMaintenance {
 impl KademliaMaintenance {
     fn new(now: Instant) -> Self {
         Self {
+            incoming: incoming_recovery::IncomingRecovery::new(now),
             next_due: now,
             started_at: None,
             queries: HashSet::new(),
@@ -3309,10 +3323,17 @@ impl KademliaMaintenance {
     }
 
     fn has_pending_query(&self) -> bool {
-        !self.queries.is_empty()
+        !self.queries.is_empty() || self.incoming.pending()
+    }
+
+    fn owns_query(&self, query: kad::QueryId) -> bool {
+        self.queries.contains(&query) || self.incoming.owns(query)
     }
 
     fn finish_query(&mut self, query: kad::QueryId) -> bool {
+        if self.incoming.finish(query) {
+            return true;
+        }
         if self.address_publication.is_some_and(|(id, _)| id == query) {
             self.address_publication = None;
             return true;
@@ -3342,7 +3363,7 @@ impl KademliaMaintenance {
         kademlia: &mut kad::Behaviour<kad::store::MemoryStore>,
         now: Instant,
     ) -> usize {
-        let cancelled = self.cancel_queries(kademlia);
+        let cancelled = self.cancel_queries(kademlia) + self.incoming.reset(kademlia, now);
         self.next_due = now;
         cancelled
     }
@@ -9362,6 +9383,7 @@ impl PublicDiscoveryBackoff {
 #[derive(Debug)]
 struct AutoRelayState {
     policy: AutoRelayConfig,
+    explicit_relays: HashSet<Libp2pPeerId>,
     reachability: AutoNatReachability,
     candidates: Vec<(Libp2pPeerId, Vec<Multiaddr>)>,
     attempted_reservations: HashSet<(Libp2pPeerId, Multiaddr)>,
@@ -9413,6 +9435,7 @@ impl AutoRelayState {
     fn new(policy: AutoRelayConfig) -> Self {
         Self {
             policy,
+            explicit_relays: HashSet::new(),
             reachability: AutoNatReachability::Unknown,
             candidates: Vec::new(),
             attempted_reservations: HashSet::new(),
@@ -9426,6 +9449,17 @@ impl AutoRelayState {
 
     fn record_reachability(&mut self, reachability: AutoNatReachability) {
         self.reachability = reachability;
+    }
+
+    fn exclude_configured_relays(&mut self, relays: &[(Libp2pPeerId, Multiaddr)]) {
+        for (peer, _) in relays {
+            self.explicit_relays.insert(*peer);
+            if !self.pending_reservations.contains_key(peer)
+                && !self.reservation_listeners.contains_key(peer)
+            {
+                self.remove_candidate(*peer);
+            }
+        }
     }
 
     const fn private_reachability(&self) -> bool {
@@ -9485,7 +9519,7 @@ impl AutoRelayState {
         if addresses_bounded.is_empty() {
             return false;
         }
-        if self.policy.max_candidates == 0 {
+        if self.policy.max_candidates == 0 || self.explicit_relays.contains(&peer) {
             return false;
         }
         if let Some((_, existing_address)) = self
@@ -22581,7 +22615,7 @@ fn handle_behaviour_event(
                 || matches!(
                     &event,
                     kad::Event::OutboundQueryProgressed { id, .. }
-                        if context.kademlia_maintenance.queries.contains(id)
+                        if context.kademlia_maintenance.owns_query(*id)
                 ) =>
         {
             handle_kademlia_event(
@@ -22774,11 +22808,12 @@ fn handle_identify_received(
 ) {
     let observed_addr = info.observed_addr.clone();
     let relay_hop = identify_protocols_include_relay_hop(&info.protocols);
-    let overlay_kademlia_routing = context.discovery.kademlia
+    // Incoming relay recovery uses the primary DHT even without overlay lookups.
+    let primary_kademlia_routing = (context.discovery.kademlia || context.discovery.autonat)
         && identify_protocols_include(&info.protocols, &context.discovery.kademlia_protocol);
     let public_pairing_kademlia_routing =
         identify_protocols_include(&info.protocols, PUBLIC_IPFS_KADEMLIA_PROTOCOL);
-    let kademlia_routing = overlay_kademlia_routing || public_pairing_kademlia_routing;
+    let kademlia_routing = primary_kademlia_routing || public_pairing_kademlia_routing;
     let checkpoint_sync = context.membership.allows_membership_sync(peer_id);
     let pairing_probe = context.code_pairing_sessions.allows_pairing_probe(peer_id)
         || context
@@ -22808,6 +22843,8 @@ fn handle_identify_received(
             .auto_relay
             .accepted_reservation_peers
             .contains(&peer_id);
+    // Public pairing still owns address retention when overlay lookups are disabled.
+    let overlay_kademlia_routing = context.discovery.kademlia && primary_kademlia_routing;
     let pairing_routing_only = public_pairing_kademlia_routing
         && !overlay_kademlia_routing
         && !context.membership.allows(peer_id)
@@ -22861,7 +22898,7 @@ fn handle_identify_received(
                         ("peer", &peer_id.to_string()),
                         (
                             "protocol",
-                            if overlay_kademlia_routing {
+                            if primary_kademlia_routing {
                                 &context.discovery.kademlia_protocol
                             } else {
                                 PUBLIC_IPFS_KADEMLIA_PROTOCOL
@@ -23543,7 +23580,11 @@ fn query_auto_relay_infrastructure(
     log_runtime_event(
         LogLevel::Info,
         "auto_relay_discovery_query",
-        &[("reason", reason), ("target", &target.to_string())],
+        &[
+            ("reason", reason),
+            ("target", &target.to_string()),
+            ("query_id", &format!("{query:?}")),
+        ],
     );
     Some(query)
 }
@@ -39331,7 +39372,7 @@ mod tests {
         assert!(discovered.as_vec().is_empty());
     }
 
-    fn autonat_query_test_node(
+    pub(super) fn autonat_query_test_node(
         protocol: &str,
         query_timeout: Duration,
         query_capacity: usize,

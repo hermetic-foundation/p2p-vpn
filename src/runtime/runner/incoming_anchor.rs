@@ -66,6 +66,7 @@ pub(super) fn attempt_with_configured_at(
     configured_relays: &[(Libp2pPeerId, Multiaddr)],
     now: Instant,
 ) {
+    state.exclude_configured_relays(configured_relays);
     expire_pending_auto_relay_reservations(swarm, state, metrics, epochs, now);
     for (peer, address) in state.next_reservation_targets_excluding(now, |peer| {
         configured_relays

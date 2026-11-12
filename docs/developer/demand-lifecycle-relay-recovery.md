@@ -5,8 +5,8 @@
 Implementation contract for missing incoming paths and transport alternatives.
 The production demand lifecycle remains disabled until all activation gates pass.
 
-Transport alternatives are implemented. Demand-independent discovery remains
-pending; the validation contract below is not a claim that every gate has passed.
+Transport alternatives and demand-independent incoming discovery are implemented.
+Local socket and bounded-scheduling tests pass; cellular savings remain unmeasured.
 
 ## Separation
 
@@ -38,6 +38,8 @@ continue after relay/candidate loss without waking every dormant mesh peer.
 - Never use pairing's public DHT to bypass a private primary DHT configuration.
 - Query completion, timeout, and cooldown do not reset ordinary maintenance cadence.
 - Normal maintenance suppression must not cancel the incoming query.
+- Provisional candidates stop new lookups, not the running lookup; only verified incoming readiness proves repair is unnecessary.
+- With overlay DHT lookups disabled, AutoNAT-only recovery still recognises compatible primary-DHT routing peers without starting ordinary maintenance.
 - Native cancellation must remove queued work, not merely forget the query ID.
 
 ## Readiness
@@ -83,3 +85,31 @@ continue after relay/candidate loss without waking every dormant mesh peer.
 
 These tests establish recovery behavior, not cellular energy savings. The final
 10x acceptance test still requires matched, replicated cellular measurements.
+
+## Implementation Evidence
+
+| Check | Evidence |
+| --- | --- |
+| Quiet outage | 24 simulated hours, both fast completion and expiry, public/private primary DHTs: 309 starts per day, no overlap or capacity rejections |
+| Query ownership | Ordinary idle cancellation preserves incoming repair; incoming timeout/reset preserves publication and unrelated queries |
+| Native cancellation | A queued provider result is purged for the cancelled owner; another native query still completes |
+| LAN and capacity | No start before LAN grace or during bootstrap backoff, pool saturation, or candidate retry; no round consumed |
+| Explicit anchors | Actual native reservation plus configured listener stops repair; missing listener or retiring owner is not ready |
+| Empty pool | Native discovery seeds the configured bootstrap, acquires a relay, and accepts fresh incoming control |
+| Routing-only bootstrap | AutoNAT-only private-DHT discovery retains its compatible bootstrap, finds a separate relay, and accepts fresh control without enabling overlay maintenance or VPN authority for the bootstrap |
+| Public pairing | Public-primary and dual-protocol Identify retain their public-pairing addresses without adding routing peers to mesh redial queues or granting VPN authority |
+| Provisional candidate | Candidate arrival does not cancel the owned lookup or admit another; its deadline still applies |
+| Lost anchor | A real relay is dropped, its failed candidate removed by production dispatch, and native discovery acquires a replacement without payload demand |
+| Cold fallback | Real TCP refusal falls back to QUIC under one dial token; advertised circuit uses the successful route |
+
+- Socket tests use isolated loopback relay/bootstrap fixtures, not public WANs.
+- Query logs include `reason=incoming_path_recovery` and `query_id` for correlation.
+- Expiry logs carry the owned query ID; no peer-wide query cancellation is introduced.
+- The existing 10-second driver expires the 90-second query on its next tick.
+
+```sh
+cargo test --offline --locked --lib incoming_ -- --test-threads=2
+```
+
+The focused run passed 26 tests. Whole-workspace and static validation are
+recorded in [incoming-anchor validation](demand-lifecycle-incoming-anchor.md).

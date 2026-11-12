@@ -145,6 +145,13 @@ async fn failed_packet_connection_cannot_veto_fresh_opposite_role_connection() {
 struct UnusedPacketIo;
 
 async fn incoming_anchor_test_relay() -> (P2pNode, Multiaddr, Multiaddr) {
+    incoming_anchor_test_host(true, &DiscoveryConfig::default().kademlia_protocol).await
+}
+
+async fn incoming_anchor_test_host(
+    relay_server: bool,
+    protocol: &str,
+) -> (P2pNode, Multiaddr, Multiaddr) {
     let mut node = build_node(&HostConfig {
         identity: NodeIdentity::generate_ed25519().unwrap(),
         network_name: "lab".into(),
@@ -160,10 +167,11 @@ async fn incoming_anchor_test_relay() -> (P2pNode, Multiaddr, Multiaddr) {
         bootstrap_peers: Vec::new(),
         known_peers: Vec::new(),
         relay_reservations: Vec::new(),
-        relay_server: true,
+        relay_server,
         relay_resources: crate::config::RelayResourceConfig::default(),
         resources: crate::config::ResourceConfig::default(),
         discovery: DiscoveryConfig {
+            kademlia_protocol: protocol.to_owned(),
             mdns: false,
             kademlia: false,
             autonat: false,
@@ -210,6 +218,21 @@ async fn automatic_incoming_anchor_recovers_over_quic_after_real_tcp_failure() {
 #[tokio::test]
 async fn automatic_incoming_anchor_cold_tcp_failure_uses_quic_and_accepts_fresh_control() {
     automatic_incoming_anchor_scenario(AnchorSetup::ColdQuic).await;
+}
+
+#[tokio::test]
+async fn automatic_incoming_recovery_replenishes_an_empty_pool_via_native_discovery() {
+    automatic_incoming_anchor_scenario(AnchorSetup::DiscoverTcp).await;
+}
+
+#[tokio::test]
+async fn automatic_incoming_recovery_replaces_a_lost_anchor_without_payload_demand() {
+    automatic_incoming_anchor_scenario(AnchorSetup::DiscoverAfterLoss).await;
+}
+
+#[tokio::test]
+async fn automatic_incoming_recovery_uses_a_private_routing_only_bootstrap_and_separate_relay() {
+    automatic_incoming_anchor_scenario(AnchorSetup::PrivateRouter).await;
 }
 
 #[tokio::test]
@@ -273,6 +296,50 @@ async fn automatic_incoming_anchor_preserves_an_explicit_quic_reservation() {
                 ),
                 Some((id, PathKind::DirectQuicStream))
             );
+            fixture.node.relay_peer_addresses = fixture.relay_addresses.clone();
+            fixture
+                .node
+                .configured_relay_reservation_listeners
+                .insert(listener);
+            fixture.node.discovery.autonat = true;
+            assert!(has_incoming_fixture(&fixture));
+            let readiness = std::mem::take(&mut fixture.readiness);
+            drive_incoming_fixture(&mut fixture, Instant::now());
+            assert!(fixture.maintenance.incoming.pending());
+            fixture.readiness = readiness;
+            let unrelated = fixture
+                .node
+                .swarm
+                .behaviour_mut()
+                .kad
+                .get_closest_peers(Libp2pPeerId::random());
+            drive_incoming_fixture(&mut fixture, Instant::now());
+            assert!(!fixture.maintenance.incoming.pending());
+            assert!(
+                fixture
+                    .node
+                    .swarm
+                    .behaviour()
+                    .kad
+                    .query_is_retained(&unrelated)
+            );
+            fixture
+                .node
+                .configured_relay_reservation_listeners
+                .remove(&listener);
+            assert!(
+                !has_incoming_fixture(&fixture),
+                "cached acceptance cannot replace a live configured listener"
+            );
+            fixture
+                .node
+                .configured_relay_reservation_listeners
+                .insert(listener);
+            fixture.epochs.mark_retiring(id);
+            assert!(
+                !has_incoming_fixture(&fixture),
+                "a retiring configured transport is not incoming readiness"
+            );
         }),
     )
     .await
@@ -286,6 +353,209 @@ enum AnchorSetup {
     ReuseQuic,
     RecoverQuic,
     ColdQuic,
+    DiscoverTcp,
+    DiscoverAfterLoss,
+    PrivateRouter,
+}
+
+#[tokio::test]
+async fn incoming_routing_identify_preserves_public_pairing_addresses_without_overlay_discovery() {
+    for protocol in [
+        PUBLIC_IPFS_KADEMLIA_PROTOCOL,
+        crate::config::PRIVATE_KADEMLIA_PROTOCOL,
+    ] {
+        let mut fixture = EventFixture::new(Libp2pPeerId::random());
+        fixture.node.discovery.kademlia = false;
+        fixture.node.discovery.autonat = true;
+        fixture.node.discovery.kademlia_protocol = protocol.to_owned();
+        let local = fixture.node.local_peer_id;
+        let primary_config = crate::runtime::p2p::controlled_kademlia_config(
+            libp2p::StreamProtocol::try_from_owned(protocol.to_owned()).unwrap(),
+        );
+        fixture.node.swarm.behaviour_mut().kad =
+            kad::Behaviour::with_config(local, kad::store::MemoryStore::new(local), primary_config);
+        if protocol != PUBLIC_IPFS_KADEMLIA_PROTOCOL {
+            let public_config = crate::runtime::p2p::controlled_kademlia_config(
+                libp2p::StreamProtocol::new(PUBLIC_IPFS_KADEMLIA_PROTOCOL),
+            );
+            fixture.node.swarm.behaviour_mut().pairing_kad = Some(kad::Behaviour::with_config(
+                local,
+                kad::store::MemoryStore::new(local),
+                public_config,
+            ))
+            .into();
+        } else {
+            fixture.node.swarm.behaviour_mut().pairing_kad = None.into();
+        }
+        let identity = libp2p::identity::Keypair::generate_ed25519();
+        let peer = identity.public().to_peer_id();
+        let address: Multiaddr = "/ip4/8.8.8.8/tcp/4001".parse().unwrap();
+        let connection_id = ConnectionId::new_unchecked(1);
+        fixture.epochs.record_started(connection_id);
+        assert!(fixture.epochs.record_established(connection_id));
+        let mut protocols = vec![libp2p::StreamProtocol::new(PUBLIC_IPFS_KADEMLIA_PROTOCOL)];
+        if protocol != PUBLIC_IPFS_KADEMLIA_PROTOCOL {
+            protocols.push(libp2p::StreamProtocol::new(
+                crate::config::PRIVATE_KADEMLIA_PROTOCOL,
+            ));
+        }
+        fixture
+            .dispatch(SwarmEvent::Behaviour(BehaviourEvent::Identify(
+                identify::Event::Received {
+                    connection_id,
+                    peer_id: peer,
+                    info: identify::Info {
+                        public_key: identity.public(),
+                        protocol_version: "test/1".to_owned(),
+                        agent_version: "pairing-retention-test".to_owned(),
+                        listen_addrs: vec![address.clone()],
+                        protocols,
+                        observed_addr: "/ip4/127.0.0.1/tcp/4002".parse().unwrap(),
+                        signed_peer_record: None,
+                    },
+                },
+            )))
+            .await;
+        let addresses =
+            public_pairing_kad_mut(fixture.node.swarm.behaviour_mut()).addresses_of_peer(peer);
+        assert_eq!(addresses.len(), 1, "{protocol}");
+        assert_eq!(
+            first_ip_in_multiaddr(&addresses[0]),
+            first_ip_in_multiaddr(&address)
+        );
+        assert!(
+            fixture.discovered.addresses.is_empty(),
+            "routing peers must not enter mesh redial queues"
+        );
+        assert!(
+            !fixture
+                .discovered
+                .retention
+                .overlay_peers()
+                .any(|entry| entry == peer)
+        );
+        assert_eq!(
+            fixture
+                .discovered
+                .retention
+                .retain_peers(|entry| entry != peer),
+            vec![(peer, peer_dial_address(peer, address.clone()))]
+        );
+        if protocol != PUBLIC_IPFS_KADEMLIA_PROTOCOL {
+            assert!(
+                fixture
+                    .node
+                    .swarm
+                    .behaviour_mut()
+                    .kad
+                    .addresses_of_peer(peer)
+                    .is_empty()
+            );
+        }
+        assert!(fixture.routing.contains(peer));
+        assert!(!fixture.membership.allows(peer));
+        assert!(!fixture.node.discovery.kademlia);
+        assert!(fixture.node.kademlia_rendezvous_key.is_none());
+        assert_eq!(
+            fixture
+                .node
+                .swarm
+                .behaviour()
+                .kad
+                .query_pool_usage()
+                .retained,
+            0
+        );
+    }
+}
+
+fn drive_incoming_fixture(receiver: &mut EventFixture, now: Instant) {
+    incoming_recovery::drive(
+        &mut receiver.node,
+        incoming_recovery::RecoveryContext {
+            state: &mut receiver.auto_relay,
+            maintenance: &mut receiver.maintenance,
+            readiness: &receiver.readiness,
+            epochs: &receiver.epochs,
+            connections: &receiver.active_connections,
+            backoff: &receiver.backoff,
+            holdoff_until: None,
+            metrics: &receiver.metrics,
+        },
+        now,
+    );
+}
+
+fn has_incoming_fixture(receiver: &EventFixture) -> bool {
+    incoming_recovery::has_usable_path(
+        &receiver.node,
+        &receiver.auto_relay,
+        &receiver.readiness,
+        &receiver.epochs,
+        &receiver.active_connections,
+    )
+}
+
+async fn lose_anchor_and_exhaust_candidates(receiver: &mut EventFixture) {
+    let (mut relay, tcp, _) = incoming_anchor_test_relay().await;
+    let peer = relay.local_peer_id;
+    receiver.infrastructure.insert(peer, tcp.clone());
+    connect_anchor_fixture(receiver, &mut relay, tcp.clone()).await;
+    receiver.auto_relay.record_candidate(peer, tcp);
+    attempt_auto_relay_reservations(
+        &mut receiver.node.swarm,
+        &mut receiver.auto_relay,
+        &receiver.metrics,
+        &mut receiver.epochs,
+        &receiver.active_connections,
+        &[],
+    );
+    while !receiver
+        .auto_relay
+        .accepted_reservation_peers
+        .contains(&peer)
+    {
+        tokio::select! {
+            _ = relay.swarm.select_next_some() => {},
+            event = receiver.node.swarm.select_next_some() => receiver.dispatch(event).await,
+        }
+    }
+    assert!(incoming_recovery::has_usable_path(
+        &receiver.node,
+        &receiver.auto_relay,
+        &receiver.readiness,
+        &receiver.epochs,
+        &receiver.active_connections
+    ));
+    drop(relay);
+    let mut tick = tokio::time::interval(Duration::from_millis(20));
+    while receiver
+        .auto_relay
+        .candidates
+        .iter()
+        .any(|(owner, _)| *owner == peer)
+        || receiver
+            .active_connections
+            .keys()
+            .any(|(owner, _)| *owner == peer)
+    {
+        tokio::select! {
+            _ = tick.tick() => {
+                let now = receiver.auto_relay.retry_after.get(&peer).copied().unwrap_or_else(Instant::now);
+                attempt_auto_relay_reservations_at(&mut receiver.node.swarm, &mut receiver.auto_relay,
+                    &receiver.metrics, &mut receiver.epochs, &receiver.active_connections, now);
+            },
+            event = receiver.node.swarm.select_next_some() => receiver.dispatch(event).await,
+        }
+    }
+    assert!(receiver.auto_relay.pending_reservations.is_empty());
+    assert!(!incoming_recovery::has_usable_path(
+        &receiver.node,
+        &receiver.auto_relay,
+        &receiver.readiness,
+        &receiver.epochs,
+        &receiver.active_connections
+    ));
 }
 
 async fn connect_anchor_fixture(
@@ -423,7 +693,9 @@ fn assert_anchor_readiness_fences(
             .accepted_reservation_peers
             .contains(&relay)
     );
+    assert!(has_incoming_fixture(receiver));
     receiver.epochs.mark_retiring(id);
+    assert!(!has_incoming_fixture(receiver));
     assert!(
         incoming_anchor::confirmed_connection(
             &receiver.node.swarm,
@@ -436,6 +708,7 @@ fn assert_anchor_readiness_fences(
     );
     receiver.epochs.retiring.remove(&id);
     receiver.epochs.advance();
+    assert!(!has_incoming_fixture(receiver));
     assert!(
         incoming_anchor::confirmed_connection(
             &receiver.node.swarm,
@@ -450,13 +723,42 @@ fn assert_anchor_readiness_fences(
 
 async fn automatic_incoming_anchor_scenario(setup: AnchorSetup) {
     tokio::time::timeout(Duration::from_secs(15), Box::pin(async {
-        let (mut relay, tcp, quic) = incoming_anchor_test_relay().await;
+        let private_router = matches!(setup, AnchorSetup::PrivateRouter);
+        let protocol = if private_router { crate::config::PRIVATE_KADEMLIA_PROTOCOL.to_owned() }
+            else { DiscoveryConfig::default().kademlia_protocol };
+        let (mut relay, tcp, quic) = incoming_anchor_test_host(true, &protocol).await;
         let relay_peer = relay.local_peer_id;
         let mut sender = membership_sync_test_node(NodeIdentity::generate_ed25519().unwrap());
         let mut receiver = EventFixture::new(sender.local_peer_id);
         receiver.auto_relay.policy.max_reservations = 1;
-        receiver.infrastructure.insert(relay_peer, tcp.clone());
-        let quic_id = if matches!(setup, AnchorSetup::ColdQuic) {
+        let discover = matches!(setup, AnchorSetup::DiscoverTcp | AnchorSetup::DiscoverAfterLoss | AnchorSetup::PrivateRouter);
+        let mut routing_bootstrap = None;
+        if matches!(setup, AnchorSetup::DiscoverAfterLoss) {
+            lose_anchor_and_exhaust_candidates(&mut receiver).await;
+        }
+        if discover {
+            receiver.node.discovery.autonat = true;
+            receiver.node.discovery.kademlia_protocol = protocol.clone();
+            receiver.node.bootstrap_peer_addresses = vec![(relay_peer, tcp.clone())];
+            // Replace the fixture's inherited public seeds as well as its config.
+            // The production recovery driver must be the sole source of this seed.
+            let config = crate::runtime::p2p::controlled_kademlia_config(
+                libp2p::StreamProtocol::try_from_owned(protocol.clone()).unwrap());
+            let local = receiver.node.local_peer_id;
+            receiver.node.swarm.behaviour_mut().kad = kad::Behaviour::with_config(
+                local, kad::store::MemoryStore::new(local), config);
+            relay.swarm.behaviour_mut().kad.set_mode(Some(kad::Mode::Server));
+            if private_router {
+                let (mut bootstrap, address, _) = incoming_anchor_test_host(false, &protocol).await;
+                bootstrap.swarm.behaviour_mut().kad.set_mode(Some(kad::Mode::Server));
+                bootstrap.swarm.behaviour_mut().kad.add_protected_address(&relay_peer, tcp.clone());
+                receiver.node.bootstrap_peer_addresses = vec![(bootstrap.local_peer_id, address)];
+                routing_bootstrap = Some(bootstrap);
+            }
+        } else {
+            receiver.infrastructure.insert(relay_peer, tcp.clone());
+        }
+        let quic_id = if matches!(setup, AnchorSetup::ColdQuic) || discover {
             assert!(receiver.active_connections.is_empty());
             None
         } else {
@@ -465,7 +767,7 @@ async fn automatic_incoming_anchor_scenario(setup: AnchorSetup) {
         let reuse = match setup {
             AnchorSetup::ReuseTcp => Some(connect_anchor_fixture(&mut receiver, &mut relay, tcp.clone()).await),
             AnchorSetup::ReuseQuic | AnchorSetup::RecoverQuic => quic_id,
-            AnchorSetup::DialTcp | AnchorSetup::ColdQuic => None,
+            AnchorSetup::DialTcp | AnchorSetup::ColdQuic | AnchorSetup::DiscoverTcp | AnchorSetup::DiscoverAfterLoss | AnchorSetup::PrivateRouter => None,
         };
         let use_quic = matches!(setup, AnchorSetup::ReuseQuic | AnchorSetup::RecoverQuic | AnchorSetup::ColdQuic);
         let address = if use_quic {quic} else {tcp};
@@ -476,31 +778,57 @@ async fn automatic_incoming_anchor_scenario(setup: AnchorSetup) {
             format!("/ip4/127.0.0.1/tcp/{port}/p2p/{relay_peer}").parse().unwrap()
         } else {address.clone()};
         let refused_route = candidate.clone();
-        if matches!(setup, AnchorSetup::ColdQuic) {
+        if discover {
+            assert!(receiver.auto_relay.candidates.is_empty());
+            drive_incoming_fixture(&mut receiver, Instant::now());
+            assert!(receiver.maintenance.incoming.pending());
+        } else if matches!(setup, AnchorSetup::ColdQuic) {
             receiver.auto_relay.record_candidate_addresses(relay_peer, [candidate, address.clone()]);
         } else {
             receiver.auto_relay.record_candidate(relay_peer, candidate);
         }
         attempt_auto_relay_reservations(&mut receiver.node.swarm, &mut receiver.auto_relay,
             &receiver.metrics, &mut receiver.epochs, &receiver.active_connections, &[]);
-        let owned = receiver.auto_relay.pending_reservations[&relay_peer].owned_dial;
-        let owner = reuse.or(owned).unwrap();
+        let owned = receiver.auto_relay.pending_reservations.get(&relay_peer).and_then(|pending| pending.owned_dial);
+        let expected_owner = reuse.or(owned);
         assert_eq!(owned.is_some(), matches!(setup, AnchorSetup::DialTcp | AnchorSetup::RecoverQuic | AnchorSetup::ColdQuic));
-        assert_eq!(receiver.auto_relay.reservation_listeners.is_empty(), owned.is_some());
+        assert_eq!(receiver.auto_relay.reservation_listeners.is_empty(), owned.is_some() || discover);
         let kind = if use_quic {PathKind::DirectQuicStream} else {PathKind::DirectTcpStream};
         let mut tick = tokio::time::interval(Duration::from_millis(20));
         while !receiver.auto_relay.accepted_reservation_peers.contains(&relay_peer) {
             tokio::select! {
                 _ = relay.swarm.select_next_some() => {},
+                _ = async {
+                    if let Some(bootstrap) = &mut routing_bootstrap { bootstrap.swarm.select_next_some().await; }
+                    else { std::future::pending::<()>().await; }
+                } => {},
                 _ = tick.tick() => {
                     // Exercise the configured retry boundary without a 30-second test sleep.
                     let now = receiver.auto_relay.retry_after.get(&relay_peer).copied().unwrap_or_else(Instant::now);
                     attempt_auto_relay_reservations_at(&mut receiver.node.swarm,
                         &mut receiver.auto_relay, &receiver.metrics, &mut receiver.epochs, &receiver.active_connections, now);
+                    if discover { drive_incoming_fixture(&mut receiver, now); }
                 },
                 event = receiver.node.swarm.select_next_some() => receiver.dispatch(event).await,
             }
         }
+        if let Some(bootstrap) = &mut routing_bootstrap {
+            let peer = bootstrap.local_peer_id;
+            while !receiver.routing.contains(peer) {
+                tokio::select! {
+                    _ = relay.swarm.select_next_some() => {},
+                    _ = bootstrap.swarm.select_next_some() => {},
+                    event = receiver.node.swarm.select_next_some() => receiver.dispatch(event).await,
+                }
+            }
+            assert!(!receiver.infrastructure.contains(peer));
+            assert!(!receiver.membership.allows(peer));
+            assert!(!receiver.node.discovery.kademlia);
+            assert!(receiver.node.kademlia_rendezvous_key.is_none());
+            assert!(receiver.node.swarm.is_connected(&peer));
+        }
+        let owner = receiver.auto_relay.reservation_listeners[&relay_peer].connection;
+        if let Some(expected) = expected_owner { assert_eq!(owner, expected); }
         assert_eq!(incoming_anchor::confirmed_connection(&receiver.node.swarm, &receiver.epochs,
             &receiver.active_connections, relay_peer, owner), Some((owner, kind)));
         if matches!(setup, AnchorSetup::DialTcp) {
@@ -509,6 +837,14 @@ async fn automatic_incoming_anchor_scenario(setup: AnchorSetup) {
         }
         if let Some(quic_id) = quic_id {
             assert!(receiver.epochs.is_usable(quic_id), "TCP promotion must not destroy the old connection");
+        }
+        if discover {
+            assert!(incoming_recovery::has_usable_path(&receiver.node, &receiver.auto_relay,
+                &receiver.readiness, &receiver.epochs, &receiver.active_connections));
+            drive_incoming_fixture(&mut receiver, Instant::now());
+            assert!(!receiver.maintenance.incoming.pending());
+            assert_eq!(receiver.packet_in_flight.stats().packets, 0);
+            assert_eq!(receiver.metrics.snapshot(crate::queue::QueueStats::default()).auto_relay_discovery_queries, 1);
         }
         if matches!(setup, AnchorSetup::ColdQuic) {
             assert_eq!(receiver.metrics.snapshot(crate::queue::QueueStats::default()).auto_relay_reservation_attempts, 1);
@@ -525,6 +861,10 @@ async fn automatic_incoming_anchor_scenario(setup: AnchorSetup) {
         loop {
             tokio::select! {
                 _ = relay.swarm.select_next_some() => {},
+                _ = async {
+                    if let Some(bootstrap) = &mut routing_bootstrap { bootstrap.swarm.select_next_some().await; }
+                    else { std::future::pending::<()>().await; }
+                } => {},
                 event = receiver.node.swarm.select_next_some() => receiver.dispatch(event).await,
                 event = sender.swarm.select_next_some() => match event {
                     SwarmEvent::ConnectionEstablished {peer_id, endpoint, ..} if peer_id == peer => {
