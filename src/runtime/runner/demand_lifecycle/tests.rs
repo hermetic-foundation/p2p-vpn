@@ -173,6 +173,16 @@ async fn idle_then_wake(listen: &str) {
         }
         assert_eq!(a_owner.snapshot().outbound, 0);
         assert_eq!(b_owner.snapshot().inbound, 0);
+        assert!(
+            a_context
+                .forwarder
+                .data_path_is_dormant(PeerId::from_libp2p(b_peer))
+        );
+        assert!(
+            b_context
+                .forwarder
+                .data_path_is_dormant(PeerId::from_libp2p(a_peer))
+        );
         let wake = idle + Duration::from_secs(1);
         b_owner
             .wake(b.behaviour_mut(), &b_context.context(), a_peer, wake)
@@ -188,6 +198,16 @@ async fn idle_then_wake(listen: &str) {
             }
         }
         assert_eq!(b_owner.phase(a_peer), Phase::Active);
+        assert!(
+            !a_context
+                .forwarder
+                .data_path_is_dormant(PeerId::from_libp2p(b_peer))
+        );
+        assert!(
+            !b_context
+                .forwarder
+                .data_path_is_dormant(PeerId::from_libp2p(a_peer))
+        );
     })
     .await
     .expect("bounded dispatcher exchange");
@@ -336,6 +356,7 @@ enum Interrupt {
     IncomingPathLost,
     NewOutstandingWork,
     MembershipRotation,
+    AcceptedPayload,
 }
 
 async fn interrupted_reply(interrupt: Interrupt) {
@@ -384,6 +405,16 @@ async fn interrupted_reply(interrupt: Interrupt) {
                                 b_fixture.local.membership_tag = Some("rotated".into());
                                 b_fixture.peers.record(PeerId::from_libp2p(a_peer), ControlCapabilities::local("demand-test", Some("rotated".into()), 1280).with_demand_lifecycle_epoch(epoch(1)));
                             }
+                            Interrupt::AcceptedPayload => {
+                                let source = crate::route::builtin_ipv4(PeerId::from_libp2p(a_peer));
+                                let target = crate::route::builtin_ipv4(b_fixture.forwarder.config().local_peer_id().unwrap());
+                                let mut bytes = vec![0; 20];
+                                bytes[0] = 0x45;
+                                bytes[12..16].copy_from_slice(&source.octets());
+                                bytes[16..20].copy_from_slice(&target.octets());
+                                let frame = Frame::packet(100, 1, bytes).unwrap();
+                                b_fixture.forwarder.accept_inbound_stream_packet(a_peer, &frame).unwrap();
+                            }
                         }
                     }
                     if delivery { sent = true; }
@@ -393,6 +424,7 @@ async fn interrupted_reply(interrupt: Interrupt) {
         assert!(interrupted);
         assert_ne!(b_owner.phase(a_peer), Phase::Dormant, "{interrupt:?}");
         assert_eq!(b_owner.snapshot().inbound, 0);
+        assert!(!b_fixture.forwarder.data_path_is_dormant(PeerId::from_libp2p(a_peer)));
     }).await.expect("interrupted reply finishes without committing quiet");
 }
 
@@ -407,6 +439,7 @@ async fn every_destructive_commit_rechecks_current_authority_epoch_work_and_conn
         Interrupt::IncomingPathLost,
         Interrupt::NewOutstandingWork,
         Interrupt::MembershipRotation,
+        Interrupt::AcceptedPayload,
     ] {
         interrupted_reply(interrupt).await;
     }

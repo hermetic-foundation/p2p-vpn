@@ -51,6 +51,21 @@ fn maintenance_does_not_extend_the_activity_window() {
 }
 
 #[test]
+fn revoking_quiet_permission_is_a_bounded_grace_not_application_demand() {
+    let now = Instant::now();
+    let (mut a, _) = dormant_pair(now);
+    let changed = now + IDLE_AFTER + Duration::from_secs(1);
+    a.revoke_quiet_permission(changed);
+    assert_eq!(a.phase(), Phase::Active);
+    assert_eq!(a.last_demand(), None);
+    assert_eq!(a.offer_idle(changed, READY), Err(Rejection::RecentlyActive));
+    for _ in 0..100 {
+        a.observe_maintenance();
+    }
+    assert!(a.offer_idle(changed + IDLE_AFTER, READY).is_ok());
+}
+
+#[test]
 fn receiver_waits_for_reply_delivery_before_becoming_dormant() {
     let now = Instant::now();
     let idle = now + IDLE_AFTER;

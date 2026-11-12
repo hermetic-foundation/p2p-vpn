@@ -3,6 +3,7 @@
 use super::*;
 use crate::runtime::lifecycle::{
     Epoch, IDLE_AFTER, IdleAck, PeerLifecycle, Phase, Readiness, Rejection,
+    activity::DemandVersion,
     protocol::{
         self, LifecycleCodec, RejectCode, Reply, Request, Response, Session, ValidatedRequest,
         ValidatedResponse,
@@ -37,18 +38,62 @@ struct Peer {
     outbound: Option<PendingRequest>,
     inbound: Option<PendingReply>,
     next_offer: Instant,
+    observed_demand: Option<DemandVersion>,
 }
 
 impl Peer {
-    fn refresh(&mut self, local: Epoch, remote: Option<Epoch>, now: Instant) {
+    fn refresh(&mut self, local: Epoch, remote: Option<Epoch>, now: Instant) -> bool {
         if self.remote_epoch == remote {
-            return;
+            return false;
         }
         self.remote_epoch = remote;
         self.policy = remote.map(|epoch| PeerLifecycle::new(local, epoch, true, now));
         self.outbound = None;
         self.inbound = None;
         self.next_offer = now + IDLE_AFTER;
+        self.observed_demand = None;
+        true
+    }
+
+    fn observe_demand(&mut self, context: &LifecycleContext<'_>, peer: Libp2pPeerId, now: Instant) {
+        let overlay = PeerId::from_libp2p(peer);
+        let Some(activity) = context.forwarder.application_demand(overlay) else {
+            return;
+        };
+        if activity.version.is_none() || activity.version != self.observed_demand {
+            let was_observed = self.observed_demand.is_some();
+            self.observed_demand = activity.version;
+            self.outbound = None;
+            self.inbound = None;
+            if let Some(last) = activity.last_demand {
+                if let Some(policy) = &mut self.policy {
+                    policy.demand(last, (context.usable_path)(peer));
+                }
+            } else if was_observed && let Some(policy) = &mut self.policy {
+                policy.revoke_quiet_permission(now);
+            }
+        }
+        if let Some(policy) = &mut self.policy
+            && policy.phase() == Phase::Dormant
+            && !context.forwarder.data_path_is_dormant(overlay)
+        {
+            policy.revoke_quiet_permission(now);
+        }
+    }
+
+    fn commit_quiet(&mut self, context: &LifecycleContext<'_>, peer: Libp2pPeerId, now: Instant) {
+        let overlay = PeerId::from_libp2p(peer);
+        if !self
+            .observed_demand
+            .is_some_and(|version| context.forwarder.grant_data_path_quiet(overlay, version))
+        {
+            self.observe_demand(context, peer, now);
+            if let Some(policy) = &mut self.policy
+                && policy.phase() == Phase::Dormant
+            {
+                policy.revoke_quiet_permission(now);
+            }
+        }
     }
 
     fn expire(&mut self, now: Instant) {
@@ -186,12 +231,20 @@ impl DemandLifecycle {
         self.underlay_epoch = context.connections.current;
         self.peers.retain(|peer, state| {
             if !context.authorized(*peer) {
+                context
+                    .forwarder
+                    .revoke_data_path_quiet(PeerId::from_libp2p(*peer));
                 return false;
             }
             let remote = context
                 .session(*peer, self.epoch)
                 .map(|session| session.remote_epoch);
-            state.refresh(self.epoch, remote, now);
+            if state.refresh(self.epoch, remote, now) {
+                context
+                    .forwarder
+                    .revoke_data_path_quiet(PeerId::from_libp2p(*peer));
+            }
+            state.observe_demand(context, *peer, now);
             if changed {
                 state.outbound = None;
                 state.inbound = None;
@@ -218,18 +271,29 @@ impl DemandLifecycle {
         let remote = context
             .session(peer, self.epoch)
             .map(|session| session.remote_epoch);
-        let state = self.peers.entry(peer).or_insert_with(|| Peer {
-            remote_epoch: remote,
-            policy: remote.map(|remote| PeerLifecycle::new(self.epoch, remote, true, now)),
-            rate: PacketRateBucket {
-                tokens: PEER_REQUESTS_PER_SECOND,
-                refilled_at: now,
-            },
-            outbound: None,
-            inbound: None,
-            next_offer: now + IDLE_AFTER,
+        let state = self.peers.entry(peer).or_insert_with(|| {
+            context
+                .forwarder
+                .revoke_data_path_quiet(PeerId::from_libp2p(peer));
+            Peer {
+                remote_epoch: remote,
+                policy: remote.map(|remote| PeerLifecycle::new(self.epoch, remote, true, now)),
+                rate: PacketRateBucket {
+                    tokens: PEER_REQUESTS_PER_SECOND,
+                    refilled_at: now,
+                },
+                outbound: None,
+                inbound: None,
+                next_offer: now + IDLE_AFTER,
+                observed_demand: None,
+            }
         });
-        state.refresh(self.epoch, remote, now);
+        if state.refresh(self.epoch, remote, now) {
+            context
+                .forwarder
+                .revoke_data_path_quiet(PeerId::from_libp2p(peer));
+        }
+        state.observe_demand(context, peer, now);
         state.expire(now);
         true
     }
@@ -252,6 +316,9 @@ impl DemandLifecycle {
         peer: Libp2pPeerId,
         now: Instant,
     ) {
+        context
+            .forwarder
+            .record_application_demand(PeerId::from_libp2p(peer), now);
         if !self.admit_peer(context, peer, now) {
             if !context.authorized(peer) {
                 self.peers.remove(&peer);
@@ -457,7 +524,12 @@ impl DemandLifecycle {
                     })
                     && let Some(policy) = &mut state.policy
                 {
-                    let _ = policy.idle_reply_sent(pending.ack, now, (context.readiness)(peer));
+                    if policy
+                        .idle_reply_sent(pending.ack, now, (context.readiness)(peer))
+                        .is_ok()
+                    {
+                        state.commit_quiet(context, peer, now);
+                    }
                 }
             }
             request_response::Event::OutboundFailure {
@@ -556,6 +628,13 @@ impl DemandLifecycle {
             ValidatedRequest::Wake(wake) => {
                 match policy.receive_wake(wake, now, (context.usable_path)(peer)) {
                     Ok(()) => {
+                        context
+                            .forwarder
+                            .record_application_demand(PeerId::from_libp2p(peer), now);
+                        state.observed_demand = context
+                            .forwarder
+                            .application_demand(PeerId::from_libp2p(peer))
+                            .and_then(|snapshot| snapshot.version);
                         state.inbound = None;
                         state.outbound = None;
                         Reply::WakeAccepted {}
@@ -603,7 +682,12 @@ impl DemandLifecycle {
         };
         match response {
             ValidatedResponse::IdleAccepted(ack) => {
-                let _ = policy.receive_idle_ack(ack, now, (context.readiness)(peer));
+                if policy
+                    .receive_idle_ack(ack, now, (context.readiness)(peer))
+                    .is_ok()
+                {
+                    state.commit_quiet(context, peer, now);
+                }
             }
             ValidatedResponse::Rejected(RejectCode::Unsupported) => {
                 policy.use_legacy();

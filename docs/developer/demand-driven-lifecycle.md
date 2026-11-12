@@ -248,10 +248,11 @@ the production runtime. Evaluate a focused proof once the model stabilizes.
 | --- | --- | --- |
 | Protocol contract | Published before runtime edits | Operational assumptions still require verification |
 | [Policy model](../../src/runtime/lifecycle.rs) | Fixed-size per-peer state; monotonic activity; epoch/revision-bound offers and acknowledgements | Not wired into the runner or any network send path |
-| [Model tests](../../src/runtime/lifecycle/tests.rs) | 32 tests, including 111,111 short bilateral event sequences | These model checks are not a production-runtime proof |
+| [Model tests](../../src/runtime/lifecycle/tests.rs) | 33 tests, including 111,111 short bilateral event sequences | These model checks are not a production-runtime proof |
 | Idle delivery safety | Receiver waits for reply-sent confirmation; fresh demand/path change invalidates pending tickets | Dispatcher must authenticate, authorize, and bind actual transport events |
 | [Wire exchange](demand-lifecycle-wire.md) | 23 tests: bounded codec, contextual authentication, epochs, scope, stale/revoked response rejection | Quiet capability remains unadvertised |
 | [Runner dispatcher](demand-lifecycle-dispatch.md) | Bounded peer records, shared request-rate admission, transport-slot retention, commit-time validation | Production readiness conservatively refuses dormancy; packet and anchor effects remain pending |
+| [Application demand](demand-lifecycle-activity.md) | Shared forwarding hooks, monotonic per-peer versions, atomic quiet fencing, probe/hello/retention/recovery gates | Physical transport retirement, full control-work readiness, incoming-path policy and activation remain pending |
 | TCP/QUIC loopback | Idle commits after real response-sent; either endpoint can initiate wake | Virtual idle clock and fixture readiness; not long-idle or public-relay evidence |
 | Compatibility | Legacy defaults; dispatcher preserves unsupported fallback across ordinary capability refreshes | Operational peer-state presentation and full mixed-version deployment tests remain pending |
 | Energy impact | No network behavior or device deployment changed in this step | All measured improvement and feature-preservation gates remain open |

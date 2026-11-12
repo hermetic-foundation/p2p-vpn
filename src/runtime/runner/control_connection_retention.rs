@@ -11,6 +11,7 @@ pub(super) fn should_retain_control_connection(
     local_networks: &[LocalInterfaceNetwork],
 ) -> bool {
     if !forwarder.is_configured_transport_peer(peer)
+        || forwarder.data_path_is_dormant(PeerId::from_libp2p(peer))
         || !peer_capabilities.contains(PeerId::from_libp2p(peer))
     {
         return false;
@@ -190,6 +191,27 @@ mod tests {
             let id = fixture.establish(excluded, PathKind::DirectTcpStream, index + 2);
             assert!(!fixture.retains(excluded, id));
         }
+        assert!(fixture.retains(peer, connection));
+    }
+
+    #[test]
+    fn quiet_releases_retention_and_application_demand_restores_it() {
+        let mut fixture = Fixture::new();
+        let peer = fixture.peer;
+        let overlay = PeerId::from_libp2p(peer);
+        let connection = fixture.establish(peer, PathKind::DirectTcpStream, 1);
+        assert!(fixture.retains(peer, connection));
+        let version = fixture
+            .forwarder
+            .application_demand(overlay)
+            .unwrap()
+            .version
+            .unwrap();
+        assert!(fixture.forwarder.grant_data_path_quiet(overlay, version));
+        assert!(!fixture.retains(peer, connection));
+        fixture
+            .forwarder
+            .record_application_demand(overlay, Instant::now());
         assert!(fixture.retains(peer, connection));
     }
 

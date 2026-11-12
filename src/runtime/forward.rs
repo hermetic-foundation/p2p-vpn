@@ -30,11 +30,16 @@ use crate::{
     route::{IpCidr, Route, RouteError, RouteTable},
     runtime::{
         control::ControlRoute,
+        lifecycle::activity::{ApplicationDemand, DemandSnapshot, DemandVersion},
         p2p::Behaviour,
         packet::{AuthorizedPeers, PacketResponse},
     },
     wire::{Frame, FrameError, PayloadType},
 };
+
+#[cfg(test)]
+#[path = "forward/demand_tests.rs"]
+mod demand_tests;
 
 #[derive(Debug)]
 pub struct Forwarder {
@@ -56,6 +61,7 @@ pub struct Forwarder {
     session_id: SessionId,
     next_sequence: Sequence,
     mtu: usize,
+    application_demand: ApplicationDemand,
 }
 
 #[derive(Debug)]
@@ -420,6 +426,8 @@ impl Forwarder {
             };
 
         let mtu = usize::from(config.effective_packet_mtu());
+        let application_demand =
+            ApplicationDemand::new(authorization.peers.keys().copied(), Instant::now());
         Ok(Self {
             local_peer,
             config,
@@ -439,12 +447,33 @@ impl Forwarder {
             session_id: fresh_session_id(),
             next_sequence: 0,
             mtu,
+            application_demand,
         })
     }
 
     #[must_use]
     pub const fn mtu(&self) -> usize {
         self.mtu
+    }
+
+    pub(crate) fn application_demand(&self, peer: PeerId) -> Option<DemandSnapshot> {
+        self.application_demand.snapshot(peer)
+    }
+
+    pub(crate) fn record_application_demand(&self, peer: PeerId, now: Instant) -> bool {
+        self.application_demand.record(peer, now)
+    }
+
+    pub(crate) fn grant_data_path_quiet(&self, peer: PeerId, version: DemandVersion) -> bool {
+        self.application_demand.grant_quiet(peer, version)
+    }
+
+    pub(crate) fn revoke_data_path_quiet(&self, peer: PeerId) {
+        self.application_demand.revoke_quiet(peer);
+    }
+
+    pub(crate) fn data_path_is_dormant(&self, peer: PeerId) -> bool {
+        self.application_demand.is_quiet(peer)
     }
 
     pub fn send_tun_packet(
@@ -848,7 +877,15 @@ impl Forwarder {
             .as_ref()
             .zip(update.checkpoint.as_ref())
             .is_some_and(|(old, new)| old.incarnations != new.incarnations);
-        if self.authorization != update.authorization || incarnations_changed {
+        let authority_changed = self.authorization != update.authorization || incarnations_changed;
+        if authority_changed || self.config.network.name != update.config.network.name {
+            // Authorization revision retains its routing meaning; scope changes
+            // still revoke transport quiet permission independently.
+            for peer in update.authorization.peers.keys() {
+                self.application_demand.revoke_quiet(*peer);
+            }
+        }
+        if authority_changed {
             self.authorization_revision = self.authorization_revision.wrapping_add(1);
         }
         if self.member_records != update.member_records
@@ -870,6 +907,18 @@ impl Forwarder {
             });
             self.hostname_records.clear();
         }
+        self.application_demand.retain(|peer| {
+            update.authorization.peers.contains_key(&peer)
+                && self
+                    .checkpoint
+                    .as_ref()
+                    .zip(update.checkpoint.as_ref())
+                    .is_none_or(|(old, new)| {
+                        old.incarnations.get(&peer) == new.incarnations.get(&peer)
+                    })
+        });
+        self.application_demand
+            .admit(update.authorization.peers.keys().copied());
         self.config = update.config;
         self.member_records = update.member_records;
         self.authorization = update.authorization;
@@ -1215,7 +1264,7 @@ impl Forwarder {
             return Err(ForwardError::NoTransportPeer(route.owner));
         }
         let (session_id, sequence) = self.take_outbound_sequence();
-
+        self.application_demand.record(route.owner, Instant::now());
         Ok(Packet::new_for_session(
             route.owner,
             session_id,
@@ -1258,6 +1307,7 @@ impl Forwarder {
         let destination = packet_destination(&frame.payload)?;
         self.authorize_local_destination(destination)?;
         self.accept_sequence(overlay_peer, frame.header.session_id, frame.header.sequence)?;
+        self.application_demand.record(overlay_peer, Instant::now());
 
         Ok(&frame.payload)
     }
@@ -1275,7 +1325,7 @@ impl Forwarder {
             .authorize_source(overlay_peer, source)?;
         let destination = packet_destination(&frame.payload)?;
         self.authorize_local_destination(destination)?;
-
+        self.application_demand.record(overlay_peer, Instant::now());
         Ok(&frame.payload)
     }
 

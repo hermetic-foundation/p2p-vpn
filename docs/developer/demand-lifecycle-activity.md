@@ -10,6 +10,7 @@
 | Explicit application request or accepted wake | Authorized target/origin peer |
 | Queued retransmission | No new activity |
 | Probe, keepalive, ACK, capability, membership or DNS-cache maintenance | No new activity |
+| Automatic service-status request on connection establishment | No new activity; bounded control work |
 | Malformed, spoofed, unauthorized or replay-rejected packet | No new activity |
 
 Record at the shared forwarding boundary so all packet backends and Android
@@ -22,6 +23,7 @@ recording must not require a new global lock or per-packet heap allocation.
 | --- | --- |
 | Monotonic timestamp | Last observed application demand; never wall-clock time |
 | Generation | Advances on each accepted application event, even at the same clock tick |
+| Admission identifier | Changes when a record is removed/re-added; prevents zero-generation ticket reuse |
 | Quiet bit | Permission committed by validated bilateral lifecycle negotiation |
 | Ownership | Exactly one record per currently authorized forwarding peer |
 
@@ -61,3 +63,40 @@ transport; it is a separate policy state.
 These gates are not permission to advertise quiet support yet. Incoming-path
 readiness, transport retirement, public-relay evidence, feature checks and
 matched cellular energy measurements remain required activation gates.
+
+## Implemented Boundaries
+
+| Component | Current Behavior |
+| --- | --- |
+| Forwarder | New TUN admission and accepted IPv4/IPv6 frames record demand; queued retries and maintenance do not |
+| Dispatcher | Reads forwarding generations before idle decisions; both idle commits grant a fenced quiet bit |
+| Wake | Accepted authenticated wake and explicit application demand clear quiet immediately |
+| Probes | Committed quiet skips outgoing probes and discards expired probe recovery work |
+| Packet-plane negotiation | Quiet blocks periodic retry and hello initiation |
+| Retention/recovery | Quiet releases selected control retention and skips background peer redial; configured infrastructure roles remain eligible |
+| Discovery | Dormant is sufficient for peer-maintenance suppression, but is not reported as a healthy transport |
+| Production | Still passive: capability advertisement, real readiness and physical retirement remain pending |
+
+Automatic service-status requests are also sent by the runtime, not only by
+human diagnostics. Treating every accepted status request as application
+activity would recreate a maintenance-driven lease.
+
+## Validation
+
+| Check | Result |
+| --- | --- |
+| `cargo test --lib demand` | 22 passed: forwarding admission, retries, backpressure, authorization, dispatcher races and retention |
+| Lifecycle/codec/activity scope | 63 passed, including the existing exhaustive model traces |
+| Probe gate | Validated outbound IP admission clears the gate; suppressed probe attempts resume |
+| Primitive concurrency | An old grant racing 10,000 same-timestamp application records cannot survive accepted data |
+| Record lifetime | Removed/re-added unused peers cannot reuse zero-generation tickets; counter exhaustion never authorizes quiet |
+| Workspace/all-targets | 1,925 passed; 48 existing exclusions |
+| Clippy/formatting | Required correctness, suspicious and performance groups pass; changed Rust files pass rustfmt |
+| Packaging | Evaluated Nix source includes identical activity and forwarding-test sources |
+
+Checks used cached Nix Cargo/Rust/Clippy 1.97.1, two build jobs and the existing
+build directory. Full Nix/Android builds, VMs, public-relay/device dormancy and
+energy comparisons were not run for this still-unadvertised stage.
+
+The concurrency check is executable coverage, not a formal memory-model proof.
+No new wakeup task, network timer or required configuration field was added.

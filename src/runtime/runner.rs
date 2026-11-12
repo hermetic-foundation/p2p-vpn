@@ -4367,6 +4367,9 @@ async fn send_path_probes(
     let local_mtu = u16::try_from(forwarder.mtu()).unwrap_or(u16::MAX);
 
     for peer in peers {
+        if forwarder.data_path_is_dormant(peer) {
+            continue;
+        }
         #[cfg(feature = "battery-diagnostics")]
         if path_probe_tracker
             .diagnostic_pause
@@ -4595,6 +4598,9 @@ fn expire_unconfirmed_path_probes(
     now: Instant,
 ) {
     for probe in path_probe_tracker.expire_unconfirmed(now, PATH_PROBE_TIMEOUT) {
+        if forwarder.data_path_is_dormant(probe.peer) {
+            continue;
+        }
         metrics.record_outbound_path_probe_failure();
         log_runtime_event(
             LogLevel::Warn,
@@ -9022,6 +9028,14 @@ fn redial_known_addresses(
     }
 
     for (peer, addresses) in group_peer_dial_targets(targets.addresses) {
+        if forwarder.data_path_is_dormant(PeerId::from_libp2p(peer))
+            && !bootstrap_addresses
+                .iter()
+                .chain(relay_addresses)
+                .any(|(infrastructure, _)| *infrastructure == peer)
+        {
+            continue;
+        }
         let now = Instant::now();
         let lan_first =
             lan_first_for_all || discovered_address_state.lan_first_recovery_active(peer, now);
@@ -12748,13 +12762,14 @@ fn public_discovery_quiet_mode(
     let peers = forwarder.configured_overlay_peers().collect::<Vec<_>>();
     !peers.is_empty()
         && peers.into_iter().all(|peer| {
-            peer_has_healthy_supported_path(
-                paths,
-                peer_capabilities,
-                packet_plane,
-                packet_plane_quic,
-                peer,
-            )
+            forwarder.data_path_is_dormant(peer)
+                || peer_has_healthy_supported_path(
+                    paths,
+                    peer_capabilities,
+                    packet_plane,
+                    packet_plane_quic,
+                    peer,
+                )
         })
 }
 
@@ -14426,6 +14441,9 @@ fn redial_configured_peer_after_supported_path_loss(
     peer: Libp2pPeerId,
 ) {
     if !context.forwarder.is_configured_transport_peer(peer)
+        || context
+            .forwarder
+            .data_path_is_dormant(PeerId::from_libp2p(peer))
         || !peer_lacks_supported_packet_path(
             context.paths,
             context.peer_capabilities,
@@ -14483,6 +14501,9 @@ fn dial_ready_relays_for_configured_peer(
     peer: Libp2pPeerId,
 ) {
     if !context.forwarder.is_configured_transport_peer(peer)
+        || context
+            .forwarder
+            .data_path_is_dormant(PeerId::from_libp2p(peer))
         || !peer_lacks_supported_packet_path(
             context.paths,
             context.peer_capabilities,
@@ -19628,6 +19649,7 @@ fn maybe_send_packet_plane_hello(
     let local_overlay = PeerId::from_libp2p(*swarm.local_peer_id());
     let remote_overlay = PeerId::from_libp2p(peer);
     if !forwarder.is_configured_transport_peer(peer)
+        || forwarder.data_path_is_dormant(remote_overlay)
         || !remote_capabilities.supports_datagram_packet_path()
         || !local_capabilities.supports_datagram_packet_path()
         || !has_direct_packet_plane_negotiation_path(paths, remote_overlay)
@@ -20599,6 +20621,9 @@ fn retry_packet_plane_negotiation(
     context: &mut PacketPlaneExpiryContext<'_>,
     overlay_peer: PeerId,
 ) {
+    if context.forwarder.data_path_is_dormant(overlay_peer) {
+        return;
+    }
     if let Some(peer) = context.forwarder.transport_peer_for_overlay(overlay_peer)
         && let Some(capabilities) = context.peer_capabilities.get(overlay_peer)
     {
@@ -35093,6 +35118,78 @@ mod tests {
             None,
             None
         ));
+    }
+
+    #[tokio::test]
+    async fn activity_quiet_gate_suppresses_probes_and_payload_reenables_them() {
+        let identity = NodeIdentity::generate_ed25519().unwrap();
+        let remote = peer_id();
+        let peer = PeerId::from_libp2p(remote);
+        let config = config_with_peer(&identity, remote);
+        let mut node = membership_sync_test_node(identity);
+        let mut forwarder = Forwarder::from_config(&config).unwrap();
+        let mut paths = PathSet::new();
+        paths.record_established(peer, PathKind::DirectTcpStream);
+        let mut capabilities = PeerCapabilities::default();
+        capabilities.record(peer, ControlCapabilities::local("lab", None, 1280));
+        let mut flights = PacketInFlight::new(16);
+        let mut probes = PathProbeTracker::default();
+        let metrics = RuntimeMetrics::default();
+        let version = forwarder.application_demand(peer).unwrap().version.unwrap();
+        assert!(forwarder.grant_data_path_quiet(peer, version));
+        send_path_probes(
+            &mut node.swarm,
+            &mut forwarder,
+            &mut paths,
+            &capabilities,
+            None,
+            None,
+            &mut flights,
+            &mut probes,
+            &metrics,
+        )
+        .await;
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.outbound_path_probes_sent, 0);
+        assert_eq!(snapshot.outbound_path_probe_failures, 0);
+        assert!(public_discovery_quiet_mode(
+            &forwarder,
+            &PathSet::new(),
+            &capabilities,
+            None,
+            None
+        ));
+        assert!(!peer_has_healthy_supported_path(
+            &PathSet::new(),
+            &capabilities,
+            None,
+            None,
+            peer
+        ));
+
+        let source = crate::route::builtin_ipv4(config.local_peer_id().unwrap());
+        let target = crate::route::builtin_ipv4(peer);
+        let mut packet = vec![0; 20];
+        packet[0] = 0x45;
+        packet[12..16].copy_from_slice(&source.octets());
+        packet[16..20].copy_from_slice(&target.octets());
+        let mut queues = PeerQueues::new(4, 4096);
+        forwarder.enqueue_tun_packet(&mut queues, packet).unwrap();
+        assert!(!forwarder.data_path_is_dormant(peer));
+        send_path_probes(
+            &mut node.swarm,
+            &mut forwarder,
+            &mut paths,
+            &capabilities,
+            None,
+            None,
+            &mut flights,
+            &mut probes,
+            &metrics,
+        )
+        .await;
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert!(snapshot.outbound_path_probes_sent + snapshot.outbound_path_probe_failures > 0);
     }
 
     #[test]

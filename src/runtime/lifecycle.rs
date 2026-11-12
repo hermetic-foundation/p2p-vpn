@@ -7,6 +7,7 @@
 
 use std::time::{Duration, Instant};
 
+pub(crate) mod activity;
 pub mod protocol;
 
 pub const IDLE_AFTER: Duration = Duration::from_secs(45);
@@ -205,6 +206,16 @@ impl PeerLifecycle {
             } else {
                 Phase::Active
             };
+        }
+    }
+
+    /// Authority/readiness invalidation is not application activity. Start a
+    /// bounded grace without inventing a new last-demand observation.
+    pub fn revoke_quiet_permission(&mut self, now: Instant) {
+        self.invalidate_exchange();
+        if self.supported {
+            self.phase = Phase::Active;
+            self.idle_since = self.idle_since.max(now);
         }
     }
 

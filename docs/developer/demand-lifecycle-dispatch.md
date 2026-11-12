@@ -69,8 +69,8 @@ do not renew the model's application-demand timestamp.
 
 ## Remaining Activation Work
 
-1. Connect accepted inbound/outbound payload and explicit service work to demand tracking.
-2. Gate probes, packet-plane negotiation, retention, peer recovery, DHT work, and per-connection ping.
+1. Finish real queue/in-flight/service readiness; [payload demand tracking](demand-lifecycle-activity.md) is implemented.
+2. Finish physical retirement and remaining connection/discovery/NAT policy; probe, hello and retention gates respect committed quiet permission.
 3. Supply actual incoming-path and outstanding-work readiness instead of the conservative adapter.
 4. Prove a quiet public relay reservation and first inbound access before advertising quiet support.
 5. Run extended dormancy, roaming, compatibility, feature, and matched cellular energy gates.
