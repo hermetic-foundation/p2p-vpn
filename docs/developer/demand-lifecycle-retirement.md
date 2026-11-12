@@ -30,9 +30,10 @@ and infrastructure dependencies at the point of retirement.
 ## Rollout
 
 1. Implement and test owned datagram retirement behind the existing quiet permission.
-2. Wire real readiness, bounded outstanding control work, and infrastructure-safe stream retirement.
-3. Validate incoming wake after public relay idleness before advertising lifecycle support.
-4. Measure paired cellular energy only after the production lifecycle is active.
+2. Native control work and infrastructure-safe stream retirement are implemented behind quiet permission.
+3. Wire real incoming-anchor readiness and bounded control-update delivery to dormant disconnected members.
+4. Validate incoming wake after public relay idleness before advertising lifecycle support.
+5. Measure paired cellular energy only after the production lifecycle is active.
 
 No battery improvement follows merely from implementing these cleanup operations.
 

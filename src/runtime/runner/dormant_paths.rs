@@ -53,6 +53,104 @@ pub(super) fn retire_datagrams(mut context: DatagramRetirementContext<'_>) -> us
     retired
 }
 
+const INITIAL_CONTROL_GRACE: Duration = Duration::from_secs(10);
+
+#[cfg(test)]
+#[path = "dormant_stream_tests.rs"]
+mod stream_tests;
+
+pub(super) struct StreamRetirementContext<'a> {
+    pub node: &'a mut P2pNode,
+    pub forwarder: &'a Forwarder,
+    pub queues: &'a PeerQueues,
+    pub in_flight: &'a PacketInFlight,
+    pub epochs: &'a mut ConnectionEpochs,
+    pub connections: &'a HashMap<(Libp2pPeerId, ConnectionId), ConnectedPoint>,
+    pub infrastructure: &'a InfrastructurePeers,
+    pub relay_readiness: &'a RelayReadiness,
+    pub auto_relay: &'a AutoRelayState,
+    pub now: Instant,
+}
+
+fn can_retire_stream(
+    context: &StreamRetirementContext<'_>,
+    peer: Libp2pPeerId,
+    id: ConnectionId,
+) -> bool {
+    let overlay = PeerId::from_libp2p(peer);
+    context.forwarder.is_configured_transport_peer(peer)
+        && context.forwarder.data_path_is_dormant(overlay)
+        && context.queues.peer_stats(overlay).queued_packets == 0
+        && !context.in_flight.has_application_work(overlay)
+        && !context.node.swarm.behaviour().has_pending_peer_work(peer)
+        && context.epochs.is_usable(id)
+        && context.epochs.established.get(&id).is_some_and(|opened| {
+            context.now.saturating_duration_since(*opened) >= INITIAL_CONTROL_GRACE
+        })
+        && context.connections.contains_key(&(peer, id))
+        && !is_infrastructure_dependency(context, peer)
+}
+
+fn is_infrastructure_dependency(context: &StreamRetirementContext<'_>, peer: Libp2pPeerId) -> bool {
+    context.node.startup.relay_server_enabled
+        || context
+            .node
+            .bootstrap_peer_addresses
+            .iter()
+            .any(|(owner, _)| *owner == peer)
+        || context
+            .node
+            .relay_peer_addresses
+            .iter()
+            .any(|(owner, _)| *owner == peer)
+        || context.infrastructure.contains(peer)
+        || context
+            .relay_readiness
+            .accepted_reservations
+            .contains(&peer)
+        || context
+            .relay_readiness
+            .relayed_listen_addresses
+            .contains_key(&peer)
+        || context.auto_relay.pending_reservations.contains_key(&peer)
+        || context
+            .auto_relay
+            .accepted_reservation_peers
+            .contains(&peer)
+        || context
+            .connections
+            .values()
+            .any(|endpoint| relay_peer_for_endpoint(endpoint) == Some(PeerId::from_libp2p(peer)))
+}
+
+pub(super) fn retire_streams(context: &mut StreamRetirementContext<'_>) -> usize {
+    let mut candidates = context
+        .connections
+        .keys()
+        .copied()
+        .filter(|(peer, id)| can_retire_stream(context, *peer, *id))
+        .collect::<Vec<_>>();
+    candidates.sort_unstable_by_key(|(_, id)| *id);
+    let mut retired = 0;
+    for (peer, id) in candidates {
+        if !can_retire_stream(context, peer, id) || !context.epochs.mark_retiring(id) {
+            continue;
+        }
+        let close_requested = context.node.swarm.close_connection(id);
+        retired += usize::from(close_requested);
+        log_runtime_event(
+            LogLevel::Info,
+            "dormant_stream_retired",
+            &[
+                ("peer", &peer.to_string()),
+                ("connection_id", &id.to_string()),
+                ("close_requested", &close_requested.to_string()),
+            ],
+        );
+    }
+    retired
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -71,8 +169,11 @@ mod tests {
 
     impl Fixture {
         fn new() -> Self {
+            Self::for_peer(Libp2pPeerId::random())
+        }
+
+        fn for_peer(remote: Libp2pPeerId) -> Self {
             let identity = NodeIdentity::generate_ed25519().unwrap();
-            let remote = Libp2pPeerId::random();
             let config: Config = serde_json::from_value(serde_json::json!({
                 "network":{"name":"dormant-path-retirement","private_key":identity.private_key},
                 "peers":[{"id":remote.to_string()}],

@@ -5,7 +5,7 @@
 | Item | Status |
 | --- | --- |
 | Decision | Separate incoming reachability from active per-peer data paths |
-| Runtime implementation | Model, wire, payload demand, initial gates, and owned datagram retirement implemented; incoming-anchor/stream retirement and activation pending |
+| Runtime implementation | Model, wire, payload demand, initial gates, native work accounting, and packet/control retirement implemented; incoming-anchor readiness and activation pending |
 | Default configuration | Preserve minimal JSON and native NixOS workflows; no required new settings |
 | Platforms | Shared Rust policy; Android and Linux must cooperate |
 | Battery acceptance | Measured 10x idle-cellular efficiency with feature preservation; not yet demonstrated |
@@ -15,6 +15,7 @@ The [combined isolation report](android-cellular-combined-isolation.md) reproduc
 high idle cellular power but does not identify the exact remaining packet source.
 
 - [Retirement ownership and fences](demand-lifecycle-retirement.md)
+- [Control work and stream retirement](demand-lifecycle-control-work.md)
 - [Public relay idle validation](relay-idle-validation.md)
 
 ## Requirements

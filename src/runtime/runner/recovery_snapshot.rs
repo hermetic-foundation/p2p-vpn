@@ -142,7 +142,7 @@ impl ApplicationRecoverySnapshot {
                 connections
                     .connections
                     .keys()
-                    .filter(|id| !connections.established.contains(*id))
+                    .filter(|id| !connections.established.contains_key(*id))
                     .count() as u64,
             ),
             ("connections_retiring", connections.retiring.len() as u64),

@@ -2462,6 +2462,18 @@ where
                     paths: &mut paths,
                     probes: &mut path_probe_tracker,
                 });
+                dormant_paths::retire_streams(&mut dormant_paths::StreamRetirementContext {
+                    node: &mut node,
+                    forwarder: &forwarder,
+                    queues: &queues,
+                    in_flight: &queue_runtime.packet_in_flight,
+                    epochs: &mut connection_epochs,
+                    connections: &active_connections,
+                    infrastructure: &infrastructure_peers,
+                    relay_readiness: &relay_readiness,
+                    auto_relay: &auto_relay,
+                    now: Instant::now(),
+                });
                 #[cfg(feature = "battery-diagnostics")]
                 metrics.record_diagnostic_probe_pause(path_probe_tracker.diagnostic_pause.active(Instant::now()));
                 expire_unconfirmed_path_probes(
@@ -13280,7 +13292,7 @@ struct SwarmEventContext<'a> {
 struct ConnectionEpochs {
     current: u64,
     connections: HashMap<ConnectionId, u64>,
-    established: HashSet<ConnectionId>,
+    established: HashMap<ConnectionId, Instant>,
     retiring: HashSet<ConnectionId>,
 }
 
@@ -13304,11 +13316,15 @@ impl ConnectionEpochs {
     }
 
     fn record_established(&mut self, connection_id: ConnectionId) -> bool {
+        self.record_established_at(connection_id, Instant::now())
+    }
+
+    fn record_established_at(&mut self, connection_id: ConnectionId, now: Instant) -> bool {
         // Public callers may hand over a node with unobserved startup dials.
         // Runtime-owned starts are registered explicitly, so unknown IDs belong to epoch zero.
         let is_current = *self.connections.entry(connection_id).or_insert(0) == self.current;
         if is_current {
-            self.established.insert(connection_id);
+            self.established.entry(connection_id).or_insert(now);
         }
         is_current
     }
@@ -13328,7 +13344,7 @@ impl ConnectionEpochs {
         self.connections
             .iter()
             .filter(|(connection_id, epoch)| {
-                **epoch != self.current && !self.established.contains(connection_id)
+                **epoch != self.current && !self.established.contains_key(connection_id)
             })
             .count()
     }
@@ -21312,7 +21328,7 @@ fn invalidate_peer_capabilities_on_first_connection(
     peer: Libp2pPeerId,
     established_connections: u32,
 ) {
-    if established_connections == 1 {
+    if established_connections == 1 && !forwarder.data_path_is_dormant(PeerId::from_libp2p(peer)) {
         invalidate_peer_capabilities(forwarder, peer_capabilities, peer);
     }
 }
@@ -21327,6 +21343,7 @@ fn invalidate_peer_capabilities_when_disconnected(
 ) {
     let overlay_peer = PeerId::from_libp2p(peer);
     if remaining_connections == 0
+        && !forwarder.data_path_is_dormant(overlay_peer)
         && !has_active_packet_plane_session(packet_plane, packet_plane_quic, overlay_peer)
     {
         invalidate_peer_capabilities(forwarder, peer_capabilities, peer);
@@ -43540,7 +43557,7 @@ mod tests {
             assert!(!node.swarm.behaviour().control.is_pending_outbound(&remote_peer, &request_id));
             assert!(epochs.mark_retiring(connection_id));
             assert!(node.swarm.close_connection(connection_id));
-            assert!(epochs.established.iter().any(|id| epochs.is_usable(*id)));
+            assert!(epochs.established.keys().any(|id| epochs.is_usable(*id)));
             dispatch_membership_sync_test_event(
                 &mut node, &mut forwarder, &mut syncs, &metrics, &mut epochs, response_event,
             ).await;
