@@ -13,7 +13,11 @@ members = [
 ]
 default-members = ["."]
 resolver = "3"
-exclude = ["vendor/libp2p-kad-0.48.0", "vendor/stats_alloc-0.1.10"]
+exclude = [
+    "vendor/libp2p-kad-0.48.0",
+    "vendor/libp2p-request-response-0.29.0",
+    "vendor/stats_alloc-0.1.10",
+]
 
 [features]
 allocation-review = []
@@ -22,6 +26,7 @@ battery-diagnostics = []
 
 [patch.crates-io]
 libp2p-kad = { path = "vendor/libp2p-kad-0.48.0" }
+libp2p-request-response = { path = "vendor/libp2p-request-response-0.29.0" }
 stats_alloc = { path = "vendor/stats_alloc-0.1.10" }
 
 [lints.rust]

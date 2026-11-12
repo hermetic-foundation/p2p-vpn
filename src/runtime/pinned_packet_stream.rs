@@ -93,6 +93,7 @@ impl Failure {
 struct ConnectionState {
     peer: PeerId,
     pending_outbound: usize,
+    stream_budget: Option<(Arc<Semaphore>, usize)>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -119,6 +120,48 @@ impl Default for Behaviour {
 }
 
 impl Behaviour {
+    pub(crate) fn has_pending_work(&self, peer: PeerId) -> bool {
+        self.connections.values().any(|state| {
+            state.peer == peer
+                && (state.pending_outbound > 0
+                    || state
+                        .stream_budget
+                        .as_ref()
+                        .is_some_and(|(budget, capacity)| budget.available_permits() < *capacity))
+        }) || self.pending_events.iter().any(|event| match event {
+            ToSwarm::NotifyHandler { peer_id, .. } => *peer_id == peer,
+            ToSwarm::GenerateEvent(
+                Event::InboundRequest { peer: owner, .. }
+                | Event::OutboundResponse { peer: owner, .. }
+                | Event::OutboundFailure { peer: owner, .. }
+                | Event::InboundFailure { peer: owner, .. }
+                | Event::ResponseSent { peer: owner, .. },
+            ) => *owner == peer,
+            _ => false,
+        })
+    }
+
+    fn connection_handler(&mut self, peer: PeerId, connection_id: ConnectionId) -> Handler {
+        let handler = Handler::new(
+            peer,
+            connection_id,
+            self.max_payload_len,
+            self.max_concurrent_streams,
+        );
+        self.connections.insert(
+            connection_id,
+            ConnectionState {
+                peer,
+                pending_outbound: 0,
+                stream_budget: Some((
+                    Arc::clone(&handler.stream_budget),
+                    self.max_concurrent_streams,
+                )),
+            },
+        );
+        handler
+    }
+
     #[cfg(test)]
     pub(super) fn pending_outbound_count(&self) -> usize {
         self.outbound_owners.len()
@@ -225,12 +268,7 @@ impl NetworkBehaviour for Behaviour {
         _local_addr: &Multiaddr,
         _remote_addr: &Multiaddr,
     ) -> Result<Self::ConnectionHandler, ConnectionDenied> {
-        Ok(Handler::new(
-            peer,
-            connection_id,
-            self.max_payload_len,
-            self.max_concurrent_streams,
-        ))
+        Ok(self.connection_handler(peer, connection_id))
     }
 
     fn handle_established_outbound_connection(
@@ -241,23 +279,27 @@ impl NetworkBehaviour for Behaviour {
         _role_override: Endpoint,
         _port_use: PortUse,
     ) -> Result<Self::ConnectionHandler, ConnectionDenied> {
-        Ok(Handler::new(
-            peer,
-            connection_id,
-            self.max_payload_len,
-            self.max_concurrent_streams,
-        ))
+        Ok(self.connection_handler(peer, connection_id))
     }
 
     fn on_swarm_event(&mut self, event: FromSwarm) {
+        let failed = match event {
+            FromSwarm::DialFailure(failure) => Some(failure.connection_id),
+            FromSwarm::ListenFailure(failure) => Some(failure.connection_id),
+            _ => None,
+        };
+        if let Some(id) = failed {
+            self.connections.remove(&id);
+            return;
+        }
         if let FromSwarm::ConnectionEstablished(established) = event {
-            self.connections.insert(
-                established.connection_id,
-                ConnectionState {
+            self.connections
+                .entry(established.connection_id)
+                .or_insert_with(|| ConnectionState {
                     peer: established.peer_id,
                     pending_outbound: 0,
-                },
-            );
+                    stream_budget: None,
+                });
             return;
         }
         let FromSwarm::ConnectionClosed(closed) = event else {
@@ -1114,6 +1156,70 @@ mod tests {
                 remaining_established: 1,
             },
         ));
+    }
+
+    #[test]
+    fn work_query_observes_existing_stream_budget_and_pending_notifications() {
+        let peer = PeerId::random();
+        let other = PeerId::random();
+        let id = ConnectionId::new_unchecked(91);
+        let mut behaviour = Behaviour::new(1280).with_max_concurrent_streams(2);
+        let handler = behaviour.connection_handler(peer, id);
+        establish_connection(&mut behaviour, peer, id);
+        assert!(!behaviour.has_pending_work(peer));
+        let permit = handler.acquire_stream().unwrap();
+        assert!(behaviour.has_pending_work(peer));
+        behaviour = behaviour.with_max_concurrent_streams(1);
+        assert!(behaviour.has_pending_work(peer));
+        assert!(!behaviour.has_pending_work(other));
+        drop(permit);
+        assert!(!behaviour.has_pending_work(peer));
+        let request_id = behaviour.send_request_on_connection(
+            peer,
+            id,
+            Frame::packet(1, 1, vec![1; 20]).unwrap(),
+        );
+        let mut cx = Context::from_waker(futures::task::noop_waker_ref());
+        assert!(matches!(
+            behaviour.poll(&mut cx),
+            Poll::Ready(ToSwarm::NotifyHandler { .. })
+        ));
+        assert!(behaviour.has_pending_work(peer));
+        behaviour.on_connection_handler_event(
+            peer,
+            id,
+            HandlerEvent::OutboundResponse {
+                request_id,
+                response: PacketResponse::Accepted,
+            },
+        );
+        assert!(behaviour.has_pending_work(peer));
+        assert!(matches!(
+            behaviour.poll(&mut cx),
+            Poll::Ready(ToSwarm::GenerateEvent(Event::OutboundResponse { .. }))
+        ));
+        assert!(!behaviour.has_pending_work(peer));
+        close_connection(&mut behaviour, peer, id);
+        assert!(behaviour.connections.is_empty());
+    }
+
+    #[test]
+    fn denied_connection_discards_staged_budget_metadata() {
+        let peer = PeerId::random();
+        let id = ConnectionId::new_unchecked(92);
+        let mut behaviour = Behaviour::new(1280);
+        let handler = behaviour.connection_handler(peer, id);
+        let _permit = handler.acquire_stream().unwrap();
+        assert!(behaviour.has_pending_work(peer));
+        behaviour.on_swarm_event(FromSwarm::DialFailure(
+            libp2p::swarm::behaviour::DialFailure {
+                peer_id: Some(peer),
+                connection_id: id,
+                error: &libp2p::swarm::DialError::NoAddresses,
+            },
+        ));
+        assert!(!behaviour.has_pending_work(peer));
+        assert!(behaviour.connections.is_empty());
     }
 
     #[test]

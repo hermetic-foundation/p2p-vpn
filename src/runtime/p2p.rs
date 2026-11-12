@@ -89,6 +89,21 @@ pub struct Behaviour {
     pub service: request_response::Behaviour<ServiceCodec>,
 }
 
+impl Behaviour {
+    pub(crate) fn has_pending_peer_work(&self, peer: PeerId) -> bool {
+        self.control.has_pending_requests(&peer)
+            || self.lifecycle.has_pending_requests(&peer)
+            || self.checkpoint.has_pending_requests(&peer)
+            || self.checkpoint_mutation.has_pending_requests(&peer)
+            || self.packet.has_pending_requests(&peer)
+            || self.pairing.has_pending_requests(&peer)
+            || self.pairing_code.has_pending_requests(&peer)
+            || self.pairing_code_v2.has_pending_requests(&peer)
+            || self.service.has_pending_requests(&peer)
+            || self.pinned_packet_stream.has_pending_work(peer)
+    }
+}
+
 pub struct P2pNode {
     pub local_peer_id: PeerId,
     pub identity: NodeIdentity,
