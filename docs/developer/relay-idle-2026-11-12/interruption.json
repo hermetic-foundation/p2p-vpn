@@ -1,0 +1,6 @@
+{
+  "succeeded": false,
+  "valid_acceptance_run": false,
+  "partial_report": "/tmp/p2p-vpn-public-relay-idle-20261112-02.json",
+  "reason": "Stopped after identifying a harness defect: reserve selected the relay's advertised QUIC circuit while the fresh sender supports TCP only. Preserve the partial idle evidence, but do not count it as an incoming TCP validation."
+}

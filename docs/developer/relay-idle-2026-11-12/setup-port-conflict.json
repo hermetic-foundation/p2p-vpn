@@ -1,0 +1,13 @@
+{
+  "attempts": [],
+  "client_identify_interval_seconds": 86400,
+  "client_ping_interval_seconds": 86400,
+  "failure": "Build(Transport(Other(Custom { kind: Other, error: Other(Right(Transport(Left(Left(Left(Os { code: 98, kind: AddrInUse, message: \"Address already in use\" })))))) })))",
+  "idle_samples": [],
+  "requested_idle_seconds": 1800,
+  "reservations": [],
+  "schema_version": 1,
+  "scope": "transport_only_not_energy_or_cellular",
+  "started_unix_seconds": 1794515899,
+  "succeeded": false
+}

@@ -1,0 +1,170 @@
+{
+  "attempts": [
+    {
+      "address": "/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ",
+      "attempts": [],
+      "client_identify_interval_seconds": 86400,
+      "client_ping_interval_seconds": 86400,
+      "idle_samples": [],
+      "reservations": [],
+      "schema_version": 1,
+      "scope": "transport_only_not_energy_or_cellular",
+      "setup_error": "listener closed: Err(Custom { kind: Other, error: Other(Left(Left(Left(Reservation(Refused))))) })",
+      "setup_seconds": 0.795385161,
+      "started_unix_seconds": 1794515973
+    },
+    {
+      "address": "/ip6/2604:a880:1:20::204:4001/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ",
+      "attempts": [],
+      "client_identify_interval_seconds": 86400,
+      "client_ping_interval_seconds": 86400,
+      "idle_samples": [],
+      "reservations": [],
+      "schema_version": 1,
+      "scope": "transport_only_not_energy_or_cellular",
+      "setup_error": "dial: Failed to negotiate transport protocol(s): [(/ip6/2604:a880:1:20::204:4001/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ: : Network is unreachable (os error 101): Network is unreachable (os error 101))]",
+      "setup_seconds": 0.00050957,
+      "started_unix_seconds": 1794515974
+    },
+    {
+      "address": "/ip4/192.236.246.179/tcp/4001/p2p/12D3KooWMRxeycTbaTXtcN47XTG13JjyTjgHMKpz59a9EZMSrvnV",
+      "attempts": [],
+      "circuit": "/ip4/192.236.246.179/udp/4001/quic-v1/p2p/12D3KooWMRxeycTbaTXtcN47XTG13JjyTjgHMKpz59a9EZMSrvnV/p2p-circuit/p2p/12D3KooWFbxK7HfjoFjtnPWFdM8jW2wptbEFsZB46vq5j7rvNgnQ",
+      "client_identify_interval_seconds": 86400,
+      "client_ping_interval_seconds": 86400,
+      "idle_samples": [],
+      "reservations": [
+        {
+          "limit": "Some(Limit { duration: Some(120s), data_in_bytes: Some(131072) })",
+          "relay": "12D3KooWMRxeycTbaTXtcN47XTG13JjyTjgHMKpz59a9EZMSrvnV",
+          "renewal": false
+        }
+      ],
+      "schema_version": 1,
+      "scope": "transport_only_not_energy_or_cellular",
+      "setup_error": null,
+      "setup_seconds": 0.404092646,
+      "started_unix_seconds": 1794515974
+    }
+  ],
+  "circuit": "/ip4/192.236.246.179/udp/4001/quic-v1/p2p/12D3KooWMRxeycTbaTXtcN47XTG13JjyTjgHMKpz59a9EZMSrvnV/p2p-circuit/p2p/12D3KooWFbxK7HfjoFjtnPWFdM8jW2wptbEFsZB46vq5j7rvNgnQ",
+  "client_identify_interval_seconds": 86400,
+  "client_ping_interval_seconds": 86400,
+  "discovery": {
+    "candidate_count": 9,
+    "dial_failures": 8,
+    "identified_peers": 4,
+    "relay_capable_peers": 3,
+    "scanned_peers": 11
+  },
+  "idle_samples": [
+    {
+      "delta": {
+        "read_bytes": 0,
+        "reads": 0,
+        "write_bytes": 0,
+        "writes": 0
+      },
+      "elapsed_seconds": 5.000790652
+    },
+    {
+      "delta": {
+        "read_bytes": 0,
+        "reads": 0,
+        "write_bytes": 0,
+        "writes": 0
+      },
+      "elapsed_seconds": 10.001193609
+    },
+    {
+      "delta": {
+        "read_bytes": 0,
+        "reads": 0,
+        "write_bytes": 0,
+        "writes": 0
+      },
+      "elapsed_seconds": 15.00073
+    },
+    {
+      "delta": {
+        "read_bytes": 30,
+        "reads": 1,
+        "write_bytes": 60,
+        "writes": 2
+      },
+      "elapsed_seconds": 20.00115176
+    },
+    {
+      "delta": {
+        "read_bytes": 30,
+        "reads": 1,
+        "write_bytes": 0,
+        "writes": 0
+      },
+      "elapsed_seconds": 25.000392711
+    },
+    {
+      "delta": {
+        "read_bytes": 0,
+        "reads": 0,
+        "write_bytes": 0,
+        "writes": 0
+      },
+      "elapsed_seconds": 30.000628779
+    },
+    {
+      "delta": {
+        "read_bytes": 0,
+        "reads": 0,
+        "write_bytes": 0,
+        "writes": 0
+      },
+      "elapsed_seconds": 35.000864707
+    },
+    {
+      "delta": {
+        "read_bytes": 0,
+        "reads": 0,
+        "write_bytes": 0,
+        "writes": 0
+      },
+      "elapsed_seconds": 40.000775735
+    },
+    {
+      "delta": {
+        "read_bytes": 0,
+        "reads": 0,
+        "write_bytes": 0,
+        "writes": 0
+      },
+      "elapsed_seconds": 45.000837727
+    },
+    {
+      "delta": {
+        "read_bytes": 90,
+        "reads": 3,
+        "write_bytes": 60,
+        "writes": 2
+      },
+      "elapsed_seconds": 50.000474809
+    }
+  ],
+  "requested_idle_seconds": 1800,
+  "reservations": [
+    {
+      "limit": "Some(Limit { duration: Some(120s), data_in_bytes: Some(131072) })",
+      "relay": "12D3KooWMRxeycTbaTXtcN47XTG13JjyTjgHMKpz59a9EZMSrvnV",
+      "renewal": false
+    }
+  ],
+  "schema_version": 1,
+  "scope": "transport_only_not_energy_or_cellular",
+  "selected_address": "/ip4/192.236.246.179/tcp/4001/p2p/12D3KooWMRxeycTbaTXtcN47XTG13JjyTjgHMKpz59a9EZMSrvnV",
+  "setup_and_settle_traffic": {
+    "read_bytes": 2453,
+    "reads": 17,
+    "write_bytes": 1069,
+    "writes": 16
+  },
+  "started_unix_seconds": 1794515928
+}

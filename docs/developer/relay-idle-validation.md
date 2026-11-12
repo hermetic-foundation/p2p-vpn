@@ -6,6 +6,9 @@ Test the infrastructure assumption behind [dormancy](demand-driven-lifecycle.md)
 an accepted public relay reservation can remain usable without frequent
 client-originated probes. This is transport evidence, not battery acceptance.
 
+Recorded [2026-11-12 results](relay-idle-2026-11-12.md) include raw reports,
+invalid attempts, and the successful fresh incoming exchange after 30 minutes.
+
 ## Protocol
 
 | Stage | Required Evidence |
@@ -33,7 +36,7 @@ client-originated probes. This is transport evidence, not battery acceptance.
 | Discovery | One existing scan, 45 seconds, at most 64 candidate addresses |
 | Reservation attempts | At most 8 plain-TCP candidates, serially, 20 seconds each |
 | Concurrent public reservations | One |
-| Idle duration | Explicit 1–3600 seconds; acceptance evidence requires at least 1800 |
+| Idle duration | Explicit 1-3600 seconds; acceptance evidence requires at least 1800 |
 | Incoming deadline | 30 seconds |
 | Echo request/reply | Exactly 16 bytes each |
 | Report | Small JSON; samples at 5-second intervals; no private identity material |

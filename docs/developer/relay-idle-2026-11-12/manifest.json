@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "scope": "transport_only_not_energy_or_cellular",
+  "measured_test_binary_sha256": "c641ec3fbcd36c8dcc777b20485912cd3d3fcfede09417f8b266c03a1cd31872",
+  "library_base_commit": "045351d4",
+  "published_harness_commit": "e4552411",
+  "binary_is_identical_to_published_harness": false,
+  "snapshot_note": "The live test began before local-only renewal coverage and lint cleanup were added. The actual running executable was hashed via /proc while it was alive.",
+  "artifacts": [
+    {
+      "path": "setup-port-conflict.json",
+      "classification": "invalid_setup",
+      "sha256": "3e161bfd9b8c0a72e70f56f3496686521e42736b490ae0db4ead20723a4d2153"
+    },
+    {
+      "path": "invalid-transport-selection.json",
+      "classification": "invalid_harness_partial_run",
+      "sha256": "dfdf832a3b9ad89249714251a75d9cbd2eef495ffaee440a8a6ab77830624d98"
+    },
+    {
+      "path": "interruption.json",
+      "classification": "interruption_explanation",
+      "sha256": "24ea1f50f0024472d7d80b9243f663e3fa16dcbdbef913b9bd7a975d2ce34033"
+    },
+    {
+      "path": "public-tcp-30m.json",
+      "classification": "valid_transport_only_observation",
+      "sha256": "29c96d6cd1b8934439417832956aa11caad8be40d6e96a9a1ae1f7b9aca07f2e"
+    }
+  ]
+}
