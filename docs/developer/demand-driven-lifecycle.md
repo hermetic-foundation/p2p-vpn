@@ -103,6 +103,9 @@ never keep its own activity lease alive. Use monotonic deadlines only.
 
 ## Bilateral Quiet Protocol
 
+The [wire contract](demand-lifecycle-wire.md) defines capability fields, framing,
+limits, identity/scope validation, and response correlation before implementation.
+
 ### Negotiation And Framing
 
 | Item | Contract |
