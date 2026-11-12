@@ -433,6 +433,31 @@ impl PathSet {
             .retain(|inventory| inventory.peer != peer);
     }
 
+    /// Deliberate dormancy removes availability, not learned path quality.
+    pub(crate) fn retire_datagram_paths(&mut self, peer: PeerId) -> Option<PathSelectionChange> {
+        let previous = self.best_for(peer);
+        for candidate in &mut self.candidates {
+            if candidate.peer == peer
+                && matches!(
+                    candidate.kind,
+                    PathKind::DirectUdpDatagram | PathKind::DirectQuicDatagram
+                )
+            {
+                candidate.healthy = false;
+                candidate.established_connections = 0;
+                candidate.latest_connection_id = None;
+            }
+        }
+        self.connection_inventories.retain(|inventory| {
+            inventory.peer != peer
+                || !matches!(
+                    inventory.kind,
+                    PathKind::DirectUdpDatagram | PathKind::DirectQuicDatagram
+                )
+        });
+        self.selection_change(peer, previous)
+    }
+
     /// Invalidates connection-backed paths without discarding path history.
     pub fn invalidate_connections(&mut self) -> usize {
         let mut invalidated = 0;

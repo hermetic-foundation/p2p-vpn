@@ -163,6 +163,7 @@ mod control_connection_retention;
 use control_connection_retention::should_retain_control_connection;
 mod demand_lifecycle;
 use demand_lifecycle::{DemandLifecycle, LifecycleContext};
+mod dormant_paths;
 mod recovery_snapshot;
 use recovery_snapshot::ApplicationRecoverySnapshot;
 mod packet_endpoint_selection;
@@ -2451,6 +2452,16 @@ where
                     readiness: &lifecycle_not_ready,
                     usable_path: &lifecycle_no_path,
                 }, Instant::now());
+                dormant_paths::retire_datagrams(dormant_paths::DatagramRetirementContext {
+                    forwarder: &forwarder,
+                    queues: &queues,
+                    in_flight: &queue_runtime.packet_in_flight,
+                    udp: &mut packet_plane,
+                    quic: packet_plane_quic.as_mut(),
+                    negotiator: &mut packet_plane_negotiator,
+                    paths: &mut paths,
+                    probes: &mut path_probe_tracker,
+                });
                 #[cfg(feature = "battery-diagnostics")]
                 metrics.record_diagnostic_probe_pause(path_probe_tracker.diagnostic_pause.active(Instant::now()));
                 expire_unconfirmed_path_probes(
@@ -12308,6 +12319,7 @@ enum PacketInFlightId {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct PacketInFlightRequest {
     peer: PeerId,
+    application_payload: bool,
     shard: FlowShard,
     path: PathKind,
     relay_peer: Option<PeerId>,
@@ -12352,6 +12364,7 @@ impl PacketInFlight {
             request_id,
             PacketInFlightRequest {
                 peer: packet.peer(),
+                application_payload: true,
                 shard: packet.flow_shard(),
                 path: path.kind,
                 relay_peer: path.relay_peer,
@@ -12361,7 +12374,7 @@ impl PacketInFlight {
         self.peers
             .entry(packet.peer())
             .or_default()
-            .record(packet.flow_shard());
+            .record(packet.flow_shard(), true);
     }
 
     fn record_path_probe(
@@ -12374,19 +12387,20 @@ impl PacketInFlight {
             request_id,
             PacketInFlightRequest {
                 peer,
+                application_payload: false,
                 shard: 0,
                 path: path.kind,
                 relay_peer: path.relay_peer,
                 sent_at: Instant::now(),
             },
         );
-        self.peers.entry(peer).or_default().record(0);
+        self.peers.entry(peer).or_default().record(0, false);
     }
 
     fn complete(&mut self, request_id: PacketInFlightId) -> Option<PacketInFlightRequest> {
         let request = self.requests.remove(&request_id)?;
         if let Some(state) = self.peers.get_mut(&request.peer) {
-            state.complete(request.shard);
+            state.complete(request.shard, request.application_payload);
             if state.total == 0 {
                 self.peers.remove(&request.peer);
             }
@@ -12425,6 +12439,12 @@ impl PacketInFlight {
         }
     }
 
+    fn has_application_work(&self, peer: PeerId) -> bool {
+        self.peers
+            .get(&peer)
+            .is_some_and(|state| state.application_payloads > 0)
+    }
+
     #[cfg(test)]
     fn in_flight_for(&self, peer: PeerId) -> usize {
         self.peers.get(&peer).map_or(0, |state| state.total)
@@ -12434,17 +12454,22 @@ impl PacketInFlight {
 #[derive(Clone, Debug, Default)]
 struct PeerInFlight {
     total: usize,
+    application_payloads: usize,
     shards: HashMap<FlowShard, usize>,
 }
 
 impl PeerInFlight {
-    fn record(&mut self, shard: FlowShard) {
+    fn record(&mut self, shard: FlowShard, application_payload: bool) {
         self.total += 1;
+        self.application_payloads += usize::from(application_payload);
         *self.shards.entry(shard).or_default() += 1;
     }
 
-    fn complete(&mut self, shard: FlowShard) {
+    fn complete(&mut self, shard: FlowShard, application_payload: bool) {
         self.total = self.total.saturating_sub(1);
+        self.application_payloads = self
+            .application_payloads
+            .saturating_sub(usize::from(application_payload));
         if let Some(count) = self.shards.get_mut(&shard) {
             *count = count.saturating_sub(1);
             if *count == 0 {
@@ -19599,6 +19624,7 @@ fn log_control_capabilities_summary(
 #[derive(Debug)]
 enum PacketPlaneNegotiationError {
     UnauthorizedPeer,
+    DormantPeer,
     MissingLocalEndpoint,
     MissingRemoteCapabilities,
     MissingRemoteEndpoint,
@@ -19616,6 +19642,7 @@ impl PacketPlaneNegotiationError {
     fn describe(&self) -> String {
         match self {
             Self::UnauthorizedPeer => "unauthorized_peer".to_owned(),
+            Self::DormantPeer => "dormant_peer".to_owned(),
             Self::MissingLocalEndpoint => "missing_local_endpoint".to_owned(),
             Self::MissingRemoteCapabilities => "missing_remote_capabilities".to_owned(),
             Self::MissingRemoteEndpoint => "missing_remote_endpoint".to_owned(),
@@ -20077,6 +20104,9 @@ async fn accept_packet_plane_hello(
         return Err(PacketPlaneNegotiationError::UnauthorizedPeer);
     }
     let remote_overlay = PeerId::from_libp2p(peer);
+    if context.forwarder.data_path_is_dormant(remote_overlay) {
+        return Err(PacketPlaneNegotiationError::DormantPeer);
+    }
     if !has_direct_packet_plane_negotiation_path(context.paths, remote_overlay) {
         return Err(PacketPlaneNegotiationError::NoDirectNegotiationPath);
     }
@@ -20196,6 +20226,9 @@ fn complete_packet_plane_hello(
         return Err(PacketPlaneNegotiationError::UnauthorizedPeer);
     }
     let remote_overlay = PeerId::from_libp2p(peer);
+    if context.forwarder.data_path_is_dormant(remote_overlay) {
+        return Err(PacketPlaneNegotiationError::DormantPeer);
+    }
     if !has_direct_packet_plane_negotiation_path(context.paths, remote_overlay) {
         return Err(PacketPlaneNegotiationError::NoDirectNegotiationPath);
     }
@@ -21257,6 +21290,7 @@ const fn packet_plane_negotiation_rejection(
     match error {
         PacketPlaneNegotiationError::UnauthorizedPeer => ControlRejectionReason::UnauthorizedPeer,
         PacketPlaneNegotiationError::Decode(_)
+        | PacketPlaneNegotiationError::DormantPeer
         | PacketPlaneNegotiationError::Verify(_)
         | PacketPlaneNegotiationError::EndpointNotAdvertised
         | PacketPlaneNegotiationError::MissingLocalEndpoint
@@ -49835,6 +49869,86 @@ mod tests {
         assert_eq!(snapshot.outbound_path_probes_sent, 1);
         assert_eq!(snapshot.outbound_path_probe_failures, 0);
         assert_eq!(packet_in_flight.in_flight_for(remote_overlay), 1);
+    }
+
+    #[tokio::test]
+    async fn dormant_retirement_closes_real_udp_quic_and_allows_fresh_sessions() {
+        let local = NodeIdentity::generate_ed25519().unwrap();
+        let remote = NodeIdentity::generate_ed25519().unwrap();
+        let transport = remote.peer_id.parse::<Libp2pPeerId>().unwrap();
+        let peer = PeerId::from_libp2p(transport);
+        let forwarder = Forwarder::from_config(&config_with_peer(&local, transport)).unwrap();
+        let mut udp = PacketPlaneRuntime::bind(vec!["127.0.0.1:0".parse().unwrap()])
+            .await
+            .unwrap();
+        let mut remote_udp = PacketPlaneRuntime::bind(vec!["127.0.0.1:0".parse().unwrap()])
+            .await
+            .unwrap();
+        let mut quic = PacketPlaneQuicRuntime::bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let mut remote_quic = PacketPlaneQuicRuntime::bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let listener = quic.local_addr();
+        let certificate = quic.server_certificate();
+        let queues = PeerQueues::new(4, 4096);
+        let in_flight = PacketInFlight::new(4);
+        let mut negotiator = PacketPlaneNegotiator::default();
+        let mut paths = PathSet::new();
+        let mut probes = PathProbeTracker::default();
+        for (round, quiet) in [(0, true), (1, false)] {
+            let a = test_packet_plane_secret(7 + round);
+            let b = test_packet_plane_secret(17 + round);
+            establish_test_packet_plane_sessions(
+                &mut udp,
+                &mut remote_udp,
+                &local,
+                &remote,
+                &a,
+                &b,
+                1200,
+            );
+            tokio::time::timeout(
+                Duration::from_secs(10),
+                establish_test_packet_plane_quic_sessions(
+                    &mut quic,
+                    &mut remote_quic,
+                    &local,
+                    &remote,
+                    &a,
+                    &b,
+                    1200,
+                ),
+            )
+            .await
+            .unwrap();
+            assert!(udp.has_session(peer));
+            assert!(quic.has_session(peer));
+            assert!(quic.has_usable_connection(peer));
+            paths.record_established(peer, PathKind::DirectUdpDatagram);
+            paths.record_established(peer, PathKind::DirectQuicDatagram);
+            if quiet {
+                let version = forwarder.application_demand(peer).unwrap().version.unwrap();
+                assert!(forwarder.grant_data_path_quiet(peer, version));
+            }
+            assert_eq!(
+                dormant_paths::retire_datagrams(dormant_paths::DatagramRetirementContext {
+                    forwarder: &forwarder,
+                    queues: &queues,
+                    in_flight: &in_flight,
+                    udp: &mut udp,
+                    quic: Some(&mut quic),
+                    negotiator: &mut negotiator,
+                    paths: &mut paths,
+                    probes: &mut probes,
+                }),
+                usize::from(quiet)
+            );
+            assert_eq!(udp.has_session(peer), !quiet);
+            assert_eq!(quic.has_session(peer), !quiet);
+            assert_eq!(quic.has_connection(peer), !quiet);
+            assert_eq!(quic.local_addr(), listener);
+            assert_eq!(quic.server_certificate(), certificate);
+            assert!(forwarder.transport_peer_for_overlay(peer).is_some());
+            assert!(forwarder.record_application_demand(peer, Instant::now()));
+        }
     }
 
     #[tokio::test]
