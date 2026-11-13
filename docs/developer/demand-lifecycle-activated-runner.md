@@ -54,6 +54,31 @@ pass. Keep all waits bounded and preserve failure state in test evidence.
 - Count actual proxied datagrams and delivered IP packets, not merely a selected-path label.
 - Quiet sampling is not a battery measurement or proof of public-WAN/mobile reachability.
 
+### Relayed Control Admission
+
+The first trial carried application traffic over the relay but started no QUIC
+negotiation within 90 seconds. The packet-plane admission gate required an
+existing direct libp2p stream, conflating control transport with UDP reachability.
+
+| Boundary | Contract |
+| --- | --- |
+| Existing direct control | Preserve existing direct-path negotiation and legacy compatibility |
+| Relay alternative | Only the identity-bound owned-QUIC backend, never legacy owned UDP |
+| Opt-in | Both validated peers advertise lifecycle support; ordinary passive startup is unchanged |
+| Authority | Configured authorized overlay peer, matching network and current membership scope |
+| Cryptographic binding | Both sides advertise bound QUIC, endpoint candidates, and certificates; signed handshakes and existing TLS/channel-binding checks remain mandatory |
+| Demand | A current, valid application-demand generation with activity less than 45 seconds old |
+| Incoming access | A healthy authenticated circuit-relay control path; no disconnected negotiation-created dial |
+| Quiet | No negotiation while maintenance is paused or quiet is committed |
+| Rechecks | Apply admission at request creation, inbound hello acceptance, response completion, and capability-refresh retries |
+| Lifetime | Existing handshake deadlines, task generations, retry backoff, and cancellation remain authoritative |
+
+- Capability refresh, hello traffic, and expired attempts do not create or renew application demand.
+- A validated lifecycle wake or actual inbound payload can supply the receiver's demand observation.
+- Maintenance alone must not turn a relay-only idle peer into a permanent QUIC negotiation loop.
+- Relay-only admission is permission to try authenticated QUIC, not proof that NAT traversal will succeed.
+- Keep the relay data fallback usable while direct QUIC is attempted or blocked.
+
 ## Follow-On Gates
 
 | Gate | Evidence Still Required |
