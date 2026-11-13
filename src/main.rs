@@ -9809,7 +9809,8 @@ async fn up(
     Box::pin(runner::run_config_until_with_runtime_platform(
         config,
         runner::RuntimePlatform::new(device.into_packet_io(), runner::NativeTunRoutes)
-            .with_installed_tun(runtime),
+            .with_installed_tun(runtime)
+            .with_build_lifecycle_policy(),
         metrics_interval,
         control_socket,
         pairing_state,

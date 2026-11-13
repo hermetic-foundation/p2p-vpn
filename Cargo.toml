@@ -25,6 +25,7 @@ exclude = [
 allocation-review = []
 allocation-sizes = ["allocation-review", "stats_alloc/size-inventory"]
 battery-diagnostics = []
+demand-lifecycle-trial = []
 
 [patch.crates-io]
 libp2p-autonat = { path = "vendor/libp2p-autonat-0.15.0" }

@@ -2022,7 +2022,8 @@ mod android {
                     config,
                     RuntimePlatform::new(port.packet_io, port.route_controller)
                         .with_installed_tun(port.installed_tun)
-                        .with_control(control_receiver),
+                        .with_control(control_receiver)
+                        .with_build_lifecycle_policy(),
                     None,
                     None,
                     Some(pairing_state_path),

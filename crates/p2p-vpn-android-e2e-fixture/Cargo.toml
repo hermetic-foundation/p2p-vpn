@@ -6,6 +6,9 @@ license = "Apache-2.0"
 description = "Unprivileged Linux endpoint for p2p-vpn Android end-to-end tests"
 publish = false
 
+[features]
+demand-lifecycle-trial = ["p2p-vpn/demand-lifecycle-trial"]
+
 [lints.rust]
 unsafe_code = "forbid"
 

@@ -176,6 +176,8 @@ mod packet_endpoint_selection;
 mod packet_negotiation_path;
 use packet_endpoint_selection::packet_capabilities_for_lan_connection;
 #[cfg(test)]
+mod build_lifecycle_tests;
+#[cfg(test)]
 mod checkpoint_dormant_delivery_tests;
 #[cfg(test)]
 mod kademlia_contention_tests;
@@ -901,6 +903,22 @@ impl RuntimePlatform {
     pub fn with_experimental_demand_lifecycle(mut self) -> Self {
         self.experimental_demand_lifecycle = true;
         self
+    }
+
+    /// Applies the opt-in `demand-lifecycle-trial` build policy at an app boundary.
+    ///
+    /// `new` remains passive in all builds. Without the feature, this preserves
+    /// the existing policy, including an explicit embedding opt-in.
+    #[must_use]
+    pub fn with_build_lifecycle_policy(self) -> Self {
+        #[cfg(feature = "demand-lifecycle-trial")]
+        {
+            self.with_experimental_demand_lifecycle()
+        }
+        #[cfg(not(feature = "demand-lifecycle-trial"))]
+        {
+            self
+        }
     }
 }
 

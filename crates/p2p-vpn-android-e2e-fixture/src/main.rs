@@ -384,8 +384,9 @@ async fn run_fixture(
     wait_for_runtime(&bootstrap_control, "bootstrap").await?;
 
     let (peer_control, peer_receiver) = runtime_control_channel();
-    let peer_platform =
-        RuntimePlatform::new(peer_packet_io, PreconfiguredTunRoutes).with_control(peer_receiver);
+    let peer_platform = RuntimePlatform::new(peer_packet_io, PreconfiguredTunRoutes)
+        .with_control(peer_receiver)
+        .with_build_lifecycle_policy();
     let mut peer_task = tokio::spawn(run_config_until_with_runtime_platform(
         peer,
         peer_platform,
@@ -1322,6 +1323,70 @@ const fn default_probe_timeout_millis() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn application_build_policy_reaches_running_endpoint() {
+        let identity = NodeIdentity::generate_ed25519().unwrap();
+        let mut config = minimal_config("build-policy-test", &identity).unwrap();
+        config.network.discovery = DiscoveryConfig {
+            mdns: false,
+            kademlia: false,
+            kademlia_provider_advertisement: false,
+            autonat: false,
+            dcutr: false,
+            ..DiscoveryConfig::default()
+        };
+        config.network.relay.auto.max_reservations = 0;
+        config.network.relay.auto.max_candidates = 0;
+        disable_packet_plane(&mut config);
+        let (control, receiver) = runtime_control_channel();
+        let (shutdown, signal) = watch::channel(false);
+        let (tun_sender, packets) = mpsc::channel();
+        let platform = RuntimePlatform::new(
+            PacketIo::new(
+                ChannelPacketReader {
+                    packets,
+                    echo_trace: Arc::new(EchoTrace {
+                        remaining: AtomicU16::new(0),
+                    }),
+                },
+                DiscardPacketWriter,
+            ),
+            PreconfiguredTunRoutes,
+        )
+        .with_control(receiver)
+        .with_build_lifecycle_policy();
+        let task = tokio::spawn(run_config_until_with_runtime_platform(
+            config,
+            platform,
+            None,
+            None,
+            None,
+            None,
+            shutdown_signal(signal),
+        ));
+        let result: Result<(), BoxError> = async {
+            wait_for_runtime(&control, "build policy").await?;
+            let expected = format!(
+                "local capability supports demand lifecycle: {}",
+                cfg!(feature = "demand-lifecycle-trial")
+            );
+            let capabilities = control.capabilities().await?;
+            if !capabilities.contains(&expected) {
+                return Err(format!("missing build-policy capability {expected:?}").into());
+            }
+            Ok(())
+        }
+        .await;
+        shutdown.send_replace(true);
+        drop(tun_sender);
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        result.unwrap();
+    }
 
     #[tokio::test]
     #[ignore = "rootless private-bootstrap restart diagnostic; binds local TCP sockets"]

@@ -10,6 +10,7 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 battery-diagnostics = ["p2p-vpn/battery-diagnostics"]
+demand-lifecycle-trial = ["p2p-vpn/demand-lifecycle-trial"]
 
 [lints.rust]
 unsafe_code = "allow"
