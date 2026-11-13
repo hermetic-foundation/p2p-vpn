@@ -375,6 +375,25 @@ class CaptureWorkflowTests(unittest.TestCase):
 
 
 class DeviceSafetyTests(unittest.TestCase):
+    def test_radio_dump_filters_history_on_device_and_preserves_failures(self):
+        device = tool.Device("PIXEL1234")
+        with patch.object(device, "shell", return_value=radio_state()) as shell:
+            self.assertEqual(
+                tool.parse_signal(device.radio_state(), 1)["rsrp_dbm"], -85
+            )
+        shell.assert_called_once_with(
+            "sh",
+            "-c",
+            "set -o pipefail; dumpsys telephony.registry "
+            "| sed -n '/last known state:/,/local logs:/p'",
+        )
+        failure = tool.CommandFailure("command_failed", b"", b"unavailable", 1)
+        with (
+            patch.object(device, "shell", side_effect=failure),
+            self.assertRaises(tool.CommandFailure),
+        ):
+            device.radio_state()
+
     def test_subscription_binding_rejects_ambiguous_capabilities(self):
         self.assertEqual(
             tool.subscription_id("SubscriptionIds: {1} Specifier: mSubId=1"), 1

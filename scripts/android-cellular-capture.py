@@ -357,13 +357,20 @@ class Device:
             "usb_transport",
         )
 
+    def radio_state(self):
+        # Discard historical entries on-device; their size grows with phone uptime.
+        return self.shell(
+            "sh",
+            "-c",
+            "set -o pipefail; dumpsys telephony.registry "
+            "| sed -n '/last known state:/,/local logs:/p'",
+        )
+
     def preflight(self, workload):
         self.usb()
         screen_off(self.shell("dumpsys", "power"))
         network_line = validated_cellular(self.shell("dumpsys", "connectivity"))
-        parse_signal(
-            self.shell("dumpsys", "telephony.registry"), subscription_id(network_line)
-        )
+        parse_signal(self.radio_state(), subscription_id(network_line))
         live_temperature(self.shell("dumpsys", "thermalservice"))
         require(
             self.shell("settings", "get", "global", "wifi_on") == "0", "wifi_enabled"
@@ -487,9 +494,7 @@ class Device:
 
     def context(self, workload, evidence):
         network_line = validated_cellular(self.shell("dumpsys", "connectivity"))
-        radio = parse_signal(
-            self.shell("dumpsys", "telephony.registry"), subscription_id(network_line)
-        )
+        radio = parse_signal(self.radio_state(), subscription_id(network_line))
         evidence["radio"] = radio
         screen_off(self.shell("dumpsys", "power"))
         wifi = self.shell("settings", "get", "global", "wifi_on")

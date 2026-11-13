@@ -111,6 +111,8 @@ The mapping follows AOSP's
 [registry dump](https://raw.githubusercontent.com/aosp-mirror/platform_frameworks_base/android16-release/services/core/java/com/android/server/TelephonyRegistry.java)
 and [network capability subscription IDs](https://android.googlesource.com/platform/packages/modules/Connectivity/+/e0051cdeb9d51a75ddea747657221e6089981794/framework/src/android/net/NetworkCapabilities.java).
 Full telephony records, phone numbers and subscriber identifiers are never retained.
+The current-state section is filtered on-device, before the bounded ADB read;
+historical log growth cannot exhaust that read. Dump failures still fail capture.
 
 Do not infer authorization from the number of live sessions. Bind the expected
 inventory to unchanged profile/membership evidence, and verify the actual
