@@ -71,6 +71,26 @@ The minimal JSON and native Nix configuration surfaces do not change.
 - Restore any still-live quarantine when the owning control window ends.
 - Reply eligibility is connection-bound; keep packet, route, pairing, and snapshot authority checks unchanged.
 
+## Checkpoint-Only Announcements
+
+| Boundary | Contract |
+| --- | --- |
+| Eligibility | Read the installed verified checkpoint roster, even when local forwarding is gated; omit self and expired/removed members |
+| Legacy peers | Preserve the existing configured packet-peer eligibility; do not broaden legacy authority |
+| Scheduling | Queue startup and actual capability/state changes; remove the separate five-second connected-peer broadcast |
+| Ownership | Use the same coalesced capability snapshot, finite round, native cancellation, and shared four-flight budget |
+| Connection | A new authenticated connection can retry existing dirty work; duplicate connection events cannot extend the opportunity |
+| Control-only reply | Validate network/tag and checkpoint anchor before acknowledgement; retire the exact native owner before the root's control-only fast path consumes the event |
+| Authority changes | Recheck the installed projection before sending or accepting; retired native slots grant no exception |
+| Isolation | Roster/control eligibility does not install routes, packet sessions, cached packet capabilities, or application demand |
+
+Use the existing checkpoint projection rather than a second roster or request
+ledger. Repeated idle ticks, unchanged snapshots, and catch-up rounds are not
+new publication events and must not renew an exhausted delivery opportunity.
+
+The checkpoint transfer owner still verifies signed offers. A valid capability
+reply proves control delivery, not participation or permission to forward IP.
+
 ## Native Queue And Write Deadline
 
 - Attach the original monotonic control-round deadline to the existing native outbound message.
