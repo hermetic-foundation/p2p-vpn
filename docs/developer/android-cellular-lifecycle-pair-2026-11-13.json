@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "kind": "android_cellular_lifecycle_candidate_screening",
+  "date_utc": "2026-11-13",
+  "status": "valid_first_pair_target_failed",
+  "goal_complete": false,
+  "replicated_acceptance_complete": false,
+  "completed_valid_windows": 2,
+  "accounting": "Android UID energy estimate under simulated-on-battery USB power",
+  "physical_battery_discharge_claimed": false,
+  "settle_seconds_each": 300,
+  "window_seconds_each": 1800,
+  "topology": {
+    "authorized_phone_peers": 6,
+    "reachable_linux_counterparts": 4,
+    "offline_members_removed": false,
+    "linux_executable_sha256": "acac3ee811fb009c7f790e3666061325daf17f6167fe02a247367f3bf3eb4e64",
+    "same_linux_builds_for_both_arms": true,
+    "diagnostic_probe_or_dht_pause": false
+  },
+  "reference": {
+    "apk_sha256": "c6d5db42b79a830ab7e58ed5579034622ecbd8b41f94337d7b8c17def34bfa16",
+    "elapsed_seconds": 1800.219,
+    "app_consumption_mah": 152.197394,
+    "app_mah_per_hour": 304.3577578061336,
+    "modem_mean_mw": 1111.9846506725391,
+    "frontend_mean_mw": 203.86791322674193,
+    "raw_reports_sha256": [
+      "e79c8c242d42ec0c6ca2db068254bfe0ce677584fd0af91cd952d5adc0994a4c",
+      "bd571b3057087b7685215986fdd5efbb140339258e64ef80cdb02d040636fa2f"
+    ],
+    "trace_sha256": "187bdde46217d331c9961cca126e9287ff8282910179ad0d66bc113a54cc4f22",
+    "window_metadata_sha256": "0d8cb4ed4cfc860d4c1ad027c9f18efb2d31d937b1410da9db3d73e33f0b78f1",
+    "valid_accounting_and_rails": true
+  },
+  "candidate": {
+    "apk_sha256": "826b0f79d37bfeb06e4c8a367796b53026a9325b32a8e2f8898c31b1b8a251dd",
+    "runtime_revision": "5f2c74cd0ac3572447b02228b8a7b6f1baee153c",
+    "feature": "demand-lifecycle-trial",
+    "production_default_activated": false,
+    "elapsed_seconds": 1799.923,
+    "app_consumption_mah": 148.007641,
+    "app_mah_per_hour": 296.0279454176651,
+    "modem_mean_mw": 1073.558358806232,
+    "frontend_mean_mw": 182.05009820825202,
+    "raw_reports_sha256": [
+      "d1d1c063fbf55f507c32b78502895cd7fa3fbb7578890b5088fff43cb53f4acf",
+      "e954584eb81abd03d90398881b6ce2c65d6670d50714436c970c59f327f237b0"
+    ],
+    "trace_sha256": "ec0fe17f58db0fc04002cc5510ed9811afd92d9c24364a70e60deee34fc9076c",
+    "window_metadata_sha256": "90fbf30da541c23a6f4fadcbe45fd5a6b6336dcec70a9000e25c10dc678e25ae",
+    "valid_accounting_and_rails": true,
+    "maintenance_counter_deltas": {
+      "outbound_path_probes_sent": 330,
+      "inbound_path_probes_accepted": 1080,
+      "kad_primary_query_requests": 3720,
+      "kad_primary_dial_intents_dispatched": 3783,
+      "autonat_probes_scheduled": 1368,
+      "relay_inbound_circuits_established": 51,
+      "relay_outbound_circuits_established": 39
+    }
+  },
+  "comparison": {
+    "observed_app_reduction_percent": 2.7368490451865957,
+    "required_reduction_percent": 90,
+    "candidate_target_max_mah_per_hour": 30.43577578061336,
+    "target_passed": false,
+    "statistically_confirmed_savings_claimed": false
+  },
+  "matched_context": {
+    "screen_off_entire_intervals": true,
+    "device_idle_at_all_boundaries": "IDLE",
+    "power_save_at_all_boundaries": true,
+    "cellular_rsrp_dbm_at_all_boundaries": -108,
+    "reference_temperature_tenths_c": [333, 329],
+    "candidate_temperature_tenths_c": [327, 325],
+    "same_device_os_profile_membership_and_underlay": true,
+    "payload_counters_unchanged_during_both_intervals": true,
+    "inbound_and_outbound_boundary_probes_passed_both_arms": true
+  },
+  "endpoint_observation": {
+    "collected_after_energy_sample_before_boundary_traffic": true,
+    "phone_commands_issued": false,
+    "phone_remote_supported": true,
+    "phone_maintenance_paused": false,
+    "phone_quiet": false,
+    "public_discovery_suppressed": false,
+    "active_incoming_reservations": 1,
+    "specific_idle_rejection_reason_recorded": false,
+    "causal_energy_breakdown_claimed": false
+  },
+  "restoration": {
+    "original_phone_apk_and_wifi_restored": true,
+    "original_phone_profile_and_membership_verified": true,
+    "hardware_battery_reporting_and_no_pending_override_verified": true,
+    "four_linux_original_executables_configs_and_other_network_pids_verified": true
+  },
+  "next_action": "Diagnose failed idle preparation before measuring another candidate; retain this failed result and require fresh paired reversed-order replication after fixes."
+}

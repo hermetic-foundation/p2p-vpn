@@ -277,3 +277,27 @@ device exclusions remain unverified operational gates, not passed tests.
 The offline Android package plan contains many locally unrealized inputs.
 A bounded online cache query did not finish within 90 seconds; this does not
 establish which inputs lack binary substitutes. No package build was started.
+
+## Cellular Idle Diagnostics
+
+The [first complete cellular pair](android-cellular-lifecycle-pair-2026-11-13.json)
+failed the 10x target. The phone advertised support, but its counterpart reported
+neither maintenance preparation nor committed quiet permission.
+
+| Planned Signal | Constraint |
+| --- | --- |
+| Idle preparation reason | Distinguish unsupported epoch/scope, missing incoming path, queued payload, and recent demand |
+| Native work | Report separately from application work; never create demand to collect diagnostics |
+| State changes | Bound output to one event per peer per idle interval; use the existing driver, no new timer |
+| Privacy | Public peer ID and local booleans/enums only; no membership secrets, keys, addresses or packet contents |
+| Behavior | No new dial, probe, keepalive, wire field, user option or relaxed eligibility check |
+
+## Discovery Effect Audit
+
+- Recheck each target before automatic data dials from late discovery results.
+- Retain valid address observations without repairing a maintenance-paused peer.
+- Keep explicit, scoped control delivery independent of data-path dormancy.
+- Preserve unpaused/legacy behavior and LAN-first recovery.
+
+These corrections require focused regressions and fresh device measurements.
+They do not establish which component consumed the measured cellular energy.

@@ -156,5 +156,16 @@ The [November 13 pilot](android-cellular-lifecycle-pilot-2026-11-13.json) retain
 the measured primary rate, rejected trace, functional results and smoke checks.
 It is not a valid paired comparison or a battery-improvement claim.
 
+The subsequent [complete first pair](android-cellular-lifecycle-pair-2026-11-13.json)
+passed accounting, rail and boundary-probe checks, but failed the energy target.
+The observed rate changed from 304.36 to 296.03 mAh/hour, not the required 10x.
+
+| Candidate Observation | Consequence |
+| --- | --- |
+| No payload during either energy interval | Maintenance remained active without application traffic |
+| Phone supported lifecycle, but was neither prepared nor quiet | Investigate idle eligibility before another long comparison |
+| Two offline members retained in both arms | Do not remove members to improve the result |
+| One original/candidate pair only | No replicated or statistically confirmed savings claim |
+
 See Perfetto's [streaming contract](https://perfetto.dev/docs/concepts/config#streaming-long-traces)
 and [buffer statistics](https://raw.githubusercontent.com/google/perfetto/main/protos/perfetto/common/trace_stats.proto).
