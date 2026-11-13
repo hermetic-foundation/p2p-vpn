@@ -16,6 +16,9 @@ Use these docs when changing, testing, or debugging `p2p-vpn`.
 | [Android Battery Efficiency](android-battery-efficiency.md) | 10x target, physical-device measurement contract, and feature-preservation gates. |
 | [Cellular Maintenance Isolation](android-cellular-combined-isolation.md) | Combined DHT/probe diagnostic, normal/off reference, and battery-accounting caveats. |
 | [Demand-Driven Lifecycle](demand-driven-lifecycle.md) | Planned idle negotiation, incoming relay policy, compatibility, and battery acceptance gates. |
+| [Incoming Anchor Ownership](demand-lifecycle-incoming-anchor.md) | Native reservation ownership, TCP preference, compatibility, and staged activation. |
+| [Incoming Relay Recovery](demand-lifecycle-relay-recovery.md) | Bounded repair independent of application traffic and ordinary discovery. |
+| [Idle Maintenance](demand-lifecycle-idle-maintenance.md) | Sparse native ping, surplus infrastructure retirement, and shared-work protection. |
 | [Quiet Relay Validation](relay-idle-validation.md) | Bounded public reservation test, raw idle traffic, and fresh incoming-circuit checks. |
 | [Dormant Path Retirement](demand-lifecycle-retirement.md) | Datagram cleanup ownership, demand/work fences, and staged activation. |
 | [Dormant Control Work](demand-lifecycle-control-work.md) | Native wire ownership, codec-I/O fences, protected stream retirement, and dormant metadata. |

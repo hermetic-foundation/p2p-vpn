@@ -236,6 +236,11 @@ async fn automatic_incoming_recovery_uses_a_private_routing_only_bootstrap_and_s
 }
 
 #[tokio::test]
+async fn idle_infrastructure_prunes_spare_quic_and_preserves_incoming_after_sparse_tcp_ping() {
+    automatic_incoming_anchor_scenario(AnchorSetup::PruneIdle).await;
+}
+
+#[tokio::test]
 async fn automatic_incoming_anchor_preserves_an_explicit_quic_reservation() {
     tokio::time::timeout(
         Duration::from_secs(10),
@@ -356,6 +361,30 @@ enum AnchorSetup {
     DiscoverTcp,
     DiscoverAfterLoss,
     PrivateRouter,
+    PruneIdle,
+}
+
+fn retire_infrastructure_fixture(
+    receiver: &mut EventFixture,
+    queues: &PeerQueues,
+    now: Instant,
+) -> usize {
+    idle_infrastructure::retire(&mut idle_infrastructure::RetirementContext {
+        node: &mut receiver.node,
+        forwarder: &receiver.forwarder,
+        infrastructure: &receiver.infrastructure,
+        routing: &receiver.routing,
+        queues,
+        in_flight: &receiver.packet_in_flight,
+        epochs: &mut receiver.epochs,
+        connections: &receiver.active_connections,
+        readiness: &receiver.readiness,
+        auto_relay: &receiver.auto_relay,
+        pairing: &receiver.pairing,
+        probes: &MembershipProbeConnections::default(),
+        discovery_quiet: true,
+        now,
+    })
 }
 
 #[tokio::test]
@@ -722,7 +751,8 @@ fn assert_anchor_readiness_fences(
 }
 
 async fn automatic_incoming_anchor_scenario(setup: AnchorSetup) {
-    tokio::time::timeout(Duration::from_secs(15), Box::pin(async {
+    let prune = matches!(setup, AnchorSetup::PruneIdle);
+    tokio::time::timeout(Duration::from_secs(if prune {90} else {15}), Box::pin(async {
         let private_router = matches!(setup, AnchorSetup::PrivateRouter);
         let protocol = if private_router { crate::config::PRIVATE_KADEMLIA_PROTOCOL.to_owned() }
             else { DiscoveryConfig::default().kademlia_protocol };
@@ -767,7 +797,7 @@ async fn automatic_incoming_anchor_scenario(setup: AnchorSetup) {
         let reuse = match setup {
             AnchorSetup::ReuseTcp => Some(connect_anchor_fixture(&mut receiver, &mut relay, tcp.clone()).await),
             AnchorSetup::ReuseQuic | AnchorSetup::RecoverQuic => quic_id,
-            AnchorSetup::DialTcp | AnchorSetup::ColdQuic | AnchorSetup::DiscoverTcp | AnchorSetup::DiscoverAfterLoss | AnchorSetup::PrivateRouter => None,
+            AnchorSetup::DialTcp | AnchorSetup::ColdQuic | AnchorSetup::DiscoverTcp | AnchorSetup::DiscoverAfterLoss | AnchorSetup::PrivateRouter | AnchorSetup::PruneIdle => None,
         };
         let use_quic = matches!(setup, AnchorSetup::ReuseQuic | AnchorSetup::RecoverQuic | AnchorSetup::ColdQuic);
         let address = if use_quic {quic} else {tcp};
@@ -791,7 +821,7 @@ async fn automatic_incoming_anchor_scenario(setup: AnchorSetup) {
             &receiver.metrics, &mut receiver.epochs, &receiver.active_connections, &[]);
         let owned = receiver.auto_relay.pending_reservations.get(&relay_peer).and_then(|pending| pending.owned_dial);
         let expected_owner = reuse.or(owned);
-        assert_eq!(owned.is_some(), matches!(setup, AnchorSetup::DialTcp | AnchorSetup::RecoverQuic | AnchorSetup::ColdQuic));
+        assert_eq!(owned.is_some(), matches!(setup, AnchorSetup::DialTcp | AnchorSetup::RecoverQuic | AnchorSetup::ColdQuic | AnchorSetup::PruneIdle));
         assert_eq!(receiver.auto_relay.reservation_listeners.is_empty(), owned.is_some() || discover);
         let kind = if use_quic {PathKind::DirectQuicStream} else {PathKind::DirectTcpStream};
         let mut tick = tokio::time::interval(Duration::from_millis(20));
@@ -837,6 +867,50 @@ async fn automatic_incoming_anchor_scenario(setup: AnchorSetup) {
         }
         if let Some(quic_id) = quic_id {
             assert!(receiver.epochs.is_usable(quic_id), "TCP promotion must not destroy the old connection");
+        }
+        if prune {
+            while idle_infrastructure::wire_busy(&receiver.node) {
+                tokio::select! {
+                    _ = relay.swarm.select_next_some() => {},
+                    event = receiver.node.swarm.select_next_some() => receiver.dispatch(event).await,
+                    _ = tokio::time::sleep(Duration::from_millis(20)) => {},
+                }
+            }
+            let quic_id = quic_id.unwrap();
+            let now = Instant::now() + Duration::from_secs(61);
+            let mut queues = PeerQueues::new(4, 4096);
+            queues.enqueue(crate::queue::Packet::new(PeerId::from_libp2p(sender.local_peer_id), 1, vec![0x45;20])).unwrap();
+            assert_eq!(retire_infrastructure_fixture(&mut receiver, &queues, now), 0);
+            queues.dequeue().unwrap();
+            let query = receiver.node.swarm.behaviour_mut().kad.get_closest_peers(Libp2pPeerId::random());
+            assert_eq!(retire_infrastructure_fixture(&mut receiver, &queues, now), 0);
+            receiver.node.swarm.behaviour_mut().kad.cancel_query(&query);
+            assert_eq!(retire_infrastructure_fixture(&mut receiver, &queues, now), 1);
+            assert!(receiver.epochs.retiring.contains(&quic_id));
+            assert!(receiver.epochs.is_usable(owner));
+            assert_eq!(retire_infrastructure_fixture(&mut receiver, &queues, now), 0);
+            while receiver.active_connections.contains_key(&(relay_peer, quic_id)) {
+                tokio::select! {
+                    _ = relay.swarm.select_next_some() => {},
+                    event = receiver.node.swarm.select_next_some() => receiver.dispatch(event).await,
+                }
+            }
+            assert!(has_incoming_fixture(&receiver));
+            assert!(receiver.infrastructure.contains(relay_peer), "retirement must preserve the active anchor's peer metadata");
+            let deadline = tokio::time::sleep(Duration::from_secs(62));
+            tokio::pin!(deadline);
+            loop {
+                tokio::select! {
+                    _ = &mut deadline => break,
+                    _ = relay.swarm.select_next_some() => {},
+                    event = receiver.node.swarm.select_next_some() => {
+                        assert!(!matches!(&event, SwarmEvent::ConnectionClosed {connection_id, ..} if *connection_id == owner), "TCP anchor must survive sparse native ping interval");
+                        receiver.dispatch(event).await;
+                    },
+                }
+            }
+            assert!(has_incoming_fixture(&receiver));
+            assert_eq!(receiver.metrics.snapshot(crate::queue::QueueStats::default()).auto_relay_reservation_attempts, 1);
         }
         if discover {
             assert!(incoming_recovery::has_usable_path(&receiver.node, &receiver.auto_relay,

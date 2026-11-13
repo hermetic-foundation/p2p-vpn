@@ -164,6 +164,7 @@ use control_connection_retention::should_retain_control_connection;
 mod demand_lifecycle;
 use demand_lifecycle::{DemandLifecycle, LifecycleContext};
 mod dormant_paths;
+mod idle_infrastructure;
 mod incoming_anchor;
 mod incoming_recovery;
 mod recovery_snapshot;
@@ -2230,6 +2231,22 @@ where
                     &mut membership_record_syncs,
                     &metrics,
                 );
+                idle_infrastructure::retire(&mut idle_infrastructure::RetirementContext {
+                    node: &mut node,
+                    forwarder: &forwarder,
+                    infrastructure: &infrastructure_peers,
+                    routing: &routing_infrastructure_peers,
+                    queues: &queues,
+                    in_flight: &queue_runtime.packet_in_flight,
+                    epochs: &mut connection_epochs,
+                    connections: &active_connections,
+                    readiness: &relay_readiness,
+                    auto_relay: &auto_relay,
+                    pairing: &code_pairing_sessions,
+                    probes: &membership_probe_connections,
+                    discovery_quiet: public_discovery_quiet,
+                    now: Instant::now(),
+                });
             }
             () = async {
                 timers.kademlia_maintenance

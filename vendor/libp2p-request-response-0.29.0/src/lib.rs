@@ -585,6 +585,25 @@ where
             })
     }
 
+    /// Whether any peer owns queued or in-flight work, including active codecs
+    /// and terminal notifications not yet returned by `poll`.
+    pub fn has_any_pending_requests(&self) -> bool {
+        self.pending_outbound_requests
+            .values()
+            .any(|requests| !requests.is_empty())
+            || self.connected.values().flatten().any(|connection| {
+                connection.active_streams.load(Ordering::Acquire) > 0
+                    || !connection.pending_outbound_responses.is_empty()
+                    || !connection.pending_inbound_responses.is_empty()
+            })
+            || self.pending_events.iter().any(|event| {
+                matches!(
+                    event,
+                    ToSwarm::GenerateEvent(_) | ToSwarm::NotifyHandler { .. }
+                )
+            })
+    }
+
     /// Returns the next outbound request ID.
     fn next_outbound_request_id(&mut self) -> OutboundRequestId {
         let request_id = self.next_outbound_request_id;

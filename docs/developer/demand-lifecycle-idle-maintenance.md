@@ -2,8 +2,9 @@
 
 ## Status
 
-Implementation contract. The demand lifecycle stays unadvertised until its
-control-delivery, wake, roaming, and energy gates pass.
+Infrastructure maintenance is implemented. The demand lifecycle stays
+unadvertised until its bilateral dormancy, control-delivery, wake, roaming,
+and energy gates pass.
 
 ## Transport Policy
 
@@ -37,7 +38,7 @@ native ping handler in the versions pinned by `Cargo.lock`.
 | Identity | Current, established, non-retiring connection ID and authenticated peer |
 | Initial grace | At least 60 seconds since establishment |
 | Scope | Automatic infrastructure, routing-only peers, and cached bootstrap peers; not overlay members |
-| Shared work | No queued/in-flight packets, pending native dials, request/reply codec work, or DHT work |
+| Shared work | No queued/in-flight packets, pending native transports, request/reply codec work, or DHT/AutoNAT work |
 
 Protect:
 
@@ -46,11 +47,13 @@ Protect:
 - Relays used by active circuits, code pairing, or membership/file-pairing probes.
 - Nodes serving circuit-relay clients; do not infer absence of server-side circuits from overlay paths.
 - Primary and public-pairing DHT queries, handler streams, RPCs, negotiations, and queued events.
+- Native AutoNAT probes, including pre-decode codec work and queued completion events; retiring their transport would trigger retries.
 
 ## Ownership
 
 - Inspect native work owners; do not add parallel request or connection registries.
 - Include disconnected requests, queued terminal notifications, and pre-decode codec work.
+- AutoNAT's read-only native getter inspects its existing request owner, probe maps, and pending actions; future timers are not work.
 - Protect shared relay transports while any protocol work or native dial might still be selecting a circuit owner.
 - Mark only the chosen connection ID retiring, then ask Swarm to close it.
 - Preserve addresses, configured seeds, memberships, and identity records.
@@ -72,3 +75,46 @@ Protect:
 
 Connection counts and wire reductions are not battery measurements. Final
 acceptance still requires matched, replicated idle cellular mAh/hour results.
+
+## Evidence: November 12, 2026
+
+| Check | Result |
+| --- | --- |
+| Workspace/all targets | 1,991 passed; zero failed; 49 ignored |
+| Focused pruning | Six passed, including the real socket/lease test |
+| Native protocol work | Five request/reply tests and three AutoNAT tests passed |
+| TCP incoming path | Spare QUIC closes; TCP reservation survives 62 real idle seconds and accepts fresh relayed control |
+| Compatibility | Active QUIC, QUIC-only relay fallback, explicit relay overrides, and recovery regressions passed |
+| Nix defaults | Seven relay contracts and nine existing QUIC contracts evaluated true; relay JSON check also built |
+| Source packaging | Linux and both Android native packages retain the runtime and native patches; Linux test inventories match |
+| Clippy | Correctness, suspicious-code, and performance groups passed; advisory warnings remain |
+| Formatting | Workspace Rust and touched Nix modules/tests passed |
+| Build resources | One existing 6.3 GiB target; two build jobs; incremental compilation off; no downloads |
+| Full Nix/APK | Not built: offline source-check dry run requires 493 uncached derivations, including bootstrap compilers |
+| Devices and energy | No APK/service deployment, phone-setting change, or new cellular energy measurement |
+
+- The socket fixture injects the quiet-policy snapshot and establishment grace clock.
+- Transport closure, native reservation ownership, the 62-second idle dwell, and fresh incoming control use real local sockets.
+- AutoNAT regression checks outstanding work with zero pending transports, then drains dial-back handshakes before asserting completion.
+- The initial broad run caught an old two-reservation CLI expectation; the corrected full rerun passed.
+
+```sh
+cargo test --offline --locked --workspace --all-targets -- --test-threads=2 --quiet
+cargo clippy --offline --locked --workspace --all-targets -- \
+  -D clippy::correctness -D clippy::suspicious -D clippy::perf
+cargo fmt --all -- --check
+nix eval --offline --raw .#checks.x86_64-linux.nixos-relay-defaults-eval.text
+nix eval --offline --raw .#checks.x86_64-linux.nixos-quic-defaults-eval.text
+```
+
+## Remaining Gates
+
+- Negotiate bilateral dormancy and stop idle overlay maintenance at both ends.
+- Gate nonessential DHT/AutoNAT maintenance on the negotiated quiet state.
+- Deliver membership, DNS, and revocation updates to dormant members on events.
+- Verify incoming/outgoing wake, legacy peers, active transfers, relay fallback, and roaming.
+- Deploy a validated candidate and measure fresh paired/reversed cellular controls.
+- Require at least 90% lower idle app-attributed mAh/hour, corroborated by modem energy.
+
+The native QUIC fallback still has five-second upkeep. Neither these source
+changes nor socket tests establish any cellular battery improvement.

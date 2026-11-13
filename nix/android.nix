@@ -68,6 +68,7 @@ let
   rootManifest = src + "/Cargo.toml";
   rootLock = src + "/Cargo.lock";
   rootRustSource = src + "/src";
+  autonatSource = src + "/vendor/libp2p-autonat-0.15.0";
   kademliaSource = src + "/vendor/libp2p-kad-0.48.0";
   relaySource = src + "/vendor/libp2p-relay-0.21.1";
   requestResponseSource = src + "/vendor/libp2p-request-response-0.29.0";
@@ -79,6 +80,7 @@ let
     rootManifest
     rootLock
     rootRustSource
+    autonatSource
     kademliaSource
     relaySource
     requestResponseSource
@@ -107,6 +109,7 @@ let
       rootManifest
       rootLock
       rootRustSource
+      autonatSource
       kademliaSource
       relaySource
       requestResponseSource

@@ -120,6 +120,23 @@ impl Default for Behaviour {
 }
 
 impl Behaviour {
+    pub(crate) fn has_any_pending_work(&self) -> bool {
+        !self.outbound_owners.is_empty()
+            || self.connections.values().any(|state| {
+                state.pending_outbound > 0
+                    || state
+                        .stream_budget
+                        .as_ref()
+                        .is_some_and(|(budget, capacity)| budget.available_permits() < *capacity)
+            })
+            || self.pending_events.iter().any(|event| {
+                matches!(
+                    event,
+                    ToSwarm::GenerateEvent(_) | ToSwarm::NotifyHandler { .. }
+                )
+            })
+    }
+
     pub(crate) fn has_pending_work(&self, peer: PeerId) -> bool {
         self.connections.values().any(|state| {
             state.peer == peer
@@ -1167,13 +1184,16 @@ mod tests {
         let handler = behaviour.connection_handler(peer, id);
         establish_connection(&mut behaviour, peer, id);
         assert!(!behaviour.has_pending_work(peer));
+        assert!(!behaviour.has_any_pending_work());
         let permit = handler.acquire_stream().unwrap();
         assert!(behaviour.has_pending_work(peer));
+        assert!(behaviour.has_any_pending_work());
         behaviour = behaviour.with_max_concurrent_streams(1);
         assert!(behaviour.has_pending_work(peer));
         assert!(!behaviour.has_pending_work(other));
         drop(permit);
         assert!(!behaviour.has_pending_work(peer));
+        assert!(!behaviour.has_any_pending_work());
         let request_id = behaviour.send_request_on_connection(
             peer,
             id,
@@ -1201,6 +1221,7 @@ mod tests {
         assert!(!behaviour.has_pending_work(peer));
         close_connection(&mut behaviour, peer, id);
         assert!(behaviour.connections.is_empty());
+        assert!(!behaviour.has_any_pending_work());
     }
 
     #[test]

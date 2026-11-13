@@ -173,9 +173,11 @@ fn disconnected_queue_and_undelivered_failure_remain_busy() {
     let unrelated = PeerId::random();
     let mut wire = rpc(Duration::from_secs(5));
     assert!(!wire.has_pending_requests(&peer));
+    assert!(!wire.has_any_pending_requests());
     let request = wire.send_request(&peer, frame(1));
     for _ in 0..1000 {
         assert!(wire.has_pending_requests(&peer));
+        assert!(wire.has_any_pending_requests());
         assert!(!wire.has_pending_requests(&unrelated));
         assert!(wire.is_pending_outbound(&peer, &request));
     }
@@ -193,6 +195,7 @@ fn disconnected_queue_and_undelivered_failure_remain_busy() {
         }),
     );
     assert!(!wire.is_pending_outbound(&peer, &request));
+    assert!(wire.has_any_pending_requests());
     assert!(
         wire.has_pending_requests(&peer),
         "terminal notification has not been delivered"
@@ -201,6 +204,7 @@ fn disconnected_queue_and_undelivered_failure_remain_busy() {
         std::task::Poll::Ready(ToSwarm::GenerateEvent(request_response::Event::OutboundFailure {peer:owner, request_id, ..}))
         if owner == peer && request_id == request));
     assert!(!wire.has_pending_requests(&peer));
+    assert!(!wire.has_any_pending_requests());
     assert!(NetworkBehaviour::poll(&mut wire, &mut cx).is_pending());
 }
 
@@ -229,6 +233,7 @@ async fn undecoded_inbound_codec_work_prevents_false_idleness() {
         b.behaviour().rpc.has_pending_requests(&peer_a),
         "no request has been decoded yet"
     );
+    assert!(b.behaviour().rpc.has_any_pending_requests());
     gate.release.add_permits(1);
     let (mut sent, mut answered) = (false, false);
     tokio::time::timeout(Duration::from_secs(5), async {
@@ -277,6 +282,7 @@ async fn concurrent_requests_and_queued_replies_drain_without_false_idleness() {
     }).await.unwrap();
     while let Some((inbound, channel)) = requests.pop() {
         assert!(b.behaviour().rpc.has_pending_requests(&peer_a));
+        assert!(b.behaviour().rpc.has_any_pending_requests());
         assert!(!b.behaviour().rpc.has_pending_requests(&unrelated));
         b.behaviour_mut()
             .rpc
@@ -378,4 +384,6 @@ async fn failed_reply(timeout: bool) {
     drop(held);
     assert!(!a.behaviour().rpc.has_pending_requests(&peer_b));
     assert!(!b.behaviour().rpc.has_pending_requests(&peer_a));
+    assert!(!a.behaviour().rpc.has_any_pending_requests());
+    assert!(!b.behaviour().rpc.has_any_pending_requests());
 }

@@ -43,7 +43,7 @@ use crate::{
 mod public_provider_tests;
 
 const PROTOCOL_VERSION: &str = "/p2p-vpn/0.1.0";
-const CONNECTION_PING_INTERVAL: Duration = Duration::from_secs(15);
+const CONNECTION_PING_INTERVAL: Duration = Duration::from_secs(60);
 const CONNECTION_PING_TIMEOUT: Duration = Duration::from_secs(20);
 const SWARM_IDLE_CONNECTION_TIMEOUT: Duration = Duration::from_secs(60);
 const OVERLAY_MDNS_QUERY_INTERVAL: Duration = Duration::from_secs(10);
@@ -90,6 +90,23 @@ pub struct Behaviour {
 }
 
 impl Behaviour {
+    pub(crate) fn has_pending_work(&self) -> bool {
+        self.control.has_any_pending_requests()
+            || self.lifecycle.has_any_pending_requests()
+            || self.checkpoint.has_any_pending_requests()
+            || self.checkpoint_mutation.has_any_pending_requests()
+            || self.packet.has_any_pending_requests()
+            || self.pairing.has_any_pending_requests()
+            || self.pairing_code.has_any_pending_requests()
+            || self.pairing_code_v2.has_any_pending_requests()
+            || self.service.has_any_pending_requests()
+            || self.pinned_packet_stream.has_any_pending_work()
+            || self
+                .autonat
+                .as_ref()
+                .is_some_and(autonat::Behaviour::has_pending_work)
+    }
+
     pub(crate) fn has_pending_peer_work(&self, peer: PeerId) -> bool {
         self.control.has_pending_requests(&peer)
             || self.lifecycle.has_pending_requests(&peer)
@@ -4103,7 +4120,7 @@ mod tests {
         let dialer_peer = dialer.local_peer_id;
         next_connection_to_peer(&mut listener.swarm, &mut dialer.swarm, listener_peer).await;
 
-        // The libp2p swarm default expires at 10 seconds, before the next 15-second ping.
+        // Stock Swarm idle expiry is 10 seconds, far before the sparse heartbeat.
         let idle_boundary = tokio::time::sleep(Duration::from_secs(17));
         tokio::pin!(idle_boundary);
         loop {
@@ -4129,6 +4146,17 @@ mod tests {
     #[tokio::test]
     async fn pinned_overload_replies_without_resetting_tcp_or_quic_connection() {
         exercise_pinned_overload(1, Duration::ZERO).await;
+    }
+
+    #[test]
+    fn sparse_native_ping_keeps_quic_idle_compatibility() {
+        assert_eq!(CONNECTION_PING_INTERVAL, Duration::from_secs(60));
+        assert_eq!(CONNECTION_PING_TIMEOUT, Duration::from_secs(20));
+        let key = libp2p::identity::Keypair::generate_ed25519();
+        let quic = libp2p::quic::Config::new(&key);
+        assert_eq!(quic.max_idle_timeout, 10_000);
+        assert_eq!(quic.keep_alive_interval, Duration::from_secs(5));
+        assert_eq!(quic.handshake_timeout, Duration::from_secs(5));
     }
 
     #[tokio::test]

@@ -52,7 +52,8 @@ protocol, claimed peer identity, or independent reservation ledger is introduced
 
 ## Idle Maintenance
 
-- Target a sparse native transport heartbeat, initially 60 seconds with the existing 20-second timeout.
+- Native libp2p ping uses a 60-second interval with the existing 20-second timeout.
+- Native QUIC retains its compatible five-second keepalive and ten-second idle timeout.
 - Continue answering incoming pings and native relay lease refreshes.
 - Active overlay path probes remain responsible for demanded data-path liveness.
 - A silent idle-anchor failure can therefore take about 80 seconds to detect.
@@ -96,7 +97,7 @@ the bilateral lifecycle exchange.
 | Explicit overrides | Automatic attempts exclude explicitly configured relay peer IDs, including while explicit setup is pending |
 | Automatic footprint | Rust and native Nix default to one; explicit disable/redundancy settings and one-slot failover are tested |
 | Candidate exhaustion | Dedicated bounded native query ownership replenishes an empty pool independently of mesh quietness |
-| Sparse heartbeat and pruning | Pending |
+| Sparse heartbeat and pruning | Native ping is sparse; mature surplus infrastructure closes behind a verified incoming anchor and native work fences |
 | Dormant control delivery and activation | Pending |
 | Cellular energy acceptance | Not measured for this lifecycle |
 
@@ -125,7 +126,8 @@ the bilateral lifecycle exchange.
 - Cold fallback uses the same owned dial ID and deadline, with no pre-existing QUIC connection.
 - Transport fallback keeps the attempt deadline and clears per-peer attempt ownership on expiry.
 
-This does not yet implement sparse maintenance or idle surplus-connection pruning.
+The [idle maintenance contract](demand-lifecycle-idle-maintenance.md) records
+sparse ping and surplus-connection pruning. Overlay dormancy remains gated.
 The [incoming recovery contract](demand-lifecycle-relay-recovery.md) records
 bounded query ownership, cold transport fallback, and empty-pool replenishment.
 
@@ -208,6 +210,6 @@ cargo fmt --all -- --check
 - Both passed unchanged in the final serial workspace run.
 - The first discovery fixture inherited public bootstrap seeds; the final socket tests replace both the bootstrap list and native address book with an isolated local seed.
 
-Remaining activation gates include sparse maintenance, idle connection pruning,
-event-driven dormant control delivery, wake/roaming validation, and matched
-replicated cellular measurements. The lifecycle remains unadvertised.
+Remaining activation gates include bilateral dormancy, event-driven dormant
+control delivery, wake/roaming validation, and matched replicated cellular
+measurements. The lifecycle remains unadvertised.
