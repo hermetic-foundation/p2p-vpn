@@ -122,7 +122,7 @@ Cached membership and DNS must remain authorized without retaining every socket.
 
 ## Remaining Activation Work
 
-1. Finish checkpoint-only capability announcements and bounded public discovery for cold control delivery.
+1. Integrate bounded public discovery for cold control delivery; retained addresses alone are insufficient.
 2. Preserve finite control recovery while quiet discovery suppresses unrelated background work.
 3. Complete remaining discovery/NAT quiet policy and prove first-payload recovery through the integrated runner.
 4. Verify extended dormancy, roaming, mixed-version operation, and feature-preservation gates before production advertisement.
@@ -149,9 +149,10 @@ stale-epoch anchors; they do not replace the remaining integrated/device gates.
 | Maintenance drain | Preparation is not quiet; pending work drains normally; payload resumes maintenance immediately |
 | Legacy races | Crossed idle offers clear quiet on fallback; delayed current-epoch unsupported results survive semantic expiry |
 | Disconnected membership | Shared runner reconnects a retained TCP member, persists departure, drains ACKs, and preserves survivor governance |
-| Dormant control delivery | 17 coalescing, deadline, quarantine, native-slot, and LAN reconnect regressions pass |
+| Dormant control delivery | 18 coalescing, deadline, quarantine, native-slot, LAN reconnect, and connection-ID regressions pass |
+| Checkpoint-only publication | Seven new regressions pass, including real gated TCP callbacks/replies, finite attempts, revocation, and expiry |
 | Checkpoint ownership | 58 tests pass, including finite hostname catch-up and cancelled/expired control leases |
-| Workspace/all-targets | 2,066 passed; zero failures; 49 existing exclusions, including opt-in namespace/resource scenarios |
+| Workspace/all-targets | 2,073 passed; zero failures; 49 existing exclusions, including opt-in namespace/resource scenarios |
 | Clippy | Required correctness, suspicious, and performance groups pass; advisory and staged-unused API warnings remain |
 | Formatting and packaging | Workspace and vendored Rust formatting pass; evaluated Linux/Android sources include identical runtime and patched dependency |
 | Unrun operational gates | Full Nix/Android package builds, NixOS VMs, live device/public-relay tests, long dormancy, and energy comparisons |

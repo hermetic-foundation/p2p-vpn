@@ -2262,6 +2262,68 @@ async fn retired_configured_listener_marker_survives_error_until_terminal_close(
 }
 
 #[tokio::test]
+async fn checkpoint_control_only_connection_callback_does_not_install_a_packet_path() {
+    use crate::membership::checkpoint::{
+        CheckpointMember, CooperativeMembershipState, NetworkAnchor, NetworkCapability,
+        SnapshotPolicy,
+    };
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let mut fixture = EventFixture::new(Libp2pPeerId::random());
+        let local = &fixture.node.identity;
+        let remote = loop {
+            let remote = NodeIdentity::generate_ed25519().unwrap();
+            if crate::route::builtin_ipv4(PeerId::from_libp2p(remote.peer_id.parse().unwrap()))
+                != crate::route::builtin_ipv4(PeerId::from_libp2p(local.peer_id.parse().unwrap())) {
+                break remote;
+            }
+        };
+        let peer = remote.peer_id.parse().unwrap();
+        let anchor = NetworkAnchor::new([92; 32]).unwrap();
+        let capability = NetworkCapability::from_secret(anchor.clone(), Some(&[7; 32])).unwrap();
+        let wall = current_unix_seconds_lossy();
+        let state = CooperativeMembershipState::bootstrap_at(
+            capability.clone(), local.peer_id.clone(),
+            vec![CheckpointMember::new(local).unwrap(), CheckpointMember::new(&remote).unwrap()],
+            SnapshotPolicy::default(), wall,
+        ).unwrap();
+        let returning = CooperativeMembershipState::restore(capability, local.peer_id.clone(), state.retained()).unwrap();
+        fixture.forwarder = Forwarder::from_checkpoint_config(&config_with_peer(local, peer), &returning, &anchor, wall).unwrap();
+        fixture.membership = OverlayMembership::from_transport_peers(fixture.forwarder.config(),
+            fixture.forwarder.configured_transport_peers()).unwrap();
+        fixture.membership.checkpoint_sync_peers.insert(peer);
+        let mut receiver = membership_sync_test_node(remote);
+        receiver.swarm.listen_on("/ip4/127.0.0.1/tcp/0".parse().unwrap()).unwrap();
+        let address = loop {
+            if let SwarmEvent::NewListenAddr { address, .. } = receiver.swarm.select_next_some().await { break address; }
+        };
+        fixture.epochs.dial(&mut fixture.node.swarm,
+            DialOpts::peer_id(peer).addresses(vec![address]).build()).unwrap();
+        let mut received = 0;
+        loop {
+            tokio::select! {
+                event = fixture.node.swarm.select_next_some() => fixture.dispatch(event).await,
+                event = receiver.swarm.select_next_some() => {
+                    if let SwarmEvent::Behaviour(BehaviourEvent::Control(request_response::Event::Message {
+                        message: Message::Request { request: ControlRequest::Capabilities(_), channel, .. }, ..
+                    })) = event {
+                        received += 1;
+                        receiver.swarm.behaviour_mut().control.send_response(channel,
+                            ControlResponse::CapabilitiesAccepted(ControlCapabilities::local("lab", None, 1280))).unwrap();
+                    }
+                },
+            }
+            if received > 0 && fixture.membership_record_syncs.pending.is_empty() { break; }
+        }
+        assert_eq!(received, 1);
+        assert_eq!(fixture.metrics.snapshot(crate::queue::QueueStats::default()).control_requests_sent, 1);
+        assert!(!fixture.capabilities.contains(PeerId::from_libp2p(peer)));
+        assert!(fixture.paths.best_for(PeerId::from_libp2p(peer)).is_none());
+        assert!(fixture.forwarder.authorized_routes().is_empty());
+        assert!(fixture.forwarder.application_demand(PeerId::from_libp2p(peer)).is_none());
+    }).await.expect("root control-only connection callback");
+}
+
+#[tokio::test]
 async fn native_connection_event_uses_one_owned_capability_request() {
     tokio::time::timeout(Duration::from_secs(10), async {
         let remote = NodeIdentity::generate_ed25519().unwrap();

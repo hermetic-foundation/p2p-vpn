@@ -365,6 +365,254 @@ mod checkpoint_joiner {
         inviter
     }
 
+    #[tokio::test]
+    async fn checkpoint_control_only_publication_is_finite_while_pairing_is_gated() {
+        let inviter = approved();
+        let mut joined = JoinFixture::new(&inviter);
+        joined.prepare(&inviter);
+        joined
+            .owner
+            .as_ref()
+            .unwrap()
+            .decorate_capabilities(&mut joined.capabilities)
+            .unwrap();
+        let peer = inviter.local.peer_id.parse().unwrap();
+        let mut node = pairing_test_node(&joined.identity);
+        let mut syncs = MembershipRecordSyncs::default();
+        let metrics = RuntimeMetrics::default();
+        let now = Instant::now();
+        syncs.queue_capabilities(joined.capabilities.clone(), &joined.forwarder);
+        syncs.drive_capabilities(&mut node.swarm, &joined.forwarder, &metrics, now);
+        assert!(
+            syncs.pending.is_empty(),
+            "disconnected control work waits for LAN discovery"
+        );
+        syncs.drive_capabilities(
+            &mut node.swarm,
+            &joined.forwarder,
+            &metrics,
+            now + PEER_RECOVERY_LAN_FIRST_GRACE,
+        );
+        assert_eq!(syncs.pending.len(), 1);
+        let id = *syncs.pending.keys().next().unwrap();
+        syncs.expire_control_work(now + control_delivery::DELIVERY_WINDOW, &metrics);
+        assert!(matches!(
+            syncs.pending[&id],
+            control_delivery::PendingControlSync::Retired { .. }
+        ));
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let SwarmEvent::Behaviour(BehaviourEvent::Control(
+                    event @ request_response::Event::OutboundFailure { .. },
+                )) = node.swarm.select_next_some().await
+                {
+                    assert!(matches!(
+                        syncs.finish_capability_event(
+                            &event,
+                            &joined.forwarder,
+                            &joined.capabilities,
+                            &[],
+                            true,
+                            now + control_delivery::DELIVERY_WINDOW
+                        ),
+                        control_delivery::Completion::Discard
+                    ));
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        for tick in 0..1000 {
+            syncs.queue_capabilities(joined.capabilities.clone(), &joined.forwarder);
+            syncs.drive_capabilities(
+                &mut node.swarm,
+                &joined.forwarder,
+                &metrics,
+                now + control_delivery::DELIVERY_WINDOW + Duration::from_secs(tick * 5),
+            );
+            assert!(syncs.pending.is_empty());
+        }
+        assert_eq!(
+            metrics
+                .snapshot(crate::queue::QueueStats::default())
+                .control_requests_sent,
+            1
+        );
+        assert!(!node.swarm.behaviour().control.has_pending_requests(&peer));
+        assert!(
+            joined
+                .forwarder
+                .application_demand(PeerId::from_libp2p(peer))
+                .is_none()
+        );
+        joined.assert_gated();
+    }
+
+    #[tokio::test]
+    async fn checkpoint_control_only_revocation_cancels_native_work_without_packet_authority() {
+        let inviter = approved();
+        let mut joined = JoinFixture::new(&inviter);
+        joined.prepare(&inviter);
+        joined.select(&inviter);
+        joined
+            .owner
+            .as_ref()
+            .unwrap()
+            .decorate_capabilities(&mut joined.capabilities)
+            .unwrap();
+        let peer = inviter.local.peer_id.parse().unwrap();
+        let mut node = pairing_test_node(&joined.identity);
+        let mut syncs = MembershipRecordSyncs::default();
+        let metrics = RuntimeMetrics::default();
+        let now = Instant::now();
+        syncs.queue_capabilities(joined.capabilities.clone(), &joined.forwarder);
+        syncs.drive_capabilities(&mut node.swarm, &joined.forwarder, &metrics, now);
+        syncs.drive_capabilities(
+            &mut node.swarm,
+            &joined.forwarder,
+            &metrics,
+            now + PEER_RECOVERY_LAN_FIRST_GRACE,
+        );
+        let id = *syncs.pending.keys().next().unwrap();
+        joined
+            .owner
+            .as_mut()
+            .unwrap()
+            .apply_change(
+                MembershipChange::RemoveMember(inviter.local.peer_id.clone()),
+                &joined.identity,
+                &joined.store,
+                &mut joined.forwarder,
+                current_unix_seconds_lossy(),
+            )
+            .unwrap();
+        assert_eq!(
+            syncs.reconcile_authorization(&joined.forwarder, &metrics),
+            1
+        );
+        assert!(matches!(
+            syncs.pending[&id],
+            control_delivery::PendingControlSync::Retired { .. }
+        ));
+        assert!(!syncs.capability_response_may_advertise(peer, id, &joined.forwarder, now));
+        assert!(
+            syncs
+                .control_delivery_deadline(peer, &joined.forwarder, now)
+                .is_none()
+        );
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let SwarmEvent::Behaviour(BehaviourEvent::Control(
+                    event @ request_response::Event::OutboundFailure { .. },
+                )) = node.swarm.select_next_some().await
+                {
+                    assert!(matches!(
+                        syncs.finish_capability_event(
+                            &event,
+                            &joined.forwarder,
+                            &joined.capabilities,
+                            &[],
+                            true,
+                            now
+                        ),
+                        control_delivery::Completion::Discard
+                    ));
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        syncs.queue_capabilities(joined.capabilities.clone(), &joined.forwarder);
+        syncs.drive_capabilities(
+            &mut node.swarm,
+            &joined.forwarder,
+            &metrics,
+            now + control_delivery::DELIVERY_WINDOW,
+        );
+        assert!(syncs.pending.is_empty());
+        assert!(!joined.forwarder.authorizes_control_capabilities(peer));
+        joined.assert_gated();
+    }
+
+    #[tokio::test]
+    async fn checkpoint_control_only_native_reply_retires_before_fast_path_consumption() {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let mut inviter = approved();
+            let mut joined = JoinFixture::new(&inviter);
+            joined.prepare(&inviter);
+            joined.owner.as_ref().unwrap().decorate_capabilities(&mut joined.capabilities).unwrap();
+            let peer = inviter.local.peer_id.parse().unwrap();
+            let mut node = pairing_test_node(&joined.identity);
+            inviter.node.swarm.listen_on("/ip4/127.0.0.1/tcp/0".parse().unwrap()).unwrap();
+            let address = loop {
+                if let SwarmEvent::NewListenAddr { address, .. } = inviter.node.swarm.select_next_some().await { break address; }
+            };
+            node.configured_peer_addresses.push((peer, address.clone()));
+            node.swarm.add_peer_address(peer, address);
+            let mut syncs = MembershipRecordSyncs::default();
+            let metrics = RuntimeMetrics::default();
+            let mut epochs = ConnectionEpochs::default();
+            let mut discovered = DiscoveredPeerAddresses::default();
+            syncs.queue_capabilities(joined.capabilities.clone(), &joined.forwarder);
+            control_delivery::drive(&mut syncs, &mut node, &joined.forwarder, &mut epochs,
+                &mut discovered, &metrics, Instant::now());
+            let mut sent = false;
+            let mut accepted = false;
+            while !accepted {
+                tokio::select! {
+                    event = node.swarm.select_next_some() => match event {
+                        SwarmEvent::ConnectionEstablished { connection_id, .. } => {
+                            epochs.record_established(connection_id);
+                            syncs.control_connection_available(peer, connection_id);
+                            send_control_capabilities(&mut node.swarm, &joined.forwarder, peer,
+                                &joined.capabilities, &mut syncs, &metrics);
+                        }
+                        SwarmEvent::Behaviour(BehaviourEvent::Control(event)) => {
+                            if let request_response::Event::Message {
+                                message: Message::Response { request_id, response: ControlResponse::CapabilitiesAccepted(capabilities) }, ..
+                            } = &event {
+                                assert!(request_response_message_is_usable(&epochs, &event, "control"));
+                                assert!(syncs.capability_response_may_advertise(peer, *request_id, &joined.forwarder, Instant::now()));
+                                assert!(joined.owner.as_mut().unwrap().observe_capabilities(peer, capabilities,
+                                    joined.capabilities.membership_tag.as_deref(), &[], Instant::now()));
+                                assert!(!joined.forwarder.is_configured_transport_peer(peer));
+                                checkpoint_pairing::finish_control_only_response(&mut syncs, &joined.forwarder,
+                                    &joined.capabilities, &[], &metrics, &event, Instant::now());
+                                accepted = true;
+                            }
+                        }
+                        _ => (),
+                    },
+                    event = inviter.node.swarm.select_next_some() => {
+                        if let SwarmEvent::Behaviour(BehaviourEvent::Control(request_response::Event::Message {
+                            message: Message::Request { request: ControlRequest::Capabilities(capabilities), channel, .. }, ..
+                        })) = event {
+                            assert!(crate::runtime::control::validate_capabilities(&capabilities, "lab",
+                                inviter.capabilities.membership_tag.as_deref(), &[]).is_none());
+                            sent = true;
+                            inviter.node.swarm.behaviour_mut().control.send_response(channel,
+                                ControlResponse::CapabilitiesAccepted(inviter.capabilities.clone())).unwrap();
+                        }
+                    },
+                }
+            }
+            assert!(sent);
+            assert!(syncs.pending.is_empty());
+            assert!(!node.swarm.behaviour().control.has_pending_requests(&peer));
+            let now = Instant::now();
+            for seconds in 1..30 {
+                syncs.queue_capabilities(joined.capabilities.clone(), &joined.forwarder);
+                syncs.drive_capabilities(&mut node.swarm, &joined.forwarder, &metrics, now + Duration::from_secs(seconds));
+                assert!(syncs.pending.is_empty());
+            }
+            assert_eq!(metrics.snapshot(crate::queue::QueueStats::default()).control_requests_sent, 1);
+            assert!(joined.forwarder.application_demand(PeerId::from_libp2p(peer)).is_none());
+            joined.assert_gated();
+        }).await.expect("native control-only reply ownership");
+    }
+
     fn formed_via_rpc() -> CheckpointApprovalFixture {
         let mut inviter = CheckpointApprovalFixture::new();
         fs::remove_file(inviter.directory.join("membership-state.json")).unwrap();

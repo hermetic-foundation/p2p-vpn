@@ -108,7 +108,7 @@ impl CapabilityPublication {
         }
         self.retain_authorization(forwarder);
         let limit = MAX_MEMBERSHIP_RECORDS.max(forwarder.config().peers.len());
-        for peer in forwarder.configured_transport_peers() {
+        for peer in forwarder.control_capability_peers() {
             if self.peers.len() >= limit && !self.peers.contains_key(&peer) {
                 continue;
             }
@@ -118,9 +118,9 @@ impl CapabilityPublication {
 
     pub(super) fn retain_authorization(&mut self, forwarder: &Forwarder) {
         self.peers
-            .retain(|peer, _| forwarder.is_configured_transport_peer(*peer));
+            .retain(|peer, _| forwarder.authorizes_control_capabilities(*peer));
         self.rounds
-            .retain(|peer, _| forwarder.is_configured_transport_peer(*peer));
+            .retain(|peer, _| forwarder.authorizes_control_capabilities(*peer));
     }
 }
 
@@ -165,7 +165,7 @@ impl MembershipRecordSyncs {
 
     pub(super) fn control_connection_available(&mut self, peer: Libp2pPeerId, id: ConnectionId) {
         if let Some(recipient) = self.capabilities.peers.get_mut(&peer)
-            && recipient.last_connection != Some(id)
+            && recipient.last_connection.is_none_or(|last| id > last)
         {
             recipient.last_connection = Some(id);
             recipient.acknowledged = 0;
@@ -207,7 +207,7 @@ impl MembershipRecordSyncs {
                     cancellation,
                 } if *expected == peer
                     && *generation == self.capabilities.generation
-                    && forwarder.is_configured_transport_peer(peer)
+                    && forwarder.authorizes_control_capabilities(peer)
                     && !cancellation.is_aborted()
                     && now < *deadline =>
                 {
@@ -246,7 +246,7 @@ impl MembershipRecordSyncs {
                 *expected == peer
                     && *generation == self.capabilities.generation
                     && now < *deadline
-                    && forwarder.is_configured_transport_peer(peer)
+                    && forwarder.authorizes_control_capabilities(peer)
             }
             Some(_) => false,
             None => true,
@@ -331,7 +331,7 @@ impl MembershipRecordSyncs {
         let mut peers = self.capabilities.peers.keys().copied().collect::<Vec<_>>();
         peers.sort_by_key(|peer| !swarm.behaviour().control.is_connected(peer));
         for peer in peers {
-            if !forwarder.is_configured_transport_peer(peer)
+            if !forwarder.authorizes_control_capabilities(peer)
                 || self.pending.values().any(|work| work.peer() == peer)
             {
                 continue;
@@ -448,7 +448,7 @@ impl MembershipRecordSyncs {
             return Completion::Discard;
         };
         let valid = usable && now < deadline && generation == self.capabilities.generation
-            && forwarder.is_configured_transport_peer(peer)
+            && forwarder.authorizes_control_capabilities(peer)
             && response.is_some_and(|response| matches!(response,
                 ControlResponse::CapabilitiesAccepted(capabilities) if crate::runtime::control::validate_capabilities(
                     capabilities, &local.network_name, local.membership_tag.as_deref(), previous_tags,
@@ -485,7 +485,7 @@ impl MembershipRecordSyncs {
         if accepted
             && now < ticket.deadline
             && ticket.generation == self.capabilities.generation
-            && forwarder.is_configured_transport_peer(ticket.peer)
+            && forwarder.authorizes_control_capabilities(ticket.peer)
             && let Some(recipient) = self.capabilities.peers.get_mut(&ticket.peer)
         {
             recipient.acknowledged = ticket.generation;
@@ -524,7 +524,7 @@ pub(super) fn drive(
         if round.lan_attempted
             || now >= round.lan_until
             || now >= round.deadline
-            || !forwarder.is_configured_transport_peer(*peer)
+            || !forwarder.authorizes_control_capabilities(*peer)
             || node.swarm.is_connected(peer)
         {
             continue;

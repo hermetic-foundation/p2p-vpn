@@ -247,7 +247,13 @@ pub(super) fn accept_joiner(
             context.tun_runtime,
             context.route_controller,
         );
-        send_sync_capabilities(swarm, owner, context.local_capabilities, context.metrics);
+        broadcast_control_capabilities(
+            swarm,
+            context.forwarder,
+            context.local_capabilities,
+            context.membership_record_syncs,
+            context.metrics,
+        );
         owner.drive_sync(swarm, context.peer_capabilities, Instant::now())?;
     }
     Ok(())
@@ -353,26 +359,23 @@ pub(super) fn stage_prepared(
     Ok(())
 }
 
-pub(super) fn send_sync_capabilities(
-    swarm: &mut Swarm<Behaviour>,
-    owner: &CheckpointRuntime,
+pub(super) fn finish_control_only_response(
+    syncs: &mut MembershipRecordSyncs,
+    forwarder: &Forwarder,
     capabilities: &ControlCapabilities,
+    previous_tags: &[String],
     metrics: &RuntimeMetrics,
+    event: &request_response::Event<ControlRequest, ControlResponse>,
+    now: Instant,
 ) {
-    for peer in swarm.connected_peers().copied().collect::<Vec<_>>() {
-        if owner
-            .state()
-            .snapshot()
-            .payload
-            .member(&peer.to_string())
-            .is_some()
-        {
-            swarm
-                .behaviour_mut()
-                .control
-                .send_request(&peer, ControlRequest::Capabilities(capabilities.clone()));
-            metrics.record_control_request_sent();
-        }
+    // Called only after the root validates the secure connection and checkpoint
+    // advertisement. Consume native ownership before its control-only fast path.
+    if let control_delivery::Completion::Reply(ticket) =
+        syncs.finish_capability_event(event, forwarder, capabilities, previous_tags, true, now)
+    {
+        syncs.acknowledge_capabilities(ticket, forwarder, true, now);
+        metrics.record_control_response_received();
+        metrics.record_control_capability_accept();
     }
 }
 

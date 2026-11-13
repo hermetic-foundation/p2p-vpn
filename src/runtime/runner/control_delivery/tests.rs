@@ -15,6 +15,27 @@ fn capabilities() -> ControlCapabilities {
 }
 
 #[tokio::test]
+async fn duplicate_and_older_connection_events_cannot_rearm_an_exhausted_round() {
+    let (mut node, forwarder, peer) = fixture();
+    let now = Instant::now();
+    let metrics = RuntimeMetrics::default();
+    let mut syncs = MembershipRecordSyncs::default();
+    syncs.queue_capabilities(capabilities(), &forwarder);
+    let first = ConnectionId::new_unchecked(100);
+    syncs.control_connection_available(peer, first);
+    syncs.drive_capabilities(&mut node.swarm, &forwarder, &metrics, now);
+    syncs.drive_capabilities(&mut node.swarm, &forwarder, &metrics, now + DELIVERY_WINDOW);
+    assert!(syncs.capabilities.peers[&peer].exhausted);
+    for id in [first, ConnectionId::new_unchecked(99), first] {
+        syncs.control_connection_available(peer, id);
+        assert!(syncs.capabilities.peers[&peer].exhausted);
+        assert!(!syncs.capabilities.rounds.contains_key(&peer));
+    }
+    syncs.control_connection_available(peer, ConnectionId::new_unchecked(101));
+    assert!(!syncs.capabilities.peers[&peer].exhausted);
+}
+
+#[tokio::test]
 async fn changes_coalesce_without_dialing_or_renewing_payload_demand() {
     let (mut node, forwarder, peer) = fixture();
     let overlay = PeerId::from_libp2p(peer);

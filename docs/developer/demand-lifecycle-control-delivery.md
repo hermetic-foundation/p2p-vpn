@@ -2,8 +2,8 @@
 
 ## Status
 
-The contract was published before implementation. Coalesced member capability
-delivery, checkpoint hostname catch-up, native cancellation, and control-only
+The contract was published before implementation. Coalesced member/checkpoint
+capability delivery, hostname catch-up, native cancellation, and control-only
 quarantine leases are implemented. Production quiet support remains disabled.
 
 This milestone is not a deployed or measured battery-efficiency result.
@@ -13,7 +13,7 @@ This milestone is not a deployed or measured battery-efficiency result.
 | Resource | Owner And Bound |
 | --- | --- |
 | Latest capabilities | One shared current snapshot in the existing membership-record sync owner |
-| Dirty recipients | Current authorized overlay peers only; bounded by the configured/learned peer admission limit |
+| Dirty recipients | Authorized packet peers or live members of the verified checkpoint roster; bounded by existing admission limits |
 | Native requests | Extend the existing control-sync pending map; share its four-flight budget with record pages |
 | Per-recipient work | One latest dirty generation, one outstanding capability request, and one finite delivery round |
 | Delivery round | At most three attempts within 45 seconds; failed attempts respect backoff |
@@ -91,6 +91,10 @@ new publication events and must not renew an exhausted delivery opportunity.
 The checkpoint transfer owner still verifies signed offers. A valid capability
 reply proves control delivery, not participation or permission to forward IP.
 
+The separate periodic sender is removed. Startup, durable capability changes,
+pairing acceptance, and actual new connections use the shared native owner.
+No timer broadcasts unchanged checkpoint capabilities to connected peers.
+
 ## Native Queue And Write Deadline
 
 - Attach the original monotonic control-round deadline to the existing native outbound message.
@@ -109,7 +113,6 @@ reply proves control delivery, not participation or permission to forward IP.
 
 | Boundary | Work Still Required |
 | --- | --- |
-| Checkpoint-only announcements | Replace the separate connected-only sync-capability sender with finite event-owned delivery |
 | Cold public recovery | Add bounded control-owned public discovery after LAN-first attempts; retained address fallback alone is insufficient |
 | Quiet discovery | Preserve necessary control recovery while suppressing idle DHT/NAT and offline-peer repair loops |
 | Activation | Exercise first IP payloads, extended incoming reachability, relay replacement, roaming, and legacy peers |
@@ -133,9 +136,10 @@ reply proves control delivery, not participation or permission to forward IP.
 
 | Check | Result |
 | --- | --- |
-| Workspace/all-targets | 2,066 passed; zero failures; 49 existing/opt-in ignores |
-| Coalesced member delivery | 17 regressions pass, including retained LAN delivery through the root control handler |
-| Native connection callback | Real TCP establishment sends one owned capability exchange without creating application demand |
+| Workspace/all-targets | 2,073 passed; zero failures; 49 existing/opt-in ignores |
+| Coalesced member delivery | 18 regressions pass, including retained LAN delivery and duplicate/older connection suppression |
+| Native connection callback | Normal and gated TCP establishment send owned control work; a gated callback installs no packet path or demand |
+| Checkpoint-only delivery | Seven new regressions pass: gated roster view, expiry/legacy eligibility, finite idle work, native reply ownership, revocation, connection callback, and ID deduplication |
 | Native deadline/cancellation | 18 socket/handler regressions pass; legacy send APIs remain covered |
 | Checkpoint runtime | 58 regressions pass, including failed/no-op hints, authority loss, leases, and exact native retirement |
 | Hostname filter | 47 matching tests pass, including older wire data and signed claim validation |

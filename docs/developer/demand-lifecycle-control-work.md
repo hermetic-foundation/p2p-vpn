@@ -128,6 +128,7 @@ specifies finite attempts, shared native ownership, and hostname compatibility.
 | Work | Implemented Bound |
 | --- | --- |
 | Member capabilities | One latest snapshot; coalesced recipients; four native slots shared with record pages |
+| Gated checkpoint announcements | Verified live roster view; startup/state/connection events instead of five-second broadcasts; no packet authority |
 | Retry opportunity | Three attempts within 45 seconds; LAN first, then retained direct/relay addresses |
 | Native writes | Original operation deadline covers queued/active work; cancellation releases slots only through native terminal events |
 | Hostname catch-up | Optional outer inventory hint; verified signed offers; three finite rounds; completed hints deduplicate |
@@ -141,7 +142,6 @@ responses before they can advertise a stale catch-up opportunity.
 ## Remaining Activation Gates
 
 - Keep verified incoming ownership, essential renewal, and automatic anchor recovery intact in the activated runtime.
-- Finish the separate checkpoint-only sync-capability sender; it still relies on connected-peer announcements.
 - Add finite control-owned public discovery after LAN-first attempts; retained-address fallback is not full cold recovery.
 - Keep bounded control recovery alive when quiet discovery cancels unrelated background work.
 - Complete demand-driven LAN-first establishment/recovery and sparse infrastructure maintenance policy.
@@ -152,13 +152,14 @@ responses before they can advertise a stale catch-up opportunity.
 
 | Check | Result |
 | --- | --- |
-| Workspace/all-target tests | 2,066 passed; zero failures; 49 existing/opt-in ignores |
+| Workspace/all-target tests | 2,073 passed; zero failures; 49 existing/opt-in ignores |
 | Native work regressions | 18 passed: original ownership fences plus absolute deadlines, delayed writes, active/queued cancellation, normal terminal events, and FIFO preservation |
 | Stream retirement regressions | Six passed: work/demand, initial grace, pending transports, nine infrastructure roles, metadata retention, real TCP close/reconnect |
 | Datagram retirement regressions | Five passed; local preparation alone cannot retire paths or reject incoming hello processing |
 | Checkpoint native ownership | 58 tests passed, including signed hostname catch-up, finite failed-hint retries, deadline/cancellation slots, and connection-bound control leases |
-| Coalesced capability delivery | 17 tests passed, including shared four-flight budget, coalescing, revocation, original deadlines, demand separation, quarantine, and retained LAN reconnect |
-| Native connection callback | Real encrypted TCP establishment queues exactly one owned capability exchange and preserves application demand |
+| Coalesced capability delivery | 18 tests passed, including shared budget, coalescing, revocation, deadlines, demand separation, quarantine, LAN reconnect, and connection ID deduplication |
+| Gated checkpoint delivery | Seven new regressions pass; finite native ownership replaces the periodic sender without restoring packet rights |
+| Native connection callback | Real encrypted TCP establishment sends owned capabilities on normal and control-only paths; gated peers gain no packet path or demand |
 | Shared-root delivery | A-B-C startup with retained A-C only; departure ACKs reach both survivors, which continue governance |
 | Pinned stream regressions | Existing budget observed; original capacity retained across builder-limit changes; denied creation releases metadata |
 | Clippy | Correctness, suspicious, and performance groups passed; other advisory warnings remain |
@@ -174,13 +175,14 @@ Validation used the existing shared target directory and cached Nix Rust 1.97.1
 tools, two build jobs, and disabled incremental compilation. The shared target
 was approximately 7.0 GiB; no new SDK, toolchain, or target was downloaded.
 
-The first broad run of this milestone exposed two reconnect-fixture failures.
-Fixtures now preserve the control owner and reflect native handler/connection
-event ordering. The final broad run passed without weakening slot limits.
+Earlier control-delivery validation exposed two reconnect-fixture failures.
+Fixtures preserve the control owner and reflect native handler/connection
+event ordering. Those guards remain covered without weakening slot limits.
 
 A paging regression also needed to wait for real cancellation terminal events
 instead of treating semantic removal as a free native slot. Its assertions now
-cover retained tombstones and actual release; the final full run passed.
+cover retained tombstones and actual release. The checkpoint-only milestone
+passed its first full workspace run.
 
 No new formal-verification project was introduced. These executable tests do
 not prove the entire distributed lifecycle or replace the remaining device tests.

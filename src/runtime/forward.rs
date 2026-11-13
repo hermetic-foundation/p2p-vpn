@@ -586,6 +586,37 @@ impl Forwarder {
         self.authorization.peers.values().copied()
     }
 
+    /// Checkpoint catch-up may contact verified roster members while packet
+    /// forwarding is gated. This view never grants packet or legacy-sync rights.
+    pub(crate) fn authorizes_control_capabilities(&self, peer: Libp2pPeerId) -> bool {
+        self.checkpoint.as_ref().map_or_else(
+            || self.is_configured_transport_peer(peer),
+            |checkpoint| {
+                let peer = PeerId::from_libp2p(peer);
+                peer != self.local_peer && checkpoint.active_at(peer, current_unix_seconds_lossy())
+            },
+        )
+    }
+
+    pub(crate) fn control_capability_peers(&self) -> impl Iterator<Item = Libp2pPeerId> + '_ {
+        let now = current_unix_seconds_lossy();
+        self.checkpoint
+            .iter()
+            .flat_map(move |checkpoint| {
+                checkpoint
+                    .audit
+                    .iter()
+                    .filter(move |member| {
+                        member.peer != self.local_peer && checkpoint.active_at(member.peer, now)
+                    })
+                    .map(|member| member.transport_peer)
+            })
+            .chain(
+                self.configured_transport_peers()
+                    .filter(|_| self.checkpoint.is_none()),
+            )
+    }
+
     pub fn merge_membership_records(
         &mut self,
         records: &[SignedMembershipRecord],
@@ -2146,6 +2177,88 @@ mod tests {
             Err(ForwardError::StalePreparedUpdate)
         ));
         assert_eq!(forwarder.mtu(), 1_250);
+    }
+
+    #[test]
+    fn checkpoint_control_capabilities_use_roster_without_restoring_packet_rights() {
+        let (a, b, c, config, mut state) = checkpoint_fixture();
+        let capability = checkpoint_capability([7; 32]);
+        let returning = CooperativeMembershipState::restore(
+            capability.clone(),
+            a.peer_id.clone(),
+            state.retained(),
+        )
+        .unwrap();
+        let mut forwarder =
+            Forwarder::from_checkpoint_config(&config, &returning, &checkpoint_anchor(), 1_000)
+                .unwrap();
+        let b_peer = b.peer_id.parse().unwrap();
+        let c_peer = c.peer_id.parse().unwrap();
+        let peers = forwarder.control_capability_peers().collect::<Vec<_>>();
+        assert_eq!(peers.len(), 2);
+        for peer in [b_peer, c_peer] {
+            assert!(peers.contains(&peer));
+            assert!(forwarder.authorizes_control_capabilities(peer));
+            assert!(!forwarder.is_configured_transport_peer(peer));
+            assert!(!forwarder.authorizes_membership_sync(peer));
+            assert!(
+                forwarder
+                    .application_demand(PeerId::from_libp2p(peer))
+                    .is_none()
+            );
+        }
+        assert!(!forwarder.authorizes_control_capabilities(a.peer_id.parse().unwrap()));
+        assert!(!forwarder.authorizes_control_capabilities(Libp2pPeerId::random()));
+        assert!(forwarder.authorized_routes().is_empty());
+
+        checkpoint_mutate(&mut state, &a, MembershipChange::RemoveMember(b.peer_id));
+        let returning =
+            CooperativeMembershipState::restore(capability, a.peer_id, state.retained()).unwrap();
+        let update = forwarder
+            .prepare_checkpoint_update(&returning, &checkpoint_anchor(), 1_000)
+            .unwrap();
+        forwarder.commit_checkpoint_update(update).unwrap();
+        assert!(!forwarder.authorizes_control_capabilities(b_peer));
+        assert_eq!(
+            forwarder.control_capability_peers().collect::<Vec<_>>(),
+            vec![c_peer]
+        );
+        assert!(forwarder.authorized_routes().is_empty());
+    }
+
+    #[test]
+    fn control_capability_roster_filters_expiry_and_preserves_legacy_eligibility() {
+        let (a, b, c, config, _) = checkpoint_fixture();
+        let legacy = Forwarder::from_config(&config).unwrap();
+        assert_eq!(
+            legacy.control_capability_peers().count(),
+            legacy.configured_transport_peers().count()
+        );
+        for peer in legacy.configured_transport_peers() {
+            assert!(legacy.authorizes_control_capabilities(peer));
+        }
+        let mut expired = CheckpointMember::new(&b).unwrap();
+        expired.expires_at_unix_seconds = Some(1_001);
+        let state = CooperativeMembershipState::bootstrap_at(
+            checkpoint_capability([7; 32]),
+            a.peer_id.clone(),
+            vec![
+                CheckpointMember::new(&a).unwrap(),
+                expired,
+                CheckpointMember::new(&c).unwrap(),
+            ],
+            SnapshotPolicy::default(),
+            1_000,
+        )
+        .unwrap();
+        let forwarder =
+            Forwarder::from_checkpoint_config(&config, &state, &checkpoint_anchor(), 1_000)
+                .unwrap();
+        assert!(!forwarder.authorizes_control_capabilities(b.peer_id.parse().unwrap()));
+        assert_eq!(
+            forwarder.control_capability_peers().collect::<Vec<_>>(),
+            vec![c.peer_id.parse().unwrap()]
+        );
     }
 
     #[test]

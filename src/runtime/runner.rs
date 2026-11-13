@@ -760,7 +760,7 @@ impl MembershipRecordSyncs {
                         !forwarder.authorizes_membership_sync(work.peer)
                     }
                     PendingControlSync::Capabilities { peer, .. } => {
-                        !forwarder.is_configured_transport_peer(*peer)
+                        !forwarder.authorizes_control_capabilities(*peer)
                     }
                     PendingControlSync::Retired { .. } => false,
                 };
@@ -1934,7 +1934,15 @@ where
     let mut checkpoint_tick = tokio::time::interval(Duration::from_secs(1));
     checkpoint_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut checkpoint_mutation_rate_limiter = GlobalRateLimiter::new(64, Instant::now());
-    let mut next_checkpoint_sync_capabilities = Instant::now();
+    if checkpoint_runtime.is_some() {
+        broadcast_control_capabilities(
+            &mut node.swarm,
+            &forwarder,
+            &local_capabilities,
+            &mut membership_record_syncs,
+            &metrics,
+        );
+    }
     let mut next_migration_retirement = Instant::now();
     loop {
         if Instant::now() >= next_migration_retirement {
@@ -2047,13 +2055,6 @@ where
                 checkpoint.drive_sync(&mut node.swarm, &peer_capabilities, Instant::now())?;
                 checkpoint.drive_mutations(&mut node.swarm, Instant::now())?;
                 membership.replace_checkpoint_sync_peers(checkpoint)?;
-                if (checkpoint.state().sync_state() != crate::membership::checkpoint::MembershipSyncState::Participating
-                    || checkpoint.pairing_activation_blocked())
-                    && Instant::now() >= next_checkpoint_sync_capabilities
-                {
-                    next_checkpoint_sync_capabilities = Instant::now() + Duration::from_secs(5);
-                    checkpoint_pairing::send_sync_capabilities(&mut node.swarm, checkpoint, &local_capabilities, &metrics);
-                }
                 let selection = checkpoint.finish_due(
                     store, &mut forwarder, Instant::now(), current_unix_seconds_lossy(),
                 )?;
@@ -3154,6 +3155,18 @@ where
                         checkpoint.drive_sync(&mut node.swarm, &peer_capabilities, Instant::now())?;
                         if !forwarder.is_configured_transport_peer(*peer) {
                             // Matching checkpoint scope grants control-only resync, not packet promotion.
+                            checkpoint_pairing::finish_control_only_response(
+                                &mut membership_record_syncs,
+                                &forwarder,
+                                &local_capabilities,
+                                &previous_membership_tags,
+                                &metrics,
+                                match &event {
+                                    SwarmEvent::Behaviour(BehaviourEvent::Control(event)) => event,
+                                    _ => unreachable!("matched control event above"),
+                                },
+                                Instant::now(),
+                            );
                             if let SwarmEvent::Behaviour(BehaviourEvent::Control(request_response::Event::Message {
                                 message: Message::Request { channel, .. }, ..
                             })) = event {
@@ -13894,6 +13907,17 @@ async fn handle_swarm_event(
                             return Ok(());
                         }
                     }
+                    context
+                        .membership_record_syncs
+                        .control_connection_available(peer_id, connection_id);
+                    send_control_capabilities(
+                        swarm,
+                        context.forwarder,
+                        peer_id,
+                        context.local_capabilities,
+                        context.membership_record_syncs,
+                        context.metrics,
+                    );
                     log_runtime_event(
                         LogLevel::Info,
                         "membership_probe_connection_established",
@@ -22012,7 +22036,7 @@ fn send_control_capabilities(
     syncs: &mut MembershipRecordSyncs,
     metrics: &RuntimeMetrics,
 ) {
-    if !forwarder.is_configured_transport_peer(peer) {
+    if !forwarder.authorizes_control_capabilities(peer) {
         return;
     }
 
