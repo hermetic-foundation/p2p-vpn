@@ -29,7 +29,14 @@ struct Fixture {
 
 impl Fixture {
     fn new(peer: Libp2pPeerId, local_epoch: u8, remote_epoch: u8) -> Self {
-        let identity = NodeIdentity::generate_ed25519().unwrap();
+        let address = crate::route::builtin_ipv4(PeerId::from_libp2p(peer));
+        let identity = std::iter::repeat_with(|| NodeIdentity::generate_ed25519().unwrap())
+            .take(1024)
+            .find(|identity| {
+                crate::route::builtin_ipv4(PeerId::from_libp2p(identity.peer_id.parse().unwrap()))
+                    != address
+            })
+            .expect("fixture local address must differ from the remote address");
         let config: Config = serde_json::from_value(serde_json::json!({
             "network": {"name":"demand-test", "private_key":identity.private_key},
             "peers":[{"id":peer.to_string()}],
@@ -65,7 +72,23 @@ impl Fixture {
     }
 
     fn extra_peer(&mut self) -> Libp2pPeerId {
-        let peer = Libp2pPeerId::random();
+        self.extra_peer_from(std::iter::repeat_with(Libp2pPeerId::random).take(1024))
+    }
+
+    fn extra_peer_from(
+        &mut self,
+        candidates: impl IntoIterator<Item = Libp2pPeerId>,
+    ) -> Libp2pPeerId {
+        let occupied = std::iter::once(self.forwarder.config().local_peer_id().unwrap())
+            .chain(self.forwarder.configured_overlay_peers())
+            .map(crate::route::builtin_ipv4)
+            .collect::<HashSet<_>>();
+        let peer = candidates
+            .into_iter()
+            .find(|peer| {
+                !occupied.contains(&crate::route::builtin_ipv4(PeerId::from_libp2p(*peer)))
+            })
+            .expect("fixture needs an unused derived IPv4 address");
         let mut config = serde_json::to_value(self.forwarder.config()).unwrap();
         config["peers"]
             .as_array_mut()
@@ -292,6 +315,42 @@ fn unknown_peers_and_table_overflow_allocate_no_extra_records() {
     let third = fixture.extra_peer();
     assert!(!owner.admit_peer(&fixture.context(), third, now));
     assert_eq!(owner.snapshot().peers, 2);
+}
+
+#[test]
+fn control_fixture_rejects_distinct_identities_with_colliding_derived_addresses() {
+    let mut seen = HashMap::new();
+    let (first, colliding) = (0..=65_536_u32)
+        .find_map(|seed| {
+            let mut secret = [0; 32];
+            secret[..4].copy_from_slice(&seed.to_be_bytes());
+            let peer = libp2p::identity::Keypair::ed25519_from_bytes(secret)
+                .unwrap()
+                .public()
+                .to_peer_id();
+            let address = crate::route::builtin_ipv4(PeerId::from_libp2p(peer));
+            seen.insert(address, peer).map(|previous| (previous, peer))
+        })
+        .expect("more identities than available derived IPv4 addresses");
+    assert_ne!(first, colliding);
+    assert_eq!(
+        crate::route::builtin_ipv4(PeerId::from_libp2p(first)),
+        crate::route::builtin_ipv4(PeerId::from_libp2p(colliding))
+    );
+    let mut fixture = Fixture::new(first, 1, 2);
+    let added = fixture.extra_peer_from(
+        std::iter::once(colliding).chain(std::iter::repeat_with(Libp2pPeerId::random).take(1024)),
+    );
+    assert_ne!(added, colliding);
+    assert_eq!(fixture.forwarder.config().peers.len(), 2);
+    assert!(
+        fixture
+            .forwarder
+            .config()
+            .peers
+            .iter()
+            .all(|peer| peer.vpn_ip.is_none())
+    );
 }
 
 #[test]
