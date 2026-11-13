@@ -111,6 +111,9 @@ No timer broadcasts unchanged checkpoint capabilities to connected peers.
 
 ## Remaining Integration
 
+The [bounded control-discovery contract](demand-lifecycle-control-discovery.md)
+defines the remaining cold public/private lookup ownership and validation.
+
 | Boundary | Work Still Required |
 | --- | --- |
 | Cold public recovery | Add bounded control-owned public discovery after LAN-first attempts; retained address fallback alone is insufficient |
