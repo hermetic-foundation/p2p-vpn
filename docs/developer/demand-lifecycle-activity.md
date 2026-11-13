@@ -100,3 +100,22 @@ energy comparisons were not run for this still-unadvertised stage.
 
 The concurrency check is executable coverage, not a formal memory-model proof.
 No new wakeup task, network timer or required configuration field was added.
+
+## Legacy Membership Tracking
+
+The C2 device preflight reached idle eligibility without entering maintenance
+pause. The legacy record-merge path updates forwarding authorization directly,
+but did not reconcile its application-demand records.
+
+| Required Correction | Invariant |
+| --- | --- |
+| Restored or newly paired member | Admit a demand record for every newly authorized packet peer |
+| Removed member | Remove its record so stale versions cannot grant quiet after re-admission |
+| Effective authorization changes | Revoke quiet permission consistently with transactional reconfiguration |
+| Duplicate/metadata-only record refresh | Preserve demand versions and quiet permission when forwarding authority is unchanged |
+| Bounds | Reuse the authorized-peer table and existing demand owner; no independent discovery timer or peer registry |
+
+Cover persisted restore and live merge, real payload-demand recording,
+duplicate refresh, revocation, and re-admission before another device candidate.
+The failed [C2 preflight](android-lifecycle-reconnect-build-2026-11-13.json)
+is not an energy measurement or a feature-preservation success.
