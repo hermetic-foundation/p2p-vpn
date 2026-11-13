@@ -323,6 +323,9 @@ def integrate_rails(rows, start_ns, end_ns, uncertainty_ns):
         value = float(row["value"])
         require(timestamp >= 0 and math.isfinite(value) and value >= 0, "rail_counter")
         samples = tracks[name][1]
+        if samples and timestamp == samples[-1][0]:
+            require(value == samples[-1][1], "rail_duplicate_conflict")
+            continue
         if samples:
             require(0 < timestamp - samples[-1][0] <= 3000000000, "rail_gap")
             require(value >= samples[-1][1], "rail_reset")
@@ -406,7 +409,7 @@ def analyze_trace(processor, trace, interval):
         errors = trace_query(
             processor,
             staged,
-            "SELECT count(*) AS n FROM stats WHERE value>0 AND severity IN ('error','data_loss')",
+            "SELECT count(*) AS n FROM stats WHERE value>0 AND (severity IN ('error','data_loss') OR name IN ('traced_buf_chunks_discarded','traced_buf_chunks_overwritten','traced_buf_bytes_overwritten'))",
         )
         require(len(errors) == 1 and errors[0]["n"] == "0", "trace_loss")
         clocks = trace_query(

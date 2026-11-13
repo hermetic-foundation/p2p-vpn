@@ -175,9 +175,12 @@ def validate_workload(value):
 
 
 def trace_config(seconds):
-    return f"""buffers {{ size_kb: 8192 fill_policy: DISCARD }}
+    return f"""buffers {{ size_kb: 8192 fill_policy: RING_BUFFER }}
 duration_ms: {(seconds + 180) * 1000}
 flush_period_ms: 5000
+write_into_file: true
+file_write_period_ms: 5000
+max_file_size_bytes: {MAX_TRACE}
 data_sources {{ config {{ name: "android.power" android_power_config {{
   battery_poll_ms: 1000 collect_power_rails: true
 }} }} }}

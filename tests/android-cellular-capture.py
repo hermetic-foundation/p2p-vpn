@@ -928,6 +928,11 @@ class PlanAndCliTests(unittest.TestCase):
             self.assertIn(
                 b"duration_ms: 1980000", (directory / "trace.pbtxt").read_bytes()
             )
+            config = (directory / "trace.pbtxt").read_bytes()
+            self.assertIn(b"fill_policy: RING_BUFFER", config)
+            self.assertIn(b"write_into_file: true", config)
+            self.assertIn(b"file_write_period_ms: 5000", config)
+            self.assertIn(f"max_file_size_bytes: {tool.MAX_TRACE}".encode(), config)
 
     def test_workload_rejects_overrides_duplicate_peers_and_commands(self):
         for change in ("override", "duplicate", "secret", "command", "address"):

@@ -82,6 +82,11 @@ Read `energy_criterion_observed` explicitly; this tool never completes the goal.
 
 ## Window Bundle
 
+Rail validation rejects positive per-buffer discard/overwrite counters even
+when Perfetto labels them `info`. Service-global historical discards are not
+this session's losses. Identical repeated HAL timestamp/value samples are collapsed;
+conflicting duplicates, counter resets and uncovered endpoints remain invalid.
+
 Keep each attempt in a new private directory. Never overwrite failed attempts.
 
 | File | Source / Purpose |

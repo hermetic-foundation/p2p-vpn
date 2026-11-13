@@ -13,6 +13,7 @@
 | Incoming access | Source-bound overlay probes before settling and after measurement |
 | Timed interval | No ADB/UI/status/traffic polling and no builds |
 | Trace | Starts before the first binary report, ends after the last, with padding |
+| Trace storage | Stream every five seconds through an 8 MiB ring buffer; stop at a 32 MiB file limit |
 | Failure | Preserve the attempt, raw files, error and restoration outcome; never overwrite or silently retry |
 
 This collector measures Android attribution while USB supplies physical power.
@@ -145,3 +146,11 @@ membership through the existing peer tools before the series.
 The collector prewarms Protobuf decoding outside the interval, then schedules
 the end sample against an absolute deadline. Endpoint/UID metadata is retained
 incrementally; post-window probe errors remain functional failures.
+
+An in-memory-only `DISCARD` buffer exhausted after approximately 21 minutes on
+the Pixel. Keep that failed trace; periodic file streaming prevents this growth
+without enlarging the buffer. Per-buffer losses invalidate rail corroboration.
+Streaming uses `RING_BUFFER`; Perfetto flags `DISCARD` streaming as data loss.
+
+See Perfetto's [streaming contract](https://perfetto.dev/docs/concepts/config#streaming-long-traces)
+and [buffer statistics](https://raw.githubusercontent.com/google/perfetto/main/protos/perfetto/common/trace_stats.proto).

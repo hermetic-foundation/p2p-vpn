@@ -5,6 +5,7 @@ import importlib.util
 import io
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -272,6 +273,88 @@ class ContextTests(unittest.TestCase):
 
 
 class RailTests(unittest.TestCase):
+    def test_identical_cached_hal_samples_do_not_change_energy_or_bounds(self):
+        rows = rail_rows()
+        repeated = [row for row in rows for _ in range(2)]
+        expected = compare.integrate_rails(rows, 500000000, 3500000000, 10000000)
+        actual = compare.integrate_rails(repeated, 500000000, 3500000000, 10000000)
+        self.assertEqual(actual, expected)
+
+    def test_conflicting_same_timestamp_counters_still_fail(self):
+        rows = rail_rows()
+        rows.insert(1, {**rows[0], "value": "1"})
+        with self.assertRaisesRegex(compare.InvalidWindow, "rail_duplicate_conflict"):
+            compare.integrate_rails(rows, 500000000, 3500000000, 10000000)
+
+    def test_info_severity_buffer_loss_is_rejected_by_actual_stats_sql(self):
+        for name in (
+            "traced_buf_chunks_discarded",
+            "traced_buf_chunks_overwritten",
+            "traced_buf_bytes_overwritten",
+        ):
+            with (
+                self.subTest(name=name),
+                tempfile.TemporaryDirectory() as temporary,
+                contextlib.closing(sqlite3.connect(":memory:")) as database,
+            ):
+                database.execute(
+                    "CREATE TABLE stats(name TEXT, value INTEGER, severity TEXT)"
+                )
+                database.execute("INSERT INTO stats VALUES (?, 1, 'info')", (name,))
+                trace = Path(temporary) / "trace"
+                trace.write_bytes(b"test-trace")
+
+                def query(_processor, _trace, sql):
+                    cursor = database.execute(sql)
+                    return [
+                        dict(
+                            zip(
+                                [column[0] for column in cursor.description],
+                                [str(value) for value in row],
+                            )
+                        )
+                        for row in cursor.fetchall()
+                    ]
+
+                with (
+                    patch.object(compare, "trace_query", side_effect=query),
+                    self.assertRaisesRegex(compare.InvalidWindow, "trace_loss"),
+                ):
+                    compare.analyze_trace(Path("trusted-tool"), trace, {})
+
+    def test_service_global_historical_discards_are_not_current_buffer_loss(self):
+        with (
+            tempfile.TemporaryDirectory() as temporary,
+            contextlib.closing(sqlite3.connect(":memory:")) as database,
+        ):
+            database.execute(
+                "CREATE TABLE stats(name TEXT, value INTEGER, severity TEXT)"
+            )
+            database.execute(
+                "INSERT INTO stats VALUES ('traced_chunks_discarded', 43, 'info')"
+            )
+            trace = Path(temporary) / "trace"
+            trace.write_bytes(b"test-trace")
+
+            def query(_processor, _trace, sql):
+                if "FROM stats" in sql:
+                    return [{"n": str(database.execute(sql).fetchone()[0])}]
+                if "FROM clock_snapshot" in sql:
+                    return [{"ts": "1", "clock_value": "1"}]
+                return rail_rows()
+
+            with patch.object(compare, "trace_query", side_effect=query):
+                result = compare.analyze_trace(
+                    Path("trusted-tool"),
+                    trace,
+                    {
+                        "start_boottime_ns": 500000000,
+                        "end_boottime_ns": 3500000000,
+                        "clock_uncertainty_ms": 10,
+                    },
+                )
+            self.assertEqual(len(result["rails"]), 2)
+
     def test_interpolated_clipped_interval_and_bounds(self):
         result = compare.integrate_rails(rail_rows(), 500000000, 3500000000, 10000000)
         for rail in result:
