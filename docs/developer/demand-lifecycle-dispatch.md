@@ -128,7 +128,7 @@ an explicit embedding opt-in and real first-IP validation before deployment.
 
 1. Validate implemented bounded cold control discovery through public-WAN and extended dormancy scenarios.
 2. Preserve native ownership while validating the implemented quiet DHT/AutoNAT scheduling gates.
-3. Extend the local activated TCP/relay first-IP result to QUIC, broader offline-peer retry policy, and public-WAN recovery.
+3. Extend local activated TCP/relay and QUIC idle/wake results to broader offline-peer retry policy and public-WAN recovery.
 4. Verify extended dormancy, roaming, mixed-version operation, and feature-preservation gates before production advertisement.
 5. Run matched, replicated cellular comparisons; no source or socket test establishes 10x savings.
 
@@ -156,9 +156,10 @@ stale-epoch anchors; they do not replace the remaining integrated/device gates.
 | Dormant control delivery | 18 coalescing, deadline, quarantine, native-slot, LAN reconnect, and connection-ID regressions pass |
 | Checkpoint-only publication | Seven new regressions pass, including real gated TCP callbacks/replies, finite attempts, revocation, and expiry |
 | Checkpoint ownership | 58 tests pass, including finite hostname catch-up and cancelled/expired control leases |
-| Workspace/all-targets | 2,101 passed; zero failures; 50 existing exclusions, including opt-in namespace/resource scenarios |
+| Workspace/all-targets | 2,108 passed; zero failures; 50 existing exclusions, including opt-in namespace/resource scenarios |
 | Quiet discovery | Native serving/foreground requests survive pause; real relay ownership, demand/epoch resume, and six callback states pass |
 | Activated TCP/relay | Real bilateral quiet, physical retirement, single first-IP delivery in both directions, and mixed enabled/passive idle pass |
+| Activated QUIC | Relay-only control establishes QUIC; real idle retires sessions, quiet counters settle, both single-packet relay wakes deliver, and restored UDP promotes back to QUIC |
 | Cold control discovery | Seven driver regressions and three native namespace runs pass; no demand renewal or foreign-provider dials |
 | Clippy | Required correctness, suspicious, and performance groups pass; advisory and staged-unused API warnings remain |
 | Formatting and packaging | Workspace and vendored Rust formatting pass; evaluated Linux/Android sources include identical runtime and patched dependency |

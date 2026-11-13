@@ -411,7 +411,7 @@ mod tests {
                     negotiator: &mut fixture.negotiator,
                     paths: &mut fixture.paths,
                     metrics: &metrics,
-                    network_name: &local.network_name,
+                    local_capabilities: &local,
                     path_probe_tracker: &mut fixture.probes,
                 },
                 peer,

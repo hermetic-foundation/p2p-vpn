@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "connection_recovery_lifecycle_quic.rs"]
+mod quic_trials;
+
 fn lifecycle_line<'a>(state: &'a [String], peer: &str) -> &'a str {
     let peer = PeerId::from_libp2p(peer.parse().expect("transport peer ID"));
     state
@@ -23,6 +26,10 @@ async fn await_quiet(a: &Node, b: &Node, peers: [&str; 2], stage: &str) {
         let quiet = states.iter().zip(peers).all(|(lines, peer)| {
             lifecycle_line(lines, peer).ends_with("maintenance_paused true quiet true")
                 && lines.iter().any(|line| line == "connected_overlay_peers 0")
+                && lines.iter().any(|line| line == "packet_plane_sessions 0")
+                && lines
+                    .iter()
+                    .any(|line| line == "packet_plane_quic_sessions 0")
         });
         if quiet {
             write_evidence(
@@ -101,7 +108,7 @@ fn activated_runners_deliver_first_ip_after_bilateral_dormancy() {
 }
 
 async fn scenario() {
-    let (mut a, mut b, relay, peers) = start_pair([true, true]);
+    let (mut a, mut b, relay, peers) = start_pair([true, true], None);
     let mut sequence = 3_000_000;
     stage(
         "lifecycle_initial",
@@ -127,7 +134,10 @@ async fn scenario() {
     stop_pair([a, b, relay]).await;
 }
 
-fn start_pair(enabled: [bool; 2]) -> (Node, Node, Node, [String; 2]) {
+fn start_pair(
+    enabled: [bool; 2],
+    quic: Option<[(SocketAddr, SocketAddr); 2]>,
+) -> (Node, Node, Node, [String; 2]) {
     let alice = NodeIdentity::generate_ed25519().unwrap();
     let bob = loop {
         let candidate = NodeIdentity::generate_ed25519().unwrap();
@@ -148,7 +158,7 @@ fn start_pair(enabled: [bool; 2]) -> (Node, Node, Node, [String; 2]) {
     bridge_config.peers.clear();
     bridge_config.network.relay.server = true;
     let relay = Node::start(bridge_config);
-    let make_config = |local: &NodeIdentity, remote: &NodeIdentity| {
+    let make_config = |local: &NodeIdentity, remote: &NodeIdentity, index: usize| {
         let mut config = config(
             local,
             remote,
@@ -157,11 +167,16 @@ fn start_pair(enabled: [bool; 2]) -> (Node, Node, Node, [String; 2]) {
         );
         config.network.relay.reservations = vec![base.clone()];
         config.network.external_addresses = vec![format!("{base}/p2p/{}", local.peer_id)];
+        if let Some(endpoints) = quic {
+            let (listener, external) = endpoints[index];
+            config.network.packet_plane.quic_listen = vec![listener.to_string()];
+            config.network.packet_plane.quic_external_endpoints = vec![external.to_string()];
+        }
         config
     };
     (
-        Node::start_with_lifecycle(make_config(&alice, &bob), enabled[0]),
-        Node::start_with_lifecycle(make_config(&bob, &alice), enabled[1]),
+        Node::start_with_lifecycle(make_config(&alice, &bob, 0), enabled[0]),
+        Node::start_with_lifecycle(make_config(&bob, &alice, 1), enabled[1]),
         relay,
         [bob.peer_id, alice.peer_id],
     )
@@ -192,7 +207,7 @@ fn mixed_enabled_passive_runners_keep_legacy_reachability() {
                 .build()
                 .unwrap()
                 .block_on(async {
-                    let (mut a, mut b, relay, peers) = start_pair([true, false]);
+                    let (mut a, mut b, relay, peers) = start_pair([true, false], None);
                     let mut sequence = 3_300_000;
                     stage("lifecycle_mixed_initial", &mut a, &mut b, &mut sequence, Duration::from_secs(45)).await;
                     let started = Instant::now();

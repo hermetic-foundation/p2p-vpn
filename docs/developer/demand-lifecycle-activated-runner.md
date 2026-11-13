@@ -78,12 +78,13 @@ existing direct libp2p stream, conflating control transport with UDP reachabilit
 - Maintenance alone must not turn a relay-only idle peer into a permanent QUIC negotiation loop.
 - Relay-only admission is permission to try authenticated QUIC, not proof that NAT traversal will succeed.
 - Keep the relay data fallback usable while direct QUIC is attempted or blocked.
+- Legacy UDP fallback priority must not mask a needed QUIC retry when only relay control is available.
 
 ## Follow-On Gates
 
 | Gate | Evidence Still Required |
 | --- | --- |
-| Preferred path | Active QUIC promotion, retirement, and recovery alongside TCP/relay fallback |
+| Preferred path | Local activated QUIC promotion/retirement/relay-wake passes; public-WAN and mobile cases remain |
 | Control changes | Membership, revocation, hostname/DNS, and pairing delivery during dormancy |
 | Incoming lifetime | Extended idle beyond transport and reservation renewal boundaries |
 | Network changes | Automatic LAN-first recovery across controlled outages and real mobile roaming |
@@ -140,24 +141,55 @@ cargo test --offline --locked --lib demand_tests -- --test-threads=2
 cargo test --offline --locked --lib queue::tests -- --test-threads=2
 ```
 
-This closes the local TCP/relay first-IP gate only. Activated QUIC, extended
+These trials close local TCP/relay and owned-QUIC idle/wake gates only. Extended
 idle, public-WAN, mobile roaming, feature preservation, and measured cellular
 energy remain separate acceptance requirements.
+
+## Activated QUIC Results
+
+| Check | Focused Native Evidence |
+| --- | --- |
+| Relay-only control | Initial owned-QUIC traffic succeeds without a direct libp2p stream; both endpoints deliver ten consecutive fresh packet pairs |
+| Normal-time idle | Both endpoints negotiate quiet and retire QUIC sessions and overlay connections |
+| Quiet packet planes | After five seconds for terminal close traffic, each of two 15-second samples has unchanged proxy-datagram and path-probe counters, with no recreated sessions |
+| First wake packets | Blackholed QUIC cannot deliver; single packets in each direction arrive through the relay in approximately 24.7 seconds |
+| QUIC promotion | Restoring UDP returns fresh traffic to QUIC in approximately 10.0 and 35.1 seconds |
+| Fixture integrity | Wildcard listeners advertise exactly the proxy endpoints; no advertised direct bypass |
+| Admission gates | Six tests cover absent/stale demand, both-end capability/binding/scope checks, quiet/preparation, authority, disconnected metadata, and early idle rejection |
+| Dual-backend repair | Real established/closed QUIC session: direct control keeps UDP priority; relay-only control selects QUIC repair instead of an unnegotiable UDP fallback |
+| Compatibility | Existing direct UDP, unbound-QUIC compatibility, QUIC handshakes, and dormant-hello rejection pass |
+
+- The initial 90-second trial failed to start QUIC because of the direct-control gate; it is retained as failure evidence, not a connectivity success.
+- A preliminary full run was intentionally cancelled after review found the dual-backend selection issue; only the replacement run can verify final source.
+- No steady-state timer, public wire/configuration field, cryptographic scheme, or native request-ownership rule changed.
+- Ordinary startup stays passive; relay-only QUIC admission requires explicit lifecycle opt-in on both endpoints.
+- The UDP fixture represents a reachable datagram path, not a successful public NAT hole punch.
+- Quiet proxy counters do not measure total network traffic, cellular radio sleep, or energy consumption.
+
+```sh
+cargo test --offline --locked --test connection_recovery \
+  lifecycle::quic_trials::activated_quic_retires_and_recovers_through_relay -- --exact
+cargo test --offline --locked --lib packet_negotiation_path
+```
 
 ## Verification Record
 
 | Check | Result |
 | --- | --- |
-| Full workspace/all targets | 2,101 passed; zero failed; 50 existing or opt-in exclusions across 16 suites |
-| Repeat native scenario | Full workspace run repeats both single-packet wakes at approximately 19.9 and 24.9 seconds |
+| Full workspace/all targets | 2,108 passed; zero failed; 50 existing or opt-in exclusions across 16 suites |
+| Repeat native scenarios | TCP/relay and QUIC idle/wake pass; final QUIC relay wakes take approximately 24.8 and 19.7 seconds, followed by QUIC promotion |
 | Formatting | Workspace Rust check passes |
 | Clippy | Correctness, suspicious, and performance groups pass; advisory warnings remain |
 | Package sources | Linux and Android ARM64/x86-64 runtime, four native patches, and lockfile match byte-for-byte |
-| Integration packaging | All 42 Rust integration/support files match the Linux package source |
-| Build resources | One approximately 7 GiB target, two jobs, no incremental compilation |
+| Integration packaging | All 43 Rust integration/support files match the Linux package source |
+| Build resources | One approximately 7 GiB target, two Cargo build jobs, four independent test workers, no incremental compilation |
 | Tool restoration | Restored missing matching Clippy from a 5.9 MiB binary substitute; source builds were disabled |
 | Package/device scope | Host workspace compiled; full Nix packages, APK builds, and device deployments not performed |
 | Goal acceptance | Ordinary startup stays passive; no new battery measurement or claimed energy improvement |
 
 These executable checks are not a formal proof. The existing privileged and
 device exclusions remain unverified operational gates, not passed tests.
+
+The offline Android package plan contains many locally unrealized inputs.
+A bounded online cache query did not finish within 90 seconds; this does not
+establish which inputs lack binary substitutes. No package build was started.

@@ -173,6 +173,7 @@ mod quiet_discovery;
 mod recovery_snapshot;
 use recovery_snapshot::ApplicationRecoverySnapshot;
 mod packet_endpoint_selection;
+mod packet_negotiation_path;
 use packet_endpoint_selection::packet_capabilities_for_lan_connection;
 #[cfg(test)]
 mod checkpoint_dormant_delivery_tests;
@@ -19203,7 +19204,7 @@ fn handle_control_response_event(
                     negotiator: packet_plane_negotiator,
                     paths,
                     metrics,
-                    network_name: validation.network,
+                    local_capabilities,
                     path_probe_tracker,
                 },
                 peer,
@@ -20178,7 +20179,17 @@ fn maybe_send_packet_plane_hello(
         || forwarder.data_path_maintenance_is_paused(remote_overlay)
         || !remote_capabilities.supports_datagram_packet_path()
         || !local_capabilities.supports_datagram_packet_path()
-        || !has_direct_packet_plane_negotiation_path(paths, remote_overlay)
+        || !packet_negotiation_path::permitted(
+            forwarder,
+            paths,
+            remote_overlay,
+            PacketDatagramBackend::OwnedQuic,
+            local_capabilities,
+            remote_capabilities,
+            Instant::now(),
+        )
+        || (!has_direct_packet_plane_negotiation_path(paths, remote_overlay)
+            && !swarm.is_connected(&peer))
         || negotiator.has_pending(remote_overlay)
         || local_overlay.as_bytes() > remote_overlay.as_bytes()
     {
@@ -20203,6 +20214,17 @@ fn maybe_send_packet_plane_hello(
     let Some(backend) = backend else {
         return;
     };
+    if !packet_negotiation_path::permitted(
+        forwarder,
+        paths,
+        remote_overlay,
+        backend,
+        &local_capabilities,
+        &remote_capabilities,
+        Instant::now(),
+    ) {
+        return;
+    }
 
     match signed_packet_plane_handshake(
         PacketPlaneHandshakeKind::Hello,
@@ -20276,8 +20298,9 @@ fn packet_plane_negotiation_backend(
 ) -> Option<PacketDatagramBackend> {
     let local_quic_endpoint = first_packet_plane_quic_endpoint(local_capabilities);
     let remote_quic_endpoint = first_packet_plane_quic_endpoint(remote_capabilities);
-    // Establish the fallback before retrying a previously established QUIC connection.
+    // Prefer UDP fallback only when its required direct control path exists.
     if packet_plane_quic.is_some_and(|runtime| runtime.has_session(peer))
+        && has_direct_packet_plane_negotiation_path(paths, peer)
         && !packet_plane.has_session(peer)
         && local_capabilities.supports_owned_udp_packet_plane
         && remote_capabilities.supports_owned_udp_packet_plane
@@ -20606,13 +20629,21 @@ async fn accept_packet_plane_hello(
     if context.forwarder.data_path_is_dormant(remote_overlay) {
         return Err(PacketPlaneNegotiationError::DormantPeer);
     }
-    if !has_direct_packet_plane_negotiation_path(context.paths, remote_overlay) {
-        return Err(PacketPlaneNegotiationError::NoDirectNegotiationPath);
-    }
     let remote_capabilities = context
         .peer_capabilities
         .get(remote_overlay)
         .ok_or(PacketPlaneNegotiationError::MissingRemoteCapabilities)?;
+    if !packet_negotiation_path::permitted(
+        context.forwarder,
+        context.paths,
+        remote_overlay,
+        PacketDatagramBackend::OwnedQuic,
+        context.local_capabilities,
+        remote_capabilities,
+        Instant::now(),
+    ) {
+        return Err(PacketPlaneNegotiationError::NoDirectNegotiationPath);
+    }
     let (local_capabilities, preferred_remote_capabilities) =
         packet_capabilities_for_lan_connection(
             context.local_capabilities,
@@ -20639,6 +20670,17 @@ async fn accept_packet_plane_hello(
     let backend =
         packet_plane_accept_backend(&local_capabilities, remote_capabilities, hello.endpoint)
             .ok_or(PacketPlaneNegotiationError::EndpointNotAdvertised)?;
+    if !packet_negotiation_path::permitted(
+        context.forwarder,
+        context.paths,
+        remote_overlay,
+        backend,
+        &local_capabilities,
+        remote_capabilities,
+        Instant::now(),
+    ) {
+        return Err(PacketPlaneNegotiationError::NoDirectNegotiationPath);
+    }
     let (secret, accept, verified_accept) = signed_packet_plane_handshake(
         PacketPlaneHandshakeKind::Accept,
         context.identity,
@@ -20712,7 +20754,7 @@ struct PacketPlaneCompleteContext<'a> {
     negotiator: &'a mut PacketPlaneNegotiator,
     paths: &'a mut PathSet,
     metrics: &'a RuntimeMetrics,
-    network_name: &'a str,
+    local_capabilities: &'a ControlCapabilities,
     path_probe_tracker: &'a mut PathProbeTracker,
 }
 
@@ -20728,9 +20770,6 @@ fn complete_packet_plane_hello(
     if context.forwarder.data_path_is_dormant(remote_overlay) {
         return Err(PacketPlaneNegotiationError::DormantPeer);
     }
-    if !has_direct_packet_plane_negotiation_path(context.paths, remote_overlay) {
-        return Err(PacketPlaneNegotiationError::NoDirectNegotiationPath);
-    }
     let pending_backend = context
         .negotiator
         .pending
@@ -20741,9 +20780,23 @@ fn complete_packet_plane_hello(
         .peer_capabilities
         .get(remote_overlay)
         .ok_or(PacketPlaneNegotiationError::MissingRemoteCapabilities)?;
+    if !packet_negotiation_path::permitted(
+        context.forwarder,
+        context.paths,
+        remote_overlay,
+        pending_backend,
+        context.local_capabilities,
+        remote_capabilities,
+        Instant::now(),
+    ) {
+        return Err(PacketPlaneNegotiationError::NoDirectNegotiationPath);
+    }
     let accept = PacketPlaneHandshake::decode(handshake)
         .map_err(PacketPlaneNegotiationError::Decode)?
-        .verify(context.network_name, Some(remote_overlay))
+        .verify(
+            &context.local_capabilities.network_name,
+            Some(remote_overlay),
+        )
         .map_err(PacketPlaneNegotiationError::Verify)?;
     if accept.kind != PacketPlaneHandshakeKind::Accept
         || !endpoint_is_advertised_for_backend(
@@ -21173,7 +21226,17 @@ fn retry_packet_plane_negotiation(
         if context.local_capabilities.supports_owned_quic_packet_plane
             && capabilities.supports_owned_quic_packet_plane
             && context.packet_plane_quic.is_some()
-            && has_direct_packet_plane_negotiation_path(context.paths, overlay_peer)
+            && (has_direct_packet_plane_negotiation_path(context.paths, overlay_peer)
+                || context.swarm.is_connected(&peer))
+            && packet_negotiation_path::permitted(
+                context.forwarder,
+                context.paths,
+                overlay_peer,
+                PacketDatagramBackend::OwnedQuic,
+                context.local_capabilities,
+                capabilities,
+                Instant::now(),
+            )
             && !context.paths.candidates_for(overlay_peer).any(|candidate| {
                 candidate.kind == PathKind::DirectQuicDatagram && candidate.healthy
             })
@@ -48148,7 +48211,7 @@ mod tests {
                 negotiator: &mut negotiator,
                 paths: &mut initiator_paths,
                 metrics: &metrics,
-                network_name: "lab",
+                local_capabilities: &initiator_capabilities,
                 path_probe_tracker: &mut initiator_path_probe_tracker,
             },
             responder_peer,
@@ -48277,7 +48340,7 @@ mod tests {
                 negotiator: &mut negotiator,
                 paths: &mut initiator_paths,
                 metrics: &metrics,
-                network_name: "lab",
+                local_capabilities: &initiator_capabilities,
                 path_probe_tracker: &mut initiator_path_probe_tracker,
             },
             responder_peer,
@@ -48665,7 +48728,7 @@ mod tests {
                 negotiator: &mut negotiator,
                 paths: &mut initiator_paths,
                 metrics: &metrics,
-                network_name: "lab",
+                local_capabilities: &initiator_capabilities,
                 path_probe_tracker: &mut initiator_path_probe_tracker,
             },
             responder_peer,
@@ -48755,6 +48818,40 @@ mod tests {
             ),
             Some(PacketDatagramBackend::OwnedQuic),
             "a closed QUIC connection must trigger renegotiation"
+        );
+        let local_dual = initiator_capabilities
+            .clone()
+            .with_owned_udp_packet_plane(true)
+            .with_packet_endpoint_candidates(vec!["127.0.0.1:51820".to_owned()]);
+        let remote_dual = responder_capabilities
+            .clone()
+            .with_owned_udp_packet_plane(true)
+            .with_packet_endpoint_candidates(vec!["127.0.0.1:51821".to_owned()]);
+        assert_eq!(
+            packet_plane_negotiation_backend(
+                &initiator_paths,
+                &local_dual,
+                &remote_dual,
+                &initiator_packet_plane,
+                Some(&initiator_quic),
+                responder_overlay
+            ),
+            Some(PacketDatagramBackend::OwnedUdp),
+            "direct control keeps legacy UDP fallback priority"
+        );
+        initiator_paths.mark_unhealthy(responder_overlay, PathKind::DirectTcpStream);
+        initiator_paths.record_established(responder_overlay, PathKind::CircuitRelay);
+        assert_eq!(
+            packet_plane_negotiation_backend(
+                &initiator_paths,
+                &local_dual,
+                &remote_dual,
+                &initiator_packet_plane,
+                Some(&initiator_quic),
+                responder_overlay
+            ),
+            Some(PacketDatagramBackend::OwnedQuic),
+            "an unavailable UDP negotiation path must not block QUIC repair over relay control"
         );
     }
 

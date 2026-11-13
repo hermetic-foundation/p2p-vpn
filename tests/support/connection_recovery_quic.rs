@@ -1,15 +1,15 @@
 use super::*;
 use tokio::net::UdpSocket;
 
-struct UdpProxy {
-    address: SocketAddr,
+pub(super) struct UdpProxy {
+    pub(super) address: SocketAddr,
     mode: watch::Sender<Link>,
     forwarded: Arc<AtomicU64>,
     dropped: Arc<AtomicU64>,
-    task: JoinHandle<()>,
+    pub(super) task: JoinHandle<()>,
 }
 impl UdpProxy {
-    async fn new(front: std::net::UdpSocket, backend: SocketAddr) -> Self {
+    pub(super) async fn new(front: std::net::UdpSocket, backend: SocketAddr) -> Self {
         front.set_nonblocking(true).unwrap();
         let front = Arc::new(UdpSocket::from_std(front).unwrap());
         let address = front.local_addr().unwrap();
@@ -58,22 +58,22 @@ impl UdpProxy {
             task,
         }
     }
-    fn set(&self, mode: Link) {
+    pub(super) fn set(&self, mode: Link) {
         self.mode.send_replace(mode);
     }
-    fn snapshot(&self) -> serde_json::Value {
+    pub(super) fn snapshot(&self) -> serde_json::Value {
         serde_json::json!({"address":self.address.to_string(),"forwarded_datagrams":self.forwarded.load(Ordering::Relaxed),"dropped_datagrams":self.dropped.load(Ordering::Relaxed)})
     }
 }
 
-fn metric(lines: &[String], name: &str) -> u64 {
+pub(super) fn metric(lines: &[String], name: &str) -> u64 {
     lines
         .iter()
         .find_map(|line| line.strip_prefix(name)?.strip_prefix(' ')?.parse().ok())
         .unwrap_or(0)
 }
 
-async fn quic_stage(
+pub(super) async fn quic_stage(
     name: &str,
     a: &mut Node,
     b: &mut Node,
