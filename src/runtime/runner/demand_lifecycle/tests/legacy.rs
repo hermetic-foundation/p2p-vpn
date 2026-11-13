@@ -200,6 +200,8 @@ enum Change {
     RemoteEpoch,
     Underlay,
     MembershipTag,
+    CapabilitiesRestored,
+    Reauthorized,
 }
 
 async fn late_unsupported(kind: Unsupported, change: Change) {
@@ -230,6 +232,23 @@ async fn late_unsupported(kind: Unsupported, change: Change) {
         assert_eq!(owner.snapshot().outbound, 1);
         match change {
             Change::None => {}
+            Change::CapabilitiesRestored => {
+                let capabilities = fixture.peers.get(overlay).unwrap().clone();
+                fixture.peers.remove(overlay);
+                owner.reconcile(&fixture.context(), expired_at);
+                assert_eq!(owner.snapshot().outbound, 1);
+                fixture.peers.record(overlay, capabilities);
+            }
+            Change::Reauthorized => {
+                let original = fixture.forwarder.config().clone();
+                let mut revoked = original.clone();
+                revoked.peers.clear();
+                fixture.forwarder = Forwarder::from_config(&revoked).unwrap();
+                owner.reconcile(&fixture.context(), expired_at);
+                assert_eq!(owner.snapshot().peers, 0);
+                assert_eq!(owner.snapshot().outbound, 1);
+                fixture.forwarder = Forwarder::from_config(&original).unwrap();
+            }
             Change::RemoteEpoch => fixture.peers.record(
                 overlay,
                 ControlCapabilities::local("demand-test", None, 1280)
@@ -292,7 +311,13 @@ async fn late_current_epoch_unsupported_events_enter_legacy_after_semantic_expir
 #[tokio::test]
 async fn late_old_epoch_underlay_or_scope_events_do_not_disable_current_epoch() {
     for kind in [Unsupported::Protocol, Unsupported::Response] {
-        for change in [Change::RemoteEpoch, Change::Underlay, Change::MembershipTag] {
+        for change in [
+            Change::RemoteEpoch,
+            Change::Underlay,
+            Change::MembershipTag,
+            Change::CapabilitiesRestored,
+            Change::Reauthorized,
+        ] {
             late_unsupported(kind, change).await;
         }
     }

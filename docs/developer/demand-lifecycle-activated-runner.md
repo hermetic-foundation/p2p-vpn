@@ -313,11 +313,12 @@ They do not establish which component consumed the measured cellular energy.
 
 ## Reconnection Idle Timeline
 
-The first diagnostic deployment repeatedly reported `RecentlyActive` after
+The [first diagnostic deployment](android-idle-reconnect-diagnosis-2026-11-13.json)
+repeatedly reported `RecentlyActive` after
 relay circuits closed and reconnected. Capability invalidation removed the
 lifecycle owner, restarting the 45-second idle grace without payload demand.
 
-| Planned Boundary | Required Behavior |
+| Boundary | Required Behavior |
 | --- | --- |
 | Temporary capability absence | Revoke quiet and semantic exchanges immediately; retain the configured member's bounded idle timeline |
 | Missing validation | No idle offer, acknowledgement commitment, wake acceptance or path retirement from cached capabilities |
@@ -330,3 +331,33 @@ lifecycle owner, restarting the 45-second idle grace without payload demand.
 Validation must reproduce repeated sub-45-second disconnects, capability
 absence, same/new epochs, true revocation, stale replies and application demand.
 Preserving idle age alone is not proof of public-relay dormancy or energy savings.
+
+The runtime now suspends the configured member's policy instead of erasing its
+application idle history when capabilities disappear. It retains no capability
+authority: preparation and negotiation still require a current validated session.
+
+- Per-peer session generations fence completions across capability invalidation.
+- Revocation permanently invalidates retained flights without freeing native slots early.
+- Re-admission cannot match a removed policy's flights; generation exhaustion fails closed.
+- A remote restart still resets the idle grace; real payload demand is observed during absence.
+
+### Reconnect Verification
+
+| Check | Result |
+| --- | --- |
+| Feature-enabled workspace/all targets | 2,124 passed; zero failed; 50 existing/opt-in exclusions across 16 suites |
+| Feature-off lifecycle regressions | 34 dispatcher tests and the suspension-model test pass |
+| Native delivery regressions | Late ACK, reply-sent, and both unsupported terminal forms cannot cross capability absence; revoke/re-admit cannot revive an old flight |
+| Compatibility | Explicit unsupported support and scope changes remain conservative; no wire/configuration field changes |
+| Source/build | ARM64 Nix release build passes; eleven relevant runtime/JNI/lockfile sources match |
+| Android packaging | 158 Java tests pass; zero lint errors, seven unchanged warnings; signing and 16 KiB alignment pass |
+| Resources | One existing 7.9 GiB host target; one ARM64 build with two compiler jobs; no SDK/compiler/emulator rebuild |
+| Formal verification | No Lean/model-checker project exists; these are executable regressions, not a formal proof |
+
+The first full host invocation omitted the flake's `RUST_MIN_STACK=8388608`
+and aborted in CLI parsing. The repeated invocation used the declared setting;
+the earlier default build passed 2,119 tests before the reconnect correction.
+
+The final post-correction full workspace run used the trial feature. The default
+build's post-correction check covered the changed lifecycle scope, not a second
+complete all-target run. Device and replicated energy acceptance remain separate.

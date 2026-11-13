@@ -234,6 +234,14 @@ impl PeerLifecycle {
         }
     }
 
+    /// Losing capability validation invalidates effects, not application idle age.
+    pub(crate) fn suspend_session(&mut self) {
+        self.invalidate_exchange();
+        if self.supported && matches!(self.phase, Phase::Dormant | Phase::Quiescing) {
+            self.phase = Phase::Active;
+        }
+    }
+
     pub fn offer_idle(
         &mut self,
         now: Instant,

@@ -4,6 +4,9 @@ use libp2p::SwarmBuilder;
 #[path = "tests/legacy.rs"]
 mod legacy;
 
+#[path = "tests/reconnections.rs"]
+mod reconnections;
+
 fn epoch(value: u8) -> Epoch {
     Epoch::new([value; 16]).unwrap()
 }
@@ -543,6 +546,13 @@ async fn semantic_cancellation_expiry_and_revocation_cannot_reuse_transport_slot
         assert_eq!(owner.snapshot().outbound, 1);
         fixture.peers.remove(PeerId::from_libp2p(peer));
         owner.reconcile(&fixture.context(), later);
+        assert_eq!(owner.snapshot().peers, 1);
+        assert!(owner.peers[&peer].capabilities_suspended);
+        assert_eq!(owner.snapshot().outbound, 1);
+        let mut config = fixture.forwarder.config().clone();
+        config.peers.clear();
+        fixture.forwarder = Forwarder::from_config(&config).unwrap();
+        owner.reconcile(&fixture.context(), later);
         assert_eq!(owner.snapshot().peers, 0);
         assert_eq!(owner.snapshot().outbound, 1);
         drop(b);
@@ -568,6 +578,7 @@ enum Interrupt {
     NewOutstandingWork,
     MembershipRotation,
     AcceptedPayload,
+    CapabilitiesRestored,
 }
 
 async fn interrupted_reply(interrupt: Interrupt) {
@@ -605,6 +616,14 @@ async fn interrupted_reply(interrupt: Interrupt) {
                                 b_fixture.forwarder = Forwarder::from_config(&config).unwrap();
                             }
                             Interrupt::RestartedPeer => b_fixture.peers.record(PeerId::from_libp2p(a_peer), ControlCapabilities::local("demand-test", None, 1280).with_demand_lifecycle_epoch(epoch(3))),
+                            Interrupt::CapabilitiesRestored => {
+                                let overlay = PeerId::from_libp2p(a_peer);
+                                let capabilities = b_fixture.peers.get(overlay).unwrap().clone();
+                                b_fixture.peers.remove(overlay);
+                                b_owner.reconcile(&b_fixture.context(), idle);
+                                b_fixture.peers.record(overlay, capabilities);
+                                b_owner.observe_peer(&b_fixture.context(), a_peer, idle);
+                            }
                             Interrupt::NetworkChange => { b_fixture.connections.advance(); }
                             Interrupt::RetiringConnection => {
                                 let connection = b_owner.peers[&a_peer].inbound.as_ref().unwrap().connection;
@@ -651,6 +670,7 @@ async fn every_destructive_commit_rechecks_current_authority_epoch_work_and_conn
         Interrupt::NewOutstandingWork,
         Interrupt::MembershipRotation,
         Interrupt::AcceptedPayload,
+        Interrupt::CapabilitiesRestored,
     ] {
         interrupted_reply(interrupt).await;
     }

@@ -26,6 +26,7 @@ struct Flight {
     peer: Libp2pPeerId,
     request: Request,
     underlay_epoch: u64,
+    session_generation: u64,
 }
 
 struct PendingReply {
@@ -54,9 +55,31 @@ struct Peer {
     wake_after: Option<Instant>,
     observed_demand: Option<DemandVersion>,
     preparation_log: Option<(PreparationSnapshot, Instant)>,
+    capabilities_suspended: bool,
+    session_generation: u64,
 }
 
 impl Peer {
+    fn suspend_capabilities(&mut self, context: &LifecycleContext<'_>, peer: Libp2pPeerId) {
+        if !self.capabilities_suspended {
+            self.capabilities_suspended = true;
+            self.session_generation = self.session_generation.saturating_add(1);
+            self.outbound = None;
+            self.inbound = None;
+            self.wake_after = None;
+            if let Some(policy) = &mut self.policy {
+                if self.session_generation == u64::MAX {
+                    policy.use_legacy();
+                } else {
+                    policy.suspend_session();
+                }
+            }
+        }
+        context
+            .forwarder
+            .revoke_data_path_quiet(PeerId::from_libp2p(peer));
+    }
+
     fn record_preparation(&mut self, snapshot: PreparationSnapshot, now: Instant) -> bool {
         if self.preparation_log.is_some_and(|(previous, last)| {
             previous == snapshot || now.saturating_duration_since(last) < IDLE_AFTER
@@ -80,11 +103,15 @@ impl Peer {
     }
 
     fn refresh(&mut self, local: Epoch, remote: Option<Epoch>, now: Instant) -> bool {
+        self.capabilities_suspended = false;
         if self.remote_epoch == remote {
             return false;
         }
         self.remote_epoch = remote;
-        self.policy = remote.map(|epoch| PeerLifecycle::new(local, epoch, true, now));
+        self.session_generation = self.session_generation.saturating_add(1);
+        self.policy = remote.map(|epoch| {
+            PeerLifecycle::new(local, epoch, self.session_generation != u64::MAX, now)
+        });
         self.outbound = None;
         self.inbound = None;
         self.next_offer = now + IDLE_AFTER;
@@ -187,11 +214,14 @@ pub(super) struct LifecycleContext<'a> {
 }
 
 impl LifecycleContext<'_> {
-    fn authorized(&self, peer: Libp2pPeerId) -> bool {
+    fn member_authorized(&self, peer: Libp2pPeerId) -> bool {
         self.forwarder
             .transport_peer_for_overlay(PeerId::from_libp2p(peer))
             == Some(peer)
-            && self.peers.contains(PeerId::from_libp2p(peer))
+    }
+
+    fn authorized(&self, peer: Libp2pPeerId) -> bool {
+        self.member_authorized(peer) && self.peers.contains(PeerId::from_libp2p(peer))
     }
 
     fn session(&self, peer: Libp2pPeerId, epoch: Epoch) -> Option<Session<'_>> {
@@ -360,20 +390,30 @@ impl DemandLifecycle {
     pub(super) fn reconcile(&mut self, context: &LifecycleContext<'_>, now: Instant) {
         let changed = self.underlay_epoch != context.connections.current;
         self.underlay_epoch = context.connections.current;
+        // Keep native ownership, but never let re-admission resurrect an old flight.
+        for flight in self.flights.values_mut() {
+            if !context.member_authorized(flight.peer) {
+                flight.session_generation = u64::MAX;
+            }
+        }
         self.peers.retain(|peer, state| {
-            if !context.authorized(*peer) {
+            if !context.member_authorized(*peer) {
                 context
                     .forwarder
                     .revoke_data_path_quiet(PeerId::from_libp2p(*peer));
                 return false;
             }
-            let remote = context
-                .session(*peer, self.epoch)
-                .map(|session| session.remote_epoch);
-            if state.refresh(self.epoch, remote, now) {
-                context
-                    .forwarder
-                    .revoke_data_path_quiet(PeerId::from_libp2p(*peer));
+            if !context.peers.contains(PeerId::from_libp2p(*peer)) {
+                state.suspend_capabilities(context, *peer);
+            } else {
+                let remote = context
+                    .session(*peer, self.epoch)
+                    .map(|session| session.remote_epoch);
+                if state.refresh(self.epoch, remote, now) {
+                    context
+                        .forwarder
+                        .revoke_data_path_quiet(PeerId::from_libp2p(*peer));
+                }
             }
             state.observe_demand(context, *peer, now);
             if changed {
@@ -419,6 +459,8 @@ impl DemandLifecycle {
                 wake_after: None,
                 observed_demand: None,
                 preparation_log: None,
+                capabilities_suspended: false,
+                session_generation: 0,
             }
         });
         if state.refresh(self.epoch, remote, now) {
@@ -428,7 +470,16 @@ impl DemandLifecycle {
         }
         state.observe_demand(context, peer, now);
         state.expire(now);
-        true
+        state.session_generation != u64::MAX
+    }
+
+    fn flight_is_current(&self, context: &LifecycleContext<'_>, flight: &Flight) -> bool {
+        flight.session_generation != u64::MAX
+            && flight.underlay_epoch == context.connections.current
+            && self.peers.get(&flight.peer).is_some_and(|state| {
+                !state.capabilities_suspended
+                    && state.session_generation == flight.session_generation
+            })
     }
 
     fn allow_request(&mut self, peer: Libp2pPeerId, now: Instant) -> bool {
@@ -450,11 +501,12 @@ impl DemandLifecycle {
         peer: Libp2pPeerId,
         now: Instant,
     ) {
+        self.reconcile(context, now);
         context
             .forwarder
             .record_application_demand(PeerId::from_libp2p(peer), now);
         if !self.admit_peer(context, peer, now) {
-            if !context.authorized(peer) {
+            if !context.member_authorized(peer) {
                 self.peers.remove(&peer);
             }
             return;
@@ -558,6 +610,9 @@ impl DemandLifecycle {
         let eligible = state
             .policy
             .as_ref()
+            .filter(|_| {
+                !state.capabilities_suspended && context.session(peer, self.epoch).is_some()
+            })
             .map_or(Err(Rejection::Unsupported), |policy| {
                 policy.idle_preparation(now, readiness.incoming_path_available, application_work)
             });
@@ -698,6 +753,7 @@ impl DemandLifecycle {
                 peer,
                 request,
                 underlay_epoch: context.connections.current,
+                session_generation: self.peers[&peer].session_generation,
             },
         );
     }
@@ -832,7 +888,7 @@ impl DemandLifecycle {
                     error,
                     request_response::OutboundFailure::UnsupportedProtocols
                 ) && let Some(flight) = completed.as_ref()
-                    && context.connections.current == flight.underlay_epoch
+                    && self.flight_is_current(context, flight)
                     && context.connections.is_usable(connection_id)
                     && context.session(peer, self.epoch).is_some_and(|session| {
                         session
@@ -958,9 +1014,7 @@ impl DemandLifecycle {
         flight: Option<&Flight>,
         now: Instant,
     ) {
-        let Some(flight) =
-            flight.filter(|flight| flight.underlay_epoch == context.connections.current)
-        else {
+        let Some(flight) = flight.filter(|flight| self.flight_is_current(context, flight)) else {
             return;
         };
         let Some(session) = context.session(peer, self.epoch) else {

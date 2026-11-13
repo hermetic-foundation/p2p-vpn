@@ -53,6 +53,14 @@ Revocation immediately removes peer policy and pending commit authority.
 Only the bounded peer/request-ID transport tombstone may outlive that removal;
 it grants no route, member, wake, or idle authority.
 
+Temporary capability absence is not membership revocation. Retain the authorized
+member's bounded idle history, revoke its quiet permission, and suspend all
+negotiation until capabilities are revalidated.
+
+- Same-epoch revalidation does not count as new application activity.
+- Session-generation fences reject completions from before capability absence.
+- Real revocation invalidates old flights even if the same peer is admitted again.
+
 ## Commit Checks
 
 | Boundary | Checks |

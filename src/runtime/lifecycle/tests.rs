@@ -40,6 +40,27 @@ fn initial_grace_is_not_fabricated_payload_activity() {
 }
 
 #[test]
+fn session_suspension_invalidates_tickets_without_restarting_application_idle_age() {
+    let now = Instant::now();
+    let (mut a, mut b) = pair(now);
+    let due = now + IDLE_AFTER;
+    let old = a.offer_idle(due, READY).unwrap();
+    let ack = b.receive_idle(old, due, READY).unwrap();
+    a.suspend_session();
+    assert_eq!(a.last_demand(), None);
+    assert_eq!(a.phase(), Phase::Active);
+    assert_eq!(
+        a.receive_idle_ack(ack, due, READY),
+        Err(Rejection::StaleAcknowledgement)
+    );
+    assert_eq!(a.idle_preparation(due, true, false), Ok(()));
+    let fresh = a.offer_idle(due, READY).unwrap();
+    assert!(fresh.revision > old.revision);
+    assert_eq!(fresh.sender_epoch, old.sender_epoch);
+    assert_eq!(fresh.receiver_epoch, old.receiver_epoch);
+}
+
+#[test]
 fn maintenance_does_not_extend_the_activity_window() {
     let now = Instant::now();
     let (mut a, _) = pair(now);

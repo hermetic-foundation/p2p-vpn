@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "kind": "android_idle_reconnection_diagnosis",
+  "date_utc": "2026-11-13",
+  "status": "idle_grace_restarted_by_capability_churn",
+  "energy_measurement": false,
+  "battery_improvement_claimed": false,
+  "goal_complete": false,
+  "private_report_sha256": "09a1bb4e205795aa949fb938ff5036ea926c54a5e377b65be7cc875b0b85fc05",
+  "phone_apk_sha256": "826b0f79d37bfeb06e4c8a367796b53026a9325b32a8e2f8898c31b1b8a251dd",
+  "linux_diagnostic_executable_sha256": "34cbc6f49aa86f28ba5891420c9b17089b6c39cd2f1191cca45fbe37f146905e",
+  "topology": {
+    "updated_linux_counterparts": 1,
+    "other_linux_counterparts": "restored production builds, unlike the four-trial-counterpart energy comparison",
+    "phone_transport": "cellular_circuit_relay",
+    "membership_modified": false,
+    "pairing_performed": false
+  },
+  "warmup_probe_results": [
+    {"inbound_received": 0, "outbound_received": 0, "packets_each": 3},
+    {"inbound_received": 0, "outbound_received": 0, "packets_each": 3},
+    {"inbound_received": 3, "outbound_received": 3, "packets_each": 3}
+  ],
+  "idle_observation": {
+    "seconds_without_generated_probes": 180,
+    "phone_runtime_generation_before": 1,
+    "phone_runtime_generation_after": 1,
+    "phone_paths_at_both_boundaries": {"relay": 1, "direct": 0, "public_routing_peers": 11},
+    "preparation_event_relative_seconds": [0, 40, 80, 120, 160],
+    "phase_in_each_event": "Active",
+    "reason_in_each_event": "RecentlyActive",
+    "incoming_path_available_in_each_event": true,
+    "application_work_in_each_event": false,
+    "outstanding_native_work_in_each_event": true,
+    "maintenance_paused_in_each_event": false,
+    "confirmed_idle_before_tested_reconnect_fix": false
+  },
+  "code_path": [
+    "Last connection close and first reconnect invalidate non-dormant peer capabilities",
+    "Lifecycle reconciliation previously removed a configured peer when its capabilities were absent",
+    "Revalidated capabilities recreated the policy with a new 45-second idle grace",
+    "Repeated shorter connection lifetimes prevented idle preparation without requiring new payload demand"
+  ],
+  "required_fix": {
+    "retain_bounded_configured_member_idle_history": true,
+    "require_fresh_capabilities_before_effects": true,
+    "revoke_quiet_and_semantic_exchanges_during_absence": true,
+    "fence_old_native_completions_without_releasing_slots": true,
+    "discard_policy_on_real_authorization_removal": true,
+    "new_remote_epoch_keeps_conservative_grace": true
+  },
+  "restoration": {
+    "original_phone_apk_profile_membership_and_wifi_verified": true,
+    "hardware_battery_reporting_verified": true,
+    "original_linux_executable_config_and_other_network_pid_verified": true,
+    "runtime_override_removed": true
+  },
+  "remaining": [
+    "Validate the reconnect fix on updated Linux and Android endpoints",
+    "Handle zero-demand offline members without perpetually enabling generic discovery",
+    "Measure a fresh candidate with matched original controls and replicated reversed-order energy windows"
+  ]
+}
