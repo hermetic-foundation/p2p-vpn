@@ -123,12 +123,27 @@ specifies finite attempts, shared native ownership, and hostname compatibility.
 - Removed recipients retain bounded control-only eligibility while waiting for a native slot.
 - Shared-root regression starts with A-B-C only, reconnects retained A-C for departure, then verifies survivor governance.
 
+## Implemented Event Delivery
+
+| Work | Implemented Bound |
+| --- | --- |
+| Member capabilities | One latest snapshot; coalesced recipients; four native slots shared with record pages |
+| Retry opportunity | Three attempts within 45 seconds; LAN first, then retained direct/relay addresses |
+| Native writes | Original operation deadline covers queued/active work; cancellation releases slots only through native terminal events |
+| Hostname catch-up | Optional outer inventory hint; verified signed offers; three finite rounds; completed hints deduplicate |
+| Failed hints | Remain dirty until verified completion; actual new connections can re-arm exhausted work once |
+| Probe quarantine | Only a live native control owner can suspend an old control-only block; retain its failure history and retry deadline |
+
+Control delivery does not advance payload demand, clear quiet permission, or
+grant packet authority. Checkpoint pre-dispatch rejects retired capability
+responses before they can advertise a stale catch-up opportunity.
+
 ## Remaining Activation Gates
 
 - Keep verified incoming ownership, essential renewal, and automatic anchor recovery intact in the activated runtime.
-- Finish dirty capability delivery and equal-authority hostname catch-up for disconnected dormant members.
-- Add a bounded control-owner exception for old probe quarantine without erasing failure history or granting packets.
-- Do not rely only on connected-peer broadcasts, and do not turn control updates into permanent activity leases.
+- Finish the separate checkpoint-only sync-capability sender; it still relies on connected-peer announcements.
+- Add finite control-owned public discovery after LAN-first attempts; retained-address fallback is not full cold recovery.
+- Keep bounded control recovery alive when quiet discovery cancels unrelated background work.
 - Complete demand-driven LAN-first establishment/recovery and sparse infrastructure maintenance policy.
 - Verify first incoming/outgoing VPN payloads, legacy peers, active transfers, and roaming with lifecycle support enabled.
 - Measure fresh paired/reversed-order cellular energy only after the functional candidate is active.
@@ -137,11 +152,13 @@ specifies finite attempts, shared native ownership, and hostname compatibility.
 
 | Check | Result |
 | --- | --- |
-| Workspace/all-target tests | 2,016 passed; zero failures; 49 existing/opt-in ignores |
-| Native work regressions | Five passed: queued failure, concurrent replies, omitted reply, timeout, undecoded codec I/O |
+| Workspace/all-target tests | 2,066 passed; zero failures; 49 existing/opt-in ignores |
+| Native work regressions | 18 passed: original ownership fences plus absolute deadlines, delayed writes, active/queued cancellation, normal terminal events, and FIFO preservation |
 | Stream retirement regressions | Six passed: work/demand, initial grace, pending transports, nine infrastructure roles, metadata retention, real TCP close/reconnect |
 | Datagram retirement regressions | Five passed; local preparation alone cannot retire paths or reject incoming hello processing |
-| Checkpoint native ownership | 41 focused tests passed, including four new disconnected-roster, slot-expiry, stale-event, and three-owner regressions |
+| Checkpoint native ownership | 58 tests passed, including signed hostname catch-up, finite failed-hint retries, deadline/cancellation slots, and connection-bound control leases |
+| Coalesced capability delivery | 17 tests passed, including shared four-flight budget, coalescing, revocation, original deadlines, demand separation, quarantine, and retained LAN reconnect |
+| Native connection callback | Real encrypted TCP establishment queues exactly one owned capability exchange and preserves application demand |
 | Shared-root delivery | A-B-C startup with retained A-C only; departure ACKs reach both survivors, which continue governance |
 | Pinned stream regressions | Existing budget observed; original capacity retained across builder-limit changes; denied creation releases metadata |
 | Clippy | Correctness, suspicious, and performance groups passed; other advisory warnings remain |
@@ -155,12 +172,15 @@ specifies finite attempts, shared native ownership, and hostname compatibility.
 
 Validation used the existing shared target directory and cached Nix Rust 1.97.1
 tools, two build jobs, and disabled incremental compilation. The shared target
-remained approximately 6.3 GiB; no new SDK, toolchain, or target was downloaded.
+was approximately 7.0 GiB; no new SDK, toolchain, or target was downloaded.
 
-An initial broad integration run exposed five test-fixture failures. Synthetic
-connection fixtures now isolate public DHT seed work, and storage-only churn
-explicitly expires its bounded offline handoff. Native guards remain unchanged;
-focused reruns and the final full workspace run passed.
+The first broad run of this milestone exposed two reconnect-fixture failures.
+Fixtures now preserve the control owner and reflect native handler/connection
+event ordering. The final broad run passed without weakening slot limits.
+
+A paging regression also needed to wait for real cancellation terminal events
+instead of treating semantic removal as a free native slot. Its assertions now
+cover retained tombstones and actual release; the final full run passed.
 
 No new formal-verification project was introduced. These executable tests do
 not prove the entire distributed lifecycle or replace the remaining device tests.

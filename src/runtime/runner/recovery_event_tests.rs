@@ -1182,6 +1182,7 @@ struct EventFixture {
     pairing_store: Option<PairingStateStore>,
     pairing_tokens: PairingReplayTokens,
     packet_in_flight: PacketInFlight,
+    membership_record_syncs: MembershipRecordSyncs,
 }
 
 impl EventFixture {
@@ -1212,6 +1213,7 @@ impl EventFixture {
             pairing_store: None,
             pairing_tokens: PairingReplayTokens::default(),
             packet_in_flight: PacketInFlight::new(1),
+            membership_record_syncs: MembershipRecordSyncs::default(),
         }
     }
 
@@ -1273,7 +1275,7 @@ impl EventFixture {
                 inbound_packet_rate_limiters: &mut PeerRateLimiters::new(1),
                 pairing_request_rate_limiters: &mut PeerRateLimiters::new(1),
                 membership_page_rate_limiters: &mut PeerRateLimiters::new(1),
-                membership_record_syncs: &mut MembershipRecordSyncs::default(),
+                membership_record_syncs: &mut self.membership_record_syncs,
                 pairing_handshake_rate_limiter: &mut GlobalRateLimiter::new(1, Instant::now()),
                 metrics: &self.metrics,
                 local_capabilities: &mut ControlCapabilities::local("lab", None, 1280),
@@ -2260,6 +2262,45 @@ async fn retired_configured_listener_marker_survives_error_until_terminal_close(
 }
 
 #[tokio::test]
+async fn native_connection_event_uses_one_owned_capability_request() {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let remote = NodeIdentity::generate_ed25519().unwrap();
+        let peer = remote.peer_id.parse().unwrap();
+        let mut fixture = EventFixture::new(peer);
+        let before = fixture.forwarder.application_demand(PeerId::from_libp2p(peer));
+        let mut receiver = membership_sync_test_node(remote);
+        receiver.swarm.listen_on("/ip4/127.0.0.1/tcp/0".parse().unwrap()).unwrap();
+        let address = loop {
+            if let SwarmEvent::NewListenAddr { address, .. } = receiver.swarm.select_next_some().await { break address; }
+        };
+        fixture.epochs.dial(&mut fixture.node.swarm,
+            DialOpts::peer_id(peer).addresses(vec![address]).build()).unwrap();
+        let mut received = 0;
+        loop {
+            tokio::select! {
+                event = fixture.node.swarm.select_next_some() => fixture.dispatch(event).await,
+                event = receiver.swarm.select_next_some() => {
+                    if let SwarmEvent::Behaviour(BehaviourEvent::Control(request_response::Event::Message {
+                        message: Message::Request { request: ControlRequest::Capabilities(_), channel, .. }, ..
+                    })) = event {
+                        received += 1;
+                        receiver.swarm.behaviour_mut().control.send_response(channel,
+                            ControlResponse::CapabilitiesAccepted(ControlCapabilities::local("lab", None, 1280))).unwrap();
+                    }
+                },
+            }
+            if received > 0 && fixture.capabilities.contains(PeerId::from_libp2p(peer))
+                && fixture.membership_record_syncs.pending.is_empty()
+            { break; }
+        }
+        assert_eq!(received, 1);
+        assert_eq!(fixture.metrics.snapshot(crate::queue::QueueStats::default()).control_requests_sent, 1);
+        assert_eq!(fixture.forwarder.application_demand(PeerId::from_libp2p(peer)), before);
+        assert!(fixture.membership_record_syncs.active_by_peer.is_empty());
+    }).await.expect("root connection callback must coalesce its capability request");
+}
+
+#[tokio::test]
 async fn capability_retry_targets_survivor_after_libp2p_removes_retired_connection() {
     use libp2p::swarm::{FromSwarm, NetworkBehaviour, NotifyHandler, ToSwarm};
     use std::task::{Context, Poll};
@@ -2377,6 +2418,7 @@ async fn capability_retry_targets_survivor_after_libp2p_removes_retired_connecti
 
 #[tokio::test]
 async fn retired_connection_close_retries_unvalidated_capabilities_once() {
+    use libp2p::swarm::{FromSwarm, NetworkBehaviour};
     for scenario in [
         "retry",
         "validated",
@@ -2412,6 +2454,22 @@ async fn retired_connection_close_retries_unvalidated_capabilities_once() {
             fixture
                 .active_connections
                 .insert((peer, id), endpoint.clone());
+            let _handler = fixture
+                .node
+                .swarm
+                .behaviour_mut()
+                .control
+                .handle_established_outbound_connection(
+                    id,
+                    peer,
+                    "/ip4/127.0.0.1/tcp/4001"
+                        .parse::<Multiaddr>()
+                        .as_ref()
+                        .unwrap(),
+                    libp2p::core::Endpoint::Dialer,
+                    libp2p::core::transport::PortUse::New,
+                )
+                .unwrap();
             fixture.paths.record_established_with_details(
                 overlay,
                 PathKind::DirectTcpStream,
@@ -2442,6 +2500,20 @@ async fn retired_connection_close_retries_unvalidated_capabilities_once() {
             num_established: u32::from(scenario != "no_replacement"),
             cause: None,
         };
+        fixture
+            .node
+            .swarm
+            .behaviour_mut()
+            .control
+            .on_swarm_event(FromSwarm::ConnectionClosed(
+                libp2p::swarm::behaviour::ConnectionClosed {
+                    peer_id: peer,
+                    connection_id: old,
+                    endpoint: &endpoint,
+                    cause: None,
+                    remaining_established: usize::from(scenario != "no_replacement"),
+                },
+            ));
         fixture.dispatch(close()).await;
         let sent = fixture
             .metrics

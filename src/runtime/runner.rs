@@ -163,6 +163,8 @@ mod control_connection_retention;
 use control_connection_retention::should_retain_control_connection;
 mod demand_lifecycle;
 use demand_lifecycle::DemandLifecycle;
+mod control_delivery;
+use control_delivery::{CapabilityPublication, PendingControlSync};
 mod dormant_paths;
 mod idle_infrastructure;
 mod incoming_anchor;
@@ -598,6 +600,8 @@ struct PendingMembershipRecordSync {
     records: Vec<SignedMembershipRecord>,
     encoded_bytes: usize,
     restarts: u8,
+    deadline: Instant,
+    cancellation: Option<futures::future::AbortHandle>,
 }
 
 impl PendingMembershipRecordSync {
@@ -622,6 +626,8 @@ impl PendingMembershipRecordSync {
             records: Vec::new(),
             encoded_bytes: 0,
             restarts: 0,
+            deadline: Instant::now() + control_delivery::DELIVERY_WINDOW,
+            cancellation: None,
         }
     }
 
@@ -636,21 +642,25 @@ impl PendingMembershipRecordSync {
         self.records.clear();
         self.encoded_bytes = 0;
         self.restarts = self.restarts.saturating_add(1);
+        self.cancellation = None;
         self
     }
 }
 
 #[derive(Debug, Default)]
 struct MembershipRecordSyncs {
-    pending: HashMap<request_response::OutboundRequestId, PendingMembershipRecordSync>,
+    pending: HashMap<request_response::OutboundRequestId, PendingControlSync>,
     active_by_peer: HashMap<Libp2pPeerId, request_response::OutboundRequestId>,
+    capabilities: CapabilityPublication,
     history: MembershipSyncHistory,
     checked_policy_revision: Option<(u64, u64)>,
 }
 
 impl MembershipRecordSyncs {
     fn contains(&self, request_id: request_response::OutboundRequestId) -> bool {
-        self.pending.contains_key(&request_id)
+        self.pending
+            .get(&request_id)
+            .is_some_and(|work| work.records().is_some())
     }
 
     fn owns_request(
@@ -658,14 +668,17 @@ impl MembershipRecordSyncs {
         peer: Libp2pPeerId,
         request_id: request_response::OutboundRequestId,
     ) -> bool {
-        self.pending
-            .get(&request_id)
-            .is_some_and(|pending| pending.peer == peer)
+        self.pending.get(&request_id).is_some_and(|pending| {
+            pending
+                .records()
+                .is_some_and(|pending| pending.peer == peer)
+        })
     }
 
     fn can_start(&self, peer: Libp2pPeerId, snapshot: &str, now: Instant) -> bool {
-        self.pending.len() < MAX_CONCURRENT_MEMBERSHIP_SYNCS
+        self.occupied_slots() < MAX_CONCURRENT_MEMBERSHIP_SYNCS
             && !self.active_by_peer.contains_key(&peer)
+            && !self.pending.values().any(|work| work.peer() == peer)
             && self.history.allows(peer, snapshot, now)
     }
 
@@ -675,7 +688,8 @@ impl MembershipRecordSyncs {
         pending: PendingMembershipRecordSync,
     ) {
         self.active_by_peer.insert(pending.peer, request_id);
-        self.pending.insert(request_id, pending);
+        self.pending
+            .insert(request_id, PendingControlSync::Records(Box::new(pending)));
         self.checked_policy_revision = None;
     }
 
@@ -683,11 +697,16 @@ impl MembershipRecordSyncs {
         &mut self,
         request_id: request_response::OutboundRequestId,
     ) -> Option<PendingMembershipRecordSync> {
-        let pending = self.pending.remove(&request_id)?;
+        if !self.contains(request_id) {
+            return None;
+        }
+        let PendingControlSync::Records(pending) = self.pending.remove(&request_id)? else {
+            unreachable!("record owner checked above")
+        };
         if self.active_by_peer.get(&pending.peer) == Some(&request_id) {
             self.active_by_peer.remove(&pending.peer);
         }
-        Some(pending)
+        Some(*pending)
     }
 
     fn mark_completed(&mut self, peer: Libp2pPeerId, snapshot: String) {
@@ -712,7 +731,10 @@ impl MembershipRecordSyncs {
 
     fn remove_peer(&mut self, peer: Libp2pPeerId) {
         if let Some(request_id) = self.active_by_peer.remove(&peer) {
-            self.pending.remove(&request_id);
+            if let Some(work) = self.pending.get_mut(&request_id) {
+                work.cancel();
+                *work = PendingControlSync::Retired { peer };
+            }
         }
     }
 
@@ -733,14 +755,27 @@ impl MembershipRecordSyncs {
             .pending
             .iter()
             .filter_map(|(request_id, pending)| {
-                (!forwarder.authorizes_membership_sync(pending.peer)).then_some(*request_id)
+                let unauthorized = match pending {
+                    PendingControlSync::Records(work) => {
+                        !forwarder.authorizes_membership_sync(work.peer)
+                    }
+                    PendingControlSync::Capabilities { peer, .. } => {
+                        !forwarder.is_configured_transport_peer(*peer)
+                    }
+                    PendingControlSync::Retired { .. } => false,
+                };
+                unauthorized.then_some(*request_id)
             })
             .collect::<Vec<_>>();
         for request_id in &retired {
-            if let Some(pending) = self.take(*request_id) {
-                fail_membership_record_sync(self, metrics, pending.peer, "authorization_withdrawn");
+            let peer = self.pending[request_id].peer();
+            let records = self.contains(*request_id);
+            self.remove_peer(peer);
+            if records {
+                fail_membership_record_sync(self, metrics, peer, "authorization_withdrawn");
             }
         }
+        self.capabilities.retain_authorization(forwarder);
         self.history
             .retain_peers(|peer| forwarder.authorizes_membership_sync(peer));
         self.checked_policy_revision = Some(revision);
@@ -1937,6 +1972,25 @@ where
             &mut queue_runtime.discovered_peer_addresses,
             Instant::now(),
         )?;
+        let now = Instant::now();
+        reconcile_control_probe_leases(
+            &mut node.swarm,
+            &mut membership_probe_connections,
+            |peer| {
+                forwarder.is_configured_transport_peer(peer)
+                    || membership.allows_configured_infrastructure(peer)
+                    || infrastructure_peers.contains(peer)
+            },
+            |peer, connection| {
+                let checkpoint = checkpoint_runtime
+                    .as_ref()
+                    .and_then(|owner| owner.control_delivery_deadline(peer, connection, now));
+                let records =
+                    membership_record_syncs.control_delivery_deadline(peer, &forwarder, now);
+                checkpoint.into_iter().chain(records).max()
+            },
+            now,
+        );
         if packet_authorization_revision != Some(forwarder.authorization_revision()) {
             demand_lifecycle::RuntimeInputs {
                 forwarder: &forwarder,
@@ -2047,7 +2101,7 @@ where
                     reconcile_checkpoint_connection_paths(
                         &forwarder, &connection_epochs, &active_connections, &mut paths, &metrics,
                     );
-                    send_control_capabilities_to_connected_peers(&mut node.swarm, &forwarder, &local_capabilities, &metrics);
+                    broadcast_control_capabilities(&mut node.swarm, &forwarder, &local_capabilities, &mut membership_record_syncs, &metrics);
                 }
             }
             reason = &mut shutdown => {
@@ -2358,14 +2412,16 @@ where
                     &mut tun_runtime,
                     route_controller.as_mut(),
                 )? {
-                    send_control_capabilities_to_connected_peers(
+                    broadcast_control_capabilities(
                         &mut node.swarm,
                         &forwarder,
                         &local_capabilities,
+                        &mut membership_record_syncs,
                         &metrics,
                     );
                 }
                 let mut expiry_context = PacketPlaneExpiryContext {
+                    membership_record_syncs: &mut membership_record_syncs,
                     active_connections: &active_connections,
                     swarm: &mut node.swarm,
                     forwarder: &forwarder,
@@ -2467,6 +2523,11 @@ where
                 }
             }
             _ = timers.path_probe.tick() => {
+                control_delivery::drive(
+                    &mut membership_record_syncs, &mut node, &forwarder,
+                    &mut connection_epochs, &mut queue_runtime.discovered_peer_addresses,
+                    &metrics, Instant::now(),
+                );
                 demand_lifecycle::RuntimeInputs {
                     forwarder: &forwarder,
                     local: &local_capabilities,
@@ -2521,6 +2582,7 @@ where
                     Instant::now(),
                 );
                 let mut context = PacketPlaneExpiryContext {
+                    membership_record_syncs: &mut membership_record_syncs,
                     active_connections: &active_connections,
                     swarm: &mut node.swarm,
                     forwarder: &forwarder,
@@ -2618,6 +2680,9 @@ where
                                 connection_epochs: &mut connection_epochs,
                             },
                         );
+                        membership_record_syncs.retry_capabilities_after_network_change();
+                        broadcast_control_capabilities(&mut node.swarm, &forwarder, &local_capabilities,
+                            &mut membership_record_syncs, &metrics);
                         let cancelled = kademlia_maintenance.reset(
                             &mut node.swarm.behaviour_mut().kad,
                             Instant::now(),
@@ -2747,10 +2812,11 @@ where
                                     &membership_mutation_recipients,
                                 )
                             } else {
-                                send_control_capabilities_to_connected_peers(
+                                broadcast_control_capabilities(
                                     &mut node.swarm,
                                     &forwarder,
                                     &local_capabilities,
+                                    &mut membership_record_syncs,
                                     &metrics,
                                 );
                                 0
@@ -2899,10 +2965,11 @@ where
                                 peer,
                                 "pairing_approval_applied",
                             );
-                            send_control_capabilities_to_connected_peers(
+                            broadcast_control_capabilities(
                                 &mut node.swarm,
                                 context.forwarder,
                                 context.local_capabilities,
+                                context.membership_record_syncs,
                                 context.metrics,
                             );
                         }
@@ -3057,7 +3124,7 @@ where
                         local_capabilities = refreshed_local_capabilities(&local_capabilities, &forwarder);
                         checkpoint.decorate_capabilities(&mut local_capabilities)?;
                         refresh_dns_zone_if_needed(dns_runtime.as_ref(), &forwarder, &mut dns_membership_revision, true);
-                        send_control_capabilities_to_connected_peers(&mut node.swarm, &forwarder, &local_capabilities, &metrics);
+                        broadcast_control_capabilities(&mut node.swarm, &forwarder, &local_capabilities, &mut membership_record_syncs, &metrics);
                     }
                     continue;
                 }
@@ -3066,6 +3133,11 @@ where
                         peer, connection_id, message,
                     })) = &event
                     && connection_epochs.is_usable(*connection_id)
+                    && match message {
+                        Message::Request { .. } => true,
+                        Message::Response { request_id, .. } => membership_record_syncs
+                            .capability_response_may_advertise(*peer, *request_id, &forwarder, Instant::now()),
+                    }
                 {
                     let capabilities = match message {
                         Message::Request { request: ControlRequest::Capabilities(capabilities), .. }
@@ -12943,6 +13015,7 @@ struct MembershipProbeQuarantine {
     retry_at: Instant,
     last_failure: Instant,
     blocked: bool,
+    control_until: Option<Instant>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -12995,7 +13068,13 @@ impl MembershipProbeConnections {
         let next = MembershipProbeConnection {
             connection_id,
             relayed,
-            expires_at: now + MEMBERSHIP_PROBE_CONNECTION_TTL,
+            expires_at: self
+                .quarantines
+                .get(&peer)
+                .and_then(|quarantine| quarantine.control_until)
+                .map_or(now + MEMBERSHIP_PROBE_CONNECTION_TTL, |deadline| {
+                    deadline.min(now + MEMBERSHIP_PROBE_CONNECTION_TTL)
+                }),
         };
         let Some(existing) = self.by_peer.get(&peer).copied() else {
             self.by_peer.insert(peer, next);
@@ -13014,9 +13093,13 @@ impl MembershipProbeConnections {
     }
 
     fn is_quarantined(&self, peer: Libp2pPeerId, now: Instant) -> bool {
-        self.quarantines
-            .get(&peer)
-            .is_some_and(|quarantine| quarantine.blocked && now < quarantine.retry_at)
+        self.quarantines.get(&peer).is_some_and(|quarantine| {
+            quarantine.blocked
+                && now < quarantine.retry_at
+                && quarantine
+                    .control_until
+                    .is_none_or(|deadline| now >= deadline)
+        })
     }
 
     fn remove(&mut self, peer: Libp2pPeerId, connection_id: ConnectionId) -> bool {
@@ -13084,6 +13167,7 @@ impl MembershipProbeConnections {
                 retry_at: now + delay,
                 last_failure: now,
                 blocked: true,
+                control_until: None,
             },
         );
 
@@ -13100,6 +13184,7 @@ impl MembershipProbeConnections {
         self.quarantines.retain(|peer, quarantine| {
             if quarantine.blocked && now >= quarantine.retry_at {
                 quarantine.blocked = false;
+                quarantine.control_until = None;
                 released.push(*peer);
             }
             quarantine.blocked
@@ -13130,6 +13215,49 @@ impl MembershipProbeConnections {
             && probe.connection_id == connection_id
         {
             probe.expires_at = now + MEMBERSHIP_PROBE_CONNECTION_TTL;
+        }
+    }
+}
+
+fn reconcile_control_probe_leases(
+    swarm: &mut Swarm<Behaviour>,
+    probes: &mut MembershipProbeConnections,
+    authorized: impl Fn(Libp2pPeerId) -> bool,
+    owner_deadline: impl Fn(Libp2pPeerId, Option<ConnectionId>) -> Option<Instant>,
+    now: Instant,
+) {
+    for peer in probes.quarantined_peers() {
+        if authorized(peer) {
+            authorize_membership_probe_peer(swarm, probes, peer, "membership_available");
+            continue;
+        }
+        let connection = probes.by_peer.get(&peer).map(|probe| probe.connection_id);
+        let deadline = owner_deadline(peer, connection).filter(|deadline| now < *deadline);
+        let quarantine = probes
+            .quarantines
+            .get_mut(&peer)
+            .expect("tracked quarantine");
+        let previous = quarantine.control_until;
+        quarantine.control_until = deadline;
+        if deadline.is_some() {
+            let unblocked = swarm.behaviour_mut().blocked_peers.unblock_peer(peer);
+            if unblocked || previous != deadline {
+                log_runtime_event(
+                    LogLevel::Info,
+                    "membership_probe_control_lease",
+                    &[("peer", &peer.to_string()), ("state", "suspended")],
+                );
+            }
+        } else if previous.is_some() && now < quarantine.retry_at {
+            swarm.behaviour_mut().blocked_peers.block_peer(peer);
+            if let Some(connection) = connection {
+                swarm.close_connection(connection);
+            }
+            log_runtime_event(
+                LogLevel::Info,
+                "membership_probe_control_lease",
+                &[("peer", &peer.to_string()), ("state", "restored")],
+            );
         }
     }
 }
@@ -13561,6 +13689,7 @@ async fn handle_swarm_event(
                 );
             let mut behaviour_context = BehaviourEventContext {
                 forwarder: context.forwarder,
+                membership_record_syncs: context.membership_record_syncs,
                 membership: context.membership,
                 tun_runtime: context.tun_runtime,
                 route_controller: context.route_controller,
@@ -13862,6 +13991,14 @@ async fn handle_swarm_event(
                 "connection_established",
             );
             if context.connection_epochs.is_usable(connection_id) {
+                context
+                    .membership_record_syncs
+                    .control_connection_available(peer_id, connection_id);
+                if let Some(pairing) = &mut context.checkpoint_pairing
+                    && let Some(owner) = pairing.runtime.as_mut()
+                {
+                    owner.hostname_connection_available(peer_id, connection_id, Instant::now());
+                }
                 invalidate_peer_capabilities_on_first_connection(
                     context.forwarder,
                     context.peer_capabilities,
@@ -13900,6 +14037,7 @@ async fn handle_swarm_event(
                     context.forwarder,
                     peer_id,
                     context.local_capabilities,
+                    context.membership_record_syncs,
                     context.metrics,
                 );
                 send_service_status_request(
@@ -14007,6 +14145,7 @@ async fn handle_swarm_event(
                     context.forwarder,
                     peer_id,
                     context.local_capabilities,
+                    context.membership_record_syncs,
                     context.metrics,
                 );
                 log_runtime_event(
@@ -14227,10 +14366,11 @@ async fn handle_swarm_event(
                         ),
                     ],
                 );
-                send_control_capabilities_to_connected_peers(
+                broadcast_control_capabilities(
                     swarm,
                     context.forwarder,
                     context.local_capabilities,
+                    context.membership_record_syncs,
                     context.metrics,
                 );
                 request_kademlia_address_publication(
@@ -14266,10 +14406,11 @@ async fn handle_swarm_event(
                 context.persistent_packet_plane_quic_endpoint_candidates,
             );
             if withdrawn.changed() {
-                send_control_capabilities_to_connected_peers(
+                broadcast_control_capabilities(
                     swarm,
                     context.forwarder,
                     context.local_capabilities,
+                    context.membership_record_syncs,
                     context.metrics,
                 );
                 request_kademlia_address_publication(
@@ -14741,7 +14882,54 @@ async fn handle_control_event(
     context: &mut SwarmEventContext<'_>,
     event: request_response::Event<ControlRequest, ControlResponse>,
 ) -> Result<(), RunnerError> {
-    if !request_response_message_is_usable(context.connection_epochs, &event, "control") {
+    let usable = request_response_message_is_usable(context.connection_epochs, &event, "control");
+    let delivery = context.membership_record_syncs.finish_capability_event(
+        &event,
+        context.forwarder,
+        context.local_capabilities,
+        context.previous_membership_tags,
+        usable,
+        Instant::now(),
+    );
+    let ticket = match delivery {
+        control_delivery::Completion::Discard | control_delivery::Completion::Failed => {
+            if matches!(delivery, control_delivery::Completion::Failed) {
+                context.metrics.record_control_failure();
+                if let request_response::Event::Message {
+                    message: Message::Response { response, .. },
+                    ..
+                } = &event
+                {
+                    context.metrics.record_control_response_received();
+                    let rejection = match response {
+                        ControlResponse::CapabilitiesRejected(reason) => Some(*reason),
+                        ControlResponse::CapabilitiesAccepted(capabilities) => {
+                            validate_capabilities(
+                                capabilities,
+                                &context.local_capabilities.network_name,
+                                context.local_capabilities.membership_tag.as_deref(),
+                                context.previous_membership_tags,
+                            )
+                        }
+                        _ => None,
+                    };
+                    if let Some(reason) = rejection {
+                        context.metrics.record_control_capability_rejection(reason);
+                    }
+                }
+            }
+            context.membership_record_syncs.drive_capabilities(
+                swarm,
+                context.forwarder,
+                context.metrics,
+                Instant::now(),
+            );
+            return Ok(());
+        }
+        control_delivery::Completion::Reply(ticket) => Some(ticket),
+        control_delivery::Completion::Unowned => None,
+    };
+    if !usable {
         // The transport has completed a response even if its connection is now stale.
         if let request_response::Event::Message {
             peer,
@@ -14818,23 +15006,28 @@ async fn handle_control_event(
                 context.local_capabilities,
                 context.previous_membership_tags,
             );
-            let membership_changed = if context.membership_record_syncs.contains(request_id)
+            let (membership_changed, capability_accepted) = if context
+                .membership_record_syncs
+                .contains(request_id)
                 || matches!(
                     &response,
                     ControlResponse::MembershipRecordsPage(_)
                         | ControlResponse::MembershipRecordsRejected(_)
                 ) {
                 context.metrics.record_control_response_received();
-                handle_membership_record_sync_response(
-                    swarm,
-                    context.forwarder,
-                    context.membership,
-                    context.membership_record_syncs,
-                    context.metrics,
-                    peer,
-                    request_id,
-                    response,
-                    validation_scope,
+                (
+                    handle_membership_record_sync_response(
+                        swarm,
+                        context.forwarder,
+                        context.membership,
+                        context.membership_record_syncs,
+                        context.metrics,
+                        peer,
+                        request_id,
+                        response,
+                        validation_scope,
+                    ),
+                    false,
                 )
             } else {
                 handle_control_response_event(
@@ -14859,6 +15052,14 @@ async fn handle_control_event(
                     context.active_connections,
                 )
             };
+            if let Some(ticket) = ticket {
+                context.membership_record_syncs.acknowledge_capabilities(
+                    ticket,
+                    context.forwarder,
+                    capability_accepted,
+                    Instant::now(),
+                );
+            }
             if membership_changed {
                 *context.local_capabilities =
                     refreshed_local_capabilities(context.local_capabilities, context.forwarder);
@@ -14867,10 +15068,11 @@ async fn handle_control_event(
                     context.tun_runtime,
                     context.route_controller,
                 )?;
-                send_control_capabilities_to_connected_peers(
+                broadcast_control_capabilities(
                     swarm,
                     context.forwarder,
                     context.local_capabilities,
+                    context.membership_record_syncs,
                     context.metrics,
                 );
             }
@@ -14942,6 +15144,12 @@ async fn handle_control_event(
         request_response::Event::ResponseSent { .. } => {}
     }
 
+    context.membership_record_syncs.drive_capabilities(
+        swarm,
+        context.forwarder,
+        context.metrics,
+        Instant::now(),
+    );
     Ok(())
 }
 
@@ -15731,10 +15939,11 @@ async fn handle_control_request(
                     context.tun_runtime,
                     context.route_controller,
                 )?;
-                send_control_capabilities_to_connected_peers(
+                broadcast_control_capabilities(
                     swarm,
                     context.forwarder,
                     context.local_capabilities,
+                    context.membership_record_syncs,
                     context.metrics,
                 );
             }
@@ -17147,10 +17356,11 @@ fn handle_pairing_code_response(
                 remote_peer,
                 "pairing_acceptance_applied",
             );
-            send_control_capabilities_to_connected_peers(
+            broadcast_control_capabilities(
                 swarm,
                 context.forwarder,
                 context.local_capabilities,
+                context.membership_record_syncs,
                 context.metrics,
             );
             if let Err(error) = context.code_pairing_sessions.complete_join(
@@ -17445,10 +17655,11 @@ fn handle_pairing_request_event(
                 connection_id,
                 &response_for_membership,
             );
-            send_control_capabilities_to_connected_peers(
+            broadcast_control_capabilities(
                 swarm,
                 context.forwarder,
                 context.local_capabilities,
+                context.membership_record_syncs,
                 context.metrics,
             );
             log_runtime_event(
@@ -17776,6 +17987,7 @@ fn promote_authenticated_overlay_connection(
         context.forwarder,
         peer,
         context.local_capabilities,
+        context.membership_record_syncs,
         context.metrics,
     );
     send_service_status_request(
@@ -17820,6 +18032,7 @@ fn promote_all_authenticated_overlay_connections(
             context.forwarder,
             peer,
             context.local_capabilities,
+            context.membership_record_syncs,
             context.metrics,
         );
         send_service_status_request(
@@ -18746,6 +18959,7 @@ fn handle_service_response(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Return membership changes and explicit capability acceptance separately.
 fn handle_control_response_event(
     swarm: &mut Swarm<Behaviour>,
     connection_epochs: &mut ConnectionEpochs,
@@ -18766,7 +18980,7 @@ fn handle_control_response_event(
     paths: &mut PathSet,
     discovery: &DiscoveryConfig,
     active_connections: &HashMap<(Libp2pPeerId, ConnectionId), ConnectedPoint>,
-) -> bool {
+) -> (bool, bool) {
     metrics.record_control_response_received();
     match response {
         ControlResponse::CapabilitiesAccepted(capabilities) => {
@@ -18817,13 +19031,13 @@ fn handle_control_response_event(
                     active_connections,
                 );
             }
-            membership_changed
+            (membership_changed, rejection.is_none())
         }
         ControlResponse::CapabilitiesRejected(reason) => {
             metrics.record_control_capability_rejection(reason);
             metrics.record_control_failure();
             eprintln!("control capabilities rejected by {peer}: {reason:?}");
-            false
+            (false, false)
         }
         ControlResponse::PacketPlaneAccepted(handshake) => {
             if let Err(error) = complete_packet_plane_hello(
@@ -18848,14 +19062,14 @@ fn handle_control_response_event(
                     error.describe()
                 );
             }
-            false
+            (false, false)
         }
         ControlResponse::PacketPlaneRejected(reason) => {
             packet_plane_negotiator.cancel_pending_for_peer(PeerId::from_libp2p(peer));
             metrics.record_control_capability_rejection(reason);
             metrics.record_control_failure();
             eprintln!("packet-plane hello rejected by {peer}: {reason:?}");
-            false
+            (false, false)
         }
         ControlResponse::MembershipRecordsPage(_)
         | ControlResponse::MembershipRecordsRejected(_) => {
@@ -18868,7 +19082,7 @@ fn handle_control_response_event(
                     ("reason", "uncorrelated_response"),
                 ],
             );
-            false
+            (false, false)
         }
     }
 }
@@ -20724,6 +20938,7 @@ const fn packet_plane_quic_negotiation_role_name(
 }
 
 struct PacketPlaneExpiryContext<'a> {
+    membership_record_syncs: &'a mut MembershipRecordSyncs,
     active_connections: &'a HashMap<(Libp2pPeerId, ConnectionId), ConnectedPoint>,
     swarm: &'a mut Swarm<Behaviour>,
     forwarder: &'a Forwarder,
@@ -20810,6 +21025,7 @@ fn retry_packet_plane_negotiation(
                 context.forwarder,
                 peer,
                 context.local_capabilities,
+                context.membership_record_syncs,
                 context.metrics,
             );
         }
@@ -20976,16 +21192,16 @@ fn endpoint_is_advertised_for_backend(
     }
 }
 
-fn send_control_capabilities_to_connected_peers(
+fn broadcast_control_capabilities(
     swarm: &mut Swarm<Behaviour>,
     forwarder: &Forwarder,
     local_capabilities: &ControlCapabilities,
+    syncs: &mut MembershipRecordSyncs,
     metrics: &RuntimeMetrics,
 ) {
-    let peers = swarm.connected_peers().copied().collect::<Vec<_>>();
-    for peer in peers {
-        send_control_capabilities(swarm, forwarder, peer, local_capabilities, metrics);
-    }
+    let capabilities = refreshed_local_capabilities_for_swarm(swarm, local_capabilities, forwarder);
+    syncs.queue_capabilities(capabilities, forwarder);
+    syncs.drive_capabilities(swarm, forwarder, metrics, Instant::now());
 }
 
 fn send_membership_departure_to_connected_members(
@@ -21540,15 +21756,17 @@ fn send_membership_record_sync_request(
     swarm: &mut Swarm<Behaviour>,
     syncs: &mut MembershipRecordSyncs,
     metrics: &RuntimeMetrics,
-    pending: PendingMembershipRecordSync,
+    mut pending: PendingMembershipRecordSync,
 ) {
     let peer = pending.peer;
     let cursor = pending.request.cursor.to_string();
     let restarts = pending.restarts.to_string();
-    let request_id = swarm.behaviour_mut().control.send_request(
+    let (request_id, cancellation) = swarm.behaviour_mut().control.send_request_cancellable(
         &peer,
         ControlRequest::MembershipRecords(pending.request.clone()),
+        pending.deadline,
     );
+    pending.cancellation = Some(cancellation);
     syncs.insert(request_id, pending);
     metrics.record_control_request_sent();
     metrics.record_membership_record_page_request_sent();
@@ -21584,6 +21802,10 @@ fn handle_membership_record_sync_response(
         );
         return false;
     };
+    if Instant::now() >= pending.deadline {
+        fail_membership_record_sync(syncs, metrics, pending.peer, "operation_expired");
+        return false;
+    }
     if pending.peer != peer {
         fail_membership_record_sync(syncs, metrics, pending.peer, "response_peer_mismatch");
         return false;
@@ -21746,7 +21968,17 @@ fn fail_membership_record_sync(
     peer: Libp2pPeerId,
     reason: &str,
 ) {
-    syncs.mark_failed(peer, Instant::now());
+    fail_membership_record_sync_at(syncs, metrics, peer, reason, Instant::now());
+}
+
+fn fail_membership_record_sync_at(
+    syncs: &mut MembershipRecordSyncs,
+    metrics: &RuntimeMetrics,
+    peer: Libp2pPeerId,
+    reason: &str,
+    now: Instant,
+) {
+    syncs.mark_failed(peer, now);
     metrics.record_membership_record_sync_failure();
     metrics.record_control_failure();
     log_runtime_event(
@@ -21777,6 +22009,7 @@ fn send_control_capabilities(
     forwarder: &Forwarder,
     peer: Libp2pPeerId,
     local_capabilities: &ControlCapabilities,
+    syncs: &mut MembershipRecordSyncs,
     metrics: &RuntimeMetrics,
 ) {
     if !forwarder.is_configured_transport_peer(peer) {
@@ -21784,11 +22017,9 @@ fn send_control_capabilities(
     }
 
     let capabilities = refreshed_local_capabilities_for_swarm(swarm, local_capabilities, forwarder);
-    swarm
-        .behaviour_mut()
-        .control
-        .send_request(&peer, ControlRequest::Capabilities(capabilities));
-    metrics.record_control_request_sent();
+    syncs.queue_capabilities(capabilities, forwarder);
+    syncs.request_capabilities(peer, forwarder);
+    syncs.drive_capabilities(swarm, forwarder, metrics, Instant::now());
 }
 
 fn send_service_status_request(
@@ -22475,6 +22706,7 @@ fn path_connection_role_for_endpoint(endpoint: &ConnectedPoint) -> PathConnectio
 
 struct BehaviourEventContext<'a> {
     forwarder: &'a mut Forwarder,
+    membership_record_syncs: &'a mut MembershipRecordSyncs,
     membership: &'a mut OverlayMembership,
     tun_runtime: &'a mut TunRuntimeConfig,
     route_controller: &'a mut dyn TunRouteController,
@@ -22661,6 +22893,7 @@ fn handle_behaviour_event(
                 KademliaEventContext {
                     connection_epochs: context.connection_epochs,
                     forwarder: context.forwarder,
+                    membership_record_syncs: context.membership_record_syncs,
                     membership: context.membership,
                     tun_runtime: context.tun_runtime,
                     route_controller: context.route_controller,
@@ -22807,6 +23040,7 @@ pub(super) fn dispatch_checkpoint_identify_test_event(
         &mut node.swarm,
         &mut BehaviourEventContext {
             forwarder,
+            membership_record_syncs: &mut MembershipRecordSyncs::default(),
             membership: &mut membership,
             tun_runtime: &mut tun_runtime,
             route_controller: &mut PreconfiguredTunRoutes,
@@ -23190,6 +23424,7 @@ impl AutoNatReachability {
 struct KademliaEventContext<'a> {
     connection_epochs: &'a mut ConnectionEpochs,
     forwarder: &'a mut Forwarder,
+    membership_record_syncs: &'a mut MembershipRecordSyncs,
     membership: &'a mut OverlayMembership,
     tun_runtime: &'a mut TunRuntimeConfig,
     route_controller: &'a mut dyn TunRouteController,
@@ -23320,10 +23555,11 @@ fn handle_kademlia_event(
                 _ => {}
             }
             if handle_kademlia_membership_record_result(&result, &mut context) {
-                send_control_capabilities_to_connected_peers(
+                broadcast_control_capabilities(
                     swarm,
                     context.forwarder,
                     context.local_capabilities,
+                    context.membership_record_syncs,
                     context.metrics,
                 );
             }
@@ -39579,6 +39815,7 @@ mod tests {
             &mut node.swarm,
             &mut BehaviourEventContext {
                 forwarder: &mut forwarder,
+                membership_record_syncs: &mut MembershipRecordSyncs::default(),
                 membership: &mut membership,
                 tun_runtime: &mut tun_runtime,
                 route_controller: &mut PreconfiguredTunRoutes,
@@ -41569,6 +41806,7 @@ mod tests {
         let local_capabilities = packet_plane_test_capabilities(local_endpoint);
 
         let mut expiry_context = PacketPlaneExpiryContext {
+            membership_record_syncs: &mut MembershipRecordSyncs::default(),
             active_connections: &HashMap::new(),
             swarm: &mut node.swarm,
             forwarder: &forwarder,
@@ -41669,6 +41907,7 @@ mod tests {
 
         {
             let mut expiry_context = PacketPlaneExpiryContext {
+                membership_record_syncs: &mut MembershipRecordSyncs::default(),
                 active_connections: &HashMap::new(),
                 swarm: &mut node.swarm,
                 forwarder: &forwarder,
@@ -43753,7 +43992,7 @@ mod tests {
         .await;
     }
 
-    async fn dispatch_membership_sync_test_event(
+    pub(super) async fn dispatch_membership_sync_test_event(
         node: &mut P2pNode,
         forwarder: &mut Forwarder,
         syncs: &mut MembershipRecordSyncs,
@@ -44036,9 +44275,14 @@ mod tests {
             );
             if response_kind == "final_page" {
                 let (&request_id, pending) = syncs.pending.iter().next().unwrap();
-                let page =
-                    build_membership_records_page(&pending.request, &records, "lab", None, &[])
-                        .unwrap();
+                let page = build_membership_records_page(
+                    &pending.records().unwrap().request,
+                    &records,
+                    "lab",
+                    None,
+                    &[],
+                )
+                .unwrap();
                 assert!(page.next_cursor.is_some());
                 dispatch_membership_sync_test_response(
                     &mut node,
@@ -44058,9 +44302,14 @@ mod tests {
                     MembershipRecordsRejectionReason::SnapshotChanged,
                 )
             } else {
-                let page =
-                    build_membership_records_page(&pending.request, &records, "lab", None, &[])
-                        .unwrap();
+                let page = build_membership_records_page(
+                    &pending.records().unwrap().request,
+                    &records,
+                    "lab",
+                    None,
+                    &[],
+                )
+                .unwrap();
                 assert_eq!(page.next_cursor.is_none(), response_kind == "final_page");
                 ControlResponse::MembershipRecordsPage(page)
             };
@@ -44164,7 +44413,17 @@ mod tests {
         assert_eq!(forwarder.authorization_revision(), packet_revision);
         assert_ne!(forwarder.membership_revision(), membership_revision);
         assert_eq!(syncs.reconcile_authorization(&forwarder, &metrics), 1);
-        assert!(syncs.pending.is_empty());
+        assert_eq!(syncs.pending.len(), 1);
+        assert!(matches!(
+            syncs.pending[&request_id],
+            PendingControlSync::Retired { .. }
+        ));
+        assert!(
+            node.swarm
+                .behaviour()
+                .control
+                .has_pending_requests(&remote_peer)
+        );
         assert!(syncs.active_by_peer.is_empty());
         assert_eq!(syncs.history.entry_counts(), (0, 0));
         assert_eq!(syncs.reconcile_authorization(&forwarder, &metrics), 0);
@@ -44226,7 +44485,19 @@ mod tests {
         assert_ne!(forwarder.authorization_revision(), packet_revision);
         assert_eq!(forwarder.membership_revision(), membership_revision);
         assert_eq!(syncs.reconcile_authorization(&forwarder, &metrics), 1);
-        assert!(syncs.pending.is_empty());
+        assert_eq!(syncs.pending.len(), 1);
+        assert!(
+            syncs
+                .pending
+                .values()
+                .all(|work| matches!(work, PendingControlSync::Retired { .. }))
+        );
+        assert!(
+            node.swarm
+                .behaviour()
+                .control
+                .has_pending_requests(&remote_peer)
+        );
         assert!(syncs.active_by_peer.is_empty());
         assert_eq!(syncs.history.entry_counts(), (0, 0));
         assert_eq!(syncs.reconcile_authorization(&forwarder, &metrics), 0);
@@ -44285,6 +44556,7 @@ mod tests {
             ),
         );
         let pending = syncs.pending.values().next().expect("pending request");
+        let pending = pending.records().unwrap();
         assert_eq!(
             pending.request.snapshot,
             remote_capabilities.membership_records_snapshot
@@ -44295,11 +44567,10 @@ mod tests {
         );
 
         let mut pages = 0;
-        while let Some((request_id, request)) = syncs
-            .pending
-            .iter()
-            .next()
-            .map(|(request_id, pending)| (*request_id, pending.request.clone()))
+        while let Some((request_id, request)) =
+            syncs.pending.iter().next().map(|(request_id, pending)| {
+                (*request_id, pending.records().unwrap().request.clone())
+            })
         {
             let page = build_membership_records_page(&request, &records, "lab", None, &[])
                 .expect("membership page");
@@ -44390,7 +44661,7 @@ mod tests {
             .pending
             .iter()
             .next()
-            .map(|(request_id, pending)| (*request_id, pending.request.clone()))
+            .map(|(request_id, pending)| (*request_id, pending.records().unwrap().request.clone()))
             .expect("first request");
         let first_page = build_membership_records_page(&first_request, &records, "lab", None, &[])
             .expect("first membership page");
@@ -44416,7 +44687,7 @@ mod tests {
             .pending
             .iter()
             .next()
-            .map(|(request_id, pending)| (*request_id, pending.request.clone()))
+            .map(|(request_id, pending)| (*request_id, pending.records().unwrap().request.clone()))
             .expect("second request");
         let mut second_page =
             build_membership_records_page(&second_request, &records, "lab", None, &[])
@@ -44554,10 +44825,41 @@ mod tests {
         }
         let waiting_peer = peers[MAX_CONCURRENT_MEMBERSHIP_SYNCS];
         assert!(!syncs.can_start(waiting_peer, "snapshot-a", now));
+        let config = config_with_peer(
+            &NodeIdentity::generate_ed25519().expect("forwarder local"),
+            waiting_peer,
+        );
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut membership = OverlayMembership::from_config(&config).expect("membership");
 
         for peer in peers.iter().take(MAX_CONCURRENT_MEMBERSHIP_SYNCS) {
             syncs.remove_peer(*peer);
         }
+        assert_eq!(syncs.pending.len(), MAX_CONCURRENT_MEMBERSHIP_SYNCS);
+        assert!(!syncs.can_start(
+            waiting_peer,
+            "snapshot-a",
+            now + MEMBERSHIP_SYNC_RETRY_DELAY
+        ));
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !syncs.pending.is_empty() {
+                if let SwarmEvent::Behaviour(BehaviourEvent::Control(
+                    event @ request_response::Event::OutboundFailure { .. },
+                )) = node.swarm.select_next_some().await
+                {
+                    syncs.finish_capability_event(
+                        &event,
+                        &forwarder,
+                        &local_capabilities,
+                        &[],
+                        true,
+                        Instant::now(),
+                    );
+                }
+            }
+        })
+        .await
+        .expect("native cancellation events must release retired slots");
         syncs.mark_failed(waiting_peer, now);
         assert!(!syncs.can_start(waiting_peer, "snapshot-a", now));
         assert!(syncs.can_start(
@@ -44577,12 +44879,6 @@ mod tests {
             now + MEMBERSHIP_SYNC_RETRY_DELAY
         ));
 
-        let config = config_with_peer(
-            &NodeIdentity::generate_ed25519().expect("forwarder local"),
-            waiting_peer,
-        );
-        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
-        let mut membership = OverlayMembership::from_config(&config).expect("membership");
         syncs.history = MembershipSyncHistory::default();
         send_membership_record_sync_request(
             &mut node.swarm,
@@ -49581,6 +49877,7 @@ mod tests {
             let mut negotiator = PacketPlaneNegotiator::default();
             let metrics = RuntimeMetrics::default();
             let mut context = PacketPlaneExpiryContext {
+                membership_record_syncs: &mut MembershipRecordSyncs::default(),
                 active_connections: &HashMap::new(),
                 swarm: &mut node.swarm,
                 forwarder: &forwarder,
@@ -49737,6 +50034,7 @@ mod tests {
                 .created_at = expired_at;
             let metrics = RuntimeMetrics::default();
             let mut context = PacketPlaneExpiryContext {
+                membership_record_syncs: &mut MembershipRecordSyncs::default(),
                 active_connections: &HashMap::new(),
                 swarm: &mut node.swarm,
                 forwarder: &forwarder,

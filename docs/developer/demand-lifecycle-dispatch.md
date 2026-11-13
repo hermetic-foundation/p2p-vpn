@@ -40,9 +40,13 @@ belongs to the separate bounded LAN/direct/relay recovery owner.
 3. Keep the transport slot until its matching authenticated response or outbound-failure event.
 4. Match both peer and request ID before releasing the slot.
 
-Libp2p does not expose application-request cancellation here. Clearing a map
-entry cannot cancel its pending dial/stream queue. Keeping bounded transport
-tombstones prevents repeated cancellation from bypassing the instance limit.
+The lifecycle dispatcher retains native ownership until terminal delivery.
+Clearing a semantic map entry cannot cancel a pending dial/stream queue. Even
+the patched native cancellation API requires waiting for its terminal event.
+
+Bounded transport tombstones prevent repeated cancellation from bypassing the
+instance limit. Control capability and checkpoint-page owners use the new API;
+the lifecycle dispatcher's existing native-slot policy remains unchanged.
 
 Revocation immediately removes peer policy and pending commit authority.
 Only the bounded peer/request-ID transport tombstone may outlive that removal;
@@ -118,8 +122,8 @@ Cached membership and DNS must remain authorized without retaining every socket.
 
 ## Remaining Activation Work
 
-1. Finish bounded dirty capability delivery and equal-authority hostname catch-up for disconnected members.
-2. Integrate bounded control-owner handling with existing probe quarantine; do not broadly bypass security limits.
+1. Finish checkpoint-only capability announcements and bounded public discovery for cold control delivery.
+2. Preserve finite control recovery while quiet discovery suppresses unrelated background work.
 3. Complete remaining discovery/NAT quiet policy and prove first-payload recovery through the integrated runner.
 4. Verify extended dormancy, roaming, mixed-version operation, and feature-preservation gates before production advertisement.
 5. Run matched, replicated cellular comparisons; no source or socket test establishes 10x savings.
@@ -145,7 +149,9 @@ stale-epoch anchors; they do not replace the remaining integrated/device gates.
 | Maintenance drain | Preparation is not quiet; pending work drains normally; payload resumes maintenance immediately |
 | Legacy races | Crossed idle offers clear quiet on fallback; delayed current-epoch unsupported results survive semantic expiry |
 | Disconnected membership | Shared runner reconnects a retained TCP member, persists departure, drains ACKs, and preserves survivor governance |
-| Workspace/all-targets | 2,016 passed; zero failures; 49 existing exclusions, including opt-in namespace/resource scenarios |
+| Dormant control delivery | 17 coalescing, deadline, quarantine, native-slot, and LAN reconnect regressions pass |
+| Checkpoint ownership | 58 tests pass, including finite hostname catch-up and cancelled/expired control leases |
+| Workspace/all-targets | 2,066 passed; zero failures; 49 existing exclusions, including opt-in namespace/resource scenarios |
 | Clippy | Required correctness, suspicious, and performance groups pass; advisory and staged-unused API warnings remain |
 | Formatting and packaging | Workspace and vendored Rust formatting pass; evaluated Linux/Android sources include identical runtime and patched dependency |
 | Unrun operational gates | Full Nix/Android package builds, NixOS VMs, live device/public-relay tests, long dormancy, and energy comparisons |
@@ -155,13 +161,15 @@ lower-level stream refusal could masquerade as evidence that the application
 rate limiter worked.
 
 Validation used cached Nix Cargo/Rust/Clippy 1.97.1, two build jobs, and the
-existing approximately 6.3 GiB build directory. No SDK/toolchain download or
+existing approximately 7.0 GiB build directory. No SDK/toolchain download or
 device change was needed. These manual checks are not a full-flake pass.
 
-The first broad run exposed five fixture failures: synthetic connections still
-owned public DHT seed work, and storage-only churn did not finish its new offline
-handoff window. Explicit fixture setup fixed both; native readiness and slot
-retention guards remain intact. Focused reruns and the final full suite passed.
+The first broad run of the control-delivery milestone exposed two reconnect
+fixture failures. Fixtures now retain their native control owner and accurately
+model handler/connection event ordering. Slot-retention guards remain intact.
+
+The paging fixture also waits for real cancellation terminal events before
+reusing slots. Focused reruns and the final full suite passed.
 
 Commands:
 

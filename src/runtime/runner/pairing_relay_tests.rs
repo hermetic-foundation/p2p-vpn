@@ -65,6 +65,7 @@ async fn pairing_relay_survives_identify_with_a_full_routing_pool() {
             &mut node.swarm,
             &mut BehaviourEventContext {
                 forwarder: &mut forwarder,
+                membership_record_syncs: &mut MembershipRecordSyncs::default(),
                 membership: &mut membership,
                 tun_runtime: &mut TunRuntimeConfig::from_config(&config).unwrap(),
                 route_controller: &mut PreconfiguredTunRoutes,
