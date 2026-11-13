@@ -15,6 +15,38 @@ The builder selects the implemented policy. It cannot inject quiet permission,
 pretend an incoming path exists, skip authentication, shorten idle eligibility,
 or replace native transport ownership.
 
+## Controlled Application Builds
+
+| Boundary | Planned Contract |
+| --- | --- |
+| Cargo feature | `demand-lifecycle-trial`, absent from default features |
+| Application entry points | CLI, Android network supervisor, and Android E2E overlay endpoint explicitly apply the build policy |
+| Embedding default | `RuntimePlatform::new` stays passive, even when the feature is compiled |
+| Shared policy builder | `with_build_lifecycle_policy` applies the feature without changing installed TUN state, control ownership, or explicit embedding opt-in |
+| Android feature | Forward the Android crate feature to the shared Rust dependency |
+| Test counterpart | Forward the fixture crate feature; enable only its overlay endpoint, not its bootstrap/relay infrastructure |
+| Nix outputs | Separate Linux, fixture, Android native, and APK trial packages; ordinary package outputs stay passive |
+| Wire/configuration | No new protocol version, JSON field, NixOS option, identity, or pairing requirement |
+| Compatibility | Quiet still requires both authenticated peers to support and agree to the current lifecycle generation |
+
+### Trial Commands
+
+```sh
+cargo build --locked --features demand-lifecycle-trial --bin p2p-vpn
+cargo build --locked -p p2p-vpn-android --features demand-lifecycle-trial
+cargo build --locked -p p2p-vpn-android-e2e-fixture --features demand-lifecycle-trial
+nix build .#demand-lifecycle-trial
+nix build .#android-e2e-fixture-demand-lifecycle-trial
+nix build .#android-native-arm64-demand-lifecycle-trial
+nix build .#android-debug-apk-demand-lifecycle-trial
+```
+
+- Verify both feature-off and feature-on startup selection, plus explicit embedding opt-in under either build.
+- Preserve existing normal/mixed-version fixtures; enabling a feature must not silently activate every test runner.
+- Record source revision, feature selection, hashes, signer, ABI, and functional results for any measured APK.
+- Build one candidate at a time with bounded jobs and storage; inspect substitutions before restoring a large toolchain.
+- A host test, source evaluation, or successfully built APK is not a cellular energy result.
+
 ## Observable State
 
 - Startup identifies passive versus explicitly enabled lifecycle policy.
