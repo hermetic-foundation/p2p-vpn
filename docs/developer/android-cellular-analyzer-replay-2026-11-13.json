@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "kind": "historical_analyzer_replay_not_battery_improvement",
+  "fresh_device_capture": false,
+  "goal_complete": false,
+  "raw_report_sha256": [
+    "fceb04356f19c3a51d16cf73c914a408b865680bc77a324d2ffce0982d6c4aff",
+    "37606c629f4925c91f707ad591dc7c4e0d3db5f9dabc5db7f9fc3c840a4aebff"
+  ],
+  "trace_sha256": "22319b1300d39a61f84b0b7abb68a93488aebdbaa5e1bb754828a0ed9167f839",
+  "trace_processor_sha256": "2434129a3af4dc9e2034a476f7b76447b490975213e301769310d3bd0d5d6458",
+  "uid_consumption_mah": [23.80947, 73.464425],
+  "elapsed_seconds": 605.398,
+  "app_mah_per_hour": 295.27325494963645,
+  "battery_interval_boottime_ns": [196349147000000, 196954545000000],
+  "clock_origin_uncertainty_ms": 775,
+  "trace_rail_interval_boottime_ns": [196350269000000, 196949688000000],
+  "full_interval_analysis_rejection": "rail_coverage",
+  "trace_interval_only_modem_mean_mw": 1064.0814355233986,
+  "trace_interval_only_frontend_mean_mw": 184.9097576152908,
+  "limitations": [
+    "Retained normal-VPN diagnostic, not a fresh reference/candidate comparison",
+    "Ten-minute battery interval is below the planned thirty-minute acceptance window",
+    "Trace-only rail powers do not cover the full battery accounting interval",
+    "Replay validates parser compatibility and math, not a battery optimization"
+  ]
+}

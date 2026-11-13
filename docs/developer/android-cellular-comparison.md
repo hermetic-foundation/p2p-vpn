@@ -26,6 +26,60 @@ The analyzer does not install APKs, invoke ADB, change settings, reset history,
 or infer that a phone is reachable because it has no live sessions. A valid
 energy calculation alone cannot establish functional equivalence.
 
+## Analyzer Commands
+
+The host-only analyzer and its tests are implemented. The endpoint capture
+adapter and fresh cellular comparison remain outstanding. These commands
+analyze existing bundles; they do not collect them or claim measured savings.
+
+```sh
+tool=$(nix build .#android-cellular-compare --no-link --print-out-paths)
+analyzer="$tool/bin/p2p-vpn-android-cellular-compare"
+"$analyzer" window "$window_directory" --trace-processor "$trusted_processor"
+"$analyzer" series "$series_directory" --trace-processor "$trusted_processor"
+nix build .#checks.x86_64-linux.android-cellular-compare --no-link
+```
+
+The processor must support `query --quiet --format csv`; v59.1 was used in
+the earlier cellular diagnostic. Realize tools before any measured interval.
+JSON results include the executable hash; invalid evidence exits nonzero.
+Retain analyzer/decoder/projection, raw metadata and plan hashes with results.
+
+| Result | Meaning |
+| --- | --- |
+| `valid` | Accounting/context/rail evidence passed analysis |
+| `functionality_passed` | All four supplied boundary-probe results passed |
+| `energy_criterion_observed` | All three app ratios meet `0.10`; modem and combined-rail reductions exceed sampling/clock uncertainty; probes pass |
+| `goal_complete` | Always `false`; full lifecycle acceptance is outside this tool |
+| Invalid series | Retains all six slot outcomes; no automatic replacement or filtering |
+
+`series_directory/plan.json` names six distinct child directories. Freeze this
+plan before capture; a post-hoc manifest alone cannot prove preregistration.
+
+```json
+{
+  "schema_version": 1,
+  "reference_apk": "<64 lowercase SHA-256 hex characters>",
+  "candidate_apk": "<64 lowercase SHA-256 hex characters>",
+  "window_seconds": 1800,
+  "windows": ["01-A", "02-B", "03-B", "04-A", "05-A", "06-B"]
+}
+```
+
+The analyzer rejects reused reports/traces, overlapping windows, changed boot
+identity, unmatched device/profile/peer inventory, and changed accounting or
+power policy. APKs must match the two planned hashes and differ from each other.
+
+It accepts only known schema-1 metadata fields, not arbitrary private records.
+Write results with `umask 077` and a new filename. Each input report is bounded
+to 2 MiB; traces to 64 MiB; processor output to 2 MiB and 45 seconds per query.
+Processor address space is capped at 1 GiB and CPU time at 40 seconds per query.
+The overall 30-minute analysis deadline stops remaining slots, preserving their
+unfinished status and every already-computed result.
+
+Exit `0` means valid evidence and passing supplied probes, not 10x acceptance.
+Read `energy_criterion_observed` explicitly; this tool never completes the goal.
+
 ## Window Bundle
 
 Keep each attempt in a new private directory. Never overwrite failed attempts.
@@ -73,10 +127,19 @@ before and after the binary report. Both endpoints must belong to one boot.
 | `temperature_tenths_c` | Live HAL battery temperature, not frozen BatteryService data |
 | `rsrp_dbm` | Serving cellular signal, recorded at both endpoints |
 | `authorized_peers` | Positive count, matched across arms; not the live-session count |
+| `payload_sent_packets`, `payload_received_packets` | Native cumulative payload counters; unchanged throughout the idle window |
 
 Context records are collector observations, not cryptographic proofs. Retain
 their raw sources. Native bilateral quiet/incoming-path state must be verified
 separately before candidate admission; zero sessions alone proves neither.
+
+Include remote host build identities and diagnostic-override state in the
+hashed workload record. Keep counterparts identical across both arms; do not
+pause probes or DHT work as a substitute for the implemented lifecycle.
+
+Map payload fields from native `outbound_sent_packets` and
+`inbound_accepted_packets`, summed across the measured app's enabled networks.
+Capture end counters before post-window probes; probes must not enter the interval.
 
 ## Accounting Validation
 
@@ -117,13 +180,31 @@ decoder tolerance, not an Android API guarantee.
 | Counters | Finite, nonnegative, monotonic cumulative microjoules |
 | Samples | Strictly increasing timestamps; no gaps over three seconds |
 | Interval | Both rails cover the complete battery-clock comparison interval |
-| Integration | Linear interpolation only at interval boundaries; no extrapolation |
+| Estimate | Linear interpolation only at interval boundaries; no extrapolation |
+| Bounds | Neighboring-counter extrema cover burst timing and clock uncertainty; not interpolated bounds |
 | Trace integrity | No positive Perfetto `error` or `data_loss` statistics |
 | Tool provenance | Explicit trusted trace-processor argument; record executable hash |
 
 Use fixed SQL. Never execute a tool path or SQL supplied by a bundle. Bound
 input sizes, processor runtime and output size. Error messages must not expose
 private phone metadata or raw records.
+
+Start the trace before the first report and stop it after the last report.
+Include enough boundary padding for endpoint commands and sampling uncertainty;
+tracing for exactly the nominal battery-window duration is insufficient.
+
+### Historical Replay
+
+The [replay record](android-cellular-analyzer-replay-2026-11-13.json) exercises
+the new parser against retained Pixel data. It is not a fresh comparison.
+
+| Observation | Replay Result |
+| --- | --- |
+| Android app rate | `295.27325494963645 mAh/hour` |
+| Battery interval | `605.398 seconds`; too short for acceptance |
+| Modem rail, trace interval only | `1064.0814355233986 mW` |
+| Trace boundary coverage | Rejected: rails miss both ends of the battery interval |
+| New savings measurement | None |
 
 ## Replication And Outcomes
 

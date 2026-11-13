@@ -370,6 +370,7 @@
           fileset = lib.fileset.unions [
             ./scripts/android-battery-decode.py
             ./scripts/android-battery-decode.proto
+            ./scripts/android-cellular-compare.py
           ];
         };
         androidBatteryDecoder = pkgs.writeShellApplication {
@@ -395,6 +396,34 @@
               export PYTHONDONTWRITEBYTECODE=1
               export P2P_VPN_BATTERY_DECODER=${androidBatterySources}/android-battery-decode.py
               python3 ${./tests/android-battery-decode.py}
+              touch "$out"
+            '';
+        androidCellularCompare = pkgs.writeShellApplication {
+          name = "p2p-vpn-android-cellular-compare";
+          runtimeInputs = [
+            androidBatteryPython
+            pkgs.protobuf
+          ];
+          text = ''
+            export PYTHONDONTWRITEBYTECODE=1
+            exec python3 ${androidBatterySources}/android-cellular-compare.py "$@"
+          '';
+        };
+        androidCellularCompareTests =
+          pkgs.runCommand "p2p-vpn-android-cellular-compare-tests"
+            {
+              nativeBuildInputs = [
+                androidBatteryPython
+                pkgs.protobuf
+                pkgs.ruff
+              ];
+            }
+            ''
+              export PYTHONDONTWRITEBYTECODE=1
+              export P2P_VPN_CELLULAR_COMPARE=${androidBatterySources}/android-cellular-compare.py
+              ruff check ${androidBatterySources}/android-cellular-compare.py ${./tests/android-cellular-compare.py}
+              ruff format --check ${androidBatterySources}/android-cellular-compare.py ${./tests/android-cellular-compare.py}
+              python3 ${./tests/android-cellular-compare.py}
               touch "$out"
             '';
         androidE2eRuntime =
@@ -5784,6 +5813,7 @@
         }
         // lib.optionalAttrs androidSupported {
           android-battery-decode = androidBatteryDecoder;
+          android-cellular-compare = androidCellularCompare;
           android-native = android.androidNative;
           android-native-arm64 = android.androidNativeArm64;
           android-native-x86_64 = android.androidNativeX86_64;
@@ -6158,6 +6188,7 @@
         }
         // lib.optionalAttrs androidSupported {
           android-battery-decode = androidBatteryDecoderTests;
+          android-cellular-compare = androidCellularCompareTests;
           android = android.androidCheck;
           android-device-audit-structure = androidDeviceAuditStructure;
           android-e2e-fixture = androidE2eFixture;
