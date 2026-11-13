@@ -59,6 +59,17 @@ The minimal JSON and native Nix configuration surfaces do not change.
 - Restore any still-live quarantine when the owning control window ends.
 - Reply eligibility is connection-bound; keep packet, route, pairing, and snapshot authority checks unchanged.
 
+## Native Queue And Write Deadline
+
+- Attach the original monotonic control-round deadline to the existing native outbound message.
+- Keep normal `send_request` and all existing protocol/frame formats unchanged.
+- Refuse an expired message before requesting a substream and before invoking its codec.
+- Bound the complete active write, close, and response operation by the earlier native timeout/deadline.
+- Preserve exact native request IDs and normal terminal events; queued expiry is not synthetic cancellation.
+- Store no second request registry and add no periodic timer or idle-peer keepalive.
+- Reuse the same deadline mechanism for capability publication and checkpoint pages.
+- A native transport queue may still retain bounded work until its normal terminal event; it must not transmit expired application messages.
+
 ## Acceptance
 
 | Scenario | Required Evidence |
