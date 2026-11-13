@@ -51,6 +51,13 @@ The minimal JSON and native Nix configuration surfaces do not change.
 | Failure | Bound attempts/deadlines and keep native request ownership until terminal delivery |
 | Legacy | Missing hints retain the existing periodic/connection catch-up behavior |
 
+- Keep a failed hint dirty across at most three 15-second transfer rounds within one original 45-second window.
+- Consume a hint only after a verified complete offer, including a valid no-op; bind completion to the inventory captured by that native transfer.
+- A newer hint during paging cannot be acknowledged by an older transfer.
+- When the finite window expires, idle ticks and repeated identical advertisements do not re-arm it.
+- A new authenticated connection can re-arm a failed, unconsumed hint once; repeated events for the same connection cannot renew its window.
+- Completed/no-op hints stay consumed across reconnection unless the advertised inventory changes.
+
 ## Quarantine Boundary
 
 - Only an active, deadline-bound native control owner may temporarily suspend an old probe block.
