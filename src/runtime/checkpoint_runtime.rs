@@ -5,6 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use futures::future::AbortHandle;
 use libp2p::{
     PeerId, Swarm,
     request_response::{self, Message},
@@ -46,12 +47,57 @@ use super::{
 };
 
 pub(crate) const RESYNC_WINDOW: Duration = Duration::from_secs(15);
+const HOSTNAME_RETRY_WINDOW: Duration = Duration::from_secs(45);
+const MAX_HOSTNAME_RESYNC_ROUNDS: u8 = 3;
 
 #[derive(Debug)]
 struct PendingResync {
     candidate: CooperativeMembershipState,
     challenge: SnapshotChallenge,
     deadline: Instant,
+    // Inventory-only rounds do not fan out to otherwise idle members/candidates.
+    hostname_rank: Option<SnapshotRank>,
+}
+
+#[derive(Debug)]
+struct PendingCheckpointRequest {
+    peer: PeerId,
+    request: CheckpointPageRequest,
+    // Captured by the first page, never replaced by a newer advertisement.
+    hostname_inventory: Option<[u8; 32]>,
+    deadline: Instant,
+    cancellation: AbortHandle,
+}
+
+#[derive(Debug)]
+struct CheckpointCandidate {
+    descriptor: CheckpointCapabilities,
+    hostname_inventory: Option<[u8; 32]>,
+    deadline: Instant,
+}
+
+#[derive(Debug)]
+struct HostnameObservation {
+    rank: SnapshotRank,
+    // A usable connection may be observed before its first hostname hint.
+    inventory: Option<[u8; 32]>,
+    hint_present: bool,
+    consumed: bool,
+    // Expiry clears the opportunity, not the unconsumed inventory marker.
+    dirty_until: Option<Instant>,
+    rounds_started: u8,
+    last_connection: Option<ConnectionId>,
+}
+
+impl HostnameObservation {
+    fn retry_deadline(&self, now: Instant) -> Option<Instant> {
+        self.dirty_until.filter(|deadline| {
+            self.hint_present
+                && !self.consumed
+                && self.rounds_started < MAX_HOSTNAME_RESYNC_ROUNDS
+                && now < *deadline
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -68,13 +114,16 @@ pub(crate) struct CheckpointRuntime {
     pending: Option<PendingResync>,
     last_selection: Option<BranchSelection>,
     transfer: CheckpointSync,
-    requests: HashMap<request_response::OutboundRequestId, (PeerId, CheckpointPageRequest)>,
+    requests: HashMap<request_response::OutboundRequestId, PendingCheckpointRequest>,
     responses: HashMap<request_response::InboundRequestId, (PeerId, SnapshotChallenge)>,
     attempted: HashSet<PeerId>,
     next_resync: Instant,
     offers_accepted: u64,
     transfer_failures: u64,
-    candidates: HashMap<PeerId, (CheckpointCapabilities, Instant)>,
+    candidates: HashMap<PeerId, CheckpointCandidate>,
+    // One latest observation per current member, not a second request ledger.
+    // Keep consumed/expired observations to deduplicate identical no-op hints.
+    hostname_observations: HashMap<PeerId, HostnameObservation>,
     handoff: Option<MutationHandoff>,
     // Preserve a removed recipient's control reachability while waiting for a native slot.
     handoff_removed_recipient: Option<PeerId>,
@@ -149,6 +198,7 @@ impl CheckpointRuntime {
         forwarder.commit_checkpoint_update(update)?;
         if blocked && !self.pairing_activation_blocked {
             self.last_selection = None;
+            self.abort_page_requests(Instant::now());
         }
         self.pairing_activation_blocked = blocked;
         Ok(())
@@ -437,6 +487,7 @@ impl CheckpointRuntime {
             offers_accepted: 0,
             transfer_failures: 0,
             candidates: HashMap::new(),
+            hostname_observations: HashMap::new(),
             handoff: None,
             handoff_removed_recipient: None,
             mutation_requests: HashMap::new(),
@@ -580,17 +631,27 @@ impl CheckpointRuntime {
     /// Catch-up gates a restored node. A live node keeps its already installed
     /// packet authority until the selected replacement is durable.
     pub(crate) fn begin_resync(&mut self, now: Instant) -> Result<(), RunnerError> {
+        self.begin_resync_until(now, now + RESYNC_WINDOW, None)
+    }
+
+    fn begin_resync_until(
+        &mut self,
+        now: Instant,
+        deadline: Instant,
+        hostname_rank: Option<SnapshotRank>,
+    ) -> Result<(), RunnerError> {
         if self.pending.is_some() {
             return Ok(());
         }
         let mut candidate = self.state.clone();
         let challenge = candidate
-            .begin_resync(now, RESYNC_WINDOW)
+            .begin_resync(now, deadline.duration_since(now))
             .map_err(core_error)?;
         self.pending = Some(PendingResync {
             candidate,
             challenge,
-            deadline: now + RESYNC_WINDOW,
+            deadline,
+            hostname_rank,
         });
         self.attempted.clear();
         Ok(())
@@ -605,6 +666,8 @@ impl CheckpointRuntime {
             descriptor.sync = super::control::checkpoint::CheckpointSyncIndicator::Resyncing;
         }
         capabilities.checkpoint = Some(descriptor);
+        capabilities.checkpoint_hostname_inventory =
+            Some(super::control::checkpoint_hostname_inventory(&self.state));
         capabilities.membership_tag = Some(crate::config::membership_tag(
             &self.network_name,
             self.credentials.secret(),
@@ -625,7 +688,8 @@ impl CheckpointRuntime {
         previous_tags: &[String],
         now: Instant,
     ) -> bool {
-        self.candidates.retain(|_, (_, deadline)| now < *deadline);
+        self.candidates
+            .retain(|_, candidate| now < candidate.deadline);
         if super::control::validate_capabilities(
             capabilities,
             &self.network_name,
@@ -645,15 +709,210 @@ impl CheckpointRuntime {
         {
             return false;
         }
-        self.candidates
-            .insert(peer, (descriptor.clone(), now + RESYNC_WINDOW));
+        self.cleanup_hostname_observations(now);
+        if let Some(observation) = self.hostname_observations.get_mut(&peer) {
+            observation.hint_present = capabilities.checkpoint_hostname_inventory.is_some()
+                && capabilities.checkpoint_hostname_inventory == observation.inventory
+                && descriptor.rank() == observation.rank;
+        }
+        if let Some(inventory) = capabilities.checkpoint_hostname_inventory
+            && self.state.sync_state() == MembershipSyncState::Participating
+            && !self.pairing_activation_blocked
+            && self
+                .state
+                .snapshot()
+                .payload
+                .member(&peer.to_string())
+                .is_some()
+            && self
+                .state
+                .snapshot()
+                .payload
+                .rank()
+                .is_ok_and(|rank| rank == descriptor.rank())
+        {
+            let local_inventory = super::control::checkpoint_hostname_inventory(&self.state);
+            let observation =
+                self.hostname_observations
+                    .entry(peer)
+                    .or_insert(HostnameObservation {
+                        rank: descriptor.rank(),
+                        inventory: Some(inventory),
+                        hint_present: true,
+                        consumed: inventory == local_inventory,
+                        dirty_until: (inventory != local_inventory)
+                            .then_some(now + HOSTNAME_RETRY_WINDOW),
+                        rounds_started: 0,
+                        last_connection: None,
+                    });
+            observation.hint_present = true;
+            if observation.inventory != Some(inventory) {
+                observation.inventory = Some(inventory);
+                observation.consumed = inventory == local_inventory;
+                if observation.dirty_until.is_none() {
+                    observation.rounds_started = 0;
+                }
+                observation.dirty_until = (!observation.consumed).then_some(
+                    observation
+                        .dirty_until
+                        .unwrap_or(now + HOSTNAME_RETRY_WINDOW),
+                );
+            }
+        }
+        self.candidates.insert(
+            peer,
+            CheckpointCandidate {
+                descriptor: descriptor.clone(),
+                hostname_inventory: capabilities.checkpoint_hostname_inventory,
+                deadline: now + RESYNC_WINDOW,
+            },
+        );
         true
+    }
+
+    /// The caller supplies a newly usable authenticated root connection.
+    pub(crate) fn hostname_connection_available(
+        &mut self,
+        peer: PeerId,
+        connection: ConnectionId,
+        now: Instant,
+    ) {
+        self.cleanup_hostname_observations(now);
+        if self.pairing_activation_blocked
+            || self.state.sync_state() != MembershipSyncState::Participating
+        {
+            return;
+        }
+        let snapshot = &self.state.snapshot().payload;
+        let Ok(rank) = snapshot.rank() else {
+            return;
+        };
+        if snapshot.member(&peer.to_string()).is_none() {
+            return;
+        }
+        let observation = self
+            .hostname_observations
+            .entry(peer)
+            .or_insert(HostnameObservation {
+                rank,
+                inventory: None,
+                hint_present: false,
+                consumed: true,
+                dirty_until: None,
+                rounds_started: 0,
+                last_connection: None,
+            });
+        // Swarm IDs increase and are never reused. A high-water mark also rejects
+        // a delayed duplicate from an older connection, without a connection ledger.
+        if observation
+            .last_connection
+            .is_some_and(|previous| connection <= previous)
+        {
+            return;
+        }
+        observation.last_connection = Some(connection);
+        if observation.hint_present && !observation.consumed {
+            observation.dirty_until = Some(now + HOSTNAME_RETRY_WINDOW);
+            observation.rounds_started = 0;
+        }
+    }
+
+    fn cleanup_hostname_observations(&mut self, now: Instant) {
+        let snapshot = &self.state.snapshot().payload;
+        let rank = snapshot.rank().ok();
+        self.hostname_observations.retain(|peer, observation| {
+            if Some(observation.rank) != rank || snapshot.member(&peer.to_string()).is_none() {
+                return false;
+            }
+            if observation
+                .dirty_until
+                .is_some_and(|deadline| now >= deadline)
+            {
+                observation.dirty_until = None;
+            }
+            true
+        });
+    }
+
+    fn hostname_round_authorized(&self) -> bool {
+        self.pending.as_ref().is_none_or(|pending| {
+            pending.hostname_rank.is_none_or(|rank| {
+                !self.pairing_activation_blocked
+                    && self.state.sync_state() == MembershipSyncState::Participating
+                    && self
+                        .state
+                        .snapshot()
+                        .payload
+                        .rank()
+                        .is_ok_and(|current| current == rank)
+            })
+        })
+    }
+
+    fn request_is_active(
+        &self,
+        peer: PeerId,
+        request: &CheckpointPageRequest,
+        now: Instant,
+    ) -> bool {
+        self.hostname_round_authorized()
+            && self.pending.as_ref().is_some_and(|pending| {
+                now < pending.deadline
+                    && request.challenge == pending.challenge
+                    && (self
+                        .state
+                        .snapshot()
+                        .payload
+                        .member(&peer.to_string())
+                        .is_some()
+                        || (pending.hostname_rank.is_none()
+                            && self
+                                .candidates
+                                .get(&peer)
+                                .is_some_and(|candidate| now < candidate.deadline)))
+            })
+    }
+
+    fn peer_descriptor<'a>(
+        &'a self,
+        peer: PeerId,
+        peers: &'a PeerCapabilities,
+    ) -> Option<&'a CheckpointCapabilities> {
+        self.candidates
+            .get(&peer)
+            .map(|candidate| &candidate.descriptor)
+            .or_else(|| {
+                peers
+                    .get(crate::PeerId::from_libp2p(peer))
+                    .and_then(|capabilities| capabilities.checkpoint.as_ref())
+            })
+    }
+
+    fn peer_has_hostname_hint(&self, peer: PeerId, peers: &PeerCapabilities) -> bool {
+        self.candidates
+            .get(&peer)
+            .map(|candidate| candidate.hostname_inventory.is_some())
+            .or_else(|| {
+                self.hostname_observations
+                    .get(&peer)
+                    .map(|observation| observation.hint_present)
+            })
+            .unwrap_or_else(|| {
+                peers
+                    .get(crate::PeerId::from_libp2p(peer))
+                    .is_some_and(|capabilities| {
+                        capabilities.checkpoint_hostname_inventory.is_some()
+                            && capabilities.checkpoint.as_ref().is_some_and(|descriptor| {
+                                descriptor.validate_for(self.anchor()).is_ok()
+                            })
+                    })
+            })
     }
 
     pub(crate) fn sync_candidates(&self, now: Instant) -> impl Iterator<Item = PeerId> + '_ {
         self.candidates
             .iter()
-            .filter_map(move |(peer, (_, deadline))| (now < *deadline).then_some(*peer))
+            .filter_map(move |(peer, candidate)| (now < candidate.deadline).then_some(*peer))
             .chain(
                 self.mutation_responses
                     .values()
@@ -683,8 +942,21 @@ impl CheckpointRuntime {
         now: Instant,
     ) -> Result<(), RunnerError> {
         self.transfer.cleanup(now);
+        for owner in self.requests.values() {
+            if now >= owner.deadline {
+                owner.cancellation.abort();
+                self.transfer
+                    .cancel(owner.peer, &owner.request.challenge, now);
+            }
+        }
         self.cleanup_mutation_responses(now);
-        self.candidates.retain(|_, (_, deadline)| now < *deadline);
+        self.candidates
+            .retain(|_, candidate| now < candidate.deadline);
+        self.cleanup_hostname_observations(now);
+        if !self.hostname_round_authorized() {
+            self.pending = None;
+            self.retire_resync(now);
+        }
         let connected = swarm
             .connected_peers()
             .copied()
@@ -698,14 +970,7 @@ impl CheckpointRuntime {
             })
             .collect::<Vec<_>>();
         let higher_advertisement = connected.iter().any(|peer| {
-            self.candidates
-                .get(peer)
-                .map(|(descriptor, _)| descriptor)
-                .or_else(|| {
-                    peers
-                        .get(crate::PeerId::from_libp2p(*peer))
-                        .and_then(|capabilities| capabilities.checkpoint.as_ref())
-                })
+            self.peer_descriptor(*peer, peers)
                 .is_some_and(|descriptor| {
                     descriptor.validate_for(self.anchor()).is_ok()
                         && self
@@ -716,28 +981,76 @@ impl CheckpointRuntime {
                             .is_ok_and(|rank| descriptor.rank() > rank)
                 })
         });
-        if self.pending.is_none()
-            && (self.state.sync_state() == MembershipSyncState::ResyncRequired
+        let legacy_connected = connected
+            .iter()
+            .any(|peer| !self.peer_has_hostname_hint(*peer, peers));
+        let hostname_deadline = connected
+            .iter()
+            .filter_map(|peer| {
+                self.hostname_observations
+                    .get(peer)
+                    .and_then(|observation| observation.retry_deadline(now))
+            })
+            .min()
+            .map(|deadline| deadline.min(now + RESYNC_WINDOW));
+        if self.pending.is_none() {
+            if self.state.sync_state() == MembershipSyncState::ResyncRequired
                 || (!connected.is_empty()
                     && (higher_advertisement
-                        || now >= self.next_resync
-                        || (self.pairing_activation_blocked && !self.pairing_remote_ready()))))
-        {
-            self.begin_resync(now)?;
+                        || (legacy_connected && now >= self.next_resync)
+                        || (self.pairing_activation_blocked && !self.pairing_remote_ready())))
+            {
+                self.begin_resync_until(
+                    now,
+                    hostname_deadline.unwrap_or(now + RESYNC_WINDOW),
+                    None,
+                )?;
+            } else if let Some(deadline) = hostname_deadline {
+                let rank = self.state.snapshot().payload.rank().map_err(core_error)?;
+                self.begin_resync_until(now, deadline, Some(rank))?;
+            }
         }
         let Some(pending) = &self.pending else {
             return Ok(());
         };
         if now >= pending.deadline {
+            self.abort_page_requests(now);
             return Ok(());
         }
         let challenge = pending.challenge.clone();
         let deadline = pending.deadline;
+        let hostname_only = pending.hostname_rank.is_some();
+        let live_refresh = self.state.sync_state() == MembershipSyncState::Participating
+            && !self.pairing_activation_blocked;
         for peer in connected {
             if self.requests.len() >= MAX_TRANSFER_SESSIONS {
                 break;
             }
             if self.attempted.contains(&peer) {
+                continue;
+            }
+            if self.requests.values().any(|owner| owner.peer == peer) {
+                continue;
+            }
+            let hint_deadline = self
+                .hostname_observations
+                .get(&peer)
+                .and_then(|observation| observation.retry_deadline(now));
+            let hostname_dirty = hint_deadline.is_some();
+            if hostname_only && !hostname_dirty {
+                continue;
+            }
+            if live_refresh
+                && !hostname_dirty
+                && self.peer_has_hostname_hint(peer, peers)
+                && self.peer_descriptor(peer, peers).is_none_or(|descriptor| {
+                    self.state
+                        .snapshot()
+                        .payload
+                        .rank()
+                        .is_ok_and(|rank| descriptor.rank() <= rank)
+                })
+            {
                 continue;
             }
             if !self.candidates.contains_key(&peer)
@@ -749,6 +1062,7 @@ impl CheckpointRuntime {
             {
                 continue;
             }
+            let deadline = hint_deadline.map_or(deadline, |hint| hint.min(deadline));
             let request = match self.transfer.start_request(
                 peer,
                 challenge.clone(),
@@ -764,13 +1078,44 @@ impl CheckpointRuntime {
                 }
             };
             self.attempted.insert(peer);
-            let request_id = swarm
-                .behaviour_mut()
-                .checkpoint
-                .send_request(&peer, request.clone());
-            self.requests.insert(request_id, (peer, request));
+            let mut hostname_inventory = None;
+            if let Some(observation) = self.hostname_observations.get_mut(&peer) {
+                if observation.hint_present {
+                    hostname_inventory = observation.inventory;
+                }
+                if hostname_dirty {
+                    observation.rounds_started += 1;
+                }
+            }
+            self.send_page_request(swarm, peer, request, deadline, hostname_inventory);
         }
         Ok(())
+    }
+
+    fn send_page_request(
+        &mut self,
+        swarm: &mut Swarm<Behaviour>,
+        peer: PeerId,
+        request: CheckpointPageRequest,
+        deadline: Instant,
+        hostname_inventory: Option<[u8; 32]>,
+    ) -> request_response::OutboundRequestId {
+        let (id, cancellation) = swarm.behaviour_mut().checkpoint.send_request_cancellable(
+            &peer,
+            request.clone(),
+            deadline,
+        );
+        self.requests.insert(
+            id,
+            PendingCheckpointRequest {
+                peer,
+                request,
+                hostname_inventory,
+                deadline,
+                cancellation,
+            },
+        );
+        id
     }
 
     pub(crate) fn handle_wire_event(
@@ -845,13 +1190,28 @@ impl CheckpointRuntime {
                     },
                 ..
             } => {
-                let Some((expected_peer, request)) = self.requests.remove(&request_id) else {
-                    return;
-                };
-                if peer != expected_peer {
-                    self.transfer.cancel(expected_peer, &request.challenge, now);
+                if self
+                    .requests
+                    .get(&request_id)
+                    .is_none_or(|owner| owner.peer != peer)
+                {
                     return;
                 }
+                let owner = self
+                    .requests
+                    .remove(&request_id)
+                    .expect("matched native request");
+                let request = owner.request;
+                if owner.cancellation.is_aborted()
+                    || now >= owner.deadline
+                    || !self.request_is_active(peer, &request, now)
+                {
+                    self.transfer.cancel(peer, &request.challenge, now);
+                    return;
+                }
+                let deadline = owner
+                    .deadline
+                    .min(self.pending.as_ref().expect("active resync owner").deadline);
                 match self.transfer.accept_response(
                     peer,
                     &request,
@@ -860,16 +1220,25 @@ impl CheckpointRuntime {
                     now,
                 ) {
                     Ok(CheckpointProgress::More(next)) => {
-                        let id = swarm
-                            .behaviour_mut()
-                            .checkpoint
-                            .send_request(&peer, next.clone());
-                        self.requests.insert(id, (peer, next));
+                        self.send_page_request(
+                            swarm,
+                            peer,
+                            next,
+                            deadline,
+                            owner.hostname_inventory,
+                        );
                     }
                     Ok(CheckpointProgress::Complete(offer)) => {
                         // Decoding and request proof are not membership authority.
                         if self.collect_offer(&offer, peer, now).is_ok() {
                             self.offers_accepted = self.offers_accepted.saturating_add(1);
+                            if let Some(observation) = self.hostname_observations.get_mut(&peer)
+                                && owner.hostname_inventory.is_some()
+                                && observation.inventory == owner.hostname_inventory
+                            {
+                                observation.consumed = true;
+                                observation.dirty_until = None;
+                            }
                         } else {
                             self.transfer_failures = self.transfer_failures.saturating_add(1);
                         }
@@ -880,8 +1249,16 @@ impl CheckpointRuntime {
                     }
                 }
             }
-            request_response::Event::OutboundFailure { request_id, .. } => {
-                self.retire_outbound(request_id, now);
+            request_response::Event::OutboundFailure {
+                peer, request_id, ..
+            } => {
+                if self
+                    .requests
+                    .get(&request_id)
+                    .is_some_and(|owner| owner.peer == peer)
+                {
+                    self.retire_outbound(request_id, now);
+                }
             }
             request_response::Event::InboundFailure { request_id, .. } => {
                 if let Some((peer, challenge)) = self.responses.remove(&request_id) {
@@ -900,26 +1277,48 @@ impl CheckpointRuntime {
         event: request_response::Event<CheckpointPageRequest, CheckpointPageResponse>,
         now: Instant,
     ) {
-        if let request_response::Event::Message {
-            message: Message::Response { request_id, .. },
-            ..
-        } = event
-        {
-            self.retire_outbound(request_id, now);
+        match event {
+            request_response::Event::Message {
+                peer,
+                message: Message::Response { request_id, .. },
+                ..
+            }
+            | request_response::Event::OutboundFailure {
+                peer, request_id, ..
+            } => {
+                if self
+                    .requests
+                    .get(&request_id)
+                    .is_some_and(|owner| owner.peer == peer)
+                {
+                    self.retire_outbound(request_id, now);
+                }
+            }
+            _ => (),
         }
     }
 
     fn retire_outbound(&mut self, request_id: request_response::OutboundRequestId, now: Instant) {
-        if let Some((peer, request)) = self.requests.remove(&request_id) {
+        if let Some(owner) = self.requests.remove(&request_id) {
             self.transfer_failures = self.transfer_failures.saturating_add(1);
-            self.transfer.cancel(peer, &request.challenge, now);
+            owner.cancellation.abort();
+            self.transfer
+                .cancel(owner.peer, &owner.request.challenge, now);
+        }
+    }
+
+    fn abort_page_requests(&mut self, now: Instant) {
+        for owner in self.requests.values() {
+            owner.cancellation.abort();
+            self.transfer
+                .cancel(owner.peer, &owner.request.challenge, now);
         }
     }
 
     fn retire_resync(&mut self, now: Instant) {
-        for (_, (peer, request)) in self.requests.drain() {
-            self.transfer.cancel(peer, &request.challenge, now);
-        }
+        // Semantic expiry cancels buffers, not native ownership. Old challenges
+        // are inert until the exact native terminal event releases their slot.
+        self.abort_page_requests(now);
         self.attempted.clear();
         self.next_resync = now + Duration::from_mins(1);
     }
@@ -930,6 +1329,20 @@ impl CheckpointRuntime {
         transport_peer: PeerId,
         now: Instant,
     ) -> Result<OfferOutcome, RunnerError> {
+        if !self.hostname_round_authorized()
+            || (self
+                .pending
+                .as_ref()
+                .is_some_and(|pending| pending.hostname_rank.is_some())
+                && self
+                    .state
+                    .snapshot()
+                    .payload
+                    .member(&transport_peer.to_string())
+                    .is_none())
+        {
+            return Err(core_error(CheckpointError::NoParticipation));
+        }
         self.pending
             .as_mut()
             .ok_or_else(|| core_error(CheckpointError::NoSyncRound))?
@@ -945,6 +1358,11 @@ impl CheckpointRuntime {
         now: Instant,
         wall_now: u64,
     ) -> Result<Option<BranchSelection>, RunnerError> {
+        if !self.hostname_round_authorized() {
+            self.pending = None;
+            self.retire_resync(now);
+            return Ok(None);
+        }
         let Some(pending) = &self.pending else {
             return Ok(None);
         };
@@ -952,6 +1370,7 @@ impl CheckpointRuntime {
             return Ok(None);
         }
         let mut candidate = pending.candidate.clone();
+        self.abort_page_requests(now);
         let selection = candidate.finish_resync(now, wall_now).map_err(core_error)?;
         if let Some(floor) = self.enrollment_floor
             && (!selection.observed_remote_offer
@@ -1326,6 +1745,66 @@ impl CheckpointRuntime {
         })
     }
 
+    /// A temporary control lease, never admission or packet authority. Outbound
+    /// owners are peer-bound; mutation ACKs additionally require their exact connection.
+    pub(crate) fn control_delivery_deadline(
+        &self,
+        peer: PeerId,
+        connection: Option<ConnectionId>,
+        now: Instant,
+    ) -> Option<Instant> {
+        let page = self.pending.as_ref().and_then(|pending| {
+            if self
+                .state
+                .snapshot()
+                .payload
+                .member(&peer.to_string())
+                .is_none()
+            {
+                return None;
+            }
+            self.requests
+                .values()
+                .filter(|owner| {
+                    owner.peer == peer
+                        && !owner.cancellation.is_aborted()
+                        && now < owner.deadline
+                        && self.request_is_active(peer, &owner.request, now)
+                })
+                .map(|owner| owner.deadline.min(pending.deadline))
+                .max()
+        });
+        let mutation = self.handoff.as_ref().and_then(|handoff| {
+            (now < handoff.deadline()
+                && handoff.is_in_flight(peer)
+                && self
+                    .state
+                    .snapshot()
+                    .payload
+                    .boundary()
+                    .is_ok_and(|boundary| handoff.acknowledges(boundary))
+                && self
+                    .mutation_requests
+                    .values()
+                    .any(|owner| *owner == Some(peer)))
+            .then_some(handoff.deadline())
+        });
+        let acknowledgement = self
+            .mutation_responses
+            .values()
+            .filter(|response| {
+                response.peer == peer
+                    && Some(response.connection) == connection
+                    && now < response.deadline
+            })
+            .map(|response| response.deadline)
+            .max();
+        page.into_iter()
+            .chain(mutation)
+            .chain(acknowledgement)
+            .max()
+    }
+
     /// This exception keeps only an authenticated command's bounded ACK transport.
     /// It never changes the roster, packet grants, or snapshot publication rights.
     fn track_mutation_response(
@@ -1451,6 +1930,8 @@ impl CheckpointRuntime {
         forwarder: &mut Forwarder,
         wall_now: u64,
     ) -> Result<(), RunnerError> {
+        let authority_changed = self.state.snapshot().payload.rank().map_err(core_error)?
+            != candidate.snapshot().payload.rank().map_err(core_error)?;
         let projection = if self.pairing_activation_blocked {
             CooperativeMembershipState::restore(
                 self.credentials.capability()?,
@@ -1483,6 +1964,9 @@ impl CheckpointRuntime {
             return Err(error.into());
         }
         self.state = candidate;
+        if authority_changed {
+            self.abort_page_requests(Instant::now());
+        }
         self.enrollment_floor = None;
         if self.handoff.as_ref().is_some_and(|handoff| {
             self.state
@@ -1689,6 +2173,10 @@ fn wire_error(error: CheckpointSyncError) -> RunnerError {
 
 #[cfg(test)]
 mod tests {
+    mod hostname_catchup {
+        include!("checkpoint_runtime/hostname_tests.rs");
+    }
+
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt as _;
     use std::{fs, path::PathBuf};
@@ -5624,8 +6112,18 @@ mod tests {
                 panic!("two-page transfer must remain pending");
             };
             let mut behaviour = super::super::control::checkpoint::behaviour(4);
-            let request_id = behaviour.send_request(&peer, next.clone());
-            runtime.requests.insert(request_id, (peer, next.clone()));
+            let (request_id, cancellation) =
+                behaviour.send_request_cancellable(&peer, next.clone(), now + RESYNC_WINDOW);
+            runtime.requests.insert(
+                request_id,
+                PendingCheckpointRequest {
+                    peer,
+                    request: next.clone(),
+                    hostname_inventory: None,
+                    deadline: now + RESYNC_WINDOW,
+                    cancellation,
+                },
+            );
             assert_eq!(runtime.transfer.stats().buffered_bytes, MAX_PAGE_BYTES * 2);
             if stale {
                 runtime.discard_wire_event(

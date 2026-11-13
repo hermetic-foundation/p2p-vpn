@@ -102,6 +102,9 @@ pub struct ControlCapabilities {
         deserialize_with = "checkpoint::deserialize_capabilities"
     )]
     pub checkpoint: Option<checkpoint::CheckpointCapabilities>,
+    /// Advisory inventory only; signed checkpoint offers remain authoritative.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkpoint_hostname_inventory: Option<[u8; 32]>,
 }
 
 impl ControlCapabilities {
@@ -133,6 +136,7 @@ impl ControlCapabilities {
             membership_records_snapshot: None,
             membership_record_count: 0,
             checkpoint: None,
+            checkpoint_hostname_inventory: None,
         }
     }
 
@@ -201,6 +205,7 @@ impl ControlCapabilities {
         state: &crate::membership::checkpoint::CooperativeMembershipState,
     ) -> Result<Self, checkpoint::CheckpointSyncError> {
         self.checkpoint = Some(checkpoint::CheckpointCapabilities::from_state(state)?);
+        self.checkpoint_hostname_inventory = Some(checkpoint_hostname_inventory(state));
         Ok(self)
     }
 
@@ -273,6 +278,17 @@ impl ControlCapabilities {
             };
         preferred_path.clone_into(&mut self.preferred_path);
     }
+}
+
+pub(crate) fn checkpoint_hostname_inventory(
+    state: &crate::membership::checkpoint::CooperativeMembershipState,
+) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(b"p2p-vpn checkpoint hostname inventory v1\n");
+    // Core state retains verified claims in canonical subject order.
+    digest
+        .update(serde_json::to_vec(state.hostname_claims()).expect("serializable hostname claims"));
+    digest.finalize().into()
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1072,6 +1088,49 @@ mod tests {
         assert!(!capabilities.supports_membership_record_pages);
         assert_eq!(capabilities.membership_records_snapshot, None);
         assert_eq!(capabilities.membership_record_count, 0);
+        assert_eq!(capabilities.checkpoint_hostname_inventory, None);
+    }
+
+    #[test]
+    fn checkpoint_hostname_hint_is_optional_outer_wire_data() {
+        let mut capabilities = ControlCapabilities::local("lab", None, 1280);
+        let legacy = serde_json::to_value(&capabilities).unwrap();
+        assert!(legacy.get("checkpoint_hostname_inventory").is_none());
+        capabilities.checkpoint_hostname_inventory = Some([7; 32]);
+        let mut encoded = serde_json::to_value(&capabilities).unwrap();
+        encoded["future_outer_extension"] = serde_json::json!(true);
+        let decoded: ControlCapabilities = serde_json::from_value(encoded.clone()).unwrap();
+        assert_eq!(decoded, capabilities);
+
+        #[derive(Deserialize)]
+        struct LegacyCapabilities {
+            checkpoint: Option<checkpoint::CheckpointCapabilities>,
+        }
+        let descriptor = checkpoint::CheckpointCapabilities {
+            version: checkpoint::CHECKPOINT_TRANSFER_VERSION,
+            anchor: crate::membership::checkpoint::NetworkAnchor::new([8; 32]).unwrap(),
+            boundary: crate::membership::checkpoint::CheckpointBoundary {
+                authority_revision: 1,
+                digest: [9; 32],
+            },
+            active_member_count: 1,
+            sync: checkpoint::CheckpointSyncIndicator::Participating,
+        };
+        encoded["checkpoint"] = serde_json::to_value(&descriptor).unwrap();
+        let old: LegacyCapabilities = serde_json::from_value(encoded.clone()).unwrap();
+        assert_eq!(old.checkpoint, Some(descriptor));
+        assert!(serde_json::from_value::<ControlCapabilities>(encoded.clone()).is_ok());
+        encoded["checkpoint"]["checkpoint_hostname_inventory"] =
+            serde_json::to_value([7; 32]).unwrap();
+        assert!(serde_json::from_value::<LegacyCapabilities>(encoded).is_err());
+    }
+
+    #[test]
+    fn checkpoint_hostname_hint_has_a_fixed_wire_bound() {
+        let mut encoded =
+            serde_json::to_value(ControlCapabilities::local("lab", None, 1280)).unwrap();
+        encoded["checkpoint_hostname_inventory"] = serde_json::json!(vec![1; 33]);
+        assert!(serde_json::from_value::<ControlCapabilities>(encoded).is_err());
     }
 
     #[test]
