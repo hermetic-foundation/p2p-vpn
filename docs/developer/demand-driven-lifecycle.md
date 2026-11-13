@@ -91,7 +91,7 @@ must not delete a peer, route authorization, DNS record, or network membership.
 
 | Event | Renews Application Activity? | Other Action |
 | --- | --- | --- |
-| Authorized outbound TUN payload | Yes | Queue within existing byte/age limits; establish a path |
+| Authorized outbound TUN payload | Yes | Queue within bounded byte/age limits; establish a path |
 | Accepted authenticated inbound payload | Yes | Deliver; permit a reply path |
 | Explicit application/service request | Yes | Track outstanding work until completion/cancellation |
 | User-initiated peer diagnostic | Bounded explicit demand | End when the diagnostic finishes |
@@ -104,6 +104,10 @@ must not delete a peer, route authorization, DNS record, or network membership.
 Default activity window: 45 seconds after actual payload demand. This is an
 initial policy value, not an energy result. Pending payloads, in-flight service
 work, or blocked queue delivery prevent quiescence even if the timer expires.
+
+The [activated runner contract](demand-lifecycle-activated-runner.md#first-wake-packet)
+permits one first-wake IP packet to remain queued for a fixed 30 seconds after
+negotiated quiet. Other packets retain their configured ordinary age limit.
 
 Track application activity separately from transport activity. A heartbeat must
 never keep its own activity lease alive. Use monotonic deadlines only.

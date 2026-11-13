@@ -50,3 +50,25 @@ pass. Keep all waits bounded and preserve failure state in test evidence.
 
 Native tests establish only the boundaries they exercise. Production activation
 and the 10x battery goal remain unproven until their own gates pass.
+
+## First Wake Packet
+
+The first enabled-runner trial negotiated quiet and retired both real overlay
+transports. A single wake packet then expired under the ordinary three-second
+queue age before the existing 15-second LAN-first recovery window completed.
+
+| Boundary | Required Treatment |
+| --- | --- |
+| Eligibility | Only a validated outbound IP packet that consumes current negotiated quiet permission |
+| Retention | That first packet may remain queued for at most 30 seconds from its original admission |
+| Bound | Fifteen seconds LAN-first grace, ten seconds protocol work, five seconds scheduling margin; not an availability guarantee |
+| Other traffic | Keep the configured ordinary packet age, packet count, and byte limits unchanged |
+| Repeat traffic | Subsequent packets do not acquire or renew the first packet's retention allowance |
+| Retries | Never reset enqueue time, renew application demand, or create a new retention allowance |
+| Failure | Expire normally at the fixed bound; no unbounded disconnected buffer |
+| Authorization | Revocation and existing send-time validation still prevent delivery |
+| Compatibility | Passive and legacy peers cannot acquire this allowance without negotiated quiet |
+
+This is a bounded wake-up exception, not a larger steady-state queue. Preserve
+LAN-first discovery and recovery rather than bypassing it to satisfy a local
+latency test. The exception remains behind the explicit lifecycle activation.
