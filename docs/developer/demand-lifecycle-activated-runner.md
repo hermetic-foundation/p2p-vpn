@@ -37,6 +37,23 @@ Use normal time and real sockets. Do not set quiet flags, inject readiness,
 advance a virtual clock, or manually reconnect the peers to make the scenario
 pass. Keep all waits bounded and preserve failure state in test evidence.
 
+## Activated QUIC Scenario
+
+| Stage | Required Evidence |
+| --- | --- |
+| Active | Fresh bidirectional IP packets increment both owned-QUIC datagram counters |
+| Idle | Real bilateral negotiation; zero UDP/QUIC sessions and zero overlay connections on both endpoints |
+| Quiet interval | Allow terminal close traffic to drain, then observe at least one normal transport idle interval without new proxy datagrams or recreated sessions |
+| Wake fallback | Blackhole advertised QUIC paths; one IP packet must arrive over the retained circuit-relay route without destination application traffic |
+| Promotion | Restore the UDP paths; require fresh bidirectional traffic over QUIC again |
+| Reverse | Repeat real idle, single-packet relay wake, and QUIC promotion with the other endpoint initiating |
+
+- Use the existing real UDP proxy, encrypted QUIC transport, and circuit relay.
+- Bind QUIC listeners on wildcard addresses and advertise only proxy endpoints; do not accidentally leave a direct bypass in the fixture.
+- Keep idle eligibility, retention, peer authorization, and first-packet checks unchanged.
+- Count actual proxied datagrams and delivered IP packets, not merely a selected-path label.
+- Quiet sampling is not a battery measurement or proof of public-WAN/mobile reachability.
+
 ## Follow-On Gates
 
 | Gate | Evidence Still Required |
