@@ -36,6 +36,14 @@ struct PendingReply {
     started: Instant,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PreparationSnapshot {
+    phase: Phase,
+    eligible: Result<(), Rejection>,
+    readiness: Readiness,
+    application_work: bool,
+}
+
 struct Peer {
     remote_epoch: Option<Epoch>,
     policy: Option<PeerLifecycle>,
@@ -45,9 +53,20 @@ struct Peer {
     next_offer: Instant,
     wake_after: Option<Instant>,
     observed_demand: Option<DemandVersion>,
+    preparation_log: Option<(PreparationSnapshot, Instant)>,
 }
 
 impl Peer {
+    fn record_preparation(&mut self, snapshot: PreparationSnapshot, now: Instant) -> bool {
+        if self.preparation_log.is_some_and(|(previous, last)| {
+            previous == snapshot || now.saturating_duration_since(last) < IDLE_AFTER
+        }) {
+            return false;
+        }
+        self.preparation_log = Some((snapshot, now));
+        true
+    }
+
     fn use_legacy(&mut self, context: &LifecycleContext<'_>, peer: Libp2pPeerId) {
         if let Some(policy) = &mut self.policy {
             policy.use_legacy();
@@ -399,6 +418,7 @@ impl DemandLifecycle {
                 next_offer: now + IDLE_AFTER,
                 wake_after: None,
                 observed_demand: None,
+                preparation_log: None,
             }
         });
         if state.refresh(self.epoch, remote, now) {
@@ -531,14 +551,18 @@ impl DemandLifecycle {
         }
     }
 
-    fn prepare_idle(&self, context: &LifecycleContext<'_>, peer: Libp2pPeerId, now: Instant) {
-        let state = &self.peers[&peer];
-        let incoming = (context.readiness)(peer).incoming_path_available;
-        let allowed = state.policy.as_ref().is_some_and(|policy| {
-            policy.can_prepare_idle(now, incoming, (context.application_work)(peer))
-        });
+    fn prepare_idle(&mut self, context: &LifecycleContext<'_>, peer: Libp2pPeerId, now: Instant) {
+        let state = self.peers.get_mut(&peer).expect("admitted lifecycle peer");
+        let readiness = (context.readiness)(peer);
+        let application_work = (context.application_work)(peer);
+        let eligible = state
+            .policy
+            .as_ref()
+            .map_or(Err(Rejection::Unsupported), |policy| {
+                policy.idle_preparation(now, readiness.incoming_path_available, application_work)
+            });
         let overlay = PeerId::from_libp2p(peer);
-        if !(allowed
+        if !(eligible.is_ok()
             && state.observed_demand.is_some_and(|version| {
                 context
                     .forwarder
@@ -546,6 +570,43 @@ impl DemandLifecycle {
             }))
         {
             context.forwarder.resume_data_path_maintenance(overlay);
+        }
+        let snapshot = PreparationSnapshot {
+            phase: state
+                .policy
+                .as_ref()
+                .map_or(Phase::Legacy, PeerLifecycle::phase),
+            eligible,
+            readiness,
+            application_work,
+        };
+        if context.local.demand_lifecycle_epoch().is_some()
+            && state.record_preparation(snapshot, now)
+        {
+            let reason =
+                eligible.map_or_else(|reason| format!("{reason:?}"), |()| "ready".to_owned());
+            log_runtime_event(
+                LogLevel::Info,
+                "peer_lifecycle_idle_preparation",
+                &[
+                    ("peer", &peer.to_string()),
+                    ("phase", &format!("{:?}", snapshot.phase)),
+                    ("reason", &reason),
+                    (
+                        "incoming_path_available",
+                        &readiness.incoming_path_available.to_string(),
+                    ),
+                    ("application_work", &application_work.to_string()),
+                    ("outstanding_work", &readiness.outstanding_work.to_string()),
+                    (
+                        "maintenance_paused",
+                        &context
+                            .forwarder
+                            .data_path_maintenance_is_paused(overlay)
+                            .to_string(),
+                    ),
+                ],
+            );
         }
     }
 

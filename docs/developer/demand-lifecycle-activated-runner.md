@@ -284,13 +284,22 @@ The [first complete cellular pair](android-cellular-lifecycle-pair-2026-11-13.js
 failed the 10x target. The phone advertised support, but its counterpart reported
 neither maintenance preparation nor committed quiet permission.
 
-| Planned Signal | Constraint |
+| Signal | Constraint |
 | --- | --- |
 | Idle preparation reason | Distinguish unsupported epoch/scope, missing incoming path, queued payload, and recent demand |
 | Native work | Report separately from application work; never create demand to collect diagnostics |
 | State changes | Bound output to one event per peer per idle interval; use the existing driver, no new timer |
 | Privacy | Public peer ID and local booleans/enums only; no membership secrets, keys, addresses or packet contents |
 | Behavior | No new dial, probe, keepalive, wire field, user option or relaxed eligibility check |
+
+The `peer_lifecycle_idle_preparation` event reports the local phase, eligibility
+reason, incoming-path availability, application work, outstanding native work
+and maintenance pause. Passive runtimes emit no preparation event.
+
+- Repeated unchanged state produces no event.
+- Flapping state and remote-epoch replacement cannot bypass the per-peer rate limit.
+- Missing native work is not inferred from an empty application queue.
+- Preparation still does not grant permission to close a peer's path.
 
 ## Discovery Effect Audit
 
@@ -301,3 +310,23 @@ neither maintenance preparation nor committed quiet permission.
 
 These corrections require focused regressions and fresh device measurements.
 They do not establish which component consumed the measured cellular energy.
+
+## Reconnection Idle Timeline
+
+The first diagnostic deployment repeatedly reported `RecentlyActive` after
+relay circuits closed and reconnected. Capability invalidation removed the
+lifecycle owner, restarting the 45-second idle grace without payload demand.
+
+| Planned Boundary | Required Behavior |
+| --- | --- |
+| Temporary capability absence | Revoke quiet and semantic exchanges immediately; retain the configured member's bounded idle timeline |
+| Missing validation | No idle offer, acknowledgement commitment, wake acceptance or path retirement from cached capabilities |
+| Same revalidated runtime epoch | Resume the existing application idle age, not the age of the new connection |
+| New remote runtime epoch | Start a fresh conservative grace and reject previous exchanges |
+| Real membership revocation | Remove policy state, quiet permission and semantic ownership |
+| Existing native requests | Retain physical slots until terminal events; suspension must not free them early |
+| Payload while disconnected | Record actual demand and honor its idle grace after revalidation |
+
+Validation must reproduce repeated sub-45-second disconnects, capability
+absence, same/new epochs, true revocation, stale replies and application demand.
+Preserving idle age alone is not proof of public-relay dormancy or energy savings.

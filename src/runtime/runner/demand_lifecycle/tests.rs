@@ -19,6 +19,105 @@ fn usable(_: Libp2pPeerId) -> bool {
     true
 }
 
+#[tokio::test]
+async fn preparation_diagnostics_distinguish_gates_without_native_work_becoming_demand() {
+    let peer = Libp2pPeerId::random();
+    let f = Fixture::new(peer, 1, 2);
+    let now = Instant::now();
+    let mut lifecycle = DemandLifecycle::new(epoch(1), 8, 8, now);
+    let mut wire = wire_swarm();
+    let before = f.forwarder.application_demand(PeerId::from_libp2p(peer));
+    lifecycle.drive(wire.behaviour_mut(), &f.context(), now);
+    let initial = lifecycle.peers[&peer].preparation_log.unwrap().0;
+    assert_eq!(initial.eligible, Err(Rejection::RecentlyActive));
+
+    let due = now + IDLE_AFTER;
+    let mut context = f.context();
+    context.readiness = &|_| Readiness {
+        incoming_path_available: false,
+        outstanding_work: true,
+    };
+    lifecycle.drive(wire.behaviour_mut(), &context, due);
+    let missing = lifecycle.peers[&peer].preparation_log.unwrap().0;
+    assert_eq!(missing.eligible, Err(Rejection::IncomingPathUnavailable));
+    assert!(!missing.application_work);
+    assert!(missing.readiness.outstanding_work);
+    assert!(
+        !f.forwarder
+            .data_path_maintenance_is_paused(PeerId::from_libp2p(peer))
+    );
+
+    context.application_work = &|_| true;
+    lifecycle.drive(wire.behaviour_mut(), &context, due + IDLE_AFTER);
+    assert_eq!(
+        lifecycle.peers[&peer].preparation_log.unwrap().0.eligible,
+        Err(Rejection::OutstandingWork)
+    );
+
+    context.application_work = &|_| false;
+    context.readiness = &|_| Readiness {
+        incoming_path_available: true,
+        outstanding_work: true,
+    };
+    lifecycle.drive(wire.behaviour_mut(), &context, due + IDLE_AFTER * 2);
+    let prepared = lifecycle.peers[&peer].preparation_log.unwrap().0;
+    assert_eq!(prepared.eligible, Ok(()));
+    assert!(prepared.readiness.outstanding_work);
+    assert!(!prepared.application_work);
+    assert!(
+        f.forwarder
+            .data_path_maintenance_is_paused(PeerId::from_libp2p(peer))
+    );
+    assert!(!f.forwarder.data_path_is_dormant(PeerId::from_libp2p(peer)));
+    assert_eq!(
+        f.forwarder.application_demand(PeerId::from_libp2p(peer)),
+        before
+    );
+    assert!(!wire.behaviour().has_any_pending_requests());
+    assert_eq!(lifecycle.snapshot().outbound, 0);
+    assert_eq!(lifecycle.phase(peer), Phase::Active);
+}
+
+#[tokio::test]
+async fn preparation_diagnostics_are_bounded_across_flapping_and_epoch_replacement() {
+    let peer = Libp2pPeerId::random();
+    let f = Fixture::new(peer, 1, 2);
+    let now = Instant::now();
+    let mut lifecycle = DemandLifecycle::new(epoch(1), 8, 8, now);
+    assert!(lifecycle.admit_peer(&f.context(), peer, now));
+    let state = lifecycle.peers.get_mut(&peer).unwrap();
+    let mut snapshot = PreparationSnapshot {
+        phase: Phase::Active,
+        eligible: Ok(()),
+        readiness: ready(peer),
+        application_work: false,
+    };
+    assert!(state.record_preparation(snapshot, now));
+    for i in 1..100 {
+        snapshot.readiness.outstanding_work = i % 2 == 0;
+        assert!(!state.record_preparation(snapshot, now + Duration::from_millis(i)));
+    }
+    snapshot.eligible = Err(Rejection::Unsupported);
+    assert!(state.refresh(epoch(1), None, now));
+    assert!(!state.record_preparation(snapshot, now + IDLE_AFTER / 2));
+    assert!(state.record_preparation(snapshot, now + IDLE_AFTER));
+    assert!(!state.record_preparation(snapshot, now + IDLE_AFTER * 20));
+}
+
+#[tokio::test]
+async fn passive_lifecycle_does_not_emit_preparation_diagnostics() {
+    let peer = Libp2pPeerId::random();
+    let mut f = Fixture::new(peer, 1, 2);
+    f.local.supports_demand_lifecycle = false;
+    let now = Instant::now();
+    let mut lifecycle = DemandLifecycle::new(epoch(1), 8, 8, now);
+    let mut wire = wire_swarm();
+    lifecycle.drive(wire.behaviour_mut(), &f.context(), now + IDLE_AFTER);
+    assert_eq!(lifecycle.phase(peer), Phase::Legacy);
+    assert!(lifecycle.peers[&peer].preparation_log.is_none());
+    assert!(!wire.behaviour().has_any_pending_requests());
+}
+
 struct Fixture {
     forwarder: Forwarder,
     local: ControlCapabilities,

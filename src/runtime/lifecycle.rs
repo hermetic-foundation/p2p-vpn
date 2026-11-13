@@ -144,12 +144,12 @@ impl PeerLifecycle {
         self.last_demand
     }
 
-    pub(crate) fn can_prepare_idle(
+    pub(crate) fn idle_preparation(
         &self,
         now: Instant,
         incoming: bool,
         application_work: bool,
-    ) -> bool {
+    ) -> Result<(), Rejection> {
         self.idle_eligible(
             now,
             Readiness {
@@ -157,7 +157,6 @@ impl PeerLifecycle {
                 outstanding_work: application_work,
             },
         )
-        .is_ok()
     }
 
     /// A dispatcher-confirmed unsupported protocol disables negotiation for the
