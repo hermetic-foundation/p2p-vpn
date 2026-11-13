@@ -22,6 +22,7 @@ Use these docs when changing, testing, or debugging `p2p-vpn`.
 | [Quiet Relay Validation](relay-idle-validation.md) | Bounded public reservation test, raw idle traffic, and fresh incoming-circuit checks. |
 | [Dormant Path Retirement](demand-lifecycle-retirement.md) | Datagram cleanup ownership, demand/work fences, and staged activation. |
 | [Dormant Control Work](demand-lifecycle-control-work.md) | Native wire ownership, codec-I/O fences, protected stream retirement, and dormant metadata. |
+| [Maintenance Drain](demand-lifecycle-drain.md) | Stop self-renewing probes before idle negotiation without claiming peer quiet permission. |
 | [Feature Matrix](feature-matrix.md) | Current implementation status. |
 | [NixOS Module Design](nixos-module.md) | Modes, secret lifecycle, service contract, and tests. |
 | [Pairing Implementation](pairing.md) | Code PAKE, approval, durability, and proof commands. |
