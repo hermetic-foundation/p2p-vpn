@@ -23,7 +23,7 @@ use crate::{
 };
 
 use super::{
-    checkpoint_handoff::{DeliveryOutcome, HandoffReport, MutationHandoff},
+    checkpoint_handoff::{DeliveryOutcome, HandoffReport, MAX_IN_FLIGHT, MutationHandoff},
     control::{
         ControlCapabilities, PeerCapabilities,
         checkpoint::{
@@ -76,7 +76,10 @@ pub(crate) struct CheckpointRuntime {
     transfer_failures: u64,
     candidates: HashMap<PeerId, (CheckpointCapabilities, Instant)>,
     handoff: Option<MutationHandoff>,
-    mutation_requests: HashMap<request_response::OutboundRequestId, PeerId>,
+    // Preserve a removed recipient's control reachability while waiting for a native slot.
+    handoff_removed_recipient: Option<PeerId>,
+    // None retires semantic ownership, but the native slot lives until its terminal event.
+    mutation_requests: HashMap<request_response::OutboundRequestId, Option<PeerId>>,
     mutation_responses: HashMap<request_response::InboundRequestId, PendingMutationResponse>,
     last_handoff: HandoffReport,
     route_cleanup_pending: bool,
@@ -435,6 +438,7 @@ impl CheckpointRuntime {
             transfer_failures: 0,
             candidates: HashMap::new(),
             handoff: None,
+            handoff_removed_recipient: None,
             mutation_requests: HashMap::new(),
             mutation_responses: HashMap::new(),
             last_handoff: HandoffReport::default(),
@@ -658,13 +662,18 @@ impl CheckpointRuntime {
             .chain(
                 self.mutation_requests
                     .values()
-                    .copied()
+                    .filter_map(|peer| *peer)
                     .filter(move |peer| {
                         self.handoff.as_ref().is_some_and(|handoff| {
                             now < handoff.deadline() && handoff.is_in_flight(*peer)
                         })
                     }),
             )
+            .chain(self.handoff_removed_recipient.filter(move |_| {
+                self.handoff
+                    .as_ref()
+                    .is_some_and(|handoff| now < handoff.deadline())
+            }))
     }
 
     pub(crate) fn drive_sync(
@@ -989,7 +998,7 @@ impl CheckpointRuntime {
         identity: &NodeIdentity,
         store: &MembershipStateStore,
         forwarder: &mut Forwarder,
-        recipients: &[PeerId],
+        _recipients: &[PeerId],
         now: Instant,
         wall_now: u64,
     ) -> Result<(), RunnerError> {
@@ -1006,19 +1015,28 @@ impl CheckpointRuntime {
             .map_err(core_error)?;
         CheckpointMutationRequest::new(mutation.clone())
             .map_err(|error| std::io::Error::other(error.to_string()))?;
-        let authorized = recipients
+        // Keep the caller hint for compatibility; connectivity never defines the roster.
+        let authorized = self
+            .state
+            .snapshot()
+            .payload
+            .members
             .iter()
-            .copied()
-            .filter(|peer| {
-                peer.to_string() != identity.peer_id
-                    && self
-                        .state
-                        .snapshot()
-                        .payload
-                        .member(&peer.to_string())
-                        .is_some_and(|member| member.active_at(wall_now))
+            .filter(|member| {
+                member.subject.peer_id != identity.peer_id && member.active_at(wall_now)
             })
-            .collect::<Vec<_>>();
+            .map(|member| member.subject.peer_id.parse::<PeerId>())
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| {
+                std::io::Error::other(format!("invalid handoff recipient: {error}"))
+            })?;
+        let removed_recipient = match &mutation.payload.change {
+            MembershipChange::RemoveMember(peer) => peer
+                .parse::<PeerId>()
+                .ok()
+                .filter(|peer| authorized.contains(peer)),
+            _ => None,
+        };
         let mut candidate = self.state.clone();
         candidate
             .apply_mutation_at(&mutation, wall_now)
@@ -1036,6 +1054,7 @@ impl CheckpointRuntime {
         .map_err(std::io::Error::other)?;
         self.persist_then_install(candidate, store, forwarder, wall_now)?;
         self.handoff = Some(handoff);
+        self.handoff_removed_recipient = removed_recipient;
         self.finish_handoff_if_due(now);
         Ok(())
     }
@@ -1045,13 +1064,16 @@ impl CheckpointRuntime {
             return;
         };
         handoff.advance_clock(now);
-        self.mutation_requests
-            .retain(|_, peer| handoff.is_in_flight(*peer));
+        for peer in self.mutation_requests.values_mut() {
+            if !peer.is_some_and(|peer| handoff.is_in_flight(peer)) {
+                *peer = None;
+            }
+        }
         let report = handoff.report();
         if report.pending == 0 {
             self.last_handoff = report;
             self.handoff = None;
-            self.mutation_requests.clear();
+            self.handoff_removed_recipient = None;
         }
     }
 
@@ -1065,11 +1087,10 @@ impl CheckpointRuntime {
         let Some(handoff) = &mut self.handoff else {
             return Ok(());
         };
-        while let Some(peer) = handoff.next_ready(now) {
-            if !swarm.is_connected(&peer) {
-                handoff.resolve(peer, DeliveryOutcome::RetryableFailure, now);
-                continue;
-            }
+        while self.mutation_requests.len() < MAX_IN_FLIGHT {
+            let Some(peer) = handoff.next_ready(now) else {
+                break;
+            };
             let request = CheckpointMutationRequest::new(handoff.mutation().clone())
                 .map_err(|error| std::io::Error::other(error.to_string()))?
                 .with_deadline(handoff.deadline());
@@ -1077,7 +1098,7 @@ impl CheckpointRuntime {
                 .behaviour_mut()
                 .checkpoint_mutation
                 .send_request(&peer, request);
-            self.mutation_requests.insert(id, peer);
+            self.mutation_requests.insert(id, Some(peer));
         }
         Ok(())
     }
@@ -1196,7 +1217,7 @@ impl CheckpointRuntime {
                     },
                 ..
             } => {
-                if let Some(expected_peer) = self.mutation_requests.remove(&request_id)
+                if let Some(expected_peer) = self.mutation_requests.remove(&request_id).flatten()
                     && let Some(handoff) = &mut self.handoff
                 {
                     let outcome = CheckpointMutationRequest::new(handoff.mutation().clone())
@@ -1234,7 +1255,7 @@ impl CheckpointRuntime {
                     error,
                     request_response::OutboundFailure::UnsupportedProtocols
                 ) {
-                    if let Some(peer) = self.mutation_requests.remove(&request_id)
+                    if let Some(peer) = self.mutation_requests.remove(&request_id).flatten()
                         && let Some(handoff) = &mut self.handoff
                     {
                         handoff.resolve(peer, DeliveryOutcome::DefiniteFailure, now);
@@ -1269,7 +1290,10 @@ impl CheckpointRuntime {
             request_response::Event::Message {
                 message: Message::Response { request_id, .. },
                 ..
-            } => self.fail_mutation_request(request_id, now),
+            }
+            | request_response::Event::OutboundFailure { request_id, .. } => {
+                self.fail_mutation_request(request_id, now);
+            }
             request_response::Event::InboundFailure {
                 peer,
                 connection_id,
@@ -1363,7 +1387,7 @@ impl CheckpointRuntime {
         request_id: request_response::OutboundRequestId,
         now: Instant,
     ) {
-        if let Some(peer) = self.mutation_requests.remove(&request_id)
+        if let Some(peer) = self.mutation_requests.remove(&request_id).flatten()
             && let Some(handoff) = &mut self.handoff
         {
             handoff.resolve(peer, DeliveryOutcome::RetryableFailure, now);
@@ -1508,7 +1532,10 @@ impl CheckpointRuntime {
             self.last_handoff.failed += self.last_handoff.pending;
             self.last_handoff.pending = 0;
         }
-        self.mutation_requests.clear();
+        self.handoff_removed_recipient = None;
+        for peer in self.mutation_requests.values_mut() {
+            *peer = None;
+        }
     }
 
     pub(crate) fn prune_expired(
@@ -2603,13 +2630,21 @@ mod tests {
     }
 
     fn surviving_owner(fixture: &Fixture) -> (CheckpointRuntime, Forwarder, MembershipStateStore) {
-        let directory = fixture.directory.join("survivor");
+        surviving_owner_for(fixture, &fixture.member, "survivor")
+    }
+
+    fn surviving_owner_for(
+        fixture: &Fixture,
+        identity: &NodeIdentity,
+        name: &str,
+    ) -> (CheckpointRuntime, Forwarder, MembershipStateStore) {
+        let directory = fixture.directory.join(name);
         fs::create_dir(&directory).unwrap();
         let store = MembershipStateStore::new(directory.join("membership-state.json"));
         store
             .save_checkpoint(
                 "lab",
-                &fixture.member.peer_id,
+                &identity.peer_id,
                 &fixture.credentials,
                 &fixture.state.retained(),
             )
@@ -2619,7 +2654,7 @@ mod tests {
         )) = store
             .load_authority(
                 "lab",
-                &fixture.member.peer_id,
+                &identity.peer_id,
                 Some(fixture.credentials.anchor()),
                 None,
             )
@@ -2628,10 +2663,10 @@ mod tests {
             panic!("survivor authority");
         };
         let mut runtime =
-            CheckpointRuntime::restore("lab".into(), &fixture.member.peer_id, *loaded).unwrap();
+            CheckpointRuntime::restore("lab".into(), &identity.peer_id, *loaded).unwrap();
         let mut config = fixture.config.clone();
-        config.network.local_peer = fixture.member.peer_id.clone();
-        config.network.private_key = Some(fixture.member.private_key.clone());
+        config.network.local_peer = identity.peer_id.clone();
+        config.network.private_key = Some(identity.private_key.clone());
         config.peers.clear();
         let mut forwarder =
             Forwarder::from_checkpoint_config(&config, runtime.state(), runtime.anchor(), WALL_NOW)
@@ -3493,6 +3528,71 @@ mod tests {
     }
 
     #[test]
+    fn handoff_uses_pre_mutation_active_roster_not_connected_recipient_hint() {
+        let mut fixture = Fixture::new("handoff-active-roster");
+        let mut allocated = fixture
+            .state
+            .snapshot()
+            .payload
+            .members
+            .iter()
+            .map(|member| {
+                crate::route::builtin_ipv4(crate::PeerId::from_libp2p(
+                    member.subject.peer_id.parse().unwrap(),
+                ))
+            })
+            .collect::<HashSet<_>>();
+        let expired = unused_ipv4_identity(&mut allocated);
+        let mut member = CheckpointMember::new(&expired).unwrap();
+        member.expires_at_unix_seconds = Some(WALL_NOW + 1);
+        let admission = fixture
+            .state
+            .sign_mutation_at(
+                &fixture.local,
+                MembershipChange::UpsertMember(member),
+                WALL_NOW,
+            )
+            .unwrap();
+        fixture
+            .state
+            .apply_mutation_at(&admission, WALL_NOW)
+            .unwrap();
+        fixture
+            .store
+            .save_checkpoint(
+                "lab",
+                &fixture.local.peer_id,
+                &fixture.credentials,
+                &fixture.state.retained(),
+            )
+            .unwrap();
+        let (mut runtime, mut forwarder) = fixture.participating();
+        let now = Instant::now();
+        let peer = fixture.member.peer_id.parse().unwrap();
+        runtime
+            .apply_change_with_handoff(
+                MembershipChange::RemoveMember(fixture.member.peer_id.clone()),
+                &fixture.local,
+                &fixture.store,
+                &mut forwarder,
+                &[fixture.local.peer_id.parse().unwrap(), PeerId::random()],
+                now,
+                WALL_NOW + 1,
+            )
+            .unwrap();
+        assert!(!forwarder.is_configured_transport_peer(peer));
+        assert_eq!(runtime.sync_candidates(now).collect::<Vec<_>>(), vec![peer]);
+        let handoff = runtime.handoff.as_mut().unwrap();
+        assert_eq!(handoff.report().recipients, 1);
+        assert_eq!(handoff.next_ready(now), Some(peer));
+        assert_eq!(handoff.next_ready(now), None);
+        let deadline = handoff.deadline();
+        assert_eq!(runtime.sync_candidates(deadline).count(), 0);
+        runtime.finish_handoff_if_due(deadline);
+        assert!(runtime.handoff_removed_recipient.is_none());
+    }
+
+    #[test]
     fn concurrent_local_commands_are_rejected_without_overwriting_bounded_handoff() {
         let fixture = Fixture::new("serialized-handoff");
         let (mut runtime, mut forwarder) = fixture.participating();
@@ -4198,7 +4298,7 @@ mod tests {
                 .behaviour_mut()
                 .checkpoint_mutation
                 .send_request(&peer, request.clone());
-            runtime.mutation_requests.insert(id, peer);
+            runtime.mutation_requests.insert(id, Some(peer));
             let expected = runtime.state().snapshot().payload.boundary().unwrap();
             let outcome = if case == "duplicate" {
                 MutationOutcome::Rejected {
@@ -4224,6 +4324,13 @@ mod tests {
             let event_now = if case == "late-request" {
                 runtime
                     .finish_handoff_if_due(now + super::super::checkpoint_handoff::ATTEMPT_WINDOW);
+                assert_eq!(runtime.mutation_requests.get(&id), Some(&None));
+                assert!(
+                    node.swarm
+                        .behaviour()
+                        .checkpoint_mutation
+                        .is_pending_outbound(&peer, &id)
+                );
                 let retry =
                     now + super::super::checkpoint_handoff::ATTEMPT_WINDOW + Duration::from_secs(1);
                 assert_eq!(
@@ -4235,7 +4342,7 @@ mod tests {
                     .behaviour_mut()
                     .checkpoint_mutation
                     .send_request(&peer, request.clone());
-                runtime.mutation_requests.insert(fresh_id, peer);
+                runtime.mutation_requests.insert(fresh_id, Some(peer));
                 retry
             } else {
                 now
@@ -4262,6 +4369,8 @@ mod tests {
                 assert_eq!(runtime.mutation_requests.len(), 1);
                 runtime
                     .finish_handoff_if_due(now + super::super::checkpoint_handoff::HANDOFF_WINDOW);
+                assert_eq!(runtime.mutation_requests.len(), 1);
+                assert!(runtime.mutation_requests.values().all(Option::is_none));
             } else {
                 assert!(runtime.handoff.is_none());
                 assert_eq!(
@@ -4269,6 +4378,221 @@ mod tests {
                     usize::from(matches!(case, "applied" | "duplicate"))
                 );
                 assert!(runtime.mutation_requests.is_empty());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn native_mutation_slots_survive_expiry_until_real_terminal_events_drain() {
+        use super::super::{checkpoint_handoff::HANDOFF_WINDOW, p2p::BehaviourEvent};
+        use futures::StreamExt as _;
+        use libp2p::swarm::SwarmEvent;
+
+        let fixture = Fixture::new("native-handoff-slots");
+        let (mut runtime, mut forwarder) = fixture.participating();
+        let mut node = test_node(&fixture.local);
+        let peer = fixture.member.peer_id.parse().unwrap();
+        let start = Instant::now();
+        for index in 0..MAX_IN_FLIGHT {
+            let now = start + HANDOFF_WINDOW * u32::try_from(index).unwrap();
+            let mut policy = runtime.state().snapshot().payload.policy.clone();
+            policy.route_grants_enabled = !policy.route_grants_enabled;
+            runtime
+                .apply_change_with_handoff(
+                    MembershipChange::SetPolicy(policy),
+                    &fixture.local,
+                    &fixture.store,
+                    &mut forwarder,
+                    &[],
+                    now,
+                    WALL_NOW,
+                )
+                .unwrap();
+            runtime.drive_mutations(&mut node.swarm, now).unwrap();
+            assert_eq!(runtime.handoff.as_ref().unwrap().report().attempts, 1);
+            runtime.finish_handoff_if_due(now + HANDOFF_WINDOW);
+            assert!(runtime.handoff.is_none());
+            assert_eq!(runtime.mutation_requests.len(), index + 1);
+            assert!(runtime.mutation_requests.values().all(Option::is_none));
+            assert_eq!(runtime.sync_candidates(now + HANDOFF_WINDOW).count(), 0);
+            for id in runtime.mutation_requests.keys() {
+                assert!(
+                    node.swarm
+                        .behaviour()
+                        .checkpoint_mutation
+                        .is_pending_outbound(&peer, id)
+                );
+            }
+        }
+        let now = start + HANDOFF_WINDOW * u32::try_from(MAX_IN_FLIGHT).unwrap();
+        runtime
+            .apply_change_with_handoff(
+                MembershipChange::RemoveMember(fixture.member.peer_id.clone()),
+                &fixture.local,
+                &fixture.store,
+                &mut forwarder,
+                &[],
+                now,
+                WALL_NOW,
+            )
+            .unwrap();
+        runtime.drive_mutations(&mut node.swarm, now).unwrap();
+        assert_eq!(runtime.mutation_requests.len(), MAX_IN_FLIGHT);
+        assert!(!forwarder.is_configured_transport_peer(peer));
+        assert_eq!(runtime.sync_candidates(now).collect::<Vec<_>>(), vec![peer]);
+        let waiting = runtime.handoff.as_ref().unwrap().report();
+        assert_eq!(waiting.attempts, 0);
+        let native_ids = runtime
+            .mutation_requests
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !runtime.mutation_requests.is_empty() {
+                if let SwarmEvent::Behaviour(BehaviourEvent::CheckpointMutation(event)) =
+                    node.swarm.select_next_some().await
+                {
+                    runtime.handle_mutation_event(
+                        &mut node.swarm,
+                        event,
+                        &fixture.store,
+                        &mut forwarder,
+                        now,
+                        WALL_NOW,
+                    );
+                    assert_eq!(runtime.handoff.as_ref().unwrap().report(), waiting);
+                }
+            }
+        })
+        .await
+        .expect("real no-address dial failures must retire the native queue");
+        for id in native_ids {
+            assert!(
+                !node
+                    .swarm
+                    .behaviour()
+                    .checkpoint_mutation
+                    .is_pending_outbound(&peer, &id)
+            );
+        }
+        runtime.drive_mutations(&mut node.swarm, now).unwrap();
+        assert_eq!(runtime.mutation_requests.len(), 1);
+        assert_eq!(runtime.handoff.as_ref().unwrap().report().attempts, 1);
+    }
+
+    #[tokio::test]
+    async fn retired_native_mutation_events_cannot_resolve_a_replacement_handoff() {
+        use super::super::checkpoint_handoff::HANDOFF_WINDOW;
+
+        for cancelled in [false, true] {
+            for terminal in ["response", "failure", "unsupported", "discarded"] {
+                let fixture = Fixture::new(&format!("retired-handoff-{cancelled}-{terminal}"));
+                let (mut runtime, mut forwarder) = fixture.participating();
+                let mut node = test_node(&fixture.local);
+                let peer = fixture.member.peer_id.parse().unwrap();
+                let now = Instant::now();
+                let mut policy = runtime.state().snapshot().payload.policy.clone();
+                policy.route_grants_enabled = false;
+                runtime
+                    .apply_change_with_handoff(
+                        MembershipChange::SetPolicy(policy.clone()),
+                        &fixture.local,
+                        &fixture.store,
+                        &mut forwarder,
+                        &[],
+                        now,
+                        WALL_NOW,
+                    )
+                    .unwrap();
+                runtime.drive_mutations(&mut node.swarm, now).unwrap();
+                let old_id = *runtime.mutation_requests.keys().next().unwrap();
+                let replacement_now = if cancelled {
+                    policy.route_grants_enabled = true;
+                    runtime
+                        .apply_change(
+                            MembershipChange::SetPolicy(policy.clone()),
+                            &fixture.local,
+                            &fixture.store,
+                            &mut forwarder,
+                            WALL_NOW,
+                        )
+                        .unwrap();
+                    now
+                } else {
+                    runtime.finish_handoff_if_due(now + HANDOFF_WINDOW);
+                    now + HANDOFF_WINDOW
+                };
+                assert_eq!(runtime.mutation_requests.get(&old_id), Some(&None));
+                assert_eq!(runtime.sync_candidates(replacement_now).count(), 0);
+                policy.route_grants_enabled = !policy.route_grants_enabled;
+                runtime
+                    .apply_change_with_handoff(
+                        MembershipChange::SetPolicy(policy),
+                        &fixture.local,
+                        &fixture.store,
+                        &mut forwarder,
+                        &[],
+                        replacement_now,
+                        WALL_NOW,
+                    )
+                    .unwrap();
+                runtime
+                    .drive_mutations(&mut node.swarm, replacement_now)
+                    .unwrap();
+                let fresh_id = *runtime
+                    .mutation_requests
+                    .keys()
+                    .find(|id| **id != old_id)
+                    .unwrap();
+                let before = runtime.handoff.as_ref().unwrap().report();
+                // Even a reply naming the new command cannot reuse an old native ID.
+                let request = CheckpointMutationRequest::new(
+                    runtime.handoff.as_ref().unwrap().mutation().clone(),
+                )
+                .unwrap();
+                let response = CheckpointMutationResponse::for_request(
+                    &request,
+                    MutationOutcome::Applied(
+                        runtime.state().snapshot().payload.boundary().unwrap(),
+                    ),
+                )
+                .unwrap();
+                let event = if matches!(terminal, "response" | "discarded") {
+                    request_response::Event::Message {
+                        peer,
+                        connection_id: ConnectionId::new_unchecked(1),
+                        message: Message::Response {
+                            request_id: old_id,
+                            response,
+                        },
+                    }
+                } else {
+                    request_response::Event::OutboundFailure {
+                        peer,
+                        connection_id: ConnectionId::new_unchecked(1),
+                        request_id: old_id,
+                        error: if terminal == "unsupported" {
+                            request_response::OutboundFailure::UnsupportedProtocols
+                        } else {
+                            request_response::OutboundFailure::ConnectionClosed
+                        },
+                    }
+                };
+                if terminal == "discarded" {
+                    runtime.discard_mutation_event(event, replacement_now);
+                } else {
+                    runtime.handle_mutation_event(
+                        &mut node.swarm,
+                        event,
+                        &fixture.store,
+                        &mut forwarder,
+                        replacement_now,
+                        WALL_NOW,
+                    );
+                }
+                assert_eq!(runtime.handoff.as_ref().unwrap().report(), before);
+                assert_eq!(runtime.mutation_requests.len(), 1);
+                assert_eq!(runtime.mutation_requests.get(&fresh_id), Some(&Some(peer)));
             }
         }
     }
@@ -4738,6 +5062,198 @@ mod tests {
         })
         .await
         .expect("checkpoint startup must complete without operator intervention");
+    }
+
+    #[tokio::test]
+    async fn three_native_owners_deliver_departure_to_disconnected_member_over_retained_tcp() {
+        use super::super::p2p::BehaviourEvent;
+        use futures::StreamExt as _;
+        use libp2p::swarm::SwarmEvent;
+
+        let mut fixture = Fixture::new("disconnected-three-owner-departure");
+        let mut allocated = fixture
+            .state
+            .snapshot()
+            .payload
+            .members
+            .iter()
+            .map(|member| {
+                crate::route::builtin_ipv4(crate::PeerId::from_libp2p(
+                    member.subject.peer_id.parse().unwrap(),
+                ))
+            })
+            .collect::<HashSet<_>>();
+        let third = unused_ipv4_identity(&mut allocated);
+        let admission = fixture
+            .state
+            .sign_mutation_at(
+                &fixture.local,
+                MembershipChange::UpsertMember(CheckpointMember::new(&third).unwrap()),
+                WALL_NOW,
+            )
+            .unwrap();
+        fixture
+            .state
+            .apply_mutation_at(&admission, WALL_NOW)
+            .unwrap();
+        fixture
+            .store
+            .save_checkpoint(
+                "lab",
+                &fixture.local.peer_id,
+                &fixture.credentials,
+                &fixture.state.retained(),
+            )
+            .unwrap();
+        let (mut creator, mut creator_forwarder) = fixture.participating();
+        let (mut survivor, mut survivor_forwarder, survivor_store) = surviving_owner(&fixture);
+        let (mut disconnected, mut disconnected_forwarder, disconnected_store) =
+            surviving_owner_for(&fixture, &third, "disconnected");
+        let (mut sender, mut receiver, _) = connected_mutation_nodes(&fixture).await;
+        let mut returning = test_node(&third);
+        let address = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let SwarmEvent::NewListenAddr { address, .. } =
+                    returning.swarm.select_next_some().await
+                {
+                    break address;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        sender
+            .swarm
+            .add_peer_address(returning.local_peer_id, address);
+        assert!(sender.swarm.is_connected(&receiver.local_peer_id));
+        assert!(!sender.swarm.is_connected(&returning.local_peer_id));
+        let survivor_peer = crate::PeerId::from_libp2p(receiver.local_peer_id);
+        let returning_peer = crate::PeerId::from_libp2p(returning.local_peer_id);
+        let survivor_demand = survivor_forwarder.application_demand(returning_peer);
+        let returning_demand = disconnected_forwarder.application_demand(survivor_peer);
+        assert!(survivor_demand.is_some());
+        assert!(returning_demand.is_some());
+        creator
+            .apply_change_with_handoff(
+                MembershipChange::RemoveMember(fixture.local.peer_id.clone()),
+                &fixture.local,
+                &fixture.store,
+                &mut creator_forwarder,
+                &[receiver.local_peer_id],
+                Instant::now(),
+                WALL_NOW,
+            )
+            .unwrap();
+        creator
+            .drive_mutations(&mut sender.swarm, Instant::now())
+            .unwrap();
+        assert_eq!(creator.handoff.as_ref().unwrap().report().recipients, 2);
+        assert_eq!(creator.mutation_requests.len(), 2);
+        assert!(
+            creator
+                .sync_candidates(Instant::now())
+                .any(|peer| peer == returning.local_peer_id)
+        );
+        assert!(!creator_forwarder.is_configured_transport_peer(returning.local_peer_id));
+        let mut connected_by_request = false;
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let mut tick = tokio::time::interval(Duration::from_millis(50));
+            loop {
+                tokio::select! {
+                    _ = tick.tick() => {
+                        creator.drive_mutations(&mut sender.swarm, Instant::now()).unwrap();
+                    }
+                    event = sender.swarm.select_next_some() => {
+                        match event {
+                            SwarmEvent::ConnectionEstablished { peer_id, .. }
+                                if peer_id == returning.local_peer_id => connected_by_request = true,
+                            SwarmEvent::Behaviour(BehaviourEvent::CheckpointMutation(event)) => {
+                                creator.handle_mutation_event(
+                                    &mut sender.swarm, event, &fixture.store,
+                                    &mut creator_forwarder, Instant::now(), WALL_NOW,
+                                );
+                            }
+                            _ => (),
+                        }
+                    }
+                    event = receiver.swarm.select_next_some() => {
+                        if let SwarmEvent::Behaviour(BehaviourEvent::CheckpointMutation(event)) = event {
+                            survivor.handle_mutation_event(
+                                &mut receiver.swarm, event, &survivor_store,
+                                &mut survivor_forwarder, Instant::now(), WALL_NOW,
+                            );
+                        }
+                    }
+                    event = returning.swarm.select_next_some() => {
+                        if let SwarmEvent::Behaviour(BehaviourEvent::CheckpointMutation(event)) = event {
+                            disconnected.handle_mutation_event(
+                                &mut returning.swarm, event, &disconnected_store,
+                                &mut disconnected_forwarder, Instant::now(), WALL_NOW,
+                            );
+                        }
+                    }
+                }
+                if creator.handoff.is_none()
+                    && creator.mutation_requests.is_empty()
+                    && survivor.mutation_responses.is_empty()
+                    && disconnected.mutation_responses.is_empty()
+                {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("native mutation delivery must reconnect the retained TCP recipient and drain ACKs");
+        assert!(connected_by_request);
+        assert_eq!(creator.last_handoff.recipients, 2);
+        assert_eq!(creator.last_handoff.acknowledged, 2);
+        assert_eq!(creator.last_handoff.failed, 0);
+        assert_eq!(creator.state().sync_state(), MembershipSyncState::Excluded);
+        assert_eq!(
+            survivor.state().sync_state(),
+            MembershipSyncState::Participating
+        );
+        assert_eq!(
+            disconnected.state().sync_state(),
+            MembershipSyncState::Participating
+        );
+        assert_eq!(
+            survivor_forwarder.application_demand(returning_peer),
+            survivor_demand
+        );
+        assert_eq!(
+            disconnected_forwarder.application_demand(survivor_peer),
+            returning_demand
+        );
+        for directory in ["survivor", "disconnected"] {
+            let bytes = fs::read_to_string(
+                fixture
+                    .directory
+                    .join(directory)
+                    .join("membership-state.json"),
+            )
+            .unwrap();
+            assert!(!bytes.contains(&fixture.local.peer_id));
+        }
+        assert!(!survivor_forwarder.is_configured_transport_peer(sender.local_peer_id));
+        assert!(!disconnected_forwarder.is_configured_transport_peer(sender.local_peer_id));
+        survivor
+            .apply_change(
+                MembershipChange::RemoveMember(third.peer_id.clone()),
+                &fixture.member,
+                &survivor_store,
+                &mut survivor_forwarder,
+                WALL_NOW,
+            )
+            .unwrap();
+        assert!(
+            survivor
+                .state()
+                .snapshot()
+                .payload
+                .member(&third.peer_id)
+                .is_none()
+        );
     }
 
     #[tokio::test]

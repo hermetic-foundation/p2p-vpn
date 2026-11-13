@@ -201,8 +201,16 @@ A member can leave without deleting the network:
 sudo p2p-vpn membership resign --instance lab
 ```
 
-The daemon first offers the signed resignation to members connected at command
-time. It stops packet and route authorization immediately.
+Packet and route authorization stop locally immediately.
+
+| Authority | Departure Delivery |
+| --- | --- |
+| Legacy signed records | Offers the resignation to currently connected members. |
+| Cooperative checkpoint | Attempts bounded delivery to the active roster, including disconnected members with retained reachability. |
+
+Checkpoint recipients acknowledge the durable update. A missing connection
+does not itself remove a recipient, but an unavailable device cannot be
+guaranteed delivery within the handoff window.
 
 An isolated member cannot publish while it has no path to another member.
 Reconnect it before resigning when immediate network-wide convergence matters.
