@@ -864,6 +864,7 @@ pub struct RuntimePlatform {
     route_controller: Box<dyn TunRouteController>,
     installed_tun: Option<TunRuntimeConfig>,
     control: Option<RuntimeControlReceiver>,
+    experimental_demand_lifecycle: bool,
 }
 
 impl RuntimePlatform {
@@ -874,6 +875,7 @@ impl RuntimePlatform {
             route_controller: Box::new(route_controller),
             installed_tun: None,
             control: None,
+            experimental_demand_lifecycle: false,
         }
     }
 
@@ -887,6 +889,16 @@ impl RuntimePlatform {
     #[must_use]
     pub fn with_installed_tun(mut self, installed: TunRuntimeConfig) -> Self {
         self.installed_tun = Some(installed);
+        self
+    }
+
+    /// Enables negotiated dormancy for controlled integration and device trials.
+    ///
+    /// Disabled by default until reachability and energy acceptance are verified.
+    /// This does not bypass bilateral authorization or incoming-path readiness.
+    #[must_use]
+    pub fn with_experimental_demand_lifecycle(mut self) -> Self {
+        self.experimental_demand_lifecycle = true;
         self
     }
 }
@@ -1153,6 +1165,7 @@ where
         route_controller,
         installed_tun,
         control,
+        experimental_demand_lifecycle,
     } = platform;
     let identity = config.identity()?;
     let public_bootstrap_defaults = config.uses_public_ipfs_bootstrap_defaults();
@@ -1241,6 +1254,7 @@ where
         config.network.relay.auto,
         public_bootstrap_defaults,
         public_bootstrap_defaults.then(|| Instant::now() + PUBLIC_DISCOVERY_LAN_FIRST_GRACE),
+        experimental_demand_lifecycle,
         shutdown,
     ))
     .await
@@ -1506,6 +1520,7 @@ where
         auto_relay_config,
         public_bootstrap_defaults,
         public_discovery_holdoff_until,
+        false,
         shutdown,
     ))
     .await
@@ -1554,6 +1569,7 @@ async fn run_node_until_with_membership_state<Shutdown>(
     auto_relay_config: AutoRelayConfig,
     public_bootstrap_defaults: bool,
     mut public_discovery_holdoff_until: Option<Instant>,
+    experimental_demand_lifecycle: bool,
     shutdown: Shutdown,
 ) -> Result<(), RunnerError>
 where
@@ -1837,8 +1853,9 @@ where
         resources.control_stream_limit(),
         Instant::now(),
     );
-    // Do not advertise quiet support until path retirement, demand hooks and
-    // verified incoming-path readiness are integrated. The wire handler is live.
+    if experimental_demand_lifecycle {
+        local_capabilities = local_capabilities.with_demand_lifecycle_epoch(lifecycle_epoch);
+    }
     let owned_udp_packet_plane = packet_plane.primary_listener().is_some()
         && !local_capabilities.packet_endpoint_candidates.is_empty();
     let local_data_plane = local_packet_data_plane();
@@ -1921,8 +1938,22 @@ where
         LogLevel::Info,
         "peer_lifecycle_policy",
         &[
-            ("mode", "passive"),
-            ("reason", "dormant_control_delivery_and_activation_pending"),
+            (
+                "mode",
+                if local_capabilities.demand_lifecycle_epoch().is_some() {
+                    "enabled"
+                } else {
+                    "passive"
+                },
+            ),
+            (
+                "reason",
+                if experimental_demand_lifecycle {
+                    "explicit_experimental_opt_in"
+                } else {
+                    "production_acceptance_pending"
+                },
+            ),
         ],
     );
     tokio::pin!(shutdown);
@@ -7192,6 +7223,10 @@ fn local_capability_lines(
             local_capabilities.supports_native_quic_datagrams
         ),
         format!(
+            "local capability supports demand lifecycle: {}",
+            local_capabilities.demand_lifecycle_epoch().is_some()
+        ),
+        format!(
             "local capability supports membership record pages: {}",
             local_capabilities.supports_membership_record_pages
         ),
@@ -7900,6 +7935,12 @@ fn extend_runtime_peer_state_lines(
             capabilities.advertised_routes.len()
         ));
     }
+    lines.push(format!(
+        "peer lifecycle state: {peer} remote_supported {} maintenance_paused {} quiet {}",
+        peer_capabilities.demand_lifecycle_epoch_for(peer).is_some(),
+        forwarder.data_path_maintenance_is_paused(peer),
+        forwarder.data_path_is_dormant(peer),
+    ));
 
     for candidate in candidates {
         let peer_mtu = peer_capabilities.effective_mtu_for(peer, local_mtu);
@@ -32392,6 +32433,10 @@ mod tests {
             ],
         );
         assert_auto_relay_lines(&lines, fixture.auto_relay);
+        assert!(lines.contains(&format!(
+            "peer lifecycle state: {} remote_supported false maintenance_paused false quiet false",
+            fixture.remote_overlay
+        )));
         assert_lines_contain(
             &lines,
             &[

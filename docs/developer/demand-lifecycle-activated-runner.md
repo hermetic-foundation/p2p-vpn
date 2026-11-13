@@ -60,7 +60,7 @@ queue age before the existing 15-second LAN-first recovery window completed.
 | Boundary | Required Treatment |
 | --- | --- |
 | Eligibility | Only a validated outbound IP packet that consumes current negotiated quiet permission |
-| Retention | That first packet may remain queued for at most 30 seconds from its original admission |
+| Retention | That first packet gets a 30-second allowance from original admission; an explicitly longer ordinary age remains unchanged |
 | Bound | Fifteen seconds LAN-first grace, ten seconds protocol work, five seconds scheduling margin; not an availability guarantee |
 | Other traffic | Keep the configured ordinary packet age, packet count, and byte limits unchanged |
 | Repeat traffic | Subsequent packets do not acquire or renew the first packet's retention allowance |
@@ -72,3 +72,50 @@ queue age before the existing 15-second LAN-first recovery window completed.
 This is a bounded wake-up exception, not a larger steady-state queue. Preserve
 LAN-first discovery and recovery rather than bypassing it to satisfy a local
 latency test. The exception remains behind the explicit lifecycle activation.
+
+## Native Trial Results
+
+| Check | Evidence |
+| --- | --- |
+| Activated startup | Both real runners advertise their fresh lifecycle epochs only after explicit builder opt-in |
+| Bilateral idle | Normal-time negotiation grants quiet on both sides; native overlay connections close while relay reservations survive |
+| First inbound packet | One IPv4 packet arrives after approximately 20.0 seconds; the destination sends no application traffic |
+| Reverse wake | A second complete idle/retirement cycle precedes one reverse IPv4 packet; delivery takes approximately 24.9 seconds |
+| Mixed-version idle | Enabled/passive pair remains non-quiet across 50 seconds of idle and retains bidirectional delivery |
+| Queue boundary | Seven demand tests and 17 queue tests pass, including exact expiry, non-renewal, interior removal, ordering, byte/count limits, and passive age |
+| Observation window | Native receive wait covers the 30-second retention allowance plus five seconds of scheduler margin; queue tests check exact expiry separately |
+
+- The 20-second receive wait in an earlier trial ended before reverse recovery completed; retained evidence distinguishes that from packet expiry.
+- Ordinary steady-state queue age remains three seconds by default; only the first packet consuming quiet permission gets the allowance.
+- Queue expiry uses one allocation-free stable scan because a wake packet can outlive ordinary packets behind it.
+- Packet admission time, application demand, byte limits, and send-time authorization remain authoritative.
+- Evidence uses real encrypted native TCP and circuit-relay protocols, but loopback underlay and packet channels instead of host TUN routes.
+- No synthetic readiness, quiet flags, virtual time, public Internet, phone deployment, or battery comparison is involved.
+
+```sh
+cargo test --offline --locked --test connection_recovery lifecycle:: -- --test-threads=2
+cargo test --offline --locked --lib demand_tests -- --test-threads=2
+cargo test --offline --locked --lib queue::tests -- --test-threads=2
+```
+
+This closes the local TCP/relay first-IP gate only. Activated QUIC, extended
+idle, public-WAN, mobile roaming, feature preservation, and measured cellular
+energy remain separate acceptance requirements.
+
+## Verification Record
+
+| Check | Result |
+| --- | --- |
+| Full workspace/all targets | 2,101 passed; zero failed; 50 existing or opt-in exclusions across 16 suites |
+| Repeat native scenario | Full workspace run repeats both single-packet wakes at approximately 19.9 and 24.9 seconds |
+| Formatting | Workspace Rust check passes |
+| Clippy | Correctness, suspicious, and performance groups pass; advisory warnings remain |
+| Package sources | Linux and Android ARM64/x86-64 runtime, four native patches, and lockfile match byte-for-byte |
+| Integration packaging | All 42 Rust integration/support files match the Linux package source |
+| Build resources | One approximately 7 GiB target, two jobs, no incremental compilation |
+| Tool restoration | Restored missing matching Clippy from a 5.9 MiB binary substitute; source builds were disabled |
+| Package/device scope | Host workspace compiled; full Nix packages, APK builds, and device deployments not performed |
+| Goal acceptance | Ordinary startup stays passive; no new battery measurement or claimed energy improvement |
+
+These executable checks are not a formal proof. The existing privileged and
+device exclusions remain unverified operational gates, not passed tests.

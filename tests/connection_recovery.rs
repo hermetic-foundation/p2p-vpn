@@ -30,6 +30,8 @@ use tokio::{
     task::JoinHandle,
 };
 
+#[path = "support/connection_recovery_lifecycle.rs"]
+mod lifecycle;
 #[path = "support/connection_recovery_quic.rs"]
 mod quic;
 #[path = "support/connection_recovery_relay.rs"]
@@ -152,6 +154,10 @@ struct Node {
 }
 impl Node {
     fn start(config: Config) -> Self {
+        Self::start_with_lifecycle(config, false)
+    }
+
+    fn start_with_lifecycle(config: Config, enabled: bool) -> Self {
         let ip = builtin_ipv4(config.local_peer_id().unwrap());
         let (input, packets) = mpsc::channel();
         let (writer, output) = async_mpsc::unbounded_channel();
@@ -163,7 +169,10 @@ impl Node {
             Writer(writer),
         );
         let (control, receiver) = runtime_control_channel();
-        let platform = RuntimePlatform::new(io, PreconfiguredTunRoutes).with_control(receiver);
+        let mut platform = RuntimePlatform::new(io, PreconfiguredTunRoutes).with_control(receiver);
+        if enabled {
+            platform = platform.with_experimental_demand_lifecycle();
+        }
         let (shutdown, stopped) = oneshot::channel();
         let daemon = tokio::spawn(run_config_until_with_runtime_platform(
             config,

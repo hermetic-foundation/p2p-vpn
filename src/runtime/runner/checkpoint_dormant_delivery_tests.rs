@@ -217,6 +217,7 @@ async fn root_checkpoint_departure_reconnects_retained_tcp_peer_without_packet_a
             config.network.relay.auto,
             false,
             None,
+            false,
             async {
                 let _ = stopped.await;
                 ShutdownReason::ControlSocket

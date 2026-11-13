@@ -6,6 +6,7 @@
 | --- | --- |
 | Handler | Registered in the shared libp2p host; dispatched by the Linux/Android runner |
 | Quiet capability | Still false and omitted from normal capability messages |
+| Controlled activation | Explicit experimental `RuntimePlatform` builder enables the real negotiated policy; ordinary startup remains passive |
 | Readiness | Native incoming-anchor, queue, in-flight, routing, codec, and transport owners |
 | Automatic driver | Existing tick and capability events drive idle/wake; no separate timer or disconnected lifecycle dial |
 | Maintenance | Generation-bound preparation drains probes; only committed quiet permits retirement |
@@ -74,10 +75,10 @@ including after a crossed offer committed quiet; fallback clears that permission
 
 ## Diagnostics
 
-- Startup emits `event=peer_lifecycle_policy mode=passive` while control-delivery and activation gates remain.
+- Startup emits `event=peer_lifecycle_policy mode=passive` by default; controlled embedding reports `mode=enabled` after explicit experimental opt-in.
 - Successful quiet commitment emits `peer_lifecycle_dormant`; a queued demand announcement emits `peer_lifecycle_wake_queued`.
 - Dispatcher snapshots retain peer/flight/reply counts and dropped/rate-limited totals.
-- CLI peer-state presentation and operational transition metrics remain part of activation work.
+- Peer-state diagnostics distinguish remote support, maintenance preparation, and committed quiet; extended operational transition metrics remain activation work.
 
 ## Runtime Integration Contract
 
@@ -127,13 +128,13 @@ an explicit embedding opt-in and real first-IP validation before deployment.
 
 1. Validate implemented bounded cold control discovery through public-WAN and extended dormancy scenarios.
 2. Preserve native ownership while validating the implemented quiet DHT/AutoNAT scheduling gates.
-3. Complete broader offline-peer retry policy and prove first-payload recovery through the activated runner.
+3. Extend the local activated TCP/relay first-IP result to QUIC, broader offline-peer retry policy, and public-WAN recovery.
 4. Verify extended dormancy, roaming, mixed-version operation, and feature-preservation gates before production advertisement.
 5. Run matched, replicated cellular comparisons; no source or socket test establishes 10x savings.
 
-Loopback tests use virtual idle time and fixture-provided readiness. They are
-not evidence of real path retirement, long-idle public reachability, or the
-10x battery target.
+Earlier dispatcher fixtures use virtual idle time and injected readiness. The
+activated runner tests instead use real time, native relay reservations, and
+real transport retirement; neither proves public reachability or 10x savings.
 
 The runtime adapter additionally checks real native reservation ownership in
 the incoming-anchor regressions. Those local socket tests reject retiring and
@@ -155,8 +156,9 @@ stale-epoch anchors; they do not replace the remaining integrated/device gates.
 | Dormant control delivery | 18 coalescing, deadline, quarantine, native-slot, LAN reconnect, and connection-ID regressions pass |
 | Checkpoint-only publication | Seven new regressions pass, including real gated TCP callbacks/replies, finite attempts, revocation, and expiry |
 | Checkpoint ownership | 58 tests pass, including finite hostname catch-up and cancelled/expired control leases |
-| Workspace/all-targets | 2,095 passed; zero failures; 50 existing exclusions, including opt-in namespace/resource scenarios |
+| Workspace/all-targets | 2,101 passed; zero failures; 50 existing exclusions, including opt-in namespace/resource scenarios |
 | Quiet discovery | Native serving/foreground requests survive pause; real relay ownership, demand/epoch resume, and six callback states pass |
+| Activated TCP/relay | Real bilateral quiet, physical retirement, single first-IP delivery in both directions, and mixed enabled/passive idle pass |
 | Cold control discovery | Seven driver regressions and three native namespace runs pass; no demand renewal or foreign-provider dials |
 | Clippy | Required correctness, suspicious, and performance groups pass; advisory and staged-unused API warnings remain |
 | Formatting and packaging | Workspace and vendored Rust formatting pass; evaluated Linux/Android sources include identical runtime and patched dependency |
