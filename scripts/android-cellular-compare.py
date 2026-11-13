@@ -445,10 +445,26 @@ def analyze_window(directory, processor):
         metadata,
     )
     trace = analyze_trace(processor, directory / "trace.pftrace", interval)
-    return {
+    collector_errors = []
+    collector_digest = None
+    collector_file = directory / "result.json"
+    marker = directory / "capture-identity.json"
+    if collector_file.exists() or collector_file.is_symlink():
+        raw_collector = read_file(collector_file, MAX_JSON)
+        collector = parse_json(raw_collector)
+        integer(collector["schema_version"], 1, 1, "collector_schema")
+        collector_digest = hashlib.sha256(raw_collector).hexdigest()
+        for key in ("captured", "restoration_verified"):
+            if collector.get(key) is not True:
+                collector_errors.append(key + "_not_verified")
+        if collector.get("cleanup_failures") or collector.get("error"):
+            collector_errors.append("collector_reported_failure")
+    elif marker.exists() or marker.is_symlink():
+        collector_errors.append("collector_attempt_incomplete")
+    result = {
         "schema_version": 1,
         "kind": "android_cellular_window_analysis",
-        "valid": True,
+        "valid": not collector_errors,
         "metadata": metadata,
         "window_metadata_sha256": hashlib.sha256(raw_metadata).hexdigest(),
         "accounting": interval,
@@ -456,6 +472,16 @@ def analyze_window(directory, processor):
         "functionality_passed": functionality_passed,
         "goal_complete": False,
     }
+    if collector_errors:
+        result.update(
+            {
+                "error": "collector_attempt_rejected",
+                "collector_errors": collector_errors,
+            }
+        )
+    if collector_digest:
+        result["collector_result_sha256"] = collector_digest
+    return result
 
 
 def summarize(plan, windows):

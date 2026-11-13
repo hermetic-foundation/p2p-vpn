@@ -577,6 +577,47 @@ else:
             self.assertFalse(value["functionality_passed"])
             self.assertEqual(value["accounting"]["app_mah_per_hour"], 100)
 
+    def test_collector_failure_and_pending_attempt_keep_energy_but_cannot_pass(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            processor = self.bundle(root)
+            command = [
+                sys.executable,
+                str(path),
+                "window",
+                str(root),
+                "--trace-processor",
+                str(processor),
+            ]
+            (root / "capture-identity.json").write_text("{}")
+            result = subprocess.run(command, capture_output=True, check=False)
+            value = json.loads(result.stdout)
+            self.assertEqual(result.returncode, 1)
+            self.assertFalse(value["valid"])
+            self.assertIn("collector_attempt_incomplete", value["collector_errors"])
+            self.assertEqual(value["accounting"]["app_mah_per_hour"], 100)
+            collector = {
+                "schema_version": 1,
+                "captured": True,
+                "restoration_verified": False,
+                "cleanup_failures": [],
+                "error": "private-do-not-echo",
+            }
+            (root / "result.json").write_text(json.dumps(collector))
+            result = subprocess.run(command, capture_output=True, check=False)
+            value = json.loads(result.stdout)
+            self.assertFalse(value["valid"])
+            self.assertEqual(value["accounting"]["app_mah_per_hour"], 100)
+            self.assertNotIn(b"private-do-not-echo", result.stdout + result.stderr)
+            collector["restoration_verified"] = True
+            del collector["error"]
+            (root / "result.json").write_text(json.dumps(collector))
+            result = subprocess.run(command, capture_output=True, check=False)
+            self.assertEqual(result.returncode, 0, result.stdout.decode())
+            value = json.loads(result.stdout)
+            self.assertTrue(value["valid"])
+            self.assertIn("collector_result_sha256", value)
+
     def test_cli_series_retains_every_invalid_slot(self):
         with tempfile.TemporaryDirectory() as root:
             root = Path(root)

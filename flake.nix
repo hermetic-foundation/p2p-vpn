@@ -371,6 +371,7 @@
             ./scripts/android-battery-decode.py
             ./scripts/android-battery-decode.proto
             ./scripts/android-cellular-compare.py
+            ./scripts/android-cellular-capture.py
           ];
         };
         androidBatteryDecoder = pkgs.writeShellApplication {
@@ -424,6 +425,37 @@
               ruff check ${androidBatterySources}/android-cellular-compare.py ${./tests/android-cellular-compare.py}
               ruff format --check ${androidBatterySources}/android-cellular-compare.py ${./tests/android-cellular-compare.py}
               python3 ${./tests/android-cellular-compare.py}
+              touch "$out"
+            '';
+        androidCellularCapture = pkgs.writeShellApplication {
+          name = "p2p-vpn-android-cellular-capture";
+          runtimeInputs = [
+            androidBatteryPython
+            pkgs.protobuf
+            pkgs.android-tools
+            pkgs.iproute2
+            pkgs.iputils
+          ];
+          text = ''
+            export PYTHONDONTWRITEBYTECODE=1
+            exec python3 ${androidBatterySources}/android-cellular-capture.py "$@"
+          '';
+        };
+        androidCellularCaptureTests =
+          pkgs.runCommand "p2p-vpn-android-cellular-capture-tests"
+            {
+              nativeBuildInputs = [
+                androidBatteryPython
+                pkgs.protobuf
+                pkgs.ruff
+              ];
+            }
+            ''
+              export PYTHONDONTWRITEBYTECODE=1
+              export P2P_VPN_CELLULAR_CAPTURE=${androidBatterySources}/android-cellular-capture.py
+              ruff check ${androidBatterySources}/android-cellular-capture.py ${./tests/android-cellular-capture.py}
+              ruff format --check ${androidBatterySources}/android-cellular-capture.py ${./tests/android-cellular-capture.py}
+              python3 ${./tests/android-cellular-capture.py}
               touch "$out"
             '';
         androidE2eRuntime =
@@ -5814,6 +5846,7 @@
         // lib.optionalAttrs androidSupported {
           android-battery-decode = androidBatteryDecoder;
           android-cellular-compare = androidCellularCompare;
+          android-cellular-capture = androidCellularCapture;
           android-native = android.androidNative;
           android-native-arm64 = android.androidNativeArm64;
           android-native-x86_64 = android.androidNativeX86_64;
@@ -6189,6 +6222,7 @@
         // lib.optionalAttrs androidSupported {
           android-battery-decode = androidBatteryDecoderTests;
           android-cellular-compare = androidCellularCompareTests;
+          android-cellular-capture = androidCellularCaptureTests;
           android = android.androidCheck;
           android-device-audit-structure = androidDeviceAuditStructure;
           android-e2e-fixture = androidE2eFixture;

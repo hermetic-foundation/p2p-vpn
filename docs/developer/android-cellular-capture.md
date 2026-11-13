@@ -19,6 +19,38 @@ This collector measures Android attribution while USB supplies physical power.
 It does not claim physical battery discharge. APK staging and final restoration
 belong to the enclosing experiment, not the per-window capture command.
 
+## Commands
+
+The collector targets the debug package in Android user `0`. Build tools before
+timed captures. The harness is tested with a fake device; live Pixel verification
+remains required before relying on its output.
+
+```sh
+tool=$(nix build .#android-cellular-capture --no-link --print-out-paths)
+capture="$tool/bin/p2p-vpn-android-cellular-capture"
+"$capture" init "$new_series_directory" \
+  --reference-apk "$reference_apk" --candidate-apk "$candidate_apk" \
+  --workload "$private_workload_file"
+"$capture" capture "$new_series_directory" --slot 01-A \
+  --serial "$usb_serial" --simulate-on-battery
+```
+
+Stage the planned APK and establish the network before each `capture` command.
+Continue with slots `02-B`, `03-B`, `04-A`, `05-A`, `06-B`, switching builds
+outside captures. Existing, failed and out-of-order slots are never replaced.
+
+| Result | Meaning |
+| --- | --- |
+| `captured` | Raw reports, trace and metadata were retained; accounting/context checks passed |
+| `boundary_probes_passed` | Actual source-bound IPv4 probes passed in both directions |
+| `battery_reporting_restored` | Battery reporting was verified back in hardware mode |
+| `restoration_verified` | Reporting and unchanged app/profile checks passed without cleanup failure |
+| Exit `0` | Capture, supplied probes and restoration passed; not a savings claim |
+
+Use `android-cellular-compare` afterward to validate trace coverage and compare
+all six windows. A fake-device trace is not battery evidence. Do not change a
+collector build midway through a series; its source hash is frozen in the plan.
+
 ## Frozen Workload
 
 Keep this record private. Hash it into every window; it is data, not a source
@@ -61,6 +93,7 @@ is an outcome to investigate, not a reason to hide that candidate's consumption.
 | --- | --- |
 | APK, OS, profile and membership-state hashes | Capture before/after; unexpected changes invalidate the attempt |
 | Binary battery reports | Retain before decoding, including malformed/unavailable reports |
+| Failed battery commands | Retain partial stdout and private stderr, even on timeout |
 | Sampling clocks | Boot UUID and `/proc/uptime` brackets around each report |
 | Native status | Cached numeric counters at boundaries; distinguish payload from maintenance |
 | App status | Enabled network, identity, runtime generation and underlay counters |
@@ -68,6 +101,16 @@ is an outcome to investigate, not a reason to hide that candidate's consumption.
 | Temperature | Live thermal HAL reading; frozen BatteryService temperature is not current |
 | Probe results | Retain exit status and bounded packet summary in both directions |
 | Lifecycle state | Verify separately for lifecycle acceptance; zero sessions alone is not a quiet/reachability proof |
+
+Addresses are parsed as CIDRs, matching the Android producer. Signal extraction
+binds the selected cellular subscription to its registry phone block. It currently
+requires the active data subscription to equal the registry's default subscription;
+unknown mappings fail before accounting changes, not by borrowing another SIM's signal.
+
+The mapping follows AOSP's
+[registry dump](https://raw.githubusercontent.com/aosp-mirror/platform_frameworks_base/android16-release/services/core/java/com/android/server/TelephonyRegistry.java)
+and [network capability subscription IDs](https://android.googlesource.com/platform/packages/modules/Connectivity/+/e0051cdeb9d51a75ddea747657221e6089981794/framework/src/android/net/NetworkCapabilities.java).
+Full telephony records, phone numbers and subscriber identifiers are never retained.
 
 Do not infer authorization from the number of live sessions. Bind the expected
 inventory to unchanged profile/membership evidence, and verify the actual
@@ -77,8 +120,11 @@ membership through the existing peer tools before the series.
 
 - Refuse an existing battery-reporting override rather than reset someone else's state.
 - Install a uniquely tagged device-side restoration timeout before simulated unplug.
+- Verify its readiness receipt, parent command line and live sleeping child before arming.
+- A separate private armed marker gates resets; an unarmed watchdog cannot reset a later experiment.
 - Restore reporting in `finally`; verify that `UPDATES STOPPED` is absent.
 - Cancel a fallback or trace process only after matching its exact command-line tag.
+- Verify process termination; unreadable command lines are not treated as absent processes.
 - Keep the fallback armed if the device disappears; report restoration as unverified.
 - Never reset battery history, alter no-auto-reset policy, uninstall, or erase app state.
 
@@ -91,3 +137,7 @@ membership through the existing peer tools before the series.
 | Metadata / individual command | Bounded size and timeout; private files only |
 | Device fallback | Settling plus capture plus bounded cleanup allowance |
 | Overall claim | No automated goal completion or unmeasured savings claim |
+
+The collector prewarms Protobuf decoding outside the interval, then schedules
+the end sample against an absolute deadline. Endpoint/UID metadata is retained
+incrementally; post-window probe errors remain functional failures.

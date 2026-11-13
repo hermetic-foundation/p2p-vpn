@@ -28,8 +28,8 @@ energy calculation alone cannot establish functional equivalence.
 
 ## Analyzer Commands
 
-The host-only analyzer and its tests are implemented. The endpoint capture
-adapter and fresh cellular comparison remain outstanding. These commands
+The host-only analyzer and [capture adapter](android-cellular-capture.md) are
+implemented. Fresh cellular comparisons remain outstanding. These commands
 analyze existing bundles; they do not collect them or claim measured savings.
 
 ```sh
@@ -90,6 +90,11 @@ Keep each attempt in a new private directory. Never overwrite failed attempts.
 | `window.json` | UID, arm, clock brackets, identity and endpoint context |
 | `trace.pftrace` | Matched, bounded Perfetto power-rail capture |
 | Additional raw evidence | Connectivity probes, native state and restoration records |
+| `result.json` | Collector completion and restoration gates; incomplete/rejected attempts cannot pass |
+
+For collector bundles, the analyzer retains calculated energy even when collection
+or restoration failed, but marks the window invalid. A capture marker without a
+completion record is an unfinished attempt, not a successful manual bundle.
 
 ### Metadata, Schema 1
 
@@ -130,8 +135,11 @@ before and after the binary report. Both endpoints must belong to one boot.
 | `payload_sent_packets`, `payload_received_packets` | Native cumulative payload counters; unchanged throughout the idle window |
 
 Context records are collector observations, not cryptographic proofs. Retain
-their raw sources. Native bilateral quiet/incoming-path state must be verified
-separately before candidate admission; zero sessions alone proves neither.
+their raw sources. Full lifecycle acceptance also needs native bilateral quiet
+and incoming-path evidence; zero sessions alone proves neither.
+
+Do not discard a high-energy candidate merely because it failed to become quiet.
+Measure that failure and investigate it; reduced reachability cannot pass the goal.
 
 Include remote host build identities and diagnostic-override state in the
 hashed workload record. Keep counterparts identical across both arms; do not
