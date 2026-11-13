@@ -1,0 +1,155 @@
+{
+  "schema_version": 1,
+  "kind": "android_cellular_lifecycle_pilot",
+  "captured_at_utc": "2026-11-13",
+  "status": "primary_accounting_measured_modem_corroboration_rejected",
+  "goal_complete": false,
+  "battery_improvement_ratio": null,
+  "completed_valid_pairs": 0,
+  "reference": {
+    "apk_sha256": "c6d5db42b79a830ab7e58ed5579034622ecbd8b41f94337d7b8c17def34bfa16",
+    "provenance": "Pre-test installed APK, backed up without modifying its runtime; also identified by android-physical-core-validation.md",
+    "runtime_revision": "29d050179627",
+    "role": "working_unoptimized_control"
+  },
+  "candidate": {
+    "apk_sha256": "826b0f79d37bfeb06e4c8a367796b53026a9325b32a8e2f8898c31b1b8a251dd",
+    "runtime_revision": "5f2c74cd0ac3572447b02228b8a7b6f1baee153c",
+    "feature": "demand-lifecycle-trial",
+    "measured": false,
+    "production_default_activated": false
+  },
+  "topology": {
+    "authorized_phone_peers": 6,
+    "reachable_linux_counterparts": 4,
+    "offline_members_removed": false,
+    "linux_executable_sha256": "acac3ee811fb009c7f790e3666061325daf17f6167fe02a247367f3bf3eb4e64",
+    "same_linux_builds_for_both_arms": true,
+    "diagnostic_probe_or_dht_pause": false,
+    "manual_route_changes": false
+  },
+  "primary_accounting": {
+    "valid": true,
+    "uid": 10304,
+    "elapsed_seconds": 1799.95,
+    "consumption_mah": 133.746446,
+    "app_mah_per_hour": 267.50032256451567,
+    "report_version": 36,
+    "parcel_version": 216,
+    "clock_uncertainty_ms": 605,
+    "raw_report_sha256": [
+      "b605e5df39c4246e452c37681ea0d3c0cc9115e8e9ec2c1a2afc010f5fee0d37",
+      "5963ab0d4e09765c9527688368ee568f30be8345f3e0fd58db73c8a69c924308"
+    ],
+    "window_metadata_sha256": "4210c6bb9401ba5c4159f56bef15d373ada9be70d76e7a7d0cb1b126c8a58f1a",
+    "accounting_mode": "simulated_on_battery",
+    "physical_usb_powered": true,
+    "physical_discharge_claimed": false
+  },
+  "context": {
+    "screen_off_entire_accounting_interval": true,
+    "device_idle_at_both_boundaries": "IDLE",
+    "power_save_at_both_boundaries": true,
+    "rsrp_dbm_at_both_boundaries": -105,
+    "temperature_tenths_c": [
+      335,
+      325
+    ],
+    "app_pid_and_runtime_generation_unchanged": true,
+    "profile_and_membership_hashes_unchanged": true,
+    "payload_counters_unchanged": true,
+    "paths_at_start": {
+      "relayed": 4,
+      "direct_quic": 0,
+      "public_routing_peers": 32
+    }
+  },
+  "functional": {
+    "inbound_before": [
+      3,
+      3
+    ],
+    "outbound_before": [
+      3,
+      3
+    ],
+    "inbound_after": [
+      3,
+      3
+    ],
+    "outbound_after": [
+      3,
+      3
+    ],
+    "battery_reporting_restored": true,
+    "cleanup_failures": []
+  },
+  "rail_corroboration": {
+    "valid": false,
+    "error": "trace_loss",
+    "trace_sha256": "5fadfae8f5f59d8b22d7c77e36a68834bc2ad3c44f1827fb00eec22312b2309f",
+    "trace_bytes": 544147,
+    "buffer_bytes": 8388608,
+    "buffer_fill_policy": "DISCARD",
+    "trace_first_boottime_ns": 345916718000000,
+    "trace_last_boottime_ns": 347193822000000,
+    "per_buffer_chunks_discarded": 109,
+    "full_window_rejected": true,
+    "identical_cached_hal_sample_observed": true,
+    "conflicting_cached_hal_samples": 0
+  },
+  "capture_fix": {
+    "memory_buffer_bytes": 8388608,
+    "buffer_fill_policy": "RING_BUFFER",
+    "stream_write_period_ms": 5000,
+    "max_file_bytes": 33554432,
+    "reject_per_buffer_info_loss": true,
+    "do_not_attribute_service_global_historical_losses_to_current_session": true,
+    "collapse_only_identical_hal_timestamp_value_repeats": true,
+    "stream_smoke": {
+      "trace_sha256": "49ed7a56c59851df0350838dd160005b7466936db3000befb474fbbec698652f",
+      "file_bytes_at_8_seconds": 1042,
+      "file_bytes_at_16_seconds": 6827,
+      "session_loss_warnings": 0,
+      "remote_files_removed": true,
+      "not_an_energy_comparison": true
+    }
+  },
+  "other_rejected_attempts": [
+    {
+      "apk_sha256": "873b7b5a06f1db65ee18486a32f593e39906d26aa5a4512e07496f69963e9ee0",
+      "failure": "Archived APK cannot start: unsupported standard-library directory locking",
+      "counted_as_energy_evidence": false
+    },
+    {
+      "apk_sha256": "b1359996a8fbab7ea8eec2fd4c0649dfe0ea6290bf9466145af8242bf58453a3",
+      "failure": "Cold cellular boundary probes did not pass; no energy sampling",
+      "counted_as_energy_evidence": false
+    },
+    {
+      "kind": "streaming_discard_smoke",
+      "failure": "Perfetto reports config_write_into_file_discard as data loss",
+      "counted_as_energy_evidence": false
+    },
+    {
+      "kind": "restarted_control_cold_start",
+      "failure": "Initial boundary probes failed before sampling; later ordinary-traffic warm-up passed both directions",
+      "counted_as_energy_evidence": false
+    }
+  ],
+  "verification": {
+    "cellular_capture_tests": 46,
+    "cellular_compare_tests": 40,
+    "battery_decode_tests": 17,
+    "nix_packages_and_checks_passed": true,
+    "ruff_passed": true,
+    "source_runtime_changed": false,
+    "new_rust_or_apk_builds_required": false
+  },
+  "remaining": [
+    "Run matched reference and candidate windows using the same corrected streaming collector",
+    "Investigate candidate behavior using measured app mAh/hour and complete modem rails",
+    "Meet replicated paired/reversed 90-percent reduction and feature-preservation gates",
+    "Restore and verify original device and counterpart settings after the experiment"
+  ]
+}

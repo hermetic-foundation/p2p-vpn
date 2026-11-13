@@ -152,5 +152,9 @@ the Pixel. Keep that failed trace; periodic file streaming prevents this growth
 without enlarging the buffer. Per-buffer losses invalidate rail corroboration.
 Streaming uses `RING_BUFFER`; Perfetto flags `DISCARD` streaming as data loss.
 
+The [November 13 pilot](android-cellular-lifecycle-pilot-2026-11-13.json) retains
+the measured primary rate, rejected trace, functional results and smoke checks.
+It is not a valid paired comparison or a battery-improvement claim.
+
 See Perfetto's [streaming contract](https://perfetto.dev/docs/concepts/config#streaming-long-traces)
 and [buffer statistics](https://raw.githubusercontent.com/google/perfetto/main/protos/perfetto/common/trace_stats.proto).
