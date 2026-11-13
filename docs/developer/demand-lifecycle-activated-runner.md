@@ -17,7 +17,7 @@ or replace native transport ownership.
 
 ## Controlled Application Builds
 
-| Boundary | Planned Contract |
+| Boundary | Contract |
 | --- | --- |
 | Cargo feature | `demand-lifecycle-trial`, absent from default features |
 | Application entry points | CLI, Android network supervisor, and Android E2E overlay endpoint explicitly apply the build policy |
@@ -46,6 +46,58 @@ nix build .#android-debug-apk-demand-lifecycle-trial
 - Record source revision, feature selection, hashes, signer, ABI, and functional results for any measured APK.
 - Build one candidate at a time with bounded jobs and storage; inspect substitutions before restoring a large toolchain.
 - A host test, source evaluation, or successfully built APK is not a cellular energy result.
+- The ARM64 cross-stdlib bootstrap explicitly honors `NIX_BUILD_CORES`; its platform uses the same pinned host Cargo as the x86_64 build, with no compiler/NDK version change.
+- Compiler and sysroot must reference the same bounded cross-stdlib output; reject a full compiler bootstrap or duplicate original sysroot build.
+
+### Build Verification
+
+| Check | Scope |
+| --- | --- |
+| Build-policy unit tests | Passive embedding under either build, exact feature selection, retained TUN/control state, and idempotent explicit opt-in |
+| Running endpoint | The Android test counterpart queries the real capability endpoint, not an injected capability or state label |
+| Enabled workspace | 2,112 passed, zero failed, 50 ignored across 16 suites |
+| Default workspace | Clean final rerun: 2,112 passed, zero failed, 50 ignored across 16 suites |
+| Enabled lint | Correctness, suspicious-code, and performance error groups pass; advisory warnings remain |
+| Nix packaging check | Default/trial feature separation, check features, custom x86_64 build flags, and distinct APK native dependencies |
+| Other systems | Packaging assertions evaluate on aarch64 Linux and Darwin; no cross-system execution claim |
+| Android source | ARM64 derivation includes the feature and byte-identical current shared/JNI/fixture Rust sources |
+| Device/energy | Host verification alone proves neither device execution nor the 10x target |
+
+- The first default endpoint assertion queried `state` instead of `capabilities`; the corrected fixture suite passes.
+- Keep failed and corrected run records separate; do not report the first default run as successful.
+- Whole-file Nix formatting already fails on the base flake; preserve unrelated formatting instead of mixing it into trial packaging.
+
+### Measurement Admission
+
+| Boundary | Requirement |
+| --- | --- |
+| Existing connected-idle harnesses | Wi-Fi-only admission or requiring one live QUIC session per peer cannot validate a dormant cellular candidate unchanged |
+| Matched topology | Retain the same identities, network membership, authorized peer inventory, and workload across original and candidate builds |
+| Candidate idle | Require authenticated bilateral quiet and a usable incoming anchor; zero per-peer sessions alone proves neither dormancy nor reachability |
+| Feature preservation | Verify real incoming/outgoing delivery before and after the capture, outside its energy interval; retain failures rather than dropping them from results |
+| Observation | No recurring status polling, wake probes, or deliberate application traffic inside an idle capture |
+| Acceptance | Use the existing [battery measurement contract](android-battery-efficiency.md): fresh paired/reversed cellular app mAh/hour, replicated reduction of at least 90%, and modem-energy corroboration |
+
+Do not keep a candidate active merely to satisfy an old connected-session
+counter. Do not count disconnected or unreachable peers as successful low-power
+behavior either. Physical paths may differ by lifecycle state; network authority
+and demonstrated incoming functionality must not.
+
+### Retained Android Candidate
+
+| Check | Result |
+| --- | --- |
+| ARM64 native | Trial feature compiled; bounded cross-stdlib and matching sysroot; Cargo auditing retained |
+| APK | ARM64-only debug phone artifact; existing package and development signer |
+| Java verification | Fresh run: 158 tests pass, no failures/skips, zero lint errors, seven lint warnings |
+| Packaging | Four 16 KiB-aligned load segments, APK alignment valid, packaged library hash and executable code match the verified native output |
+| Linux counterparts | Matched opt-in CLI and rootless endpoint binaries retained separately from the mutable Cargo output aliases |
+| Device/energy | Not deployed or measured; no battery-improvement claim |
+
+The [build record](android-lifecycle-trial-build-2026-11-13.json) contains hashes,
+source/recipe identifiers, raw-log locations, invalidated attempts, resource
+limits, and remaining acceptance gates. This phone-test APK is not a newly
+verified dual-ABI release.
 
 ## Observable State
 

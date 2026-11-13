@@ -41,6 +41,15 @@
             }
           else
             null;
+        androidLifecycleTrial =
+          if androidSupported then
+            import ./nix/android.nix {
+              inherit pkgs;
+              androidSdkLicenseAccepted = true;
+              demandLifecycleTrial = true;
+            }
+          else
+            null;
         rust = pkgs.rustc;
         cargo = pkgs.cargo;
         rustSource = lib.fileset.toSource {
@@ -5702,6 +5711,10 @@
       {
         packages = {
           default = package;
+          demand-lifecycle-trial = package.overrideAttrs (_: {
+            cargoBuildFeatures = [ "demand-lifecycle-trial" ];
+            cargoCheckFeatures = [ "demand-lifecycle-trial" ];
+          });
           check-fast = checkFast;
           check-operational = checkOperational;
           debug-bundle = debugBundle;
@@ -5776,11 +5789,18 @@
           android-native-x86_64 = android.androidNativeX86_64;
           android-rust-tests = android.androidRustTests;
           android-debug-apk = android.androidDebugApk;
+          android-native-arm64-demand-lifecycle-trial = androidLifecycleTrial.androidNativeArm64;
+          android-native-x86_64-demand-lifecycle-trial = androidLifecycleTrial.androidNativeX86_64;
+          android-debug-apk-demand-lifecycle-trial = androidLifecycleTrial.androidDebugApk;
           android-device-audit = androidDeviceAuditLauncher;
           android-device-audit-runtime = androidDeviceAuditRuntime;
           android-e2e = androidE2eLauncher;
           android-e2e-runtime = androidE2eRuntime;
           android-e2e-fixture = androidE2eFixture;
+          android-e2e-fixture-demand-lifecycle-trial = androidE2eFixture.overrideAttrs (_: {
+            cargoBuildFeatures = [ "demand-lifecycle-trial" ];
+            cargoCheckFeatures = [ "demand-lifecycle-trial" ];
+          });
           android-emulator = android.androidEmulator;
           android-sdk = android.androidSdk;
         }
@@ -5929,6 +5949,44 @@
 
         checks = {
           package = package;
+          demand-lifecycle-trial-packaging =
+            let
+              packages = self.packages.${system};
+              trialFeatures = [ "demand-lifecycle-trial" ];
+              androidSeparated =
+                !androidSupported
+                || (
+                  android.androidNativeArm64.cargoBuildFeatures == [ ]
+                  && androidLifecycleTrial.androidNativeArm64.cargoBuildFeatures == trialFeatures
+                  && lib.hasInfix "--set=build.jobs=$NIX_BUILD_CORES" android.androidNativeArm64.rustCompiler.unwrapped.preConfigure
+                  &&
+                    android.androidNativeArm64.rustCompiler.outPath
+                    == androidLifecycleTrial.androidNativeArm64.rustCompiler.outPath
+                  && androidLifecycleTrial.androidRustTests.cargoCheckFeatures == trialFeatures
+                  && !(lib.hasInfix "--features demand-lifecycle-trial" android.androidNativeX86_64.buildPhase)
+                  && lib.hasInfix "--features demand-lifecycle-trial" androidLifecycleTrial.androidNativeX86_64.buildPhase
+                  &&
+                    android.androidDebugApk.androidNative.outPath
+                    != androidLifecycleTrial.androidDebugApk.androidNative.outPath
+                  && packages.android-e2e-fixture.cargoBuildFeatures == [ ]
+                  && packages.android-e2e-fixture-demand-lifecycle-trial.cargoBuildFeatures == trialFeatures
+                  && packages.android-e2e-fixture-demand-lifecycle-trial.cargoCheckFeatures == trialFeatures
+                );
+            in
+            assert packages.default.cargoBuildFeatures == [ ];
+            assert packages.default.cargoCheckFeatures == [ ];
+            assert packages.demand-lifecycle-trial.cargoBuildFeatures == trialFeatures;
+            assert packages.demand-lifecycle-trial.cargoCheckFeatures == trialFeatures;
+            assert androidSeparated;
+            pkgs.writeText "p2p-vpn-demand-lifecycle-trial-contract.json" (
+              builtins.toJSON {
+                default_features = packages.default.cargoBuildFeatures;
+                trial_features = trialFeatures;
+                android_builds_separated = androidSeparated;
+                android_checked = androidSupported;
+                validates_runtime_or_energy = false;
+              }
+            );
           rust-test-sources =
             pkgs.runCommand "p2p-vpn-rust-test-sources"
               {

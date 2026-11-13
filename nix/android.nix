@@ -3,6 +3,7 @@
   src ? ../.,
   version ? "0.1.0",
   androidSdkLicenseAccepted ? false,
+  demandLifecycleTrial ? false,
 }:
 
 let
@@ -15,6 +16,7 @@ let
     arm64Abi
     x86_64Abi
   ];
+  lifecycleTrialFeatures = lib.optional demandLifecycleTrial "demand-lifecycle-trial";
   minimumSdkVersion = "26";
   platformVersion = "37";
   buildToolsVersion = "37.0.0";
@@ -39,6 +41,20 @@ let
     localSystem = pkgs.stdenv.hostPlatform.system;
     crossSystem = androidCrossSystem;
     config = androidNixpkgsConfig;
+  };
+  androidRustStd = androidCrossPkgs.buildPackages.rustc.unwrapped.overrideAttrs (previous: {
+    preConfigure = (previous.preConfigure or "") + ''
+      configureFlagsArray+=("--set=build.jobs=$NIX_BUILD_CORES")
+    '';
+  });
+  androidRustc = androidCrossPkgs.buildPackages.rustc.override {
+    rustc-unwrapped = androidRustStd;
+    sysroot = androidRustStd;
+  };
+  androidRustPlatform = androidCrossPkgs.makeRustPlatform {
+    cargo = pkgs.cargo;
+    cargo-auditable = pkgs.cargo-auditable;
+    rustc = androidRustc;
   };
   arm64RustTarget = androidCrossPkgs.stdenv.hostPlatform.rust.rustcTarget;
   x86_64RustTarget = "x86_64-linux-android";
@@ -129,11 +145,18 @@ let
       ) "p2p-vpn Android Rust cross target must retain the nixpkgs prebuilt NDK 27 toolchain";
       assert lib.assertMsg (androidCrossPkgs.stdenv.hostPlatform.useAndroidPrebuilt or false
       ) "p2p-vpn Android Rust cross target must retain the nixpkgs prebuilt Android toolchain";
-      androidCrossPkgs.rustPlatform.buildRustPackage {
+      assert lib.assertMsg (lib.hasInfix "--keep-stage=0 --stage=1 build library" (
+        androidRustc.unwrapped.buildPhase or ""
+      )) "p2p-vpn Android Rust cross compiler must build only the target standard library";
+      assert lib.assertMsg
+        (lib.hasInfix "--sysroot ${builtins.unsafeDiscardStringContext (toString androidRustStd)}" androidRustc.buildCommand)
+        "p2p-vpn Android compiler and sysroot must use the same bounded standard-library build";
+      androidRustPlatform.buildRustPackage {
         pname = "${pname}-arm64";
         inherit version;
         src = nativeSource;
         cargoLock.lockFile = rootLock;
+        buildFeatures = lifecycleTrialFeatures;
         cargoBuildFlags = [
           "--package"
           "p2p-vpn-android"
@@ -165,6 +188,7 @@ let
           rustTarget = arm64RustTarget;
           minimumSdk = lib.toInt minimumSdkVersion;
           toolchainNdkMajor = 27;
+          rustCompiler = androidRustc;
         };
       }
     else
@@ -231,7 +255,7 @@ let
             --offline \
             --release \
             --package p2p-vpn-android \
-            --lib
+            --lib ${lib.optionalString demandLifecycleTrial "--features demand-lifecycle-trial"}
 
           runHook postBuild
         '';
@@ -286,6 +310,7 @@ let
         inherit version;
         src = nativeSource;
         cargoLock.lockFile = rootLock;
+        buildFeatures = lifecycleTrialFeatures;
         cargoBuildFlags = [
           "--package"
           "p2p-vpn-android"
@@ -788,6 +813,7 @@ in
     };
     minimumSdk = lib.toInt minimumSdkVersion;
     inherit androidProjectPresent nativeSourcesPresent;
+    inherit demandLifecycleTrial;
     gradleVersion = gradle.version;
     gradleJdkVersion = lib.versions.major gradle.jdk.version;
     jdkVersion = lib.versions.major jdk.version;
