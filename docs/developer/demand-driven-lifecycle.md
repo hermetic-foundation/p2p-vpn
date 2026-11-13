@@ -17,6 +17,7 @@ high idle cellular power but does not identify the exact remaining packet source
 - [Retirement ownership and fences](demand-lifecycle-retirement.md)
 - [Control work and stream retirement](demand-lifecycle-control-work.md)
 - [Bounded cold control discovery](demand-lifecycle-control-discovery.md)
+- [Quiet discovery scheduling](demand-lifecycle-quiet-discovery.md)
 - [Maintenance drain before idle](demand-lifecycle-drain.md)
 - [Public relay idle validation](relay-idle-validation.md)
 
