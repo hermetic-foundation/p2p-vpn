@@ -86,6 +86,9 @@ savings are claimed from ownership tests alone.
 
 ## Event-Driven Delivery Contract
 
+The [delivery integration contract](demand-lifecycle-control-delivery.md)
+specifies finite attempts, shared native ownership, and hostname compatibility.
+
 ### Capability Changes
 
 - Coalesce local membership, hostname, and incoming-endpoint changes per authorized recipient.
