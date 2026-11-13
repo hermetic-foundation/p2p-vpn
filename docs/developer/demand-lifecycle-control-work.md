@@ -82,6 +82,34 @@ Production lifecycle advertisement stays disabled until real incoming-anchor
 readiness and end-to-end wake handling are active and verified. No battery
 savings are claimed from ownership tests alone.
 
+## Event-Driven Delivery Contract
+
+### Capability Changes
+
+- Coalesce local membership, hostname, and incoming-endpoint changes per authorized recipient.
+- Extend the existing bounded membership-sync owner; keep one latest dirty generation instead of a request ledger.
+- Track native capability requests through exact peer/request completion, with deadlines, concurrency limits, and failure backoff.
+- Use existing retained addresses and bounded LAN-first recovery; do not enqueue unlimited disconnected control requests.
+- Recheck authority before dialing or sending. Control delivery must not renew application demand or clear quiet permission.
+
+### Checkpoint Mutations
+
+| Boundary | Contract |
+| --- | --- |
+| Recipients | The pre-mutation active roster except self; connection presence is not membership |
+| Removed recipient | Retain only existing control-delivery eligibility; never restore packet authorization |
+| Delivery | Existing native mutation owner, deadline-bearing request codec, operation window, three attempts, and 32-flight bound |
+| Acknowledgement | Preserve exact-base proof checks, scope/peer validation, and persist-before-ACK |
+| Final departure | Survivors can acknowledge and continue governance even when initially disconnected |
+| Offline member | Bounded failure remains explicit; no guarantee of delivery to an arbitrarily unavailable device |
+
+### Catch-Up And Hostnames
+
+- Trigger bounded checkpoint catch-up on actual control changes, including a hostname claim at unchanged authority rank.
+- Deduplicate completed/no-op notifications; identical descriptors must not trigger endless fetch/broadcast rounds.
+- Preserve paged membership pulls and their existing byte, restart, concurrency, and retry limits.
+- Test disconnected delivery, authority loss during retry, unchanged application demand, and subsequent stream retirement.
+
 ## Remaining Activation Gates
 
 - Own and bound a live incoming anchor; keep essential renewal and automatic anchor recovery intact.

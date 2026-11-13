@@ -67,6 +67,46 @@ do not renew the model's application-demand timestamp.
 - Dispatcher snapshots retain peer/flight/reply counts and dropped/rate-limited totals.
 - CLI peer-state presentation and operational transition metrics remain part of activation work.
 
+## Runtime Integration Contract
+
+### Native Readiness
+
+| Fact | Authoritative Owner |
+| --- | --- |
+| Incoming access | Current native reservation, owned live listener, usable underlay epoch; not cached capabilities |
+| Payload work | Destination queue and application in-flight ownership |
+| Protocol work | Native request/reply queues, active codecs, pending replies, and terminal notifications |
+| Shared routing work | Primary/public-pairing DHT owners, AutoNAT probes, and pending native transports |
+| Usable data path | Existing supported healthy path and actual packet-plane session |
+
+- Borrow native owners; do not copy requests into another registry.
+- Exclude only the lifecycle behaviour from idle-readiness work, so an idle exchange cannot block itself.
+- Keep lifecycle work included in physical retirement fences until its transport events drain.
+- A synchronous callback must recheck readiness at reply/ACK commitment, not reuse an earlier idle decision.
+- Pending DHT/AutoNAT work also protects a dormant overlay transport from retirement.
+
+### Automatic Driver
+
+| Event | Action |
+| --- | --- |
+| Existing maintenance tick | Reconcile authorized records; offer idle only to connected supported peers after normal eligibility |
+| Payload invalidates quiet | Retain one coalesced wake announcement; use the normal bounded path-recovery owner |
+| Control path absent | Do not make the lifecycle behaviour dial or queue a disconnected request |
+| Wake retry | Preserve the original application timestamp/version; obey the same bounded request slots and backoff |
+| Stale demand | Stop announcements after demand expires unless actual application work remains |
+| Dormant/legacy peer | No periodic idle/wake exchange merely to retain its state |
+
+- Reuse the existing tick; add no timer, new configuration field, or maintenance-created application demand.
+- A valid payload or authenticated wake still overrides quiet immediately.
+- Keep unsupported-protocol fallback sticky for the validated capability epoch.
+- Native readiness and a working driver alone are insufficient for production advertisement.
+
+### Control Delivery Gate
+
+The [control-work contract](demand-lifecycle-control-work.md) requires bounded
+event delivery to disconnected dormant members before quiet support is enabled.
+Cached membership and DNS must remain authorized without retaining every socket.
+
 ## Remaining Activation Work
 
 1. Finish real queue/in-flight/service readiness; [payload demand tracking](demand-lifecycle-activity.md) is implemented.
