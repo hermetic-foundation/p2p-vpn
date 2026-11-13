@@ -768,6 +768,13 @@ impl Forwarder {
         }
         if effective_changed {
             self.authorization_revision = self.authorization_revision.wrapping_add(1);
+            for peer in authorization.peers.keys() {
+                self.application_demand.revoke_quiet(*peer);
+            }
+            self.application_demand
+                .retain(|peer| authorization.peers.contains_key(&peer));
+            self.application_demand
+                .admit(authorization.peers.keys().copied());
         }
         self.membership_effective_refresh_pending |= effective_changed;
         self.authorization = authorization;

@@ -119,3 +119,21 @@ Cover persisted restore and live merge, real payload-demand recording,
 duplicate refresh, revocation, and re-admission before another device candidate.
 The failed [C2 preflight](android-lifecycle-reconnect-build-2026-11-13.json)
 is not an energy measurement or a feature-preservation success.
+
+The merge path now reconciles demand records on effective authorization changes.
+New members receive tracking; removed records are discarded; changed authority
+revokes quiet, while duplicate/metadata-only refreshes preserve activity state.
+
+| Verification | Result |
+| --- | --- |
+| Regression before correction | Fails because a learned, authorized peer has no demand record |
+| Forwarding/membership scope after correction | 79 passed; zero failed; one existing opt-in exclusion |
+| Demand/dispatcher scope | 55 pass, including signed live merge and persisted restore with no explicit peers |
+| Payload | Real TUN admission records demand and clears quiet/preparation for the newly learned peer |
+| Revocation/re-admission | Removed versions cannot grant quiet after a new membership-epoch admission |
+| Compatibility | Same-epoch sequence increments do not undo revocation; the test uses a new epoch rather than changing that policy |
+| Device | The cached C2 APK predates this correction; rebuild both endpoints before repeating preflight |
+
+The full 2,124-test workspace result belongs to the earlier reconnect candidate.
+This subsequent correction has focused coverage; its full feature-enabled
+workspace, Android build and operational/energy gates still need repeating.

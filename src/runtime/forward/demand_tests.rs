@@ -37,6 +37,117 @@ fn packet6(source: Ipv6Addr, target: Ipv6Addr) -> Vec<u8> {
 }
 
 #[test]
+fn demand_tracks_legacy_membership_restore_merge_revoke_and_readmission() {
+    use crate::membership::{
+        MembershipRecordIssueOptions, MembershipRecordOptions, MembershipRecordSubject,
+        MembershipRole, issue_membership_record_at, issue_membership_record_for_subject_at,
+    };
+
+    for restored in [false, true] {
+        let issuer = NodeIdentity::generate_ed25519().unwrap();
+        let local = PeerId::from_libp2p(issuer.peer_id.parse().unwrap());
+        let member = std::iter::repeat_with(|| NodeIdentity::generate_ed25519().unwrap())
+            .take(1024)
+            .find(|member| {
+                builtin_ipv4(PeerId::from_libp2p(member.peer_id.parse().unwrap()))
+                    != builtin_ipv4(local)
+            })
+            .unwrap();
+        let remote: Libp2pPeerId = member.peer_id.parse().unwrap();
+        let peer = PeerId::from_libp2p(remote);
+        let config: Config = serde_json::from_value(serde_json::json!({
+            "network": {"name":"membership-demand", "private_key":issuer.private_key},
+            "peers":[],
+        }))
+        .unwrap();
+        let mut forwarder = Forwarder::from_config(&config).unwrap();
+        let grant = |sequence, membership_epoch| {
+            issue_membership_record_at(
+                &issuer,
+                MembershipRecordOptions {
+                    network_name: "membership-demand".to_owned(),
+                    member: member.clone(),
+                    membership_epoch,
+                    sequence,
+                    roles: vec![MembershipRole::OverlayMember],
+                    route_grants: Vec::new(),
+                    expires_at_unix_seconds: None,
+                },
+                1000 + sequence,
+            )
+            .unwrap()
+        };
+        let record = grant(1, 1);
+        assert!(forwarder.application_demand(peer).is_none());
+        if restored {
+            forwarder
+                .restore_persisted_membership_records(std::slice::from_ref(&record), 1002)
+                .unwrap();
+        } else {
+            forwarder
+                .merge_membership_records(std::slice::from_ref(&record), 1002)
+                .unwrap();
+        }
+        assert!(forwarder.is_configured_transport_peer(remote));
+        let admitted = forwarder
+            .application_demand(peer)
+            .expect("learned packet peer must have demand tracking");
+        assert_eq!(admitted.last_demand, None);
+        assert!(forwarder.pause_data_path_maintenance(peer, admitted.version.unwrap()));
+        assert!(forwarder.grant_data_path_quiet(peer, admitted.version.unwrap()));
+        let mut queues = PeerQueues::new(2, 4096);
+        forwarder
+            .enqueue_tun_packet(
+                &mut queues,
+                packet4(builtin_ipv4(local), builtin_ipv4(peer)),
+            )
+            .unwrap();
+        let demanded = forwarder.application_demand(peer).unwrap();
+        assert!(demanded.last_demand.is_some());
+        assert_ne!(admitted.version, demanded.version);
+        assert!(!forwarder.data_path_maintenance_is_paused(peer));
+        assert!(forwarder.grant_data_path_quiet(peer, demanded.version.unwrap()));
+        for refresh in [record, grant(2, 1)] {
+            forwarder
+                .merge_membership_records(&[refresh], 1003)
+                .unwrap();
+            assert_eq!(forwarder.application_demand(peer), Some(demanded));
+            assert!(forwarder.data_path_is_dormant(peer));
+        }
+        let revoked = issue_membership_record_for_subject_at(
+            &issuer,
+            MembershipRecordIssueOptions {
+                network_name: "membership-demand".to_owned(),
+                member: MembershipRecordSubject::from_identity(&member).unwrap(),
+                membership_epoch: 1,
+                sequence: 3,
+                revoked: true,
+                roles: Vec::new(),
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1003,
+        )
+        .unwrap();
+        forwarder
+            .merge_membership_records(&[revoked], 1004)
+            .unwrap();
+        assert!(!forwarder.is_configured_transport_peer(remote));
+        assert!(forwarder.application_demand(peer).is_none());
+        assert!(!forwarder.grant_data_path_quiet(peer, demanded.version.unwrap()));
+        forwarder
+            .merge_membership_records(&[grant(4, 2)], 1005)
+            .unwrap();
+        assert!(forwarder.is_configured_transport_peer(remote));
+        let readmitted = forwarder.application_demand(peer).unwrap();
+        assert_eq!(readmitted.last_demand, None);
+        assert_ne!(readmitted.version, admitted.version);
+        assert!(!forwarder.grant_data_path_quiet(peer, admitted.version.unwrap()));
+        assert!(!forwarder.grant_data_path_quiet(peer, demanded.version.unwrap()));
+    }
+}
+
+#[test]
 fn demand_records_new_tun_admission_but_not_queued_frame_retries() {
     let (config, remote, mut forwarder) = fixture();
     let peer = PeerId::from_libp2p(remote);
