@@ -23,16 +23,18 @@ pub(crate) mod protocol;
 use std::{
     collections::VecDeque,
     fmt, io,
+    pin::Pin,
     sync::{
         atomic::{AtomicU64, AtomicUsize, Ordering},
         Arc,
     },
     task::{Context, Poll},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use futures::{
     channel::{mpsc, oneshot},
+    future::{AbortRegistration, Abortable, BoxFuture},
     prelude::*,
 };
 use libp2p_swarm::{
@@ -40,7 +42,7 @@ use libp2p_swarm::{
         ConnectionEvent, ConnectionHandler, ConnectionHandlerEvent, DialUpgradeError,
         FullyNegotiatedInbound, FullyNegotiatedOutbound, ListenUpgradeError, StreamUpgradeError,
     },
-    SubstreamProtocol,
+    ConnectionId, SubstreamProtocol,
 };
 pub use protocol::ProtocolSupport;
 use smallvec::SmallVec;
@@ -177,38 +179,71 @@ where
     fn on_fully_negotiated_outbound(
         &mut self,
         FullyNegotiatedOutbound {
-            protocol: (mut stream, protocol),
+            protocol: (stream, protocol),
             info: (),
         }: FullyNegotiatedOutbound<<Self as ConnectionHandler>::OutboundProtocol>,
     ) {
-        let message = self
+        let mut message = self
             .requested_outbound
             .pop_front()
             .expect("negotiated a stream without a pending message");
 
-        let mut codec = self.codec.clone();
         let request_id = message.request_id;
+        if message.is_cancelled() {
+            self.pending_events.push_back(cancelled_request(request_id));
+            return;
+        }
+        if message
+            .deadline
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            self.pending_events
+                .push_back(Event::OutboundTimeout(request_id));
+            return;
+        }
 
-        let send = async move {
-            let write = codec.write_request(&protocol, &mut stream, message.request);
-            write.await?;
-            stream.close().await?;
-            let read = codec.read_response(&protocol, &mut stream);
-            let response = read.await?;
+        let codec = self.codec.clone();
+        let send = match message.deadline {
+            Some(deadline) => async move {
+                let send = send_request(
+                    codec,
+                    protocol,
+                    DeadlineStream { stream, deadline },
+                    request_id,
+                    message.request,
+                );
+                futures::pin_mut!(send);
+                let mut timeout =
+                    futures_timer::Delay::new(deadline.saturating_duration_since(Instant::now()));
 
-            Ok(Event::Response {
-                request_id,
-                response,
-            })
+                // Poll the deadline first, including when codec I/O wakes after expiry.
+                futures::future::poll_fn(move |cx| {
+                    if Instant::now() >= deadline || timeout.poll_unpin(cx).is_ready() {
+                        return Poll::Ready(Ok(Event::OutboundTimeout(request_id)));
+                    }
+                    let result = send.as_mut().poll(cx);
+                    if Instant::now() >= deadline {
+                        return Poll::Ready(Ok(Event::OutboundTimeout(request_id)));
+                    }
+                    result
+                })
+                .await
+            }
+            .boxed(),
+            None => send_request(codec, protocol, stream, request_id, message.request).boxed(),
+        };
+        let send = match message.cancellation.take() {
+            Some(cancellation) => cancellation.start(request_id, send),
+            None => send,
         };
 
         if self
             .worker_streams
-            .try_push(RequestId::Outbound(request_id), send.boxed())
+            .try_push(RequestId::Outbound(request_id), send)
             .is_err()
         {
             self.pending_events.push_back(Event::OutboundStreamFailed {
-                request_id: message.request_id,
+                request_id,
                 error: io::Error::other("max sub-streams reached"),
             });
         }
@@ -227,6 +262,12 @@ where
             .requested_outbound
             .pop_front()
             .expect("negotiated a stream without a pending message");
+
+        if message.is_cancelled() {
+            self.pending_events
+                .push_back(cancelled_request(message.request_id));
+            return;
+        }
 
         match error {
             StreamUpgradeError::Timeout => {
@@ -259,6 +300,133 @@ where
         >,
     ) {
         libp2p_core::util::unreachable(error)
+    }
+}
+
+type OutboundWorker<TCodec> = BoxFuture<'static, io::Result<Event<TCodec>>>;
+
+/// One abort registration follows the message from the behaviour queue into active I/O.
+pub(crate) struct Cancellation<TCodec: Codec> {
+    pub(crate) connection_id: Option<ConnectionId>,
+    worker: Abortable<OutboundWorker<TCodec>>,
+    start: oneshot::Sender<OutboundWorker<TCodec>>,
+}
+
+impl<TCodec: Codec + 'static> Cancellation<TCodec> {
+    pub(crate) fn new(registration: AbortRegistration) -> Self {
+        let (start, receiver) = oneshot::channel::<OutboundWorker<TCodec>>();
+        let worker = async move {
+            let operation = receiver
+                .await
+                .expect("cancellable worker is started before being polled as active I/O");
+            operation.await
+        }
+        .boxed();
+        Self {
+            connection_id: None,
+            worker: Abortable::new(worker, registration),
+            start,
+        }
+    }
+
+    pub(crate) fn poll_cancelled(&mut self, cx: &mut Context<'_>) -> bool {
+        matches!(self.worker.poll_unpin(cx), Poll::Ready(Err(_)))
+    }
+
+    fn start(
+        self,
+        request_id: OutboundRequestId,
+        operation: OutboundWorker<TCodec>,
+    ) -> OutboundWorker<TCodec> {
+        let _ = self.start.send(operation);
+        async move {
+            match self.worker.await {
+                Ok(result) => result,
+                Err(_) => Ok(cancelled_request(request_id)),
+            }
+        }
+        .boxed()
+    }
+}
+
+fn cancelled_request<TCodec: Codec>(request_id: OutboundRequestId) -> Event<TCodec> {
+    Event::OutboundStreamFailed {
+        request_id,
+        error: cancelled_error(),
+    }
+}
+
+pub(crate) fn cancelled_error() -> io::Error {
+    io::Error::new(io::ErrorKind::Interrupted, "request cancelled locally")
+}
+
+async fn send_request<TCodec, TStream>(
+    mut codec: TCodec,
+    protocol: TCodec::Protocol,
+    mut stream: TStream,
+    request_id: OutboundRequestId,
+    request: TCodec::Request,
+) -> io::Result<Event<TCodec>>
+where
+    TCodec: Codec,
+    TStream: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    let write = codec.write_request(&protocol, &mut stream, request);
+    write.await?;
+    stream.close().await?;
+    let read = codec.read_response(&protocol, &mut stream);
+    let response = read.await?;
+
+    Ok(Event::Response {
+        request_id,
+        response,
+    })
+}
+
+/// Prevents I/O after expiry even if a codec makes multiple I/O calls in one poll.
+struct DeadlineStream<T> {
+    stream: T,
+    deadline: Instant,
+}
+
+impl<T> DeadlineStream<T> {
+    fn check_deadline(&self) -> io::Result<()> {
+        if Instant::now() >= self.deadline {
+            return Err(io::ErrorKind::TimedOut.into());
+        }
+        Ok(())
+    }
+}
+
+impl<T: AsyncRead + Unpin> AsyncRead for DeadlineStream<T> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut [u8],
+    ) -> Poll<io::Result<usize>> {
+        self.check_deadline()?;
+        Pin::new(&mut self.stream).poll_read(cx, buf)
+    }
+}
+
+impl<T: AsyncWrite + Unpin> AsyncWrite for DeadlineStream<T> {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        self.check_deadline()?;
+        Pin::new(&mut self.stream).poll_write(cx, buf)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        self.check_deadline()?;
+        Pin::new(&mut self.stream).poll_flush(cx)
+    }
+
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        self.check_deadline()?;
+        Pin::new(&mut self.stream).poll_close(cx)
     }
 }
 
@@ -357,6 +525,16 @@ pub struct OutboundMessage<TCodec: Codec> {
     pub(crate) request_id: OutboundRequestId,
     pub(crate) request: TCodec::Request,
     pub(crate) protocols: SmallVec<[TCodec::Protocol; 2]>,
+    pub(crate) deadline: Option<Instant>,
+    pub(crate) cancellation: Option<Cancellation<TCodec>>,
+}
+
+impl<TCodec: Codec> OutboundMessage<TCodec> {
+    pub(crate) fn is_cancelled(&self) -> bool {
+        self.cancellation
+            .as_ref()
+            .is_some_and(|cancellation| cancellation.worker.is_aborted())
+    }
 }
 
 impl<TCodec> fmt::Debug for OutboundMessage<TCodec>
@@ -455,6 +633,19 @@ where
 
         // Emit outbound requests.
         if let Some(request) = self.pending_outbound.pop_front() {
+            if request.is_cancelled() {
+                return Poll::Ready(ConnectionHandlerEvent::NotifyBehaviour(cancelled_request(
+                    request.request_id,
+                )));
+            }
+            if request
+                .deadline
+                .is_some_and(|deadline| Instant::now() >= deadline)
+            {
+                return Poll::Ready(ConnectionHandlerEvent::NotifyBehaviour(
+                    Event::OutboundTimeout(request.request_id),
+                ));
+            }
             let protocols = request.protocols.clone();
             self.requested_outbound.push_back(request);
 

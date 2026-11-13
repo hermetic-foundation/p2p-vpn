@@ -83,6 +83,9 @@ version = "0.3.30"
 [dependencies.futures-bounded]
 version = "0.2.4"
 
+[dependencies.futures-timer]
+version = "3.0.3"
+
 [dependencies.libp2p-core]
 version = "0.43.1"
 

@@ -81,11 +81,11 @@ use std::{
         Arc,
     },
     task::{Context, Poll},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 pub use codec::Codec;
-use futures::channel::oneshot;
+use futures::{channel::oneshot, future::AbortHandle};
 use handler::Handler;
 pub use handler::ProtocolSupport;
 use libp2p_core::{transport::PortUse, ConnectedPoint, Endpoint, Multiaddr};
@@ -98,7 +98,7 @@ use libp2p_swarm::{
 };
 use smallvec::SmallVec;
 
-use crate::handler::OutboundMessage;
+use crate::handler::{Cancellation, OutboundMessage};
 
 /// An inbound request or response.
 #[derive(Debug)]
@@ -373,6 +373,8 @@ where
     /// Requests that have not yet been sent and are waiting for a connection
     /// to be established.
     pending_outbound_requests: HashMap<PeerId, SmallVec<[OutboundMessage<TCodec>; 10]>>,
+    /// Avoid polling cancellation signals when only legacy requests are queued.
+    pending_cancellable_requests: usize,
 }
 
 impl<TCodec> Behaviour<TCodec>
@@ -419,6 +421,7 @@ where
             pending_events: VecDeque::new(),
             connected: HashMap::new(),
             pending_outbound_requests: HashMap::new(),
+            pending_cancellable_requests: 0,
             addresses: PeerAddresses::default(),
         }
     }
@@ -442,6 +445,50 @@ where
         self.send_request_with_addresses(peer, request, Vec::new())
     }
 
+    /// Like [`Behaviour::send_request`], but with an absolute monotonic deadline.
+    ///
+    /// Expired requests do not open a new substream or invoke the request codec.
+    /// The complete write, close, and response operation is bounded by the earlier
+    /// of this deadline and the configured request timeout. Expiry is reported
+    /// through the normal [`Event::OutboundFailure`] with [`OutboundFailure::Timeout`].
+    /// Queued work retains its native request ID until a normal terminal event;
+    /// the deadline does not cancel a pending dial.
+    pub fn send_request_with_deadline(
+        &mut self,
+        peer: &PeerId,
+        request: TCodec::Request,
+        deadline: Instant,
+    ) -> OutboundRequestId {
+        self.send_request_with_options(peer, request, Vec::new(), Some(deadline), None)
+    }
+
+    /// Like [`Behaviour::send_request_with_deadline`], with local cancellation.
+    ///
+    /// Calling [`AbortHandle::abort`] wakes and removes queued work or stops the
+    /// active write, close, and response operation. A request already negotiating
+    /// a substream remains owned until negotiation completes or fails, without
+    /// invoking the request codec after cancellation.
+    /// Cancellation emits the normal [`Event::OutboundFailure`] for the original
+    /// request ID with [`OutboundFailure::Io`] and [`io::ErrorKind::Interrupted`].
+    /// The caller must retain native ownership until the terminal event arrives.
+    /// Dropping the handle does not cancel the request.
+    pub fn send_request_cancellable(
+        &mut self,
+        peer: &PeerId,
+        request: TCodec::Request,
+        deadline: Instant,
+    ) -> (OutboundRequestId, AbortHandle) {
+        let (handle, registration) = AbortHandle::new_pair();
+        let request_id = self.send_request_with_options(
+            peer,
+            request,
+            Vec::new(),
+            Some(deadline),
+            Some(Cancellation::new(registration)),
+        );
+        (request_id, handle)
+    }
+
     /// Like [`Behaviour::send_request`], but additionally using the provided addresses
     /// if a connection needs to be established.
     pub fn send_request_with_addresses(
@@ -450,20 +497,36 @@ where
         request: TCodec::Request,
         addresses: Vec<Multiaddr>,
     ) -> OutboundRequestId {
+        self.send_request_with_options(peer, request, addresses, None, None)
+    }
+
+    fn send_request_with_options(
+        &mut self,
+        peer: &PeerId,
+        request: TCodec::Request,
+        addresses: Vec<Multiaddr>,
+        deadline: Option<Instant>,
+        cancellation: Option<Cancellation<TCodec>>,
+    ) -> OutboundRequestId {
         let request_id = self.next_outbound_request_id();
         let request = OutboundMessage {
             request_id,
             request,
             protocols: self.outbound_protocols.clone(),
+            deadline,
+            cancellation,
         };
 
-        if let Some(request) = self.try_send_request(peer, request) {
-            self.pending_events.push_back(ToSwarm::Dial {
-                opts: DialOpts::peer_id(*peer)
-                    .addresses(addresses)
-                    .extend_addresses_through_behaviour()
-                    .build(),
-            });
+        if let Some(mut request) = self.try_send_request(peer, request) {
+            let opts = DialOpts::peer_id(*peer)
+                .addresses(addresses)
+                .extend_addresses_through_behaviour()
+                .build();
+            if let Some(cancellation) = &mut request.cancellation {
+                cancellation.connection_id = Some(opts.connection_id());
+                self.pending_cancellable_requests += 1;
+            }
+            self.pending_events.push_back(ToSwarm::Dial { opts });
             self.pending_outbound_requests
                 .entry(*peer)
                 .or_default()
@@ -783,12 +846,19 @@ where
             // another, concurrent dialing attempt ongoing.
             if let Some(pending) = self.pending_outbound_requests.remove(&peer) {
                 for request in pending {
+                    if request.cancellation.is_some() {
+                        self.pending_cancellable_requests -= 1;
+                    }
                     self.pending_events
                         .push_back(ToSwarm::GenerateEvent(Event::OutboundFailure {
                             peer,
                             connection_id,
                             request_id: request.request_id,
-                            error: OutboundFailure::DialFailure,
+                            error: if request.is_cancelled() {
+                                OutboundFailure::Io(handler::cancelled_error())
+                            } else {
+                                OutboundFailure::DialFailure
+                            },
                         }));
                 }
             }
@@ -812,6 +882,9 @@ where
 
         if let Some(pending_requests) = self.pending_outbound_requests.remove(&peer) {
             for request in pending_requests {
+                if request.cancellation.is_some() {
+                    self.pending_cancellable_requests -= 1;
+                }
                 connection
                     .pending_outbound_responses
                     .insert(request.request_id);
@@ -1082,7 +1155,46 @@ where
     }
 
     #[tracing::instrument(level = "trace", name = "NetworkBehaviour::poll", skip(self))]
-    fn poll(&mut self, _: &mut Context<'_>) -> Poll<ToSwarm<Self::ToSwarm, THandlerInEvent<Self>>> {
+    fn poll(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<ToSwarm<Self::ToSwarm, THandlerInEvent<Self>>> {
+        if self.pending_cancellable_requests > 0 {
+            for (peer, requests) in &mut self.pending_outbound_requests {
+                let mut index = 0;
+                while index < requests.len() {
+                    let cancelled_connection =
+                        requests[index]
+                            .cancellation
+                            .as_mut()
+                            .and_then(|cancellation| {
+                                if cancellation.poll_cancelled(cx) {
+                                    cancellation.connection_id
+                                } else {
+                                    None
+                                }
+                            });
+                    let Some(connection_id) = cancelled_connection else {
+                        index += 1;
+                        continue;
+                    };
+                    let request = requests.remove(index);
+                    self.pending_cancellable_requests -= 1;
+                    self.pending_events.retain(|event| {
+                        !matches!(event, ToSwarm::Dial { opts } if opts.connection_id() == connection_id)
+                    });
+                    self.pending_events
+                        .push_back(ToSwarm::GenerateEvent(Event::OutboundFailure {
+                            peer: *peer,
+                            connection_id,
+                            request_id: request.request_id,
+                            error: OutboundFailure::Io(handler::cancelled_error()),
+                        }));
+                }
+            }
+            self.pending_outbound_requests
+                .retain(|_, requests| !requests.is_empty());
+        }
         if let Some(ev) = self.pending_events.pop_front() {
             return Poll::Ready(ev);
         } else if self.pending_events.capacity() > EMPTY_QUEUE_SHRINK_THRESHOLD {
