@@ -2,6 +2,11 @@
 
 use super::*;
 
+mod discovery;
+pub(super) use discovery::{
+    handle_result as handle_discovery_result, reconcile as reconcile_discovery,
+};
+
 pub(super) const DELIVERY_WINDOW: Duration = Duration::from_secs(45);
 const RETRY_DELAY: Duration = Duration::from_secs(5);
 const MAX_ATTEMPTS: u8 = 3;
@@ -54,6 +59,7 @@ struct Round {
     lan_until: Instant,
     attempts: u8,
     lan_attempted: bool,
+    lookup: discovery::LookupState,
 }
 
 #[derive(Debug, Default)]
@@ -363,8 +369,9 @@ impl MembershipRecordSyncs {
                     },
                     attempts: 0,
                     lan_attempted: false,
+                    lookup: discovery::LookupState::default(),
                 });
-            if !connected && now < round.lan_until {
+            if !connected && (now < round.lan_until || round.lookup.waiting()) {
                 continue;
             }
             let deadline = round.deadline;
@@ -504,6 +511,8 @@ pub(super) fn drive(
     metrics: &RuntimeMetrics,
     now: Instant,
 ) {
+    discovery::reconcile(syncs, &mut node.swarm, forwarder, discovered, metrics, now);
+    discovery::drive(syncs, node, forwarder, discovered, metrics, now);
     syncs.drive_capabilities(&mut node.swarm, forwarder, metrics, now);
     if !syncs
         .capabilities

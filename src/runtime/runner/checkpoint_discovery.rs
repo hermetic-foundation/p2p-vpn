@@ -90,6 +90,13 @@ impl CheckpointDiscoveryRetention {
         node.configured_peer_addresses
             .retain(|(peer, _)| keep(*peer));
         let removed_addresses = discovered.retention.retain_peers(keep);
+        for (peer, address) in &removed_addresses {
+            #[allow(deprecated)]
+            node.swarm
+                .behaviour_mut()
+                .control
+                .remove_address(peer, address);
+        }
         discovered.addresses.retain(|entry| keep(entry.peer));
         discovered
             .recovery_dial_attempts

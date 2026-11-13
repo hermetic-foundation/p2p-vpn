@@ -9,6 +9,7 @@ use crate::membership::MAX_MEMBERSHIP_RECORDS;
 
 pub(super) const QUERY_TIMEOUT: Duration = Duration::from_mins(1);
 pub(super) const BACKOFF_BASE: Duration = Duration::from_secs(30);
+pub(super) const CONTROL_QUERY_TIMEOUT: Duration = Duration::from_secs(10);
 const BACKOFF_MAX: Duration = Duration::from_hours(1);
 const STATE_TTL: Duration = Duration::from_secs(5 * 60 + 10);
 const CONNECTED_RETRY: Duration = Duration::from_secs(10);
@@ -19,7 +20,26 @@ const MAX_CONCURRENT: usize = 1;
 #[derive(Debug, Default, Eq, PartialEq)]
 pub(super) struct RecoveryQueries {
     peers: HashMap<PeerId, QueryState>,
-    queries: HashMap<QueryId, PeerId>,
+    queries: HashMap<QueryId, PendingQuery>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct ControlQueryScope {
+    pub peer: PeerId,
+    pub generation: u64,
+    pub deadline: Instant,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct ControlQuery {
+    pub scope: ControlQueryScope,
+    pub expires_at: Instant,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PendingQuery {
+    peer: PeerId,
+    control: Option<ControlQuery>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -72,8 +92,8 @@ impl RecoveryQueries {
     ) -> Vec<QueryId> {
         self.peers.retain(|peer, _| authorized(*peer));
         let mut cancelled = Vec::new();
-        self.queries.retain(|query, peer| {
-            if self.peers.contains_key(peer) {
+        self.queries.retain(|query, owner| {
+            if self.peers.contains_key(&owner.peer) {
                 true
             } else {
                 cancelled.push(*query);
@@ -85,6 +105,66 @@ impl RecoveryQueries {
 
     pub(super) fn has_pending(&self) -> bool {
         !self.queries.is_empty()
+    }
+
+    pub(super) fn control_query(&self, id: &QueryId) -> Option<ControlQuery> {
+        self.queries.get(id).and_then(|owner| owner.control)
+    }
+
+    pub(super) fn control_queries(&self) -> impl Iterator<Item = (QueryId, ControlQuery)> + '_ {
+        self.queries
+            .iter()
+            .filter_map(|(id, owner)| owner.control.map(|control| (*id, control)))
+    }
+
+    /// Only a validated next stage of the same finite control round may bypass
+    /// the inter-round cooldown. The shared native query budget still applies.
+    pub(super) fn can_continue_control(&self, peer: PeerId) -> bool {
+        self.queries.len() < MAX_CONCURRENT
+            && self
+                .peers
+                .get(&peer)
+                .is_some_and(|state| state.pending_queries == 0)
+    }
+
+    pub(super) fn record_control(
+        &mut self,
+        query: QueryId,
+        scope: ControlQueryScope,
+        now: Instant,
+    ) {
+        self.record_owned(
+            scope.peer,
+            [(
+                query,
+                PendingQuery {
+                    peer: scope.peer,
+                    control: Some(ControlQuery {
+                        scope,
+                        expires_at: scope.deadline.min(now + CONTROL_QUERY_TIMEOUT),
+                    }),
+                },
+            )],
+            now,
+        );
+    }
+
+    pub(super) fn cancel_data_queries(
+        &mut self,
+        mut authorized: impl FnMut(PeerId) -> bool,
+        now: Instant,
+    ) -> Vec<QueryId> {
+        let cancelled = self
+            .queries
+            .iter()
+            .filter_map(|(id, owner)| {
+                (owner.control.is_none() && !authorized(owner.peer)).then_some(*id)
+            })
+            .collect::<Vec<_>>();
+        for id in &cancelled {
+            self.finished(*id, now);
+        }
+        cancelled
     }
 
     pub(super) fn connected(&mut self, peer: PeerId, now: Instant) {
@@ -129,24 +209,45 @@ impl RecoveryQueries {
         queries: impl IntoIterator<Item = QueryId>,
         now: Instant,
     ) {
+        self.record_owned(
+            peer,
+            queries.into_iter().map(|id| {
+                (
+                    id,
+                    PendingQuery {
+                        peer,
+                        control: None,
+                    },
+                )
+            }),
+            now,
+        );
+    }
+
+    fn record_owned(
+        &mut self,
+        peer: PeerId,
+        queries: impl IntoIterator<Item = (QueryId, PendingQuery)>,
+        now: Instant,
+    ) {
         let Some(state) = self.peers.get_mut(&peer) else {
             return;
         };
         state.last_query = now;
         state.attempt_count = state.attempt_count.saturating_add(1);
         state.retry_after = now + failure_backoff(state.attempt_count);
-        for query in queries {
-            if self.queries.insert(query, peer).is_none() {
+        for (query, owner) in queries {
+            if self.queries.insert(query, owner).is_none() {
                 state.pending_queries += 1;
             }
         }
     }
 
     pub(super) fn finished(&mut self, query: QueryId, now: Instant) {
-        let Some(peer) = self.queries.remove(&query) else {
+        let Some(owner) = self.queries.remove(&query) else {
             return;
         };
-        if let Some(state) = self.peers.get_mut(&peer) {
+        if let Some(state) = self.peers.get_mut(&owner.peer) {
             state.pending_queries = state.pending_queries.saturating_sub(1);
             if state.pending_queries == 0 {
                 state.retry_after = now + failure_backoff(state.attempt_count);
@@ -167,7 +268,13 @@ impl RecoveryQueries {
         let expired = self
             .queries
             .iter()
-            .filter_map(|(query, peer)| expired_peers.contains(peer).then_some(*query))
+            .filter_map(|(query, owner)| {
+                (expired_peers.contains(&owner.peer)
+                    || owner
+                        .control
+                        .is_some_and(|control| now >= control.expires_at))
+                .then_some(*query)
+            })
             .collect::<Vec<_>>();
         for query in &expired {
             self.finished(*query, now);
@@ -175,6 +282,7 @@ impl RecoveryQueries {
         expired
     }
 
+    #[cfg(test)]
     pub(super) fn cancel(&mut self, now: Instant) -> Vec<QueryId> {
         let cancelled = self.queries.keys().copied().collect::<Vec<_>>();
         for query in &cancelled {
@@ -218,6 +326,78 @@ mod tests {
             kad.get_record(kad::RecordKey::new(&b"one")),
             kad.get_record(kad::RecordKey::new(&b"two")),
         )
+    }
+
+    #[test]
+    fn control_lookup_shares_native_budget_and_keeps_its_original_deadline() {
+        let now = Instant::now();
+        let peer = PeerId::random();
+        let other = PeerId::random();
+        let (first, second) = query_ids();
+        let mut owner = RecoveryQueries::default();
+        assert!(owner.should_query(peer, now));
+        let scope = ControlQueryScope {
+            peer,
+            generation: 3,
+            deadline: now + Duration::from_secs(5),
+        };
+        owner.record_control(first, scope, now);
+        assert!(!owner.should_query(other, now));
+        assert!(!owner.can_continue_control(peer));
+        assert_eq!(
+            owner.control_query(&first),
+            Some(ControlQuery {
+                scope,
+                expires_at: scope.deadline
+            })
+        );
+        assert!(owner.cancel_data_queries(|_| false, now).is_empty());
+        assert_eq!(owner.expire(scope.deadline), vec![first]);
+        assert!(owner.control_query(&first).is_none());
+        assert!(!owner.should_query(peer, scope.deadline));
+        assert!(owner.can_continue_control(peer));
+        owner.record_control(
+            second,
+            ControlQueryScope {
+                deadline: now + Duration::from_secs(45),
+                ..scope
+            },
+            scope.deadline,
+        );
+        assert_eq!(
+            owner.control_query(&second).unwrap().expires_at,
+            scope.deadline + CONTROL_QUERY_TIMEOUT
+        );
+        assert!(
+            owner
+                .expire(scope.deadline + CONTROL_QUERY_TIMEOUT)
+                .contains(&second)
+        );
+        assert_eq!(owner.state(&peer).unwrap().attempt_count, 2);
+    }
+
+    #[test]
+    fn quiet_cancellation_removes_data_but_network_reset_removes_control_too() {
+        let now = Instant::now();
+        let peer = PeerId::random();
+        let (first, second) = query_ids();
+        let mut owner = RecoveryQueries::default();
+        assert!(owner.should_query(peer, now));
+        owner.record(peer, [first], now);
+        assert_eq!(owner.cancel_data_queries(|_| false, now), vec![first]);
+        assert!(owner.can_continue_control(peer));
+        owner.record_control(
+            second,
+            ControlQueryScope {
+                peer,
+                generation: 1,
+                deadline: now + Duration::from_secs(45),
+            },
+            now,
+        );
+        assert!(owner.cancel_data_queries(|_| false, now).is_empty());
+        assert_eq!(owner.reset(), vec![second]);
+        assert_eq!(owner.snapshot(now), RecoveryQueriesSnapshot::default());
     }
 
     #[test]

@@ -5,7 +5,7 @@
 | Item | Status |
 | --- | --- |
 | Decision | Separate incoming reachability from active per-peer data paths |
-| Runtime implementation | Native incoming readiness, idle/wake, retirement, coalesced member updates, and hostname catch-up integrated; cold control recovery and activation pending |
+| Runtime implementation | Incoming readiness, idle/wake, retirement, member/hostname updates, and bounded cold control recovery integrated; activation pending |
 | Default configuration | Preserve minimal JSON and native NixOS workflows; no required new settings |
 | Platforms | Shared Rust policy; Android and Linux must cooperate |
 | Battery acceptance | Measured 10x idle-cellular efficiency with feature preservation; not yet demonstrated |
@@ -16,6 +16,7 @@ high idle cellular power but does not identify the exact remaining packet source
 
 - [Retirement ownership and fences](demand-lifecycle-retirement.md)
 - [Control work and stream retirement](demand-lifecycle-control-work.md)
+- [Bounded cold control discovery](demand-lifecycle-control-discovery.md)
 - [Maintenance drain before idle](demand-lifecycle-drain.md)
 - [Public relay idle validation](relay-idle-validation.md)
 
@@ -191,7 +192,9 @@ and subsequent inbound circuit establishment is a required operational gate.
 - Limit attempts per round, per peer, and per network. Bound concurrency, elapsed time, queue memory, and cancellation.
 - Back off offline unused peers instead of repeatedly crawling the public DHT for them.
 - A network change invalidates old endpoint evidence and starts bounded incoming-path repair; it does not eagerly rebuild every peer path.
-- Preserve signed address publication and provider/relay renewal deadlines. The current peer-address TTL is 30 minutes, refreshed at 15 minutes.
+- Preserve private signed-address records: 30-minute TTL, 15-minute refresh.
+- Public address updates use the existing provider key and coalesced 15-minute refresh owner, not custom public DHT values.
+- Preserve native provider and relay renewal deadlines; do not add a duplicate periodic publisher.
 - Address publication is coalesced control work; never suppress it indefinitely while advertising a stale incoming path.
 - Membership and hostname changes propagate through bounded authenticated exchanges, including wake-on-control when necessary.
 - Revocation takes effect locally immediately; any incoming wake/payload must recheck current authority.
@@ -256,8 +259,8 @@ the production runtime. Evaluate a focused proof once the model stabilizes.
 | [Model tests](../../src/runtime/lifecycle/tests.rs) | 34 tests, including 111,111 short bilateral event sequences | These model checks are not a production-runtime proof |
 | Idle delivery safety | Authenticated reply-sent/ACK commitment rechecks authority, epochs, demand, incoming path, and native work | Integrated first-payload and public-relay validation remain |
 | [Wire exchange](demand-lifecycle-wire.md) | 23 tests: bounded codec, contextual authentication, epochs, scope, stale/revoked response rejection | Quiet capability remains unadvertised |
-| [Runner dispatcher](demand-lifecycle-dispatch.md) | Native readiness, automatic idle/wake, bounded slots/rates, commit-time validation, and native-owned control quarantine leases | Cold public control recovery and integrated activation remain |
-| [Control delivery](demand-lifecycle-control-delivery.md) | Coalesced member/checkpoint updates, native ownership, gated-roster isolation, and verified hostname catch-up without payload demand | Retained address fallback does not replace bounded cold public discovery |
+| [Runner dispatcher](demand-lifecycle-dispatch.md) | Native readiness, automatic idle/wake, bounded slots/rates, commit-time validation, and native-owned control quarantine leases | Integrated activation, quiet discovery/NAT policy, and operational validation remain |
+| [Control delivery](demand-lifecycle-control-delivery.md) | Coalesced member/checkpoint updates, gated-roster isolation, hostname catch-up, and scoped cold discovery without payload demand | Public-WAN and extended dormancy validation remain |
 | [Application demand](demand-lifecycle-activity.md) | Shared forwarding hooks, atomic quiet fencing, transport retirement, and demand-gated probes/recovery | Complete discovery/NAT quiet policy and first-payload/roaming validation remain |
 | TCP/QUIC loopback | Idle commits after real response-sent; either endpoint can initiate wake | Virtual idle clock and fixture readiness; not long-idle or public-relay evidence |
 | Compatibility | Legacy defaults; dispatcher preserves unsupported fallback across ordinary capability refreshes | Operational peer-state presentation and full mixed-version deployment tests remain pending |

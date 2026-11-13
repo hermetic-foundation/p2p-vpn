@@ -129,7 +129,8 @@ specifies finite attempts, shared native ownership, and hostname compatibility.
 | --- | --- |
 | Member capabilities | One latest snapshot; coalesced recipients; four native slots shared with record pages |
 | Gated checkpoint announcements | Verified live roster view; startup/state/connection events instead of five-second broadcasts; no packet authority |
-| Retry opportunity | Three attempts within 45 seconds; LAN first, then retained direct/relay addresses |
+| Retry opportunity | Three attempts within 45 seconds; LAN first, retained direct/relay paths, and scoped finite DHT lookup |
+| Cold control lookup | Existing shared targeted-query owner; public provider/peer lookup or private signed values; no packet authority |
 | Native writes | Original operation deadline covers queued/active work; cancellation releases slots only through native terminal events |
 | Hostname catch-up | Optional outer inventory hint; verified signed offers; three finite rounds; completed hints deduplicate |
 | Failed hints | Remain dirty until verified completion; actual new connections can re-arm exhausted work once |
@@ -142,8 +143,8 @@ responses before they can advertise a stale catch-up opportunity.
 ## Remaining Activation Gates
 
 - Keep verified incoming ownership, essential renewal, and automatic anchor recovery intact in the activated runtime.
-- Add finite control-owned public discovery after LAN-first attempts; retained-address fallback is not full cold recovery.
-- Keep bounded control recovery alive when quiet discovery cancels unrelated background work.
+- Validate implemented [finite cold control recovery](demand-lifecycle-control-discovery.md) with public-WAN and extended dormancy.
+- Preserve scoped control ownership while completing the remaining quiet discovery/NAT policy.
 - Complete demand-driven LAN-first establishment/recovery and sparse infrastructure maintenance policy.
 - Verify first incoming/outgoing VPN payloads, legacy peers, active transfers, and roaming with lifecycle support enabled.
 - Measure fresh paired/reversed-order cellular energy only after the functional candidate is active.
@@ -152,7 +153,8 @@ responses before they can advertise a stale catch-up opportunity.
 
 | Check | Result |
 | --- | --- |
-| Workspace/all-target tests | 2,073 passed; zero failures; 49 existing/opt-in ignores |
+| Workspace/all-target tests | 2,086 passed; zero failures; 50 existing/opt-in ignores |
+| Cold control recovery | Seven driver tests, thirteen shared-ledger tests, and three repeated native namespace runs pass |
 | Native work regressions | 18 passed: original ownership fences plus absolute deadlines, delayed writes, active/queued cancellation, normal terminal events, and FIFO preservation |
 | Stream retirement regressions | Six passed: work/demand, initial grace, pending transports, nine infrastructure roles, metadata retention, real TCP close/reconnect |
 | Datagram retirement regressions | Five passed; local preparation alone cannot retire paths or reject incoming hello processing |

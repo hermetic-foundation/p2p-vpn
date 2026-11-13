@@ -111,12 +111,13 @@ No timer broadcasts unchanged checkpoint capabilities to connected peers.
 
 ## Remaining Integration
 
-The [bounded control-discovery contract](demand-lifecycle-control-discovery.md)
-defines the remaining cold public/private lookup ownership and validation.
+The [bounded control-discovery implementation](demand-lifecycle-control-discovery.md)
+adds scoped public provider/peer lookup and private signed-value recovery after
+LAN-first attempts, using the existing native targeted-query owner.
 
 | Boundary | Work Still Required |
 | --- | --- |
-| Cold public recovery | Add bounded control-owned public discovery after LAN-first attempts; retained address fallback alone is insufficient |
+| Cold public recovery | Local native client-mode discovery and control delivery pass; integrated public-WAN and long-dormancy validation remain |
 | Quiet discovery | Preserve necessary control recovery while suppressing idle DHT/NAT and offline-peer repair loops |
 | Activation | Exercise first IP payloads, extended incoming reachability, relay replacement, roaming, and legacy peers |
 | Energy | Fresh matched paired/reversed-order cellular measurements; no improvement is established by these source tests |
@@ -139,7 +140,8 @@ defines the remaining cold public/private lookup ownership and validation.
 
 | Check | Result |
 | --- | --- |
-| Workspace/all-targets | 2,073 passed; zero failures; 49 existing/opt-in ignores |
+| Workspace/all-targets | 2,086 passed; zero failures; 50 existing/opt-in ignores |
+| Cold control recovery | Seven driver tests and three explicit native namespace runs pass; finite scoped discovery preserves packet dormancy |
 | Coalesced member delivery | 18 regressions pass, including retained LAN delivery and duplicate/older connection suppression |
 | Native connection callback | Normal and gated TCP establishment send owned control work; a gated callback installs no packet path or demand |
 | Checkpoint-only delivery | Seven new regressions pass: gated roster view, expiry/legacy eligibility, finite idle work, native reply ownership, revocation, connection callback, and ID deduplication |

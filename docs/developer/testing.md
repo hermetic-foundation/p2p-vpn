@@ -1087,6 +1087,31 @@ the fixture explicitly advertises its known listener addresses.
 This tests public-address discovery policy locally. It is not a public-WAN proof,
 and production rejection of third-party private-address hints remains enabled.
 
+### Control Discovery Namespace
+
+The library's opt-in cold-control fixture requires `unshare`, `iproute2`, and
+unprivileged user/network namespaces. It does not need TUN or a live VPN profile.
+
+```sh
+cargo test --offline --locked --lib \
+  runtime::runner::control_delivery::discovery::tests::control_discovery_native_public_client_namespace \
+  -- --ignored --exact --nocapture
+```
+
+| Check | Assertion |
+| --- | --- |
+| Isolation | Verify a new network namespace before configuring its loopback; no external default route |
+| Publication | IPFS-protocol client publishes its address to a server without joining its routing buckets |
+| Cold delivery | Peer-ID-only target is found through providers and receives authenticated TCP control |
+| Scope | Unrelated providers are not dialed or admitted as infrastructure |
+| Quiet | Control acknowledgement changes neither application demand nor packet dormancy |
+
+LAN grace is injected; publication, discovery, connection, and acknowledgement
+use real sockets. This is not long-dormancy, public-WAN, QUIC activation, or
+cellular-energy evidence. See the [contract and fixture notes](demand-lifecycle-control-discovery.md).
+
+### TUN Namespace Commands
+
 Do not rebuild the test executable while a namespace suite is running.
 Each orchestrator re-executes that executable; replacement invalidates later cases.
 

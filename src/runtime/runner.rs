@@ -1972,6 +1972,14 @@ where
             }
         }
         membership_record_syncs.reconcile_authorization(&forwarder, &metrics);
+        control_delivery::reconcile_discovery(
+            &mut membership_record_syncs,
+            &mut node.swarm,
+            &forwarder,
+            &mut queue_runtime.discovered_peer_addresses,
+            &metrics,
+            Instant::now(),
+        );
         checkpoint_discovery_retention.reconcile(
             checkpoint_runtime.as_ref(),
             &forwarder,
@@ -2317,6 +2325,7 @@ where
                 );
                 let now = Instant::now();
                 drive_kademlia_address_publication(
+                    node.discovery.kademlia_provider_advertisement,
                     &mut node.swarm,
                     &mut kademlia_maintenance,
                     &node.network_name,
@@ -8439,7 +8448,15 @@ fn refresh_kademlia_rendezvous(
     if context.auto_relay.should_discover_candidates() {
         tasks.push(KademliaMaintenanceTask::DiscoverRelay);
     }
-    tasks.push(KademliaMaintenanceTask::PublishPeerAddress);
+    if !swarm
+        .behaviour()
+        .kad
+        .protocol_names()
+        .iter()
+        .any(|protocol| protocol.as_ref() == PUBLIC_IPFS_KADEMLIA_PROTOCOL)
+    {
+        tasks.push(KademliaMaintenanceTask::PublishPeerAddress);
+    }
     if context.advertise_provider {
         tasks.push(KademliaMaintenanceTask::AdvertiseProvider);
     }
@@ -8474,6 +8491,7 @@ fn refresh_kademlia_rendezvous(
             }
             KademliaMaintenanceTask::PublishPeerAddress => {
                 start_kademlia_peer_address_record_publication(
+                    context.advertise_provider,
                     swarm,
                     context.network_name,
                     context.membership_tag,
@@ -8663,6 +8681,7 @@ impl std::fmt::Display for KademliaPeerAddressRecordError {
 }
 
 fn drive_kademlia_address_publication(
+    advertise_provider: bool,
     swarm: &mut Swarm<Behaviour>,
     maintenance: &mut KademliaMaintenance,
     network_name: &str,
@@ -8671,6 +8690,7 @@ fn drive_kademlia_address_publication(
     now: Instant,
 ) {
     drive_kademlia_address_publication_at(
+        advertise_provider,
         swarm,
         maintenance,
         network_name,
@@ -8682,6 +8702,7 @@ fn drive_kademlia_address_publication(
 }
 
 fn drive_kademlia_address_publication_at(
+    advertise_provider: bool,
     swarm: &mut Swarm<Behaviour>,
     maintenance: &mut KademliaMaintenance,
     network_name: &str,
@@ -8716,6 +8737,7 @@ fn drive_kademlia_address_publication_at(
     maintenance.address_publication_refresh = None;
     maintenance.address_publication_next = now + KADEMLIA_MAINTENANCE_POLL_INTERVAL;
     match start_kademlia_peer_address_record_publication_at(
+        advertise_provider,
         swarm,
         network_name,
         membership_tag,
@@ -8748,12 +8770,14 @@ fn drive_kademlia_address_publication_at(
 }
 
 fn start_kademlia_peer_address_record_publication(
+    advertise_provider: bool,
     swarm: &mut Swarm<Behaviour>,
     network_name: &str,
     membership_tag: Option<&str>,
     identity: &NodeIdentity,
 ) -> Result<Option<kad::QueryId>, kad::QueryStartError> {
     start_kademlia_peer_address_record_publication_at(
+        advertise_provider,
         swarm,
         network_name,
         membership_tag,
@@ -8763,6 +8787,7 @@ fn start_kademlia_peer_address_record_publication(
 }
 
 fn start_kademlia_peer_address_record_publication_at(
+    advertise_provider: bool,
     swarm: &mut Swarm<Behaviour>,
     network_name: &str,
     membership_tag: Option<&str>,
@@ -8770,6 +8795,30 @@ fn start_kademlia_peer_address_record_publication_at(
     now_unix_seconds: u64,
 ) -> Result<Option<kad::QueryId>, kad::QueryStartError> {
     let addresses = local_advertisable_addresses(swarm);
+    if swarm
+        .behaviour()
+        .kad
+        .protocol_names()
+        .iter()
+        .any(|protocol| protocol.as_ref() == PUBLIC_IPFS_KADEMLIA_PROTOCOL)
+    {
+        if !advertise_provider || addresses.is_empty() {
+            return Ok(None);
+        }
+        let key = crate::runtime::p2p::kademlia_rendezvous_key(network_name, membership_tag);
+        let key = crate::runtime::p2p::kademlia_provider_wire_key(&swarm.behaviour().kad, &key);
+        return Ok(match swarm.behaviour_mut().kad.try_start_providing(key)? {
+            Ok(query) => Some(query),
+            Err(error) => {
+                log_runtime_event(
+                    LogLevel::Warn,
+                    "kademlia_address_provider_publication_failed",
+                    &[("reason", &error.to_string())],
+                );
+                None
+            }
+        });
+    }
     let key = crate::runtime::p2p::kademlia_peer_addresses_key(
         network_name,
         membership_tag,
@@ -8970,6 +9019,22 @@ fn learn_peer_addresses_from_kademlia_value(
     previous_membership_tags: &[String],
     value: &[u8],
 ) -> Result<(Libp2pPeerId, Vec<Multiaddr>), KademliaPeerAddressRecordError> {
+    decode_kademlia_peer_addresses(
+        expected_network_name,
+        current_membership_tag,
+        previous_membership_tags,
+        value,
+        |peer| forwarder.is_configured_transport_peer(peer),
+    )
+}
+
+fn decode_kademlia_peer_addresses(
+    expected_network_name: &str,
+    current_membership_tag: Option<&str>,
+    previous_membership_tags: &[String],
+    value: &[u8],
+    authorized: impl Fn(Libp2pPeerId) -> bool,
+) -> Result<(Libp2pPeerId, Vec<Multiaddr>), KademliaPeerAddressRecordError> {
     if value.len() > MAX_KADEMLIA_PEER_ADDRESS_RECORD_BYTES {
         return Err(KademliaPeerAddressRecordError::TooLarge);
     }
@@ -9006,7 +9071,7 @@ fn learn_peer_addresses_from_kademlia_value(
         .peer_id
         .parse::<Libp2pPeerId>()
         .map_err(|_| KademliaPeerAddressRecordError::InvalidPeerId)?;
-    if !forwarder.is_configured_transport_peer(peer) {
+    if !authorized(peer) {
         return Err(KademliaPeerAddressRecordError::WrongPeer);
     }
     let public_key =
@@ -11573,7 +11638,10 @@ impl DiscoveredPeerAddresses {
         kademlia: &mut kad::Behaviour<kad::store::MemoryStore>,
         now: Instant,
     ) -> usize {
-        finish_targeted_recovery_queries(kademlia, self.recovery_queries.cancel(now))
+        finish_targeted_recovery_queries(
+            kademlia,
+            self.recovery_queries.cancel_data_queries(|_| false, now),
+        )
     }
 
     fn make_recovery_dial_room(
@@ -20796,8 +20864,15 @@ fn reconcile_recovery_query_authorization(
     recovery: &mut DiscoveredPeerAddresses,
     kademlia: &mut kad::Behaviour<kad::store::MemoryStore>,
 ) -> usize {
-    let cancelled = recovery
-        .retain_recovery_discovery_peers(|peer| forwarder.is_configured_transport_peer(peer));
+    let now = Instant::now();
+    let mut cancelled = recovery
+        .recovery_queries
+        .cancel_data_queries(|peer| forwarder.is_configured_transport_peer(peer), now);
+    cancelled.extend(
+        recovery.retain_recovery_discovery_peers(|peer| {
+            forwarder.authorizes_control_capabilities(peer)
+        }),
+    );
     let cancelled_count = finish_targeted_recovery_queries(kademlia, cancelled);
     if cancelled_count > 0 {
         log_runtime_event(
@@ -23468,14 +23543,33 @@ struct KademliaEventContext<'a> {
 
 fn handle_kademlia_event(
     swarm: &mut Swarm<Behaviour>,
+    context: KademliaEventContext<'_>,
+    event: kad::Event,
+) {
+    handle_kademlia_event_at(swarm, context, event, Instant::now());
+}
+
+fn handle_kademlia_event_at(
+    swarm: &mut Swarm<Behaviour>,
     mut context: KademliaEventContext<'_>,
     event: kad::Event,
+    now: Instant,
 ) {
     let handles_public_pairing = public_pairing_uses_primary_kad(swarm.behaviour());
     match event {
         kad::Event::OutboundQueryProgressed {
             id, result, step, ..
         } => {
+            if control_delivery::handle_discovery_result(
+                swarm,
+                &mut context,
+                id,
+                &result,
+                step.last,
+                now,
+            ) {
+                return;
+            }
             if let kad::QueryResult::GetProviders(Ok(kad::GetProvidersOk::FoundProviders {
                 key,
                 providers,
@@ -24172,6 +24266,7 @@ fn learn_public_pairing_address(
     }
 }
 
+#[allow(deprecated)]
 fn remove_retained_discovery_address(
     swarm: &mut Swarm<Behaviour>,
     discovered: &mut DiscoveredPeerAddresses,
@@ -24182,6 +24277,7 @@ fn remove_retained_discovery_address(
         .addresses
         .retain(|entry| entry.peer != peer || entry.canonical_address != *address);
     if !discovered.retention.is_protected(peer, address) {
+        swarm.behaviour_mut().control.remove_address(&peer, address);
         swarm.behaviour_mut().kad.remove_address(&peer, address);
         if let Some(pairing_kad) = swarm.behaviour_mut().pairing_kad.as_mut() {
             pairing_kad.remove_address(&peer, address);
@@ -32572,16 +32668,26 @@ mod tests {
         assert_eq!(snapshot.queue.expired_packets, 1);
     }
 
+    fn signed_address_publication_test_node(identity: &NodeIdentity) -> P2pNode {
+        let mut node = pairing_test_node(identity);
+        let local = node.local_peer_id;
+        node.swarm.behaviour_mut().kad = kad::Behaviour::with_config(
+            local,
+            kad::store::MemoryStore::new(local),
+            crate::runtime::p2p::controlled_kademlia_config(libp2p::StreamProtocol::new(
+                crate::config::PRIVATE_KADEMLIA_PROTOCOL,
+            )),
+        );
+        node
+    }
+
     #[tokio::test]
     async fn address_publication_stays_fresh_for_twenty_four_quiet_hours() {
         use libp2p::kad::store::RecordStore;
 
-        for protocol in [
-            PUBLIC_IPFS_KADEMLIA_PROTOCOL,
-            crate::config::PRIVATE_KADEMLIA_PROTOCOL,
-        ] {
+        for protocol in [crate::config::PRIVATE_KADEMLIA_PROTOCOL] {
             let identity = NodeIdentity::generate_ed25519().unwrap();
-            let mut node = pairing_test_node(&identity);
+            let mut node = signed_address_publication_test_node(&identity);
             let local = *node.swarm.local_peer_id();
             node.swarm.behaviour_mut().kad = kad::Behaviour::with_config(
                 local,
@@ -32619,6 +32725,7 @@ mod tests {
                     0
                 );
                 drive_kademlia_address_publication_at(
+                    true,
                     &mut node.swarm,
                     &mut maintenance,
                     "lab",
@@ -32678,10 +32785,10 @@ mod tests {
         use libp2p::kad::store::RecordStore;
 
         let identity = NodeIdentity::generate_ed25519().unwrap();
-        let mut node = pairing_test_node(&identity);
+        let mut node = signed_address_publication_test_node(&identity);
         let local = *node.swarm.local_peer_id();
         let mut config = crate::runtime::p2p::controlled_kademlia_config(
-            libp2p::StreamProtocol::new(PUBLIC_IPFS_KADEMLIA_PROTOCOL),
+            libp2p::StreamProtocol::new(crate::config::PRIVATE_KADEMLIA_PROTOCOL),
         );
         config.set_query_pool_capacity(std::num::NonZeroUsize::MIN);
         node.swarm.behaviour_mut().kad =
@@ -32694,6 +32801,7 @@ mod tests {
         let mut maintenance = KademliaMaintenance::new(start);
         // Startup publication cannot depend on an address event that occurred before the runner.
         drive_kademlia_address_publication_at(
+            true,
             &mut node.swarm,
             &mut maintenance,
             "lab",
@@ -32713,6 +32821,7 @@ mod tests {
             .unwrap();
         for (elapsed, rejected) in [(900, 1), (901, 1), (904, 1), (905, 2)] {
             drive_kademlia_address_publication_at(
+                true,
                 &mut node.swarm,
                 &mut maintenance,
                 "lab",
@@ -32748,6 +32857,7 @@ mod tests {
         assert!(node.swarm.behaviour_mut().kad.cancel_query(&unrelated));
         for elapsed in [906, 910] {
             drive_kademlia_address_publication_at(
+                true,
                 &mut node.swarm,
                 &mut maintenance,
                 "lab",
@@ -32772,6 +32882,7 @@ mod tests {
         assert_eq!(record.payload.addresses, vec![latest.to_string()]);
         for elapsed in [1000, 1809, 1810] {
             drive_kademlia_address_publication_at(
+                true,
                 &mut node.swarm,
                 &mut maintenance,
                 "lab",
@@ -32792,11 +32903,12 @@ mod tests {
     #[tokio::test]
     async fn address_publication_empty_snapshot_stays_idle_for_a_day_then_resumes() {
         let identity = NodeIdentity::generate_ed25519().unwrap();
-        let mut node = pairing_test_node(&identity);
+        let mut node = signed_address_publication_test_node(&identity);
         let start = Instant::now();
         let mut maintenance = KademliaMaintenance::new(start);
         for elapsed in (0..86_400_u64).step_by(5) {
             drive_kademlia_address_publication_at(
+                true,
                 &mut node.swarm,
                 &mut maintenance,
                 "lab",
@@ -32814,6 +32926,7 @@ mod tests {
             .add_external_address("/ip4/192.168.1.2/tcp/4001".parse().unwrap());
         request_kademlia_address_publication(&mut maintenance, &DiscoveryConfig::default());
         drive_kademlia_address_publication_at(
+            true,
             &mut node.swarm,
             &mut maintenance,
             "lab",
@@ -32829,7 +32942,7 @@ mod tests {
     #[tokio::test]
     async fn address_publication_completion_preserves_pending_update() {
         let identity = NodeIdentity::generate_ed25519().unwrap();
-        let mut node = pairing_test_node(&identity);
+        let mut node = signed_address_publication_test_node(&identity);
         let now = Instant::now();
         let mut maintenance = KademliaMaintenance::new(now);
         let mut discovery = DiscoveryConfig {
@@ -32841,6 +32954,7 @@ mod tests {
         discovery.kademlia = true;
         request_kademlia_address_publication(&mut maintenance, &discovery);
         drive_kademlia_address_publication(
+            true,
             &mut node.swarm,
             &mut maintenance,
             "lab",
@@ -32858,6 +32972,7 @@ mod tests {
         let tick = now + KADEMLIA_MAINTENANCE_POLL_INTERVAL;
         request_kademlia_address_publication(&mut maintenance, &discovery);
         drive_kademlia_address_publication(
+            true,
             &mut node.swarm,
             &mut maintenance,
             "lab",
@@ -32880,6 +32995,7 @@ mod tests {
         assert!(!maintenance.finish_query(query));
         assert!(maintenance.address_publication_pending);
         drive_kademlia_address_publication(
+            true,
             &mut node.swarm,
             &mut maintenance,
             "lab",
@@ -32892,6 +33008,7 @@ mod tests {
             "completion must not bypass rate limit"
         );
         drive_kademlia_address_publication(
+            true,
             &mut node.swarm,
             &mut maintenance,
             "lab",
@@ -32907,10 +33024,10 @@ mod tests {
     async fn address_publication_preserves_update_after_query_capacity_rejection() {
         use libp2p::kad::store::RecordStore;
         let identity = NodeIdentity::generate_ed25519().unwrap();
-        let mut node = pairing_test_node(&identity);
+        let mut node = signed_address_publication_test_node(&identity);
         let local = *node.swarm.local_peer_id();
         let mut config = crate::runtime::p2p::controlled_kademlia_config(
-            libp2p::StreamProtocol::new(crate::config::PUBLIC_IPFS_KADEMLIA_PROTOCOL),
+            libp2p::StreamProtocol::new(crate::config::PRIVATE_KADEMLIA_PROTOCOL),
         );
         config.set_query_pool_capacity(std::num::NonZeroUsize::MIN);
         node.swarm.behaviour_mut().kad =
@@ -32923,6 +33040,7 @@ mod tests {
         node.swarm.add_external_address(original.clone());
         request_kademlia_address_publication(&mut maintenance, &discovery);
         drive_kademlia_address_publication(
+            true,
             &mut node.swarm,
             &mut maintenance,
             "lab",
@@ -32948,6 +33066,7 @@ mod tests {
         node.swarm.add_external_address(latest.clone());
         assert!(node.swarm.behaviour_mut().kad.cancel_query(&held));
         drive_kademlia_address_publication(
+            true,
             &mut node.swarm,
             &mut maintenance,
             "lab",
@@ -32958,6 +33077,7 @@ mod tests {
         assert!(maintenance.address_publication.is_none());
         assert!(maintenance.address_publication_pending);
         drive_kademlia_address_publication(
+            true,
             &mut node.swarm,
             &mut maintenance,
             "lab",
@@ -32983,10 +33103,10 @@ mod tests {
     #[tokio::test]
     async fn address_publication_discards_oversized_snapshot_until_a_new_update() {
         let identity = NodeIdentity::generate_ed25519().unwrap();
-        let mut node = pairing_test_node(&identity);
+        let mut node = signed_address_publication_test_node(&identity);
         let local = *node.swarm.local_peer_id();
         let mut config = crate::runtime::p2p::controlled_kademlia_config(
-            libp2p::StreamProtocol::new(crate::config::PUBLIC_IPFS_KADEMLIA_PROTOCOL),
+            libp2p::StreamProtocol::new(crate::config::PRIVATE_KADEMLIA_PROTOCOL),
         );
         config.set_query_metadata_limits(Some(kad::QueryMetadataLimits::new(
             std::num::NonZeroUsize::MIN,
@@ -33002,6 +33122,7 @@ mod tests {
         request_kademlia_address_publication(&mut maintenance, &DiscoveryConfig::default());
         for tick in 0..17_280 {
             drive_kademlia_address_publication(
+                true,
                 &mut node.swarm,
                 &mut maintenance,
                 "lab",
@@ -33030,7 +33151,7 @@ mod tests {
     async fn address_publication_coalesces_churn_and_publishes_latest_snapshot() {
         use libp2p::kad::store::RecordStore;
         let identity = NodeIdentity::generate_ed25519().unwrap();
-        let mut node = pairing_test_node(&identity);
+        let mut node = signed_address_publication_test_node(&identity);
         let now = Instant::now();
         let mut maintenance = KademliaMaintenance::new(now);
         let discovery = DiscoveryConfig::default();
@@ -33060,6 +33181,7 @@ mod tests {
             let tick = now + KADEMLIA_MAINTENANCE_POLL_INTERVAL * cycle;
             if cycle > 0 {
                 drive_kademlia_address_publication(
+                    true,
                     &mut node.swarm,
                     &mut maintenance,
                     "lab",
@@ -33073,6 +33195,7 @@ mod tests {
                 );
             }
             drive_kademlia_address_publication(
+                true,
                 &mut node.swarm,
                 &mut maintenance,
                 "lab",
@@ -33103,6 +33226,7 @@ mod tests {
         let query = previous_query.unwrap();
         let last_started = maintenance.address_publication.unwrap().1;
         drive_kademlia_address_publication(
+            true,
             &mut node.swarm,
             &mut maintenance,
             "lab",
@@ -33114,6 +33238,7 @@ mod tests {
         assert!(!node.swarm.behaviour_mut().kad.cancel_query(&query));
         assert_eq!(node.swarm.behaviour().kad.iter_queries().count(), 1);
         drive_kademlia_address_publication(
+            true,
             &mut node.swarm,
             &mut maintenance,
             "lab",
@@ -33123,6 +33248,7 @@ mod tests {
         );
         assert_eq!(node.swarm.behaviour().kad.iter_queries().count(), 1);
         drive_kademlia_address_publication(
+            true,
             &mut node.swarm,
             &mut maintenance,
             "lab",
@@ -33132,6 +33258,140 @@ mod tests {
         );
         assert!(maintenance.address_publication.is_some());
         assert_eq!(node.swarm.behaviour().kad.iter_queries().count(), 2);
+    }
+
+    #[tokio::test]
+    async fn public_address_publication_uses_provider_records_for_twenty_four_quiet_hours() {
+        use libp2p::kad::store::RecordStore as _;
+        let identity = NodeIdentity::generate_ed25519().unwrap();
+        let mut node = pairing_test_node(&identity);
+        let tag = "c".repeat(64);
+        node.swarm
+            .add_external_address("/ip4/11.252.0.2/tcp/4001".parse().unwrap());
+        let key = crate::runtime::p2p::kademlia_rendezvous_key("lab", Some(&tag));
+        let key =
+            crate::runtime::p2p::kademlia_provider_wire_key(&node.swarm.behaviour().kad, &key);
+        let value_key =
+            crate::runtime::p2p::kademlia_peer_addresses_key("lab", Some(&tag), node.local_peer_id);
+        let now = Instant::now();
+        let mut maintenance = KademliaMaintenance::new(now);
+        let mut starts = 0;
+        for elapsed in (0..86_400).step_by(5) {
+            drive_kademlia_address_publication_at(
+                true,
+                &mut node.swarm,
+                &mut maintenance,
+                "lab",
+                Some(&tag),
+                &identity,
+                now + Duration::from_secs(elapsed),
+                1_800_000_000 + elapsed,
+            );
+            if let Some((id, _)) = maintenance.address_publication {
+                assert_eq!(elapsed % 900, 0);
+                assert!(
+                    matches!(node.swarm.behaviour().kad.query(&id).unwrap().info(), kad::QueryInfo::AddProvider { key: actual, .. } if actual == &key)
+                );
+                assert!(
+                    node.swarm
+                        .behaviour_mut()
+                        .kad
+                        .store_mut()
+                        .get(&value_key)
+                        .is_none()
+                );
+                assert!(node.swarm.behaviour_mut().kad.cancel_query(&id));
+                assert!(maintenance.finish_query(id));
+                starts += 1;
+            }
+        }
+        assert_eq!(starts, 96);
+        assert_eq!(
+            node.swarm
+                .behaviour_mut()
+                .kad
+                .store_mut()
+                .providers(&key)
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn public_address_publication_respects_provider_disable_without_disabling_private_values()
+    {
+        for public in [true, false] {
+            let identity = NodeIdentity::generate_ed25519().unwrap();
+            let mut node = if public {
+                pairing_test_node(&identity)
+            } else {
+                signed_address_publication_test_node(&identity)
+            };
+            node.swarm
+                .add_external_address("/ip4/11.252.0.2/tcp/4001".parse().unwrap());
+            let query = start_kademlia_peer_address_record_publication(
+                false,
+                &mut node.swarm,
+                "lab",
+                None,
+                &identity,
+            )
+            .unwrap();
+            assert_eq!(query.is_some(), !public);
+            if let Some(id) = query {
+                assert!(node.swarm.behaviour_mut().kad.cancel_query(&id));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn public_address_publication_maintenance_has_one_provider_task() {
+        let identity = NodeIdentity::generate_ed25519().unwrap();
+        let mut node = pairing_test_node(&identity);
+        node.swarm
+            .add_external_address("/ip4/11.252.0.2/tcp/4001".parse().unwrap());
+        let key = crate::runtime::p2p::kademlia_rendezvous_key("lab", None);
+        let forwarder = Forwarder::from_config(&config_with_peer(&identity, peer_id())).unwrap();
+        let auto_relay = AutoRelayState::new(AutoRelayConfig {
+            max_candidates: 0,
+            ..AutoRelayConfig::default()
+        });
+        let backoff = PublicDiscoveryBackoff::default();
+        let metrics = RuntimeMetrics::default();
+        let mut cursor = 0;
+        for enabled in [true, false] {
+            let context = KademliaRefreshContext {
+                advertise_key: &key,
+                lookup_keys: &[],
+                membership_record_advertise_key: None,
+                membership_record_lookup_keys: &[],
+                network_name: "lab",
+                membership_tag: None,
+                forwarder: &forwarder,
+                identity: &identity,
+                advertise_provider: enabled,
+                auto_relay: &auto_relay,
+                public_discovery_backoff: &backoff,
+                routing_peer_count: KADEMLIA_BOOTSTRAP_MIN_ROUTING_PEERS,
+                public_discovery_quiet: false,
+                metrics: &metrics,
+            };
+            let started = refresh_kademlia_rendezvous(&mut node.swarm, &context, &mut cursor);
+            if enabled {
+                let (id, task) = started.unwrap();
+                assert_eq!(task, "advertise_provider");
+                assert_eq!(cursor, 0, "exactly one task in this rotation");
+                assert!(node.swarm.behaviour_mut().kad.cancel_query(&id));
+            } else {
+                assert!(started.is_none());
+            }
+        }
+        assert_eq!(
+            metrics
+                .snapshot(crate::queue::QueueStats::default())
+                .kademlia_provider_advertisements,
+            1
+        );
     }
 
     #[tokio::test]
@@ -44024,6 +44284,29 @@ mod tests {
         connection_epochs: &mut ConnectionEpochs,
         event: request_response::Event<ControlRequest, ControlResponse>,
     ) {
+        let mut local = ControlCapabilities::local("lab", None, 1280)
+            .with_membership_record_inventory(forwarder.member_records());
+        dispatch_membership_sync_test_event_with_capabilities(
+            node,
+            forwarder,
+            syncs,
+            metrics,
+            connection_epochs,
+            &mut local,
+            event,
+        )
+        .await;
+    }
+
+    pub(super) async fn dispatch_membership_sync_test_event_with_capabilities(
+        node: &mut P2pNode,
+        forwarder: &mut Forwarder,
+        syncs: &mut MembershipRecordSyncs,
+        metrics: &RuntimeMetrics,
+        connection_epochs: &mut ConnectionEpochs,
+        local_capabilities: &mut ControlCapabilities,
+        event: request_response::Event<ControlRequest, ControlResponse>,
+    ) {
         struct UnusedPacketIo;
         impl crate::runtime::tun::PacketRead for UnusedPacketIo {
             fn read_packet(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
@@ -44039,8 +44322,6 @@ mod tests {
         let mut membership =
             OverlayMembership::from_config(forwarder.config()).expect("membership");
         let mut tun_runtime = TunRuntimeConfig::from_config(forwarder.config()).expect("TUN");
-        let mut local_capabilities = ControlCapabilities::local("lab", None, 1280)
-            .with_membership_record_inventory(forwarder.member_records());
         handle_control_event(
             &mut node.swarm,
             &mut SwarmEventContext {
@@ -44071,7 +44352,7 @@ mod tests {
                 membership_record_syncs: syncs,
                 pairing_handshake_rate_limiter: &mut GlobalRateLimiter::new(1, Instant::now()),
                 metrics,
-                local_capabilities: &mut local_capabilities,
+                local_capabilities,
                 persistent_packet_endpoint_candidates: &[],
                 persistent_packet_plane_quic_endpoint_candidates: &[],
                 previous_membership_tags: &[],

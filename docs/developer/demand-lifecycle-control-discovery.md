@@ -2,9 +2,9 @@
 
 ## Status
 
-Implementation contract, published before runtime changes. Production quiet
-support stays disabled until recovery, activation, reachability, and energy
-gates pass. Query counters are not battery measurements.
+The contract was published before implementation. Finite control-owned lookup
+now extends the shared native recovery owner. Production quiet support remains
+disabled; activation, reachability, and energy gates are still open.
 
 ## Protocol Audit
 
@@ -50,6 +50,7 @@ The existing network provider key supplies the complementary discovery path.
 - Reuse the existing address-change/refresh owner and its capacity/backoff limits.
 - Public address changes refresh provider addresses through `ADD_PROVIDER`, not unsupported custom `PUT_VALUE` requests.
 - Keep the existing private signed-record freshness contract.
+- Public ordinary maintenance has one provider task, not a second address-value publisher.
 - Preserve explicit discovery/advertisement disable settings and minimal JSON/Nix configuration.
 - Do not add another periodic provider publisher or user-managed relay requirement.
 
@@ -71,3 +72,50 @@ The existing network provider key supplies the complementary discovery path.
 The namespace fixture uses simulated public IPs and no external route. It is
 evidence of native protocol behavior and scope isolation, not public-WAN or
 cellular battery acceptance.
+
+## Native Fixture
+
+| Role | Evidence |
+| --- | --- |
+| Router | Real IPFS-protocol DHT server in a disposable network namespace |
+| Publisher | Client-mode peer publishes its TCP listener; router stores it outside its routing buckets |
+| Recipient | Starts with only the router address; control target address is absent from configuration and native lookup cache |
+| Delivery | Scoped provider lookup learns the target; native encrypted control request receives an accepted reply |
+| Isolation | Unrelated provider is returned but never dialed; target is not promoted to a DHT routing server |
+| Quiet | Application-demand version is unchanged and packet path remains dormant |
+| Timing | LAN grace is injected; TCP publication, discovery, secure connection, and acknowledgement use real sockets |
+
+- Wait for the router's stored record, not just local publication completion; `ADD_PROVIDER` has no remote acknowledgement.
+- Compare normalized `/p2p/<peer-id>` addresses, not bare listener addresses.
+- Replace inherited bootstrap address books; allow dials only to the isolated router and intended target.
+- On timeout, report the active fixture stage rather than a generic elapsed error.
+
+These checks do not establish first IP payload recovery, long dormancy,
+public-WAN availability, mobile roaming, or battery savings.
+
+## Verification Record
+
+| Check | Result |
+| --- | --- |
+| Scoped recovery driver | Seven focused tests pass: LAN priority, scope checks, cancellation, deadlines, fallback, signed values, and target-only retention |
+| Shared native query owner | Thirteen tests pass, including data/control capacity, quiet cancellation, cooldown, expiry, and network reset |
+| Public publication | Three tests pass: provider records, explicit disable/private compatibility, and one ordinary public provider task |
+| Native public client | Three repeated namespace runs pass on final source; real TCP control delivery and scope isolation |
+| Lifecycle dispatcher | Twenty-seven tests pass, including collision-safe fixture admission and unchanged request budgets |
+| Workspace/all targets | 2,086 passed; zero failed; 50 existing/opt-in exclusions |
+| Clippy | Correctness, suspicious, and performance groups pass; other advisory warnings remain |
+| Formatting | Workspace Rust passes |
+| Package sources | Linux and Android ARM64/x86-64 evaluate; runtime, patched native dependencies, and lockfile match byte-for-byte |
+| Linux test inventory | All 41 Rust integration/support files match the evaluated source |
+| Resources | Cached Nix tools, one existing approximately 7 GiB target, two jobs, no incremental compilation or downloads |
+| Not exercised | Full Nix/APK builds, device/service deployment, long dormancy, public-WAN activation, and cellular energy |
+
+The first broad run exposed an unrelated random derived-address collision in
+the rate-budget fixture. Its corrected setup filters occupied derived addresses
+without overriding IPs or weakening production route validation.
+
+The superseded alias-address attempt was stopped, not counted as a passing run.
+Full Nix builds remain outside cached-only verification: the earlier offline dry
+run required 493 uncached derivations, including bootstrap compilers.
+
+These executable checks are not a formal proof or a battery comparison.

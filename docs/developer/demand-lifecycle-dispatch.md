@@ -122,8 +122,8 @@ Cached membership and DNS must remain authorized without retaining every socket.
 
 ## Remaining Activation Work
 
-1. Integrate bounded public discovery for cold control delivery; retained addresses alone are insufficient.
-2. Preserve finite control recovery while quiet discovery suppresses unrelated background work.
+1. Validate implemented bounded cold control discovery through public-WAN and extended dormancy scenarios.
+2. Preserve its native ownership while completing quiet discovery/NAT suppression.
 3. Complete remaining discovery/NAT quiet policy and prove first-payload recovery through the integrated runner.
 4. Verify extended dormancy, roaming, mixed-version operation, and feature-preservation gates before production advertisement.
 5. Run matched, replicated cellular comparisons; no source or socket test establishes 10x savings.
@@ -140,7 +140,7 @@ stale-epoch anchors; they do not replace the remaining integrated/device gates.
 
 | Check | Evidence |
 | --- | --- |
-| Focused lifecycle tests | 93 pass: 34 policy, 23 protocol, 10 activity, and 26 dispatcher tests |
+| Focused lifecycle tests | 94 pass: 34 policy, 23 protocol, 10 activity, and 27 dispatcher/fixture tests |
 | Idle commit interruption | Eight cases: demand, revocation, peer restart, underlay change, retirement, incoming-path loss, new work, and membership rotation |
 | Queue ownership | Repeated cancellation, expiry, and revocation cannot recycle an outstanding transport slot |
 | Admission | Unknown peers retain no state; table overflow is bounded; peer/network budgets and monotonic refill pass |
@@ -152,7 +152,8 @@ stale-epoch anchors; they do not replace the remaining integrated/device gates.
 | Dormant control delivery | 18 coalescing, deadline, quarantine, native-slot, LAN reconnect, and connection-ID regressions pass |
 | Checkpoint-only publication | Seven new regressions pass, including real gated TCP callbacks/replies, finite attempts, revocation, and expiry |
 | Checkpoint ownership | 58 tests pass, including finite hostname catch-up and cancelled/expired control leases |
-| Workspace/all-targets | 2,073 passed; zero failures; 49 existing exclusions, including opt-in namespace/resource scenarios |
+| Workspace/all-targets | 2,086 passed; zero failures; 50 existing exclusions, including opt-in namespace/resource scenarios |
+| Cold control discovery | Seven driver regressions and three native namespace runs pass; no demand renewal or foreign-provider dials |
 | Clippy | Required correctness, suspicious, and performance groups pass; advisory and staged-unused API warnings remain |
 | Formatting and packaging | Workspace and vendored Rust formatting pass; evaluated Linux/Android sources include identical runtime and patched dependency |
 | Unrun operational gates | Full Nix/Android package builds, NixOS VMs, live device/public-relay tests, long dormancy, and energy comparisons |
