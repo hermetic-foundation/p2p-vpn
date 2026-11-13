@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "kind": "android_lifecycle_membership_preflight",
+  "candidate": "C3",
+  "date_utc": "2026-11-14",
+  "runtime_revision": "3bd77637bce3895bae8239a9f8b703558b856142",
+  "production_lifecycle_default_enabled": false,
+  "goal_complete": false,
+  "energy_measured": false,
+  "battery_improvement_ratio": null,
+  "candidate_accepted": false,
+  "functional_passed": false,
+  "topology": {"updated_linux_counterparts": 4, "updated_android_endpoints": 1, "authorized_phone_members": 6, "offline_authorized_members_preserved": 2},
+  "context": {"cellular_validated": true, "screen_off_at_boundaries": true, "accounting_mode": "hardware_no_energy_measurement"},
+  "probes": {
+    "observation_seconds": 45,
+    "runtime_first_wake_queue_retention_seconds": 30,
+    "independent_idle_seconds_each_direction": 180,
+    "inbound": {"first_sent": 1, "first_received": 1, "elapsed_seconds": 1.2192902599927038, "steady_sent": 3, "steady_received": 3},
+    "outbound": {"first_sent": 1, "first_received": 0, "elapsed_seconds": 45.275680207880214, "steady_attempted": false},
+    "manual_rescue_attempts": 0,
+    "both_directions_independently_cold_proven": false
+  },
+  "idle_state": {
+    "local_linux_maintenance_paused_toward_phone": true,
+    "local_linux_quiet_toward_phone": false,
+    "first_window_phone_counter_deltas": {"outbound_path_probes_sent": 33, "inbound_path_probes_accepted": 32, "autonat_probes_scheduled": 165, "kademlia_provider_lookups": 7, "outbound_sent_packets": 1, "inbound_accepted_packets": 2},
+    "second_window_phone_counter_deltas": {"outbound_path_probes_sent": 9, "inbound_path_probes_accepted": 10, "autonat_probes_scheduled": 144, "kademlia_provider_lookups": 6, "outbound_sent_packets": 2, "inbound_accepted_packets": 2},
+    "public_routing_peers_retained_at_boundaries": [31, 27],
+    "zero_payload_energy_window": false,
+    "scheduled_autonat_events_are_not_transmitted_packet_counts": true
+  },
+  "failure_limits": [
+    "The phone peer did not reach committed quiet on the local Linux endpoint.",
+    "The failed outgoing ping does not identify whether its request or reply leg failed.",
+    "Relay connection and authenticated wake/control recovery are not proof of IP delivery.",
+    "These counters do not establish an energy improvement or causal battery share."
+  ],
+  "retained_attempts": [
+    {"attempt": 1, "report_sha256": "9d1449b1b1eeda789782515523263573813203fe0014c47b2371fdf595e5e6f3", "outcome": "Restricted PATH selected unprivileged sudo before service deployment."},
+    {"attempt": 2, "report_sha256": "bfd4494238f0b6c65a65a831c47ec130260b587da23169231febcecc995c4bd4", "outcome": "Functional harness incorrectly required simulated energy accounting; no cold packet sent; originals restored."},
+    {"attempt": 3, "report_sha256": "5c8b92c61ea827676ab0aea50fc13382fe0248fae99451c863d1698a56427943", "outcome": "Corrected functional harness: inbound pass, outbound fail; originals restored."}
+  ],
+  "private_failure_journals_sha256": [
+    "efe87764c7f7cfbf4d72f437e20b55fbe972cb826bb5c77813ad5b9994a0ccb4",
+    "a21a072380ac1c7e2506847232e86a581f0773efcae6255af6b4d7a00aa7199d",
+    "0ac97527f708253f679131122260a490fa7b872985f7316f3f410ce8b0655a6f",
+    "19c597ef84607ce6cabe2ca5a7536000abb293e37800b4828c969186152abcd1"
+  ],
+  "build": {
+    "feature": "demand-lifecycle-trial",
+    "native_nix_build_succeeded": true,
+    "native_source": "/nix/store/yfwsgjiha5g8ip8n6grw8wgdsafb4j7z-source",
+    "apk_sha256": "65dcd680872f1541eccba2cc018902413547d19457161ec510ec7b960ad9ee2c",
+    "apk_bytes": 20047267,
+    "packaged_native_sha256": "ee78aacc2c29445e451bb53b60e35306bf9cbb764f68e98e0ab74c55ca310621",
+    "linux_sha256": "46f08fe15af95f4492610aa33ad44d164e20b357c3313fa2b1ff96c3296355f1",
+    "linux_bytes": 84734656,
+    "apk_signature_matches_original": true,
+    "zipalign_16k_passed": true,
+    "packaged_native_matches_stripped_output": true
+  },
+  "verification": {"enabled_rust_workspace_all_targets_exit_code": 0, "android_unit_tests": 158, "android_unit_failures": 0, "android_lint_errors": 0, "android_lint_warnings": 7, "capture_tests": 57, "comparison_tests": 40, "capture_and_comparison_nix_checks_passed": true, "formal_proof_claimed": false},
+  "restoration": {"original_apk_verified": true, "encrypted_profile_unchanged": true, "membership_unchanged": true, "wifi_restored_and_native_runtime_running": true, "battery_reporting_hardware": true, "all_four_linux_original_executables_and_configs_verified": true, "management_network_service_pids_unchanged": true, "trial_overrides_and_remote_staging_removed": true},
+  "next": [
+    "Verify finite offline discovery budgets without declaring offline members dormant.",
+    "Repeat first-packet checks with post-probe counters to isolate any failed leg.",
+    "Require committed quiet and incoming access before fresh matched replicated energy pairs."
+  ]
+}

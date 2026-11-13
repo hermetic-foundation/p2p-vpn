@@ -202,5 +202,22 @@ idle period. The runtime's `FIRST_WAKE_PACKET_RETENTION` is 30 seconds per queue
 admission; the 45-second observation window is not a retention guarantee or a
 proof that recovery met that deadline. This change does not modify the runtime.
 
+### Physical Preflight: C3
+
+| Check | Result |
+| --- | --- |
+| Counterparts | Four Linux candidates plus the same candidate on Android; six authorized members, two offline |
+| Independent idle | Three minutes before each direction; screen off and validated cellular |
+| Incoming | One packet delivered in 1.21 seconds, then 3/3 steady packets |
+| Outgoing | First packet failed after 45 seconds; no retry or steady check |
+| Lifecycle | Local maintenance pause observed; phone peer did not commit quiet locally |
+| Remaining work | First window: 33 outbound path probes, 165 scheduled AutoNAT events, seven DHT lookups |
+| Acceptance | Rejected; no energy measurement or savings claim |
+| Restoration | Original APK, profile, membership, Wi-Fi, and all four Linux services verified |
+
+See the [retained C3 record](android-lifecycle-membership-preflight-2026-11-14.json).
+The windows contain small payload-counter changes and are not clean energy
+samples. Scheduled AutoNAT events are not transmitted-packet counts.
+
 See Perfetto's [streaming contract](https://perfetto.dev/docs/concepts/config#streaming-long-traces)
 and [buffer statistics](https://raw.githubusercontent.com/google/perfetto/main/protos/perfetto/common/trace_stats.proto).
