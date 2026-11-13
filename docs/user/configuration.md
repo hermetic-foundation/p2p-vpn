@@ -39,7 +39,7 @@ Set it only to assert the key belongs to an expected peer ID.
 | `network.bootstrap_peers` | empty in JSON; public defaults at runtime |
 | `network.dns` | disabled |
 | `network.discovery` | public discovery defaults |
-| `network.relay` | disabled relay server, no reservations |
+| `network.relay` | relay server off, no explicit reservations, at most one automatic reservation |
 | `network.packet_plane` | UDP packet plane listens on `0.0.0.0:0` |
 | `queue` | `256` packets, `512 KiB`, `3000 ms` packet age |
 | `resources` | built-in connection and stream limits |

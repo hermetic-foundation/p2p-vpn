@@ -373,6 +373,7 @@ Tune automatic selection with `autoRelay`:
 {
   services.p2p-vpn.instances.lab.autoRelay = {
     maxCandidates = 16;
+    # Optional redundancy; the default is one reservation.
     maxReservations = 2;
     retryIntervalSeconds = 30;
   };

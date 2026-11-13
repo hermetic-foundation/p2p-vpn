@@ -1304,7 +1304,7 @@ pub const fn default_auto_relay_max_candidates() -> usize {
 
 #[must_use]
 pub const fn default_auto_relay_max_reservations() -> usize {
-    2
+    1
 }
 
 #[must_use]
@@ -4135,6 +4135,21 @@ mod tests {
                 retry_interval_seconds: 17,
             }
         );
+    }
+
+    #[test]
+    fn auto_relay_defaults_to_one_and_keeps_explicit_reservation_limits() {
+        for (json, reservations) in [
+            ("{}", 1),
+            (r#"{"max_candidates":8}"#, 1),
+            (r#"{"max_reservations":0}"#, 0),
+            (r#"{"max_reservations":2}"#, 2),
+            (r#"{"max_reservations":3}"#, 3),
+        ] {
+            let policy: AutoRelayConfig = serde_json::from_str(json).unwrap();
+            assert_eq!(policy.max_reservations, reservations, "{json}");
+            assert_eq!(policy.retry_interval_seconds, 30);
+        }
     }
 
     #[test]

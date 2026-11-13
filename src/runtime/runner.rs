@@ -36524,7 +36524,10 @@ mod tests {
         let public_address: Multiaddr = format!("/ip4/127.0.0.1/tcp/4002/p2p/{public_relay}")
             .parse()
             .expect("relay address");
-        let mut state = AutoRelayState::default();
+        let mut state = AutoRelayState::new(AutoRelayConfig {
+            max_reservations: 2,
+            ..AutoRelayConfig::default()
+        });
         let now = Instant::now();
 
         assert!(state.record_candidate(relay, address.clone()));
@@ -36906,6 +36909,7 @@ mod tests {
             let (_, mut node) = autonat_query_test_node(protocol, Duration::from_secs(600), 1);
             let mut auto_relay = AutoRelayState::new(AutoRelayConfig {
                 max_candidates: 2,
+                max_reservations: 2,
                 ..AutoRelayConfig::default()
             });
             let metrics = RuntimeMetrics::default();
@@ -37148,7 +37152,10 @@ mod tests {
         let other_address: Multiaddr = format!("/ip4/127.0.0.1/tcp/4002/p2p/{other}")
             .parse()
             .expect("other relay address");
-        let mut state = AutoRelayState::default();
+        let mut state = AutoRelayState::new(AutoRelayConfig {
+            max_reservations: 2,
+            ..AutoRelayConfig::default()
+        });
         let now = Instant::now();
         state.record_reachability(AutoNatReachability::Private);
 
@@ -37159,6 +37166,36 @@ mod tests {
 
         assert!(state.has_active_reservation(relay));
         assert!(!state.has_active_reservation(other));
+    }
+
+    #[test]
+    fn auto_relay_default_has_one_slot_and_uses_an_alternative_after_loss() {
+        let now = Instant::now();
+        let mut state = AutoRelayState::default();
+        assert_eq!(state.policy.max_reservations, 1);
+        let peers = [peer_id(), peer_id()];
+        let addresses = peers.map(|peer| {
+            format!("/ip4/127.0.0.1/tcp/4001/p2p/{peer}")
+                .parse::<Multiaddr>()
+                .unwrap()
+        });
+        for (peer, address) in peers.into_iter().zip(&addresses) {
+            state.record_candidate(peer, address.clone());
+        }
+        assert_eq!(
+            state.next_reservation_targets(now),
+            [(peers[0], addresses[0].clone())]
+        );
+        assert_eq!(state.reservation_slots(), 1);
+        assert!(state.next_reservation_targets(now).is_empty());
+        state.record_reservation_accepted(peers[0]);
+        assert!(state.next_reservation_targets(now).is_empty());
+        state.release_reservation_for_retry_after(peers[0], now);
+        assert_eq!(
+            state.next_reservation_targets(now),
+            [(peers[1], addresses[1].clone())]
+        );
+        assert_eq!(state.reservation_slots(), 1);
     }
 
     #[tokio::test]

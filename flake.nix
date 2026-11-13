@@ -6111,6 +6111,10 @@
             inherit pkgs lib system;
             module = self.nixosModules.default;
           };
+          nixos-relay-defaults-eval = import ./tests/nixos/relay-defaults-eval.nix {
+            inherit pkgs lib system;
+            module = self.nixosModules.default;
+          };
           nixos-consumer-flake =
             pkgs.runCommand "p2p-vpn-nixos-consumer-flake"
               {

@@ -104,6 +104,7 @@ server duties or advertise itself as a Kademlia server.
 
 | Control | Behavior |
 | --- | --- |
+| Automatic incoming relays | One reservation by default; explicit limits and reservations remain configurable. |
 | Maintenance cadence | At most once every two minutes. |
 | Query overlap | A second cycle cannot start while one is active. |
 | AutoNAT-triggered relay lookup | Shares the two-minute cadence; pauses when acquisition is disabled, candidates or reservations are sufficient, or query capacity is full. |

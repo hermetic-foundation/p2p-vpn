@@ -94,7 +94,7 @@ the bilateral lifecycle exchange.
 | Attempt epochs | Start observations preserve initial epoch, retirement, and establishment time; late success cannot admit stale/retired paths |
 | Runtime acquisition/readiness | Two-stage setup; the listener record retains its selected connection ID, which must be natively confirmed |
 | Explicit overrides | Automatic attempts exclude explicitly configured relay peer IDs, including while explicit setup is pending |
-| Automatic footprint | Existing default remains two; changing Rust/Nix defaults to one is pending |
+| Automatic footprint | Rust and native Nix default to one; explicit disable/redundancy settings and one-slot failover are tested |
 | Candidate exhaustion | Dedicated bounded native query ownership replenishes an empty pool independently of mesh quietness |
 | Sparse heartbeat and pruning | Pending |
 | Dormant control delivery and activation | Pending |

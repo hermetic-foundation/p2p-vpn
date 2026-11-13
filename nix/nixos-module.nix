@@ -971,7 +971,7 @@ let
                 };
                 maxReservations = mkOption {
                   type = types.ints.unsigned;
-                  default = 2;
+                  default = 1;
                   description = "Maximum active automatic relay reservations.";
                 };
                 retryIntervalSeconds = mkOption {
