@@ -1307,13 +1307,13 @@ impl Forwarder {
             return Err(ForwardError::NoTransportPeer(route.owner));
         }
         let (session_id, sequence) = self.take_outbound_sequence();
+        let first_wake = self.application_demand.is_quiet(route.owner);
         self.application_demand.record(route.owner, Instant::now());
-        Ok(Packet::new_for_session(
-            route.owner,
-            session_id,
-            sequence,
-            packet,
-        ))
+        let mut packet = Packet::new_for_session(route.owner, session_id, sequence, packet);
+        if first_wake {
+            packet.retain_for_first_wake();
+        }
+        Ok(packet)
     }
 
     fn take_outbound_sequence(&mut self) -> (SessionId, Sequence) {

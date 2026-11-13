@@ -65,6 +65,82 @@ fn demand_records_new_tun_admission_but_not_queued_frame_retries() {
 }
 
 #[test]
+fn only_first_negotiated_wake_packet_gets_fixed_recovery_retention() {
+    let (config, remote, mut forwarder) = fixture();
+    let peer = PeerId::from_libp2p(remote);
+    let local = config.local_peer_id().unwrap();
+    let bytes = packet4(builtin_ipv4(local), builtin_ipv4(peer));
+    let mut queues = PeerQueues::with_packet_ttl(2, 4096, Duration::from_secs(3));
+    let before = forwarder.application_demand(peer).unwrap();
+    assert!(forwarder.grant_data_path_quiet(peer, before.version.unwrap()));
+    forwarder
+        .enqueue_tun_packet(&mut queues, bytes.clone())
+        .unwrap();
+    let demand = forwarder.application_demand(peer).unwrap();
+    let first = queues.dequeue().unwrap();
+    let original_time = first.enqueued_at();
+    let expiry = original_time + crate::queue::FIRST_WAKE_PACKET_RETENTION;
+    assert!(!first.is_expired(
+        original_time + Duration::from_secs(15),
+        Duration::from_secs(3)
+    ));
+    assert!(!first.is_expired(expiry, Duration::from_secs(3)));
+    assert!(first.is_expired(expiry + Duration::from_nanos(1), Duration::from_secs(3)));
+    assert!(
+        !first.is_expired(expiry + Duration::from_secs(1), Duration::from_secs(60)),
+        "an explicitly longer ordinary age remains unchanged"
+    );
+    for _ in 0..100 {
+        forwarder
+            .queued_packet_frame_with_mtu(&first, 1280)
+            .unwrap();
+        queues.enqueue(first.clone()).unwrap();
+        assert_eq!(queues.dequeue().unwrap().enqueued_at(), original_time);
+    }
+    assert_eq!(forwarder.application_demand(peer), Some(demand));
+
+    forwarder.enqueue_tun_packet(&mut queues, bytes).unwrap();
+    let next = queues.dequeue().unwrap();
+    assert!(next.is_expired(
+        next.enqueued_at() + Duration::from_secs(4),
+        Duration::from_secs(3)
+    ));
+    queues.enqueue(first).unwrap();
+    queues.enqueue(next).unwrap();
+    queues.drop_expired(original_time + Duration::from_secs(4));
+    assert_eq!(queues.total_stats().queued_packets, 1);
+    assert_eq!(queues.total_stats().expired_packets, 1);
+    queues.drop_expired(expiry + Duration::from_nanos(1));
+    assert_eq!(queues.total_stats().queued_packets, 0);
+    assert_eq!(queues.total_stats().expired_packets, 2);
+}
+
+#[test]
+fn idle_preparation_and_legacy_admission_keep_ordinary_packet_age() {
+    let (config, remote, mut forwarder) = fixture();
+    let peer = PeerId::from_libp2p(remote);
+    let local = config.local_peer_id().unwrap();
+    let mut queues = PeerQueues::new(2, 4096);
+    for preparing in [false, true] {
+        if preparing {
+            let version = forwarder.application_demand(peer).unwrap().version.unwrap();
+            assert!(forwarder.pause_data_path_maintenance(peer, version));
+        }
+        forwarder
+            .enqueue_tun_packet(
+                &mut queues,
+                packet4(builtin_ipv4(local), builtin_ipv4(peer)),
+            )
+            .unwrap();
+        let packet = queues.dequeue().unwrap();
+        assert!(packet.is_expired(
+            packet.enqueued_at() + Duration::from_secs(4),
+            Duration::from_secs(3)
+        ));
+    }
+}
+
+#[test]
 fn demand_includes_valid_backpressured_attempts_but_not_rejected_ip() {
     let (config, remote, mut forwarder) = fixture();
     let peer = PeerId::from_libp2p(remote);

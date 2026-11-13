@@ -8,6 +8,7 @@ use crate::{PeerId, Sequence, SessionId};
 pub type FlowShard = u8;
 
 const FLOW_SHARDS: FlowShard = 16;
+pub(crate) const FIRST_WAKE_PACKET_RETENTION: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Packet {
@@ -17,6 +18,7 @@ pub struct Packet {
     flow_shard: FlowShard,
     bytes: Vec<u8>,
     enqueued_at: Instant,
+    first_wake: bool,
 }
 
 impl Packet {
@@ -29,6 +31,7 @@ impl Packet {
             flow_shard: flow_shard(&bytes),
             bytes,
             enqueued_at: Instant::now(),
+            first_wake: false,
         }
     }
 
@@ -41,6 +44,7 @@ impl Packet {
             flow_shard: flow_shard(&bytes),
             bytes,
             enqueued_at,
+            first_wake: false,
         }
     }
 
@@ -58,6 +62,7 @@ impl Packet {
             flow_shard: flow_shard(&bytes),
             bytes,
             enqueued_at: Instant::now(),
+            first_wake: false,
         }
     }
 
@@ -106,8 +111,19 @@ impl Packet {
         self.enqueued_at
     }
 
+    /// Retain the one packet that consumed negotiated quiet permission while
+    /// LAN-first recovery runs. Retries never change its original admission.
+    pub(crate) fn retain_for_first_wake(&mut self) {
+        self.first_wake = true;
+    }
+
     #[must_use]
     pub fn is_expired(&self, now: Instant, max_age: Duration) -> bool {
+        let max_age = if self.first_wake {
+            max_age.max(FIRST_WAKE_PACKET_RETENTION)
+        } else {
+            max_age
+        };
         now.saturating_duration_since(self.enqueued_at) > max_age
     }
 }
@@ -224,22 +240,19 @@ impl PeerQueue {
     }
 
     pub fn drop_expired(&mut self, now: Instant) {
-        let Some(first_fresh) = self
-            .packets
-            .iter()
-            .position(|packet| !packet.is_expired(now, self.max_packet_age))
-        else {
-            while let Some(packet) = self.dequeue() {
-                self.record_expire(packet.len());
+        // A retained wake packet can outlive ordinary packets behind it.
+        let mut expired_packets = 0;
+        let mut expired_bytes = 0;
+        self.packets.retain(|packet| {
+            if packet.is_expired(now, self.max_packet_age) {
+                expired_packets += 1;
+                expired_bytes += packet.len();
+                false
+            } else {
+                true
             }
-            return;
-        };
-
-        for _ in 0..first_fresh {
-            if let Some(packet) = self.dequeue() {
-                self.record_expire(packet.len());
-            }
-        }
+        });
+        self.record_expire(expired_packets, expired_bytes);
     }
 
     #[must_use]
@@ -263,10 +276,15 @@ impl PeerQueue {
         self.stats.dropped_bytes += u64::try_from(packet_bytes).unwrap_or(u64::MAX);
     }
 
-    fn record_expire(&mut self, packet_bytes: usize) {
-        self.record_drop(packet_bytes);
-        self.stats.expired_packets += 1;
-        self.stats.expired_bytes += u64::try_from(packet_bytes).unwrap_or(u64::MAX);
+    fn record_expire(&mut self, packets: usize, bytes: usize) {
+        self.stats.queued_packets -= packets;
+        self.stats.queued_bytes -= bytes;
+        let packets = u64::try_from(packets).unwrap_or(u64::MAX);
+        let bytes = u64::try_from(bytes).unwrap_or(u64::MAX);
+        self.stats.dropped_packets += packets;
+        self.stats.dropped_bytes += bytes;
+        self.stats.expired_packets += packets;
+        self.stats.expired_bytes += bytes;
     }
 }
 
@@ -526,6 +544,56 @@ mod tests {
 
     fn peer(seed: u8) -> PeerId {
         PeerId::from_bytes([seed; 32])
+    }
+
+    #[test]
+    fn first_wake_retention_preserves_capacity_and_expiration_accounting() {
+        let now = Instant::now();
+        let mut packet = Packet::new_at(peer(1), 1, vec![1; 3], now);
+        packet.retain_for_first_wake();
+        let mut queue = PeerQueue::with_packet_ttl(1, 3, Duration::from_secs(3));
+        queue.enqueue(packet.clone()).unwrap();
+        assert!(matches!(
+            queue.enqueue(packet),
+            Err(EnqueueError::QueueFull { .. })
+        ));
+        let mut oversized = Packet::new_at(peer(1), 2, vec![2; 4], now);
+        oversized.retain_for_first_wake();
+        assert!(matches!(
+            queue.enqueue(oversized),
+            Err(EnqueueError::PacketTooLarge { .. })
+        ));
+        queue.drop_expired(now + Duration::from_secs(4));
+        assert_eq!(queue.stats().queued_packets, 1);
+        assert_eq!(queue.stats().queued_bytes, 3);
+        queue.drop_expired(now + FIRST_WAKE_PACKET_RETENTION + Duration::from_nanos(1));
+        let stats = queue.stats();
+        assert_eq!(stats.queued_packets, 0);
+        assert_eq!(stats.queued_bytes, 0);
+        assert_eq!(stats.expired_packets, 1);
+        assert_eq!(stats.expired_bytes, 3);
+        assert_eq!(stats.dropped_packets, 3);
+        assert_eq!(stats.dropped_bytes, 10);
+    }
+
+    #[test]
+    fn mixed_retention_removes_expired_interiors_without_reordering() {
+        let now = Instant::now();
+        let mut queue = PeerQueue::with_packet_ttl(5, 100, Duration::from_secs(3));
+        for sequence in 0..5 {
+            let mut packet = Packet::new_at(peer(1), sequence, vec![1; 3], now);
+            if sequence % 2 == 0 {
+                packet.retain_for_first_wake();
+            }
+            queue.enqueue(packet).unwrap();
+        }
+        queue.drop_expired(now + Duration::from_secs(4));
+        assert_eq!(queue.stats().expired_packets, 2);
+        assert_eq!(queue.stats().queued_bytes, 9);
+        let retained = std::iter::from_fn(|| queue.dequeue())
+            .map(|packet| packet.sequence())
+            .collect::<Vec<_>>();
+        assert_eq!(retained, [0, 2, 4]);
     }
 
     fn ipv4_tcp_packet(source_port: u16, destination_port: u16) -> Vec<u8> {
