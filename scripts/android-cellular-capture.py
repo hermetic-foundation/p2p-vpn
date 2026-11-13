@@ -366,10 +366,18 @@ class Device:
             "| sed -n '/last known state:/,/local logs:/p'",
         )
 
+    def network_state(self):
+        return self.shell(
+            "sh",
+            "-c",
+            "set -o pipefail; dumpsys connectivity | grep -E "
+            "'^[[:space:]]*(Active default network:|NetworkAgentInfo[{]network[{])'",
+        )
+
     def preflight(self, workload):
         self.usb()
         screen_off(self.shell("dumpsys", "power"))
-        network_line = validated_cellular(self.shell("dumpsys", "connectivity"))
+        network_line = validated_cellular(self.network_state())
         parse_signal(self.radio_state(), subscription_id(network_line))
         live_temperature(self.shell("dumpsys", "thermalservice"))
         require(
@@ -493,7 +501,7 @@ class Device:
         return identity, evidence
 
     def context(self, workload, evidence):
-        network_line = validated_cellular(self.shell("dumpsys", "connectivity"))
+        network_line = validated_cellular(self.network_state())
         radio = parse_signal(self.radio_state(), subscription_id(network_line))
         evidence["radio"] = radio
         screen_off(self.shell("dumpsys", "power"))

@@ -375,6 +375,30 @@ class CaptureWorkflowTests(unittest.TestCase):
 
 
 class DeviceSafetyTests(unittest.TestCase):
+    def test_network_dump_filters_current_agents_and_preserves_failures(self):
+        device = tool.Device("PIXEL1234")
+        raw = "Active default network: 123\n  NetworkAgentInfo{network{123} ni{MOBILE[LTE] IS_VALIDATED SubscriptionIds: {1}}"
+        with patch.object(device, "shell", return_value=raw) as shell:
+            self.assertEqual(
+                tool.subscription_id(tool.validated_cellular(device.network_state())),
+                1,
+            )
+        shell.assert_called_once_with(
+            "sh",
+            "-c",
+            "set -o pipefail; dumpsys connectivity | grep -E "
+            "'^[[:space:]]*(Active default network:|NetworkAgentInfo[{]network[{])'",
+        )
+        with (
+            patch.object(
+                device,
+                "shell",
+                side_effect=tool.CommandFailure("command_failed", b"", b"", 1),
+            ),
+            self.assertRaises(tool.CommandFailure),
+        ):
+            device.network_state()
+
     def test_radio_dump_filters_history_on_device_and_preserves_failures(self):
         device = tool.Device("PIXEL1234")
         with patch.object(device, "shell", return_value=radio_state()) as shell:

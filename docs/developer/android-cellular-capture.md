@@ -113,6 +113,8 @@ and [network capability subscription IDs](https://android.googlesource.com/platf
 Full telephony records, phone numbers and subscriber identifiers are never retained.
 The current-state section is filtered on-device, before the bounded ADB read;
 historical log growth cannot exhaust that read. Dump failures still fail capture.
+Connectivity reads likewise retain only the active-default identifier and
+current network-agent lines before applying the same bounded read.
 
 Do not infer authorization from the number of live sessions. Bind the expected
 inventory to unchanged profile/membership evidence, and verify the actual
