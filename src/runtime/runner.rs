@@ -24236,6 +24236,7 @@ fn dial_kademlia_providers(
     for provider in providers {
         if *provider == *swarm.local_peer_id()
             || !forwarder.is_configured_transport_peer(*provider)
+            || forwarder.data_path_maintenance_is_paused(PeerId::from_libp2p(*provider))
             || swarm.is_connected(provider)
             || !dial_allowed(*provider)
         {
@@ -24666,13 +24667,16 @@ fn learn_peer_address_with_policy(
         autonat.add_server(peer, Some(address.clone()));
     }
 
-    if !should_dial_discovered_address(
-        paths,
-        peer,
-        swarm.is_connected(&peer),
-        &address,
-        lan_promotion,
-    ) {
+    // Retain validated hints while paused without creating a data-dial cooldown.
+    if forwarder.data_path_maintenance_is_paused(PeerId::from_libp2p(peer))
+        || !should_dial_discovered_address(
+            paths,
+            peer,
+            swarm.is_connected(&peer),
+            &address,
+            lan_promotion,
+        )
+    {
         return;
     }
     if !discovered_peer_addresses.is_ready_at(peer, &address, now) {

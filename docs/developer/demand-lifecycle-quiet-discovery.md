@@ -49,6 +49,9 @@ existing per-poll and shared query budgets still apply.
 - Preserve scoped, live control-query ownership and failure cooldowns.
 - Keep explicit application recovery, LAN-first selection, incoming-relay repair, and configured reservations available.
 - Maintenance events cannot advance application demand or clear negotiated quiet permission.
+- Recheck maintenance pause before ordinary discovered-address and provider dial effects, including late closest-peer success/timeout results.
+- Cache validated address hints while paused without creating a data-dial cooldown; actual payload demand restores normal eligibility.
+- Scoped control-result delivery retains its separate ownership and original deadline, even for a maintenance-paused member.
 
 This change does not declare an unseen/offline legacy peer dormant. Broader
 offline-peer retry policy and integrated first-packet recovery remain activation

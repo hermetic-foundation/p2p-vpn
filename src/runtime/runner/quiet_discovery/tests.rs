@@ -1,6 +1,8 @@
 use super::*;
 use crate::runtime::runner::tests::{config_with_peer, membership_sync_test_node};
 
+mod automatic_dial_effects;
+
 struct Fixture {
     node: P2pNode,
     forwarder: Forwarder,
