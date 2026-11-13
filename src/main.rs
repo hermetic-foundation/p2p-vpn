@@ -10090,7 +10090,7 @@ mod tests {
         );
         assert!(
             lines.contains(
-                &"relay auto policy: 16 candidates / 2 reservations / 30s retry".to_owned()
+            &"relay auto policy: 16 candidates / 1 reservations / 30s retry".to_owned()
             )
         );
         assert!(lines.iter().any(|line| line
