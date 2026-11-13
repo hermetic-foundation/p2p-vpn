@@ -87,9 +87,42 @@ class BatteryDecoderTests(unittest.TestCase):
 
     def test_missing_clocks(self):
         for field in decoder.SCOPE_FIELDS:
+            if field == "start_count":
+                continue
             message = fixture()
             message.batterystats.system.battery.ClearField(field)
             with self.subTest(field=field), self.assertRaises(decoder.InvalidReport):
+                decoder.decode(message.SerializeToString(), 10303)
+
+    def test_android_omitted_zero_start_count(self):
+        message = fixture()
+        message.batterystats.system.battery.ClearField("start_count")
+        value = decoder.decode(message.SerializeToString(), 10303)
+        self.assertEqual(value["scope"]["start_count"], 0)
+
+    def test_retained_pixel_clock_projection(self):
+        message = fixture()
+        battery = message.batterystats.system.battery
+        battery.ClearField("start_count")
+        for field, value in {
+            "start_clock_time_ms": 1794453312970,
+            "total_realtime_ms": 915606, "total_uptime_ms": 915607,
+            "battery_realtime_ms": 915606, "battery_uptime_ms": 915607,
+            "screen_off_realtime_ms": 910480, "screen_off_uptime_ms": 910482,
+        }.items():
+            setattr(battery, field, value)
+        value = decoder.decode(message.SerializeToString(), 10303)
+        self.assertEqual(value["scope"]["screen_off_uptime_ms"], 910482)
+
+    def test_cross_clock_skew_is_bounded_and_same_clock_order_stays_strict(self):
+        for prefix in ("total", "battery", "screen_off"):
+            message = fixture()
+            battery = message.batterystats.system.battery
+            for field in ("total_uptime_ms", "battery_uptime_ms", "screen_off_uptime_ms"):
+                setattr(battery, field, 123 + decoder.CLOCK_SKEW_MS)
+            decoder.decode(message.SerializeToString(), 10303)
+            setattr(battery, prefix + "_uptime_ms", 124 + decoder.CLOCK_SKEW_MS)
+            with self.subTest(prefix=prefix), self.assertRaises(decoder.InvalidReport):
                 decoder.decode(message.SerializeToString(), 10303)
 
     def test_invalid_clock_order(self):

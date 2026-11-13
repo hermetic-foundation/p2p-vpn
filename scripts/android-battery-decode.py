@@ -14,6 +14,7 @@ from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
 from google.protobuf.message import DecodeError
 
 MAX_REPORT_BYTES = 2 * 1024 * 1024
+CLOCK_SKEW_MS = 5
 SCHEMA = Path(__file__).with_suffix(".proto")
 SCOPE_FIELDS = (
     "start_clock_time_ms",
@@ -71,7 +72,8 @@ def decode(raw, uid):
     if not stats.HasField("system") or not stats.system.HasField("battery"):
         raise InvalidReport("missing scope")
     battery = stats.system.battery
-    if not all(battery.HasField(field) for field in SCOPE_FIELDS):
+    # Android's ProtoOutputStream omits a zero-valued START_COUNT.
+    if not all(battery.HasField(field) for field in SCOPE_FIELDS if field != "start_count"):
         raise InvalidReport("missing clock")
     scope = {field: getattr(battery, field) for field in SCOPE_FIELDS}
     if any(value < 0 for value in scope.values()) or scope["start_clock_time_ms"] == 0:
@@ -80,12 +82,12 @@ def decode(raw, uid):
         scope["screen_off_uptime_ms"]
         <= scope["battery_uptime_ms"]
         <= scope["total_uptime_ms"]
-        <= scope["total_realtime_ms"]
-        and scope["screen_off_uptime_ms"]
-        <= scope["screen_off_realtime_ms"]
+        and scope["screen_off_realtime_ms"]
         <= scope["battery_realtime_ms"]
         <= scope["total_realtime_ms"]
-        and scope["battery_uptime_ms"] <= scope["battery_realtime_ms"]
+        and scope["total_uptime_ms"] <= scope["total_realtime_ms"] + CLOCK_SKEW_MS
+        and scope["screen_off_uptime_ms"] <= scope["screen_off_realtime_ms"] + CLOCK_SKEW_MS
+        and scope["battery_uptime_ms"] <= scope["battery_realtime_ms"] + CLOCK_SKEW_MS
     ):
         raise InvalidReport("inconsistent clocks")
     matches = [entry for entry in stats.uids if entry.HasField("uid") and entry.uid == uid]

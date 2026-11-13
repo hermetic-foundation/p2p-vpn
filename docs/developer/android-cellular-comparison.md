@@ -92,6 +92,22 @@ Clock brackets may span at most two seconds. Allow only bounded sampling
 uncertainty; report that uncertainty. Do not silently shorten a window until
 its screen or radio conditions look better.
 
+### Pixel Wire Compatibility
+
+| Case | Handling |
+| --- | --- |
+| Omitted zero `start_count` | Decode as `0`; still require the timing fields |
+| Uptime versus realtime | Permit at most `5 ms` endpoint skew; preserve original values |
+| Same-clock ordering | Remains strict; screen-off time cannot exceed battery time |
+| Interval admission | Independently require matching monotonic session origins and screen-off deltas |
+
+Retained Pixel reports reproduce the omitted counter and `1-2 ms` clock skew.
+AOSP's [writer](https://raw.githubusercontent.com/aosp-mirror/platform_frameworks_base/android16-release/core/java/android/os/BatteryStats.java)
+samples uptime and realtime separately; its
+[serializer](https://raw.githubusercontent.com/aosp-mirror/platform_frameworks_base/android16-release/core/java/android/util/proto/ProtoOutputStream.java)
+omits zero integer fields. The five-millisecond limit is our conservative
+decoder tolerance, not an Android API guarantee.
+
 ## Rail Validation
 
 | Check | Requirement |
