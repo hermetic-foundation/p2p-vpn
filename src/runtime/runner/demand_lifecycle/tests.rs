@@ -1,6 +1,9 @@
 use super::*;
 use libp2p::SwarmBuilder;
 
+#[path = "tests/legacy.rs"]
+mod legacy;
+
 fn epoch(value: u8) -> Epoch {
     Epoch::new([value; 16]).unwrap()
 }
@@ -57,6 +60,7 @@ impl Fixture {
             connections: &self.connections,
             readiness: &self.readiness,
             usable_path: &usable,
+            application_work: &|_| false,
         }
     }
 
@@ -82,6 +86,13 @@ fn wire_swarm() -> Swarm<WireBehaviour> {
 }
 
 fn wire_swarm_with_protocol(name: &'static str) -> Swarm<WireBehaviour> {
+    wire_swarm_with_support(name, request_response::ProtocolSupport::Full)
+}
+
+fn wire_swarm_with_support(
+    name: &'static str,
+    support: request_response::ProtocolSupport,
+) -> Swarm<WireBehaviour> {
     SwarmBuilder::with_new_identity()
         .with_tokio()
         .with_tcp(
@@ -94,10 +105,7 @@ fn wire_swarm_with_protocol(name: &'static str) -> Swarm<WireBehaviour> {
         .with_behaviour(move |_| {
             request_response::Behaviour::with_codec(
                 LifecycleCodec,
-                [(
-                    libp2p::StreamProtocol::new(name),
-                    request_response::ProtocolSupport::Full,
-                )],
+                [(libp2p::StreamProtocol::new(name), support)],
                 request_response::Config::default()
                     .with_request_timeout(protocol::REQUEST_TIMEOUT)
                     .with_max_concurrent_streams(8),
@@ -115,8 +123,21 @@ async fn connected_protocol(
     listen: &str,
     receiver_protocol: &'static str,
 ) -> (Swarm<WireBehaviour>, Fixture, Swarm<WireBehaviour>, Fixture) {
+    connected_with_support(
+        listen,
+        receiver_protocol,
+        request_response::ProtocolSupport::Full,
+    )
+    .await
+}
+
+async fn connected_with_support(
+    listen: &str,
+    receiver_protocol: &'static str,
+    support: request_response::ProtocolSupport,
+) -> (Swarm<WireBehaviour>, Fixture, Swarm<WireBehaviour>, Fixture) {
     let mut a = wire_swarm();
-    let mut b = wire_swarm_with_protocol(receiver_protocol);
+    let mut b = wire_swarm_with_support(receiver_protocol, support);
     let mut a_context = Fixture::new(*b.local_peer_id(), 1, 2);
     let mut b_context = Fixture::new(*a.local_peer_id(), 2, 1);
     b.listen_on(listen.parse().unwrap()).unwrap();
@@ -158,9 +179,7 @@ async fn idle_then_wake(listen: &str) {
         let mut b_owner = DemandLifecycle::new(epoch(2), 2, 2, now);
         a_owner.observe_peer(&a_context.context(), b_peer, now);
         b_owner.observe_peer(&b_context.context(), a_peer, now);
-        a_owner
-            .offer_idle(a.behaviour_mut(), &a_context.context(), b_peer, idle)
-            .unwrap();
+        a_owner.drive(a.behaviour_mut(), &a_context.context(), idle);
         while a_owner.phase(b_peer) != Phase::Dormant || b_owner.phase(a_peer) != Phase::Dormant {
             tokio::select! {
                 event = a.select_next_some() => if let SwarmEvent::Behaviour(event) = event {
@@ -183,10 +202,44 @@ async fn idle_then_wake(listen: &str) {
                 .forwarder
                 .data_path_is_dormant(PeerId::from_libp2p(a_peer))
         );
-        let wake = idle + Duration::from_secs(1);
-        b_owner
-            .wake(b.behaviour_mut(), &b_context.context(), a_peer, wake)
+        for step in 0..1000 {
+            let tick = idle + Duration::from_secs(step * 5);
+            a_owner.drive(a.behaviour_mut(), &a_context.context(), tick);
+            b_owner.drive(b.behaviour_mut(), &b_context.context(), tick);
+        }
+        assert_eq!(a_owner.snapshot().outbound, 0);
+        assert_eq!(b_owner.snapshot().outbound, 0);
+        assert_eq!(
+            a_owner.peers[&b_peer]
+                .policy
+                .as_ref()
+                .unwrap()
+                .last_demand(),
+            None
+        );
+        assert_eq!(
+            b_owner.peers[&a_peer]
+                .policy
+                .as_ref()
+                .unwrap()
+                .last_demand(),
+            None
+        );
+        let wake = idle + Duration::from_secs(5001);
+        b_context
+            .forwarder
+            .record_application_demand(PeerId::from_libp2p(a_peer), wake);
+        let demand = b_context
+            .forwarder
+            .application_demand(PeerId::from_libp2p(a_peer))
             .unwrap();
+        b_owner.drive(b.behaviour_mut(), &b_context.context(), wake);
+        assert_eq!(
+            b_context
+                .forwarder
+                .application_demand(PeerId::from_libp2p(a_peer)),
+            Some(demand)
+        );
         while a_owner.phase(b_peer) != Phase::Active || b_owner.snapshot().outbound != 0 {
             tokio::select! {
                 event = a.select_next_some() => if let SwarmEvent::Behaviour(event) = event {
@@ -539,7 +592,10 @@ async fn excess_requests_are_dropped_without_response_amplification() {
     tokio::time::timeout(Duration::from_secs(10), async {
         let (mut a, _, mut b, mut fixture) = connected("/ip4/127.0.0.1/tcp/0").await;
         let peer = *a.local_peer_id();
-        fixture.readiness = lifecycle_not_ready;
+        fixture.readiness = |_| Readiness {
+            incoming_path_available: false,
+            outstanding_work: true,
+        };
         let now = Instant::now();
         let idle = now + IDLE_AFTER;
         let mut owner = DemandLifecycle::new(epoch(2), 2, 2, now);
@@ -598,4 +654,445 @@ async fn unauthorized_transport_peer_gets_no_reply_or_retained_record() {
         assert_eq!(owner.snapshot().dropped, 1);
         assert_eq!(owner.snapshot().peers, 0);
     }).await.expect("unauthorized peer is dropped before state admission");
+}
+
+#[tokio::test]
+async fn automatic_driver_never_dials_or_renews_demand_without_a_control_path() {
+    for application in [false, true] {
+        let peer = Libp2pPeerId::random();
+        let fixture = Fixture::new(peer, 1, 2);
+        let mut wire = wire_swarm();
+        let now = Instant::now();
+        let mut owner = DemandLifecycle::new(epoch(1), 2, 2, now);
+        let no_path = |_| false;
+        let mut context = fixture.context();
+        context.usable_path = &no_path;
+        owner.observe_peer(&context, peer, now);
+        if application {
+            fixture
+                .forwarder
+                .record_application_demand(PeerId::from_libp2p(peer), now);
+        }
+        let before = fixture
+            .forwarder
+            .application_demand(PeerId::from_libp2p(peer));
+        for step in 0..1000 {
+            owner.drive(
+                wire.behaviour_mut(),
+                &context,
+                now + Duration::from_secs(step),
+            );
+            assert_eq!(owner.snapshot().outbound, 0);
+            assert!(!wire.behaviour().has_any_pending_requests());
+            assert_eq!(wire.network_info().connection_counters().num_pending(), 0);
+        }
+        assert_eq!(
+            fixture
+                .forwarder
+                .application_demand(PeerId::from_libp2p(peer)),
+            before
+        );
+        assert_eq!(owner.peers[&peer].wake_after, None);
+    }
+}
+
+#[tokio::test]
+async fn preparation_drains_busy_maintenance_without_granting_quiet() {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let (mut a, mut fixture, mut b, remote) = connected("/ip4/127.0.0.1/tcp/0").await;
+        let peer = *b.local_peer_id();
+        let now = Instant::now();
+        let idle = now + IDLE_AFTER;
+        let mut owner = DemandLifecycle::new(epoch(1), 2, 2, now);
+        let mut responder = DemandLifecycle::new(epoch(2), 2, 2, now);
+        owner.observe_peer(&fixture.context(), peer, now);
+        responder.observe_peer(&remote.context(), *a.local_peer_id(), now);
+        let overlay = PeerId::from_libp2p(peer);
+        let before = fixture.forwarder.application_demand(overlay);
+        fixture.readiness = |_| Readiness {
+            incoming_path_available: true,
+            outstanding_work: true,
+        };
+        for step in 0..1000 {
+            owner.drive(
+                a.behaviour_mut(),
+                &fixture.context(),
+                idle + Duration::from_secs(step * 5),
+            );
+            assert!(fixture.forwarder.data_path_maintenance_is_paused(overlay));
+            assert!(!fixture.forwarder.data_path_is_dormant(overlay));
+            assert_eq!(owner.snapshot().outbound, 0);
+        }
+        assert_eq!(fixture.forwarder.application_demand(overlay), before);
+        fixture.readiness = ready;
+        let drained = idle + Duration::from_secs(5001);
+        owner.drive(a.behaviour_mut(), &fixture.context(), drained);
+        assert_eq!(owner.snapshot().outbound, 1);
+        while owner.phase(peer) != Phase::Dormant
+            || responder.phase(*a.local_peer_id()) != Phase::Dormant
+        {
+            tokio::select! {
+                event = a.select_next_some() => if let SwarmEvent::Behaviour(event) = event {
+                    owner.handle_event(a.behaviour_mut(), &fixture.context(), event, drained);
+                },
+                event = b.select_next_some() => if let SwarmEvent::Behaviour(event) = event {
+                    responder.handle_event(b.behaviour_mut(), &remote.context(), event, drained);
+                },
+            }
+        }
+        assert!(fixture.forwarder.data_path_is_dormant(overlay));
+        assert_eq!(fixture.forwarder.application_demand(overlay), before);
+    })
+    .await
+    .expect("maintenance drain followed by native idle exchange");
+}
+
+#[tokio::test]
+async fn preparation_requires_support_anchor_idle_age_and_empty_application_work() {
+    for blocked in ["legacy", "anchor", "age", "application"] {
+        let peer = Libp2pPeerId::random();
+        let mut fixture = Fixture::new(peer, 1, 2);
+        let mut wire = wire_swarm();
+        let now = Instant::now();
+        let mut owner = DemandLifecycle::new(epoch(1), 2, 2, now);
+        owner.observe_peer(&fixture.context(), peer, now);
+        if blocked == "legacy" {
+            fixture.local.supports_demand_lifecycle = false;
+        }
+        if blocked == "anchor" {
+            fixture.readiness = |_| Readiness {
+                incoming_path_available: false,
+                outstanding_work: false,
+            };
+        }
+        let work = |_| blocked == "application";
+        let mut context = fixture.context();
+        context.application_work = &work;
+        let at = now + IDLE_AFTER - Duration::from_secs(u64::from(blocked == "age"));
+        owner.drive(wire.behaviour_mut(), &context, at);
+        assert!(
+            !fixture
+                .forwarder
+                .data_path_maintenance_is_paused(PeerId::from_libp2p(peer)),
+            "{blocked}"
+        );
+        assert!(
+            !fixture
+                .forwarder
+                .data_path_is_dormant(PeerId::from_libp2p(peer))
+        );
+        assert_eq!(owner.snapshot().outbound, 0);
+    }
+}
+
+#[tokio::test]
+async fn capability_invalidation_clears_local_preparation_without_activity() {
+    let peer = Libp2pPeerId::random();
+    let mut fixture = Fixture::new(peer, 1, 2);
+    let now = Instant::now();
+    let mut owner = DemandLifecycle::new(epoch(1), 2, 2, now);
+    let mut wire = wire_swarm();
+    owner.observe_peer(&fixture.context(), peer, now);
+    owner.drive(wire.behaviour_mut(), &fixture.context(), now + IDLE_AFTER);
+    let overlay = PeerId::from_libp2p(peer);
+    assert!(fixture.forwarder.data_path_maintenance_is_paused(overlay));
+    let before = fixture.forwarder.application_demand(overlay);
+    fixture.peers.record(
+        overlay,
+        ControlCapabilities::local("demand-test", None, 1280),
+    );
+    owner.drive(
+        wire.behaviour_mut(),
+        &fixture.context(),
+        now + IDLE_AFTER + Duration::from_secs(1),
+    );
+    assert_eq!(owner.phase(peer), Phase::Legacy);
+    assert!(!fixture.forwarder.data_path_maintenance_is_paused(overlay));
+    assert_eq!(fixture.forwarder.application_demand(overlay), before);
+}
+
+#[test]
+fn underlay_control_work_does_not_fabricate_demand_for_a_dormant_peer() {
+    let peer = Libp2pPeerId::random();
+    let mut fixture = Fixture::new(peer, 1, 2);
+    let now = Instant::now();
+    let idle = now + IDLE_AFTER;
+    let mut owner = DemandLifecycle::new(epoch(1), 2, 2, now);
+    owner.observe_peer(&fixture.context(), peer, now);
+    let state = owner.peers.get_mut(&peer).unwrap();
+    let policy = state.policy.as_mut().unwrap();
+    let offer = policy.offer_idle(idle, ready(peer)).unwrap();
+    policy
+        .receive_idle_ack(
+            IdleAck {
+                offer,
+                responder_revision: 0,
+            },
+            idle,
+            ready(peer),
+        )
+        .unwrap();
+    state.commit_quiet(&fixture.context(), peer, idle);
+    assert_eq!(owner.phase(peer), Phase::Dormant);
+    let before = fixture
+        .forwarder
+        .application_demand(PeerId::from_libp2p(peer));
+    fixture.connections.advance();
+    fixture.readiness = |_| Readiness {
+        incoming_path_available: false,
+        outstanding_work: true,
+    };
+    owner.reconcile(&fixture.context(), idle + Duration::from_secs(1));
+    assert_eq!(owner.phase(peer), Phase::Dormant);
+    assert!(
+        fixture
+            .forwarder
+            .data_path_is_dormant(PeerId::from_libp2p(peer))
+    );
+    assert_eq!(
+        fixture
+            .forwarder
+            .application_demand(PeerId::from_libp2p(peer)),
+        before
+    );
+    assert_eq!(
+        owner.peers[&peer].policy.as_ref().unwrap().last_demand(),
+        None
+    );
+}
+
+struct RuntimeFixture {
+    peer: Libp2pPeerId,
+    base: Fixture,
+    node: P2pNode,
+    queues: PeerQueues,
+    in_flight: PacketInFlight,
+    paths: PathSet,
+    connections: HashMap<(Libp2pPeerId, ConnectionId), ConnectedPoint>,
+    relay_readiness: RelayReadiness,
+    auto_relay: AutoRelayState,
+}
+
+impl RuntimeFixture {
+    fn new() -> Self {
+        let peer = Libp2pPeerId::random();
+        let base = Fixture::new(peer, 1, 2);
+        let mut node = super::super::tests::membership_sync_test_node(
+            base.forwarder.config().identity().unwrap(),
+        );
+        let local = node.local_peer_id;
+        node.bootstrap_peer_addresses.clear();
+        node.swarm.behaviour_mut().kad = kad::Behaviour::with_config(
+            local,
+            kad::store::MemoryStore::new(local),
+            crate::runtime::p2p::controlled_kademlia_config(libp2p::StreamProtocol::new(
+                PUBLIC_IPFS_KADEMLIA_PROTOCOL,
+            )),
+        );
+        node.swarm.behaviour_mut().pairing_kad = None.into();
+        node.swarm.behaviour_mut().autonat = None.into();
+        Self {
+            peer,
+            base,
+            node,
+            queues: PeerQueues::new(4, 4096),
+            in_flight: PacketInFlight::new(4),
+            paths: PathSet::new(),
+            connections: HashMap::new(),
+            relay_readiness: RelayReadiness::default(),
+            auto_relay: AutoRelayState::default(),
+        }
+    }
+
+    fn with<R>(
+        &mut self,
+        action: impl FnOnce(&mut WireBehaviour, &LifecycleContext<'_>) -> R,
+    ) -> R {
+        RuntimeInputs {
+            forwarder: &self.base.forwarder,
+            local: &self.base.local,
+            peers: &self.base.peers,
+            previous_tags: &[],
+            epochs: &self.base.connections,
+            connections: &self.connections,
+            relay_readiness: &self.relay_readiness,
+            auto_relay: &self.auto_relay,
+            queues: &self.queues,
+            in_flight: &self.in_flight,
+            paths: &self.paths,
+            udp: None,
+            quic: None,
+        }
+        .with(&mut self.node, action)
+    }
+
+    fn readiness(&mut self) -> Readiness {
+        let peer = self.peer;
+        self.with(|_, context| (context.readiness)(peer))
+    }
+}
+
+#[tokio::test]
+async fn runtime_readiness_exempts_only_its_own_lifecycle_exchange() {
+    let mut f = RuntimeFixture::new();
+    assert_eq!(
+        f.readiness(),
+        Readiness {
+            incoming_path_available: false,
+            outstanding_work: false
+        }
+    );
+    let peer = f.peer;
+    let before = f
+        .base
+        .forwarder
+        .application_demand(PeerId::from_libp2p(peer));
+    f.with(|wire, context| {
+        wire.send_request(&peer, raw_idle(1));
+        assert!(!(context.readiness)(peer).outstanding_work);
+    });
+    assert!(
+        f.node.swarm.behaviour().has_pending_peer_work(peer),
+        "physical retirement must still include the lifecycle wire"
+    );
+    f.node
+        .swarm
+        .behaviour_mut()
+        .control
+        .send_request(&peer, ControlRequest::Capabilities(f.base.local.clone()));
+    assert!(f.readiness().outstanding_work);
+    assert_eq!(
+        f.base
+            .forwarder
+            .application_demand(PeerId::from_libp2p(peer)),
+        before
+    );
+}
+
+#[tokio::test]
+async fn runtime_readiness_separates_application_queues_and_native_transports() {
+    let mut f = RuntimeFixture::new();
+    let peer = f.peer;
+    let overlay = PeerId::from_libp2p(peer);
+    let before = f.base.forwarder.application_demand(overlay);
+    f.queues
+        .enqueue(crate::queue::Packet::new(overlay, 1, vec![0x45; 20]))
+        .unwrap();
+    f.with(|_, context| {
+        assert!((context.application_work)(peer));
+        assert!((context.readiness)(peer).outstanding_work);
+        assert!(!(context.readiness)(peer).incoming_path_available);
+    });
+    f.queues.dequeue().unwrap();
+    assert!(!f.readiness().outstanding_work);
+    f.node
+        .swarm
+        .dial(
+            DialOpts::peer_id(peer)
+                .addresses(vec!["/ip4/127.0.0.1/tcp/9".parse().unwrap()])
+                .build(),
+        )
+        .unwrap();
+    f.with(|_, context| {
+        assert!(!(context.application_work)(peer));
+        assert!((context.readiness)(peer).outstanding_work);
+    });
+    assert_eq!(f.base.forwarder.application_demand(overlay), before);
+}
+
+#[tokio::test]
+async fn runtime_readiness_counts_payload_flights_but_not_probe_flights_as_application_work() {
+    let mut f = RuntimeFixture::new();
+    let peer = f.peer;
+    let overlay = PeerId::from_libp2p(peer);
+    let before = f.base.forwarder.application_demand(overlay);
+    f.paths
+        .record_established(overlay, PathKind::DirectTcpStream);
+    let path = f.paths.candidates_for(overlay).next().unwrap();
+    let mut source = wire_swarm();
+    let probe =
+        PacketInFlightId::RequestResponse(source.behaviour_mut().send_request(&peer, raw_idle(1)));
+    f.in_flight.record_path_probe(overlay, probe, path);
+    f.with(|_, context| {
+        assert!(!(context.application_work)(peer));
+        assert!(!(context.readiness)(peer).outstanding_work);
+        assert!((context.usable_path)(peer));
+    });
+    let packet = crate::queue::Packet::new(overlay, 1, vec![0x45; 20]);
+    let delivery =
+        PacketInFlightId::RequestResponse(source.behaviour_mut().send_request(&peer, raw_idle(2)));
+    f.in_flight.record(&packet, delivery, path);
+    f.with(|_, context| {
+        assert!((context.application_work)(peer));
+        assert!((context.readiness)(peer).outstanding_work);
+    });
+    f.in_flight.complete(delivery);
+    assert!(!f.readiness().outstanding_work);
+    f.in_flight.complete(probe);
+    assert_eq!(f.base.forwarder.application_demand(overlay), before);
+}
+
+#[tokio::test]
+async fn native_routing_work_protects_idle_admission_and_stream_retirement() {
+    for secondary in [false, true] {
+        let mut f = RuntimeFixture::new();
+        let local = f.node.local_peer_id;
+        if secondary {
+            f.node.swarm.behaviour_mut().pairing_kad = Some(kad::Behaviour::with_config(
+                local,
+                kad::store::MemoryStore::new(local),
+                crate::runtime::p2p::controlled_kademlia_config(libp2p::StreamProtocol::new(
+                    PUBLIC_IPFS_KADEMLIA_PROTOCOL,
+                )),
+            ))
+            .into();
+        }
+        let behaviour = f.node.swarm.behaviour_mut();
+        let kad = if secondary {
+            behaviour.pairing_kad.as_mut().unwrap()
+        } else {
+            &mut behaviour.kad
+        };
+        let query = kad.get_closest_peers(Libp2pPeerId::random());
+        assert!(f.readiness().outstanding_work);
+        assert!(f.node.swarm.behaviour().has_pending_peer_work(f.peer));
+        let behaviour = f.node.swarm.behaviour_mut();
+        let kad = if secondary {
+            behaviour.pairing_kad.as_mut().unwrap()
+        } else {
+            &mut behaviour.kad
+        };
+        kad.cancel_query(&query);
+        assert!(!f.readiness().outstanding_work);
+        assert!(!f.node.swarm.behaviour().has_pending_peer_work(f.peer));
+    }
+}
+
+#[tokio::test]
+async fn queued_disconnected_work_protects_an_unselected_circuit_underlay() {
+    let mut f = RuntimeFixture::new();
+    let before = f
+        .base
+        .forwarder
+        .application_demand(PeerId::from_libp2p(f.peer));
+    f.node.swarm.behaviour_mut().control.send_request(
+        &Libp2pPeerId::random(),
+        ControlRequest::Capabilities(f.base.local.clone()),
+    );
+    assert_eq!(
+        f.node
+            .swarm
+            .network_info()
+            .connection_counters()
+            .num_pending(),
+        0
+    );
+    assert!(f.readiness().outstanding_work);
+    assert!(f.node.swarm.behaviour().has_pending_peer_work(f.peer));
+    assert_eq!(
+        f.base
+            .forwarder
+            .application_demand(PeerId::from_libp2p(f.peer)),
+        before
+    );
 }

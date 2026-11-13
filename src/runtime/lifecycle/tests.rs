@@ -336,6 +336,20 @@ fn authenticated_payload_itself_wakes_without_a_separate_wake_exchange() {
 }
 
 #[test]
+fn retrying_a_wake_announcement_does_not_renew_application_activity() {
+    let now = Instant::now();
+    let (mut a, _) = dormant_pair(now);
+    let demand = now + Duration::from_mins(30);
+    a.demand(demand, false);
+    for _ in 0..1000 {
+        a.announce_wake().unwrap();
+        assert_eq!(a.last_demand(), Some(demand));
+        assert_eq!(a.phase(), Phase::Establishing);
+    }
+    assert!(a.offer_idle(demand + IDLE_AFTER, READY).is_ok());
+}
+
+#[test]
 fn stale_wake_does_not_renew_activity() {
     let now = Instant::now();
     let (mut a, mut b) = dormant_pair(now);

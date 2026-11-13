@@ -144,6 +144,22 @@ impl PeerLifecycle {
         self.last_demand
     }
 
+    pub(crate) fn can_prepare_idle(
+        &self,
+        now: Instant,
+        incoming: bool,
+        application_work: bool,
+    ) -> bool {
+        self.idle_eligible(
+            now,
+            Readiness {
+                incoming_path_available: incoming,
+                outstanding_work: application_work,
+            },
+        )
+        .is_ok()
+    }
+
     /// A dispatcher-confirmed unsupported protocol disables negotiation for the
     /// epoch. Only a fresh validated connection may retry capability admission.
     pub fn use_legacy(&mut self) {
@@ -329,6 +345,12 @@ impl PeerLifecycle {
     /// bounded exchange and must not keep the data activity lease alive.
     pub fn wake(&mut self, now: Instant, usable_path: bool) -> Result<Wake, Rejection> {
         self.demand(now, usable_path);
+        self.announce_wake()
+    }
+
+    /// Announce demand already observed by the dispatcher. Retrying this signal
+    /// must not turn protocol maintenance into a fresh application activity lease.
+    pub(crate) fn announce_wake(&mut self) -> Result<Wake, Rejection> {
         if !self.supported {
             return Err(Rejection::Unsupported);
         }

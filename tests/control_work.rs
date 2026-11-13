@@ -174,10 +174,12 @@ fn disconnected_queue_and_undelivered_failure_remain_busy() {
     let mut wire = rpc(Duration::from_secs(5));
     assert!(!wire.has_pending_requests(&peer));
     assert!(!wire.has_any_pending_requests());
+    assert!(!wire.has_pending_connection_requests());
     let request = wire.send_request(&peer, frame(1));
     for _ in 0..1000 {
         assert!(wire.has_pending_requests(&peer));
         assert!(wire.has_any_pending_requests());
+        assert!(wire.has_pending_connection_requests());
         assert!(!wire.has_pending_requests(&unrelated));
         assert!(wire.is_pending_outbound(&peer, &request));
     }
@@ -195,6 +197,7 @@ fn disconnected_queue_and_undelivered_failure_remain_busy() {
         }),
     );
     assert!(!wire.is_pending_outbound(&peer, &request));
+    assert!(!wire.has_pending_connection_requests());
     assert!(wire.has_any_pending_requests());
     assert!(
         wire.has_pending_requests(&peer),
@@ -267,6 +270,7 @@ async fn concurrent_requests_and_queued_replies_drain_without_false_idleness() {
         a.behaviour_mut().rpc.send_request(&peer_b, frame(sequence));
     }
     assert!(a.behaviour().rpc.has_pending_requests(&peer_b));
+    assert!(!a.behaviour().rpc.has_pending_connection_requests());
     tokio::time::timeout(Duration::from_secs(5), async {
         while requests.len() < 3 {
             tokio::select! {

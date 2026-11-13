@@ -20,23 +20,10 @@ pub(super) struct RetirementContext<'a> {
     pub now: Instant,
 }
 
-fn kademlia_busy(kad: &kad::Behaviour<kad::store::MemoryStore>) -> bool {
-    let handler = kad.handler_resource_usage().usage;
-    kad.query_pool_usage().retained > 0
-        || kad.pending_rpc_usage().requests > 0
-        || kad.behaviour_queue_usage().events > 0
-        || handler.active_inbound_streams > 0
-        || handler.active_outbound_streams > 0
-        || handler.pending_negotiations > 0
-        || handler.requests > 0
-        || handler.queued_rejections > 0
-}
-
 pub(super) fn wire_busy(node: &P2pNode) -> bool {
     let behaviour = node.swarm.behaviour();
     behaviour.has_pending_work()
-        || kademlia_busy(&behaviour.kad)
-        || behaviour.pairing_kad.as_ref().is_some_and(kademlia_busy)
+        || behaviour.has_pending_routing_work()
         || node
             .swarm
             .network_info()

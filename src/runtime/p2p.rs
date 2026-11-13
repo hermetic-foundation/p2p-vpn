@@ -108,17 +108,91 @@ impl Behaviour {
     }
 
     pub(crate) fn has_pending_peer_work(&self, peer: PeerId) -> bool {
-        self.control.has_pending_requests(&peer)
-            || self.lifecycle.has_pending_requests(&peer)
-            || self.checkpoint.has_pending_requests(&peer)
-            || self.checkpoint_mutation.has_pending_requests(&peer)
-            || self.packet.has_pending_requests(&peer)
-            || self.pairing.has_pending_requests(&peer)
-            || self.pairing_code.has_pending_requests(&peer)
-            || self.pairing_code_v2.has_pending_requests(&peer)
-            || self.service.has_pending_requests(&peer)
+        protocol_work(&self.control, peer)
+            || protocol_work(&self.lifecycle, peer)
+            || protocol_work(&self.checkpoint, peer)
+            || protocol_work(&self.checkpoint_mutation, peer)
+            || protocol_work(&self.packet, peer)
+            || protocol_work(&self.pairing, peer)
+            || protocol_work(&self.pairing_code, peer)
+            || protocol_work(&self.pairing_code_v2, peer)
+            || protocol_work(&self.service, peer)
             || self.pinned_packet_stream.has_pending_work(peer)
+            || self.has_pending_routing_work()
+            || self
+                .autonat
+                .as_ref()
+                .is_some_and(autonat::Behaviour::has_pending_work)
     }
+
+    pub(crate) fn has_pending_routing_work(&self) -> bool {
+        kademlia_has_pending_work(&self.kad)
+            || self
+                .pairing_kad
+                .as_ref()
+                .is_some_and(kademlia_has_pending_work)
+    }
+
+    /// Borrow the wire and other native work owners separately. Idle admission
+    /// excludes its own exchange; physical retirement must use the full query.
+    pub(crate) fn split_lifecycle_work(
+        &mut self,
+    ) -> (
+        &mut request_response::Behaviour<LifecycleCodec>,
+        impl Fn(PeerId) -> bool + '_,
+    ) {
+        let Self {
+            control,
+            lifecycle,
+            checkpoint,
+            checkpoint_mutation,
+            packet,
+            pairing,
+            pairing_code,
+            pairing_code_v2,
+            service,
+            pinned_packet_stream,
+            kad,
+            pairing_kad,
+            autonat,
+            ..
+        } = self;
+        (lifecycle, move |peer| {
+            protocol_work(control, peer)
+                || protocol_work(checkpoint, peer)
+                || protocol_work(checkpoint_mutation, peer)
+                || protocol_work(packet, peer)
+                || protocol_work(pairing, peer)
+                || protocol_work(pairing_code, peer)
+                || protocol_work(pairing_code_v2, peer)
+                || protocol_work(service, peer)
+                || pinned_packet_stream.has_pending_work(peer)
+                || kademlia_has_pending_work(kad)
+                || pairing_kad.as_ref().is_some_and(kademlia_has_pending_work)
+                || autonat
+                    .as_ref()
+                    .is_some_and(autonat::Behaviour::has_pending_work)
+        })
+    }
+}
+
+fn protocol_work<C: request_response::Codec + Clone + Send + 'static>(
+    wire: &request_response::Behaviour<C>,
+    peer: PeerId,
+) -> bool {
+    wire.has_pending_requests(&peer) || wire.has_pending_connection_requests()
+}
+
+fn kademlia_has_pending_work(kad: &kad::Behaviour<kad::store::MemoryStore>) -> bool {
+    let handler = kad.handler_resource_usage().usage;
+    kad.query_pool_usage().retained > 0
+        || kad.pending_rpc_usage().requests > 0
+        || kad.behaviour_queue_usage().events > 0
+        || handler.active_inbound_streams > 0
+        || handler.active_outbound_streams > 0
+        || handler.pending_negotiations > 0
+        || handler.requests > 0
+        || handler.queued_rejections > 0
 }
 
 pub struct P2pNode {

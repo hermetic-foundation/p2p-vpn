@@ -258,6 +258,17 @@ pub struct Session<'a> {
 }
 
 impl Session<'_> {
+    pub(crate) fn validate_outbound_request(
+        &self,
+        authenticated_peer: PeerId,
+        authorized_now: impl FnOnce(PeerId) -> bool,
+        request: &Request,
+    ) -> Result<(), ValidationError> {
+        self.authorize(authenticated_peer, authorized_now)?;
+        request.validate()?;
+        self.validate_outbound_intent(request)
+    }
+
     pub fn validate_request(
         &self,
         authenticated_peer: PeerId,
@@ -291,10 +302,7 @@ impl Session<'_> {
         self.authorize(authenticated_peer, authorized_now)?;
         request.validate()?;
         response.validate()?;
-        self.validate_scope(&request.scope)?;
-        request
-            .intent
-            .check_epochs(self.local_epoch, self.remote_epoch)?;
+        self.validate_outbound_intent(request)?;
         if response.scope != request.scope || response.intent != request.intent {
             return Err(ValidationError::ResponseMismatch);
         }
@@ -309,6 +317,13 @@ impl Session<'_> {
             (_, Reply::Rejected { reason }) => Ok(ValidatedResponse::Rejected(reason)),
             _ => Err(ValidationError::ResponseMismatch),
         }
+    }
+
+    fn validate_outbound_intent(&self, request: &Request) -> Result<(), ValidationError> {
+        self.validate_scope(&request.scope)?;
+        request
+            .intent
+            .check_epochs(self.local_epoch, self.remote_epoch)
     }
 
     fn authorize(

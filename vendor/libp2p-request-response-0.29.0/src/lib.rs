@@ -585,12 +585,22 @@ where
             })
     }
 
-    /// Whether any peer owns queued or in-flight work, including active codecs
-    /// and terminal notifications not yet returned by `poll`.
-    pub fn has_any_pending_requests(&self) -> bool {
+    /// Whether requests or dial actions are still selecting a connection. Such
+    /// work can depend on a relay underlay before Swarm admits the native dial.
+    pub fn has_pending_connection_requests(&self) -> bool {
         self.pending_outbound_requests
             .values()
             .any(|requests| !requests.is_empty())
+            || self
+                .pending_events
+                .iter()
+                .any(|event| matches!(event, ToSwarm::Dial { .. }))
+    }
+
+    /// Whether any peer owns queued or in-flight work, including active codecs
+    /// and terminal notifications not yet returned by `poll`.
+    pub fn has_any_pending_requests(&self) -> bool {
+        self.has_pending_connection_requests()
             || self.connected.values().flatten().any(|connection| {
                 connection.active_streams.load(Ordering::Acquire) > 0
                     || !connection.pending_outbound_responses.is_empty()

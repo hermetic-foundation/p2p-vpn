@@ -5,7 +5,7 @@
 | Item | Status |
 | --- | --- |
 | Decision | Separate incoming reachability from active per-peer data paths |
-| Runtime implementation | Model, wire, payload demand, initial gates, native work accounting, and packet/control retirement implemented; incoming-anchor readiness and activation pending |
+| Runtime implementation | Native incoming readiness, automatic idle/wake, maintenance drain, and retirement integrated; control-delivery completion and production activation pending |
 | Default configuration | Preserve minimal JSON and native NixOS workflows; no required new settings |
 | Platforms | Shared Rust policy; Android and Linux must cooperate |
 | Battery acceptance | Measured 10x idle-cellular efficiency with feature preservation; not yet demonstrated |
@@ -16,6 +16,7 @@ high idle cellular power but does not identify the exact remaining packet source
 
 - [Retirement ownership and fences](demand-lifecycle-retirement.md)
 - [Control work and stream retirement](demand-lifecycle-control-work.md)
+- [Maintenance drain before idle](demand-lifecycle-drain.md)
 - [Public relay idle validation](relay-idle-validation.md)
 
 ## Requirements
@@ -36,7 +37,7 @@ high idle cellular power but does not identify the exact remaining packet source
 | Owner | Current Scheduling | Planned Treatment |
 | --- | --- | --- |
 | Libp2p QUIC | Default 5-second keepalive, 10-second idle timeout | Close dormant overlay connections; audit infrastructure transport separately |
-| Libp2p ping | 15-second ping interval | Suppress for negotiated dormant connections; sparse, independent infrastructure policy |
+| Libp2p ping | 60-second interval; 20-second timeout | Retire unused negotiated paths; preserve the native incoming anchor |
 | Packet-plane probes | 5-second timer across available peer sessions | Demand-gate; avoid probing unused backup transports |
 | MTU probes | Datagram probes include MTU-sized payloads | Discovery on establishment/path change; not a permanent idle heartbeat |
 | Peer recovery | Periodically seeks disconnected configured peers | Recover demanded peers; distinguish dormant from failed |
@@ -251,15 +252,15 @@ the production runtime. Evaluate a focused proof once the model stabilizes.
 | Component | Evidence | Remaining Boundary |
 | --- | --- | --- |
 | Protocol contract | Published before runtime edits | Operational assumptions still require verification |
-| [Policy model](../../src/runtime/lifecycle.rs) | Fixed-size per-peer state; monotonic activity; epoch/revision-bound offers and acknowledgements | Not wired into the runner or any network send path |
-| [Model tests](../../src/runtime/lifecycle/tests.rs) | 33 tests, including 111,111 short bilateral event sequences | These model checks are not a production-runtime proof |
-| Idle delivery safety | Receiver waits for reply-sent confirmation; fresh demand/path change invalidates pending tickets | Dispatcher must authenticate, authorize, and bind actual transport events |
+| [Policy model](../../src/runtime/lifecycle.rs) | Fixed-size state, epoch/revision-bound exchanges, and wake announcements that preserve application time | Shared runner driver is integrated; production advertisement remains gated |
+| [Model tests](../../src/runtime/lifecycle/tests.rs) | 34 tests, including 111,111 short bilateral event sequences | These model checks are not a production-runtime proof |
+| Idle delivery safety | Authenticated reply-sent/ACK commitment rechecks authority, epochs, demand, incoming path, and native work | Integrated first-payload and public-relay validation remain |
 | [Wire exchange](demand-lifecycle-wire.md) | 23 tests: bounded codec, contextual authentication, epochs, scope, stale/revoked response rejection | Quiet capability remains unadvertised |
-| [Runner dispatcher](demand-lifecycle-dispatch.md) | Bounded peer records, shared request-rate admission, transport-slot retention, commit-time validation | Production readiness conservatively refuses dormancy; packet and anchor effects remain pending |
-| [Application demand](demand-lifecycle-activity.md) | Shared forwarding hooks, monotonic per-peer versions, atomic quiet fencing, probe/hello/retention/recovery gates | Physical transport retirement, full control-work readiness, incoming-path policy and activation remain pending |
+| [Runner dispatcher](demand-lifecycle-dispatch.md) | Native readiness, automatic idle/wake, bounded slots/rates, and commit-time validation | Dirty control delivery, quarantine handover, and integrated activation gates remain |
+| [Application demand](demand-lifecycle-activity.md) | Shared forwarding hooks, atomic quiet fencing, transport retirement, and demand-gated probes/recovery | Complete discovery/NAT quiet policy and first-payload/roaming validation remain |
 | TCP/QUIC loopback | Idle commits after real response-sent; either endpoint can initiate wake | Virtual idle clock and fixture readiness; not long-idle or public-relay evidence |
 | Compatibility | Legacy defaults; dispatcher preserves unsupported fallback across ordinary capability refreshes | Operational peer-state presentation and full mixed-version deployment tests remain pending |
-| Energy impact | No network behavior or device deployment changed in this step | All measured improvement and feature-preservation gates remain open |
+| Energy impact | Source/transport evidence only; no updated APK/service deployment in these integration checks | All measured improvement and feature-preservation gates remain open |
 
 The model owns no heap allocations and retains at most one pending offer and
 one pending reply. Table admission, revocation cleanup, attempt budgets, relay

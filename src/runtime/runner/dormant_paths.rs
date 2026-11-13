@@ -83,6 +83,13 @@ fn can_retire_stream(
         && context.queues.peer_stats(overlay).queued_packets == 0
         && !context.in_flight.has_application_work(overlay)
         && !context.node.swarm.behaviour().has_pending_peer_work(peer)
+        && context
+            .node
+            .swarm
+            .network_info()
+            .connection_counters()
+            .num_pending()
+            == 0
         && context.epochs.is_usable(id)
         && context.epochs.established.get(&id).is_some_and(|opened| {
             context.now.saturating_duration_since(*opened) >= INITIAL_CONTROL_GRACE
@@ -233,6 +240,22 @@ mod tests {
     fn only_current_quiet_permission_can_retire_paths() {
         let mut fixture = Fixture::new();
         assert_eq!(fixture.retire(), 0);
+        let version = fixture
+            .forwarder
+            .application_demand(fixture.peer)
+            .unwrap()
+            .version
+            .unwrap();
+        assert!(
+            fixture
+                .forwarder
+                .pause_data_path_maintenance(fixture.peer, version)
+        );
+        assert_eq!(
+            fixture.retire(),
+            0,
+            "preparation is not permission to retire a path"
+        );
         assert!(fixture.path(PathKind::DirectQuicDatagram).healthy);
         assert!(
             fixture
@@ -332,7 +355,6 @@ mod tests {
     #[tokio::test]
     async fn quiet_rejects_inbound_and_completed_hellos_until_actual_demand() {
         let mut fixture = Fixture::new();
-        fixture.quiet();
         let peer = fixture
             .forwarder
             .transport_peer_for_overlay(fixture.peer)
@@ -341,8 +363,23 @@ mod tests {
         let capabilities = PeerCapabilities::default();
         let local = ControlCapabilities::local("dormant-path-retirement", None, 1280);
         let metrics = RuntimeMetrics::default();
-        for quiet in [true, false] {
-            if !quiet {
+        for stage in ["preparing", "quiet", "active"] {
+            let quiet = stage == "quiet";
+            if stage == "preparing" {
+                let version = fixture
+                    .forwarder
+                    .application_demand(fixture.peer)
+                    .unwrap()
+                    .version
+                    .unwrap();
+                assert!(
+                    fixture
+                        .forwarder
+                        .pause_data_path_maintenance(fixture.peer, version)
+                );
+            } else if quiet {
+                fixture.quiet();
+            } else {
                 fixture
                     .forwarder
                     .record_application_demand(fixture.peer, Instant::now());

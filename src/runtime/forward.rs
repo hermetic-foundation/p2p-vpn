@@ -476,6 +476,18 @@ impl Forwarder {
         self.application_demand.is_quiet(peer)
     }
 
+    pub(crate) fn pause_data_path_maintenance(&self, peer: PeerId, version: DemandVersion) -> bool {
+        self.application_demand.pause_maintenance(peer, version)
+    }
+
+    pub(crate) fn resume_data_path_maintenance(&self, peer: PeerId) {
+        self.application_demand.resume_maintenance(peer);
+    }
+
+    pub(crate) fn data_path_maintenance_is_paused(&self, peer: PeerId) -> bool {
+        self.application_demand.maintenance_is_paused(peer)
+    }
+
     pub fn send_tun_packet(
         &mut self,
         swarm: &mut Swarm<Behaviour>,

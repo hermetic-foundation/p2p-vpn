@@ -26,6 +26,8 @@ Do not invent a second request ledger or treat semantic cancellation as completi
 - Pin the existing `libp2p-request-response` 0.29.0 source through a local patch.
 - Add `Behaviour::has_pending_requests(peer)`, a read-only aggregate query.
 - Include pending requests, response channels, and queued peer event delivery.
+- Include queued connection selection across destinations before native pending-dial counters increase.
+- Connected requests for unrelated peers do not globally pin every dormant connection.
 - Share one native worker-count gauge per connection, so undecoded inbound I/O is visible without a request ledger.
 - Preserve all current behaviour types, request IDs, codecs, stream limits, and wire protocols.
 - Query existing ownership in place; allocate no additional per-request bookkeeping.
@@ -110,10 +112,19 @@ savings are claimed from ownership tests alone.
 - Preserve paged membership pulls and their existing byte, restart, concurrency, and retry limits.
 - Test disconnected delivery, authority loss during retry, unchanged application demand, and subsequent stream retirement.
 
+## Implemented Checkpoint Delivery
+
+- Mutation recipients come from the active roster before applying the change, including disconnected members.
+- Native request IDs retain their slots after semantic expiry/cancellation; tombstones carry no mutation authority.
+- Old terminal events cannot acknowledge or fail a newer handoff for the same peer.
+- Removed recipients retain bounded control-only eligibility while waiting for a native slot.
+- Shared-root regression starts with A-B-C only, reconnects retained A-C for departure, then verifies survivor governance.
+
 ## Remaining Activation Gates
 
-- Own and bound a live incoming anchor; keep essential renewal and automatic anchor recovery intact.
-- Deliver membership, checkpoints, revocations, and hostname changes to disconnected dormant members on events.
+- Keep verified incoming ownership, essential renewal, and automatic anchor recovery intact in the activated runtime.
+- Finish dirty capability delivery and equal-authority hostname catch-up for disconnected dormant members.
+- Add a bounded control-owner exception for old probe quarantine without erasing failure history or granting packets.
 - Do not rely only on connected-peer broadcasts, and do not turn control updates into permanent activity leases.
 - Complete demand-driven LAN-first establishment/recovery and sparse infrastructure maintenance policy.
 - Verify first incoming/outgoing VPN payloads, legacy peers, active transfers, and roaming with lifecycle support enabled.
@@ -123,22 +134,30 @@ savings are claimed from ownership tests alone.
 
 | Check | Result |
 | --- | --- |
-| Workspace/all-target tests | 1,948 passed; zero failures; 49 existing/opt-in ignores |
+| Workspace/all-target tests | 2,016 passed; zero failures; 49 existing/opt-in ignores |
 | Native work regressions | Five passed: queued failure, concurrent replies, omitted reply, timeout, undecoded codec I/O |
-| Stream retirement regressions | Five passed: work/demand, initial grace, nine infrastructure roles, metadata retention, real TCP close/reconnect |
+| Stream retirement regressions | Six passed: work/demand, initial grace, pending transports, nine infrastructure roles, metadata retention, real TCP close/reconnect |
+| Datagram retirement regressions | Five passed; local preparation alone cannot retire paths or reject incoming hello processing |
+| Checkpoint native ownership | 41 focused tests passed, including four new disconnected-roster, slot-expiry, stale-event, and three-owner regressions |
+| Shared-root delivery | A-B-C startup with retained A-C only; departure ACKs reach both survivors, which continue governance |
 | Pinned stream regressions | Existing budget observed; original capacity retained across builder-limit changes; denied creation releases metadata |
 | Clippy | Correctness, suspicious, and performance groups passed; other advisory warnings remain |
 | Rust formatting | Changed repository Rust files passed; vendored source preserves upstream formatting |
 | Linux package source | Current runtime and patched dependency match evaluated source byte-for-byte; test inventory matches |
 | Android package sources | ARM64/x86-64 evaluate and include identical current runtime and patched dependency |
-| Full Nix build/check | Not run: offline dry run requires 493 uncached derivations, including bootstrap toolchain |
+| Full Nix build/check | Not run: earlier offline dry run required 493 uncached derivations, including bootstrap toolchain |
 | Nix formatting | Android source module passes; root flake already fails formatter checks on the unchanged baseline |
 | Phone/APK/service deployment | None performed in this milestone |
 | Energy acceptance | Unmeasured; no 10x savings claim |
 
 Validation used the existing shared target directory and cached Nix Rust 1.97.1
-tools. One final-suite attempt was interrupted mid-run with no remaining process;
-its log was preserved and a subsequent full run completed successfully.
+tools, two build jobs, and disabled incremental compilation. The shared target
+remained approximately 6.3 GiB; no new SDK, toolchain, or target was downloaded.
+
+An initial broad integration run exposed five test-fixture failures. Synthetic
+connection fixtures now isolate public DHT seed work, and storage-only churn
+explicitly expires its bounded offline handoff. Native guards remain unchanged;
+focused reruns and the final full workspace run passed.
 
 No new formal-verification project was introduced. These executable tests do
 not prove the entire distributed lifecycle or replace the remaining device tests.

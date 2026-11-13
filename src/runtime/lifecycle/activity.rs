@@ -24,11 +24,12 @@ pub(crate) struct DemandSnapshot {
     pub last_demand: Option<Instant>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct Record {
     id: u64,
     state: AtomicU64,
     timestamp: AtomicU64,
+    paused_generation: AtomicU64,
 }
 
 #[derive(Debug)]
@@ -61,6 +62,7 @@ impl ApplicationDemand {
                         EXHAUSTED
                     }),
                     timestamp: AtomicU64::new(0),
+                    paused_generation: AtomicU64::new(EXHAUSTED),
                 });
             }
         }
@@ -139,6 +141,38 @@ impl ApplicationDemand {
         })
     }
 
+    pub fn pause_maintenance(&self, peer: PeerId, version: DemandVersion) -> bool {
+        self.peers.get(&peer).is_some_and(|record| {
+            let current = record.state.load(Ordering::Acquire);
+            if record.id != version.record
+                || current == EXHAUSTED
+                || current & !QUIET != version.generation
+            {
+                return false;
+            }
+            record
+                .paused_generation
+                .store(version.generation, Ordering::Release);
+            let current = record.state.load(Ordering::Acquire);
+            current != EXHAUSTED && current & !QUIET == version.generation
+        })
+    }
+
+    pub fn maintenance_is_paused(&self, peer: PeerId) -> bool {
+        self.peers.get(&peer).is_some_and(|record| {
+            let current = record.state.load(Ordering::Acquire);
+            current != EXHAUSTED
+                && (current & QUIET != 0
+                    || record.paused_generation.load(Ordering::Acquire) == current & !QUIET)
+        })
+    }
+
+    pub fn resume_maintenance(&self, peer: PeerId) {
+        if let Some(record) = self.peers.get(&peer) {
+            record.paused_generation.store(EXHAUSTED, Ordering::Release);
+        }
+    }
+
     pub fn revoke_quiet(&self, peer: PeerId) {
         if let Some(record) = self.peers.get(&peer) {
             let _ = record
@@ -150,6 +184,7 @@ impl ApplicationDemand {
                         state & !QUIET
                     })
                 });
+            record.paused_generation.store(EXHAUSTED, Ordering::Release);
         }
     }
 }
@@ -187,6 +222,80 @@ mod tests {
         assert_eq!(first.last_demand, second.last_demand);
         assert_ne!(first.version, second.version);
         assert!(!demand.grant_quiet(peer(1), first.version.unwrap()));
+    }
+
+    #[test]
+    fn preparation_is_not_quiet_and_payload_immediately_invalidates_it() {
+        let now = Instant::now();
+        let demand = ApplicationDemand::new([peer(1), peer(2)], now);
+        let before = demand.snapshot(peer(1)).unwrap();
+        assert!(!demand.maintenance_is_paused(peer(1)));
+        assert!(demand.pause_maintenance(peer(1), before.version.unwrap()));
+        assert!(demand.maintenance_is_paused(peer(1)));
+        assert!(!demand.maintenance_is_paused(peer(2)));
+        assert!(!demand.is_quiet(peer(1)));
+        assert_eq!(demand.snapshot(peer(1)), Some(before));
+        demand.record(peer(1), now);
+        assert!(!demand.maintenance_is_paused(peer(1)));
+        assert!(!demand.pause_maintenance(peer(1), before.version.unwrap()));
+        let current = demand.snapshot(peer(1)).unwrap().version.unwrap();
+        assert!(demand.pause_maintenance(peer(1), current));
+        demand.resume_maintenance(peer(1));
+        assert!(!demand.maintenance_is_paused(peer(1)));
+        assert!(demand.grant_quiet(peer(1), current));
+        demand.resume_maintenance(peer(1));
+        assert!(
+            demand.maintenance_is_paused(peer(1)),
+            "resuming preparation cannot cancel agreed quiet"
+        );
+        demand.revoke_quiet(peer(1));
+        assert!(!demand.maintenance_is_paused(peer(1)));
+    }
+
+    #[test]
+    fn preparation_cannot_cross_record_replacement_or_exhaustion() {
+        let now = Instant::now();
+        let mut demand = ApplicationDemand::new([peer(1)], now);
+        let old = demand.snapshot(peer(1)).unwrap().version.unwrap();
+        assert!(demand.pause_maintenance(peer(1), old));
+        demand.retain(|_| false);
+        demand.admit([peer(1)]);
+        assert!(!demand.maintenance_is_paused(peer(1)));
+        assert!(!demand.pause_maintenance(peer(1), old));
+        demand.peers[&peer(1)]
+            .state
+            .store(LAST_GENERATION, Ordering::Relaxed);
+        let last = demand.snapshot(peer(1)).unwrap().version.unwrap();
+        assert!(demand.pause_maintenance(peer(1), last));
+        demand.record(peer(1), now);
+        assert!(!demand.maintenance_is_paused(peer(1)));
+        assert!(!demand.pause_maintenance(peer(1), last));
+        assert_eq!(demand.snapshot(peer(1)).unwrap().version, None);
+    }
+
+    #[test]
+    fn stale_preparation_cannot_survive_concurrent_payload() {
+        let now = Instant::now();
+        let demand = std::sync::Arc::new(ApplicationDemand::new([peer(1)], now));
+        let old = demand.snapshot(peer(1)).unwrap().version.unwrap();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let data = {
+            let demand = std::sync::Arc::clone(&demand);
+            let barrier = std::sync::Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                barrier.wait();
+                for _ in 0..10_000 {
+                    demand.record(peer(1), now);
+                }
+            })
+        };
+        barrier.wait();
+        for _ in 0..10_000 {
+            demand.pause_maintenance(peer(1), old);
+        }
+        data.join().unwrap();
+        assert!(!demand.maintenance_is_paused(peer(1)));
+        assert!(!demand.is_quiet(peer(1)));
     }
 
     #[test]

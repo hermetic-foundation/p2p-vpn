@@ -723,8 +723,10 @@ fn assert_anchor_readiness_fences(
             .contains(&relay)
     );
     assert!(has_incoming_fixture(receiver));
+    assert!(receiver.lifecycle_readiness().incoming_path_available);
     receiver.epochs.mark_retiring(id);
     assert!(!has_incoming_fixture(receiver));
+    assert!(!receiver.lifecycle_readiness().incoming_path_available);
     assert!(
         incoming_anchor::confirmed_connection(
             &receiver.node.swarm,
@@ -738,6 +740,7 @@ fn assert_anchor_readiness_fences(
     receiver.epochs.retiring.remove(&id);
     receiver.epochs.advance();
     assert!(!has_incoming_fixture(receiver));
+    assert!(!receiver.lifecycle_readiness().incoming_path_available);
     assert!(
         incoming_anchor::confirmed_connection(
             &receiver.node.swarm,
@@ -1210,6 +1213,26 @@ impl EventFixture {
             pairing_tokens: PairingReplayTokens::default(),
             packet_in_flight: PacketInFlight::new(1),
         }
+    }
+
+    fn lifecycle_readiness(&mut self) -> super::super::lifecycle::Readiness {
+        let peer = self.forwarder.configured_transport_peers().next().unwrap();
+        demand_lifecycle::RuntimeInputs {
+            forwarder: &self.forwarder,
+            local: &ControlCapabilities::local("lab", None, 1280),
+            peers: &self.capabilities,
+            previous_tags: &[],
+            epochs: &self.epochs,
+            connections: &self.active_connections,
+            relay_readiness: &self.readiness,
+            auto_relay: &self.auto_relay,
+            queues: &PeerQueues::new(4, 4096),
+            in_flight: &self.packet_in_flight,
+            paths: &self.paths,
+            udp: None,
+            quic: None,
+        }
+        .with(&mut self.node, |_, context| (context.readiness)(peer))
     }
 
     async fn dispatch(&mut self, event: SwarmEvent<BehaviourEvent>) {

@@ -2,8 +2,9 @@
 
 ## Status
 
-Implementation contract. Local draining is not negotiated dormancy, does not
-retire a path, and is not evidence of cellular energy savings.
+Implemented in the shared runtime; production lifecycle advertisement remains
+disabled. Local draining is not negotiated dormancy, does not retire a path,
+and is not evidence of cellular energy savings.
 
 ## Problem
 
@@ -60,3 +61,19 @@ message, configuration option, or substitute for the authenticated idle exchange
 | Cancellation | Capability changes, authority replacement, and exhaustion cannot preserve a stale pause |
 | Resource | One fixed-size field per existing peer; no extra timer or background packet |
 | Energy | Fresh replicated cellular mAh/hour comparisons remain mandatory after activation |
+
+## Implementation Evidence
+
+| Check | Result |
+| --- | --- |
+| Focused lifecycle run | 93 passed: 34 policy, 23 protocol, 10 activity, and 26 dispatcher tests |
+| Maintenance drain | Pending maintenance permits preparation but still prevents idle commitment until native work drains |
+| Payload race | Real demand immediately invalidates preparation; stale concurrent preparation cannot restore it |
+| Incoming negotiation | Preparation accepts incoming hello processing; only committed quiet rejects dormant-path negotiation |
+| Probe expiry | Draining does not demote the path, record failure, or start another recovery round |
+| Legacy races | Crossed offers and late unsupported results clear quiet for the current epoch; stale epochs cannot disable a replacement |
+| Dormant scheduling | 1,000 virtual five-second ticks do not generate lifecycle work or renew demand |
+| Physical retirement | Preparation alone cannot authorize closing a path; native transport/control fences remain |
+
+Virtual idle time tests policy and dispatch, not real long-idle reachability.
+No updated APK, service deployment, or cellular energy comparison was performed.

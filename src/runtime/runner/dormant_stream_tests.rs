@@ -16,7 +16,7 @@ struct Fixture {
 }
 
 fn node(identity: NodeIdentity) -> P2pNode {
-    build_node(&HostConfig {
+    let mut node = build_node(&HostConfig {
         identity,
         network_name: "dormant-stream-retirement".into(),
         membership_tag: None,
@@ -39,7 +39,18 @@ fn node(identity: NodeIdentity) -> P2pNode {
             ..DiscoveryConfig::default()
         },
     })
-    .unwrap()
+    .unwrap();
+    // Unit connections are synthetic; public pairing seeds are not test work.
+    let local = node.local_peer_id;
+    node.swarm.behaviour_mut().kad = kad::Behaviour::with_config(
+        local,
+        kad::store::MemoryStore::new(local),
+        crate::runtime::p2p::controlled_kademlia_config(libp2p::StreamProtocol::new(
+            PUBLIC_IPFS_KADEMLIA_PROTOCOL,
+        )),
+    );
+    node.swarm.behaviour_mut().pairing_kad = None.into();
+    node
 }
 
 fn endpoint(address: &str) -> ConnectedPoint {
@@ -154,6 +165,25 @@ async fn retirement_requires_quiet_and_empty_application_and_wire_work() {
         .forwarder
         .record_application_demand(active.overlay(), active.now);
     assert!(!active.eligible(id));
+}
+
+#[tokio::test]
+async fn pending_native_transports_protect_a_possible_circuit_underlay() {
+    let mut f = Fixture::new();
+    let id = f.mature_connection();
+    f.quiet();
+    assert!(f.eligible(id));
+    let before = f.forwarder.application_demand(f.overlay());
+    f.node
+        .swarm
+        .dial(
+            DialOpts::peer_id(Libp2pPeerId::random())
+                .addresses(vec!["/ip4/127.0.0.1/tcp/9".parse().unwrap()])
+                .build(),
+        )
+        .unwrap();
+    assert!(!f.eligible(id));
+    assert_eq!(f.forwarder.application_demand(f.overlay()), before);
 }
 
 #[tokio::test]

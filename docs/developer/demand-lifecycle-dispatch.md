@@ -6,8 +6,10 @@
 | --- | --- |
 | Handler | Registered in the shared libp2p host; dispatched by the Linux/Android runner |
 | Quiet capability | Still false and omitted from normal capability messages |
-| Readiness | Production adapter conservatively refuses quiet admission |
-| Maintenance | Existing probes, retention, discovery, and keepalives remain unchanged |
+| Readiness | Native incoming-anchor, queue, in-flight, routing, codec, and transport owners |
+| Automatic driver | Existing tick and capability events drive idle/wake; no separate timer or disconnected lifecycle dial |
+| Maintenance | Generation-bound preparation drains probes; only committed quiet permits retirement |
+| Transport timing | Native ping is 60 seconds; QUIC keepalive/idle remain the compatible 5/10 seconds |
 | Energy result | None from this step; no device deployment or battery comparison |
 
 The [wire protocol](demand-lifecycle-wire.md) and
@@ -61,9 +63,15 @@ New application demand cancels pending quiet permission immediately. It cannot
 recycle a libp2p request slot prematurely. Maintenance and capability observation
 do not renew the model's application-demand timestamp.
 
+Retained native flights keep their original bounded request and underlay epoch.
+An expired semantic ticket cannot authorize a late idle/wake acceptance. A valid
+unsupported result can still select Legacy for its current capability epoch,
+including after a crossed offer committed quiet; fallback clears that permission.
+
 ## Diagnostics
 
-- Startup emits `event=peer_lifecycle_policy mode=passive` with the pending-integration reason.
+- Startup emits `event=peer_lifecycle_policy mode=passive` while control-delivery and activation gates remain.
+- Successful quiet commitment emits `peer_lifecycle_dormant`; a queued demand announcement emits `peer_lifecycle_wake_queued`.
 - Dispatcher snapshots retain peer/flight/reply counts and dropped/rate-limited totals.
 - CLI peer-state presentation and operational transition metrics remain part of activation work.
 
@@ -97,6 +105,7 @@ do not renew the model's application-demand timestamp.
 | Dormant/legacy peer | No periodic idle/wake exchange merely to retain its state |
 
 - Reuse the existing tick; add no timer, new configuration field, or maintenance-created application demand.
+- [Drain maintenance](demand-lifecycle-drain.md) after normal idle eligibility; preparation never grants physical retirement.
 - A valid payload or authenticated wake still overrides quiet immediately.
 - Keep unsupported-protocol fallback sticky for the validated capability epoch.
 - Native readiness and a working driver alone are insufficient for production advertisement.
@@ -109,29 +118,36 @@ Cached membership and DNS must remain authorized without retaining every socket.
 
 ## Remaining Activation Work
 
-1. Finish real queue/in-flight/service readiness; [payload demand tracking](demand-lifecycle-activity.md) is implemented.
-2. Finish physical retirement and remaining connection/discovery/NAT policy; probe, hello and retention gates respect committed quiet permission.
-3. Supply actual incoming-path and outstanding-work readiness instead of the conservative adapter.
-4. Prove a quiet public relay reservation and first inbound access before advertising quiet support.
-5. Run extended dormancy, roaming, compatibility, feature, and matched cellular energy gates.
+1. Finish bounded dirty capability delivery and equal-authority hostname catch-up for disconnected members.
+2. Integrate bounded control-owner handling with existing probe quarantine; do not broadly bypass security limits.
+3. Complete remaining discovery/NAT quiet policy and prove first-payload recovery through the integrated runner.
+4. Verify extended dormancy, roaming, mixed-version operation, and feature-preservation gates before production advertisement.
+5. Run matched, replicated cellular comparisons; no source or socket test establishes 10x savings.
 
 Loopback tests use virtual idle time and fixture-provided readiness. They are
 not evidence of real path retirement, long-idle public reachability, or the
 10x battery target.
 
+The runtime adapter additionally checks real native reservation ownership in
+the incoming-anchor regressions. Those local socket tests reject retiring and
+stale-epoch anchors; they do not replace the remaining integrated/device gates.
+
 ## Validation
 
 | Check | Evidence |
 | --- | --- |
-| Focused dispatcher tests | 12 pass, including real authenticated TCP/QUIC idle and reverse wake |
+| Focused lifecycle tests | 93 pass: 34 policy, 23 protocol, 10 activity, and 26 dispatcher tests |
 | Idle commit interruption | Eight cases: demand, revocation, peer restart, underlay change, retirement, incoming-path loss, new work, and membership rotation |
 | Queue ownership | Repeated cancellation, expiry, and revocation cannot recycle an outstanding transport slot |
 | Admission | Unknown peers retain no state; table overflow is bounded; peer/network budgets and monotonic refill pass |
 | Compatibility | Unsupported protocol and explicit unsupported reply remain Legacy across unchanged capability refreshes |
 | Wire flood | Five incoming requests with eight available stream slots: four bounded rejections and one application-level drop |
-| Workspace/all-targets | 1,910 passed; 48 existing exclusions, including opt-in namespace/resource scenarios |
+| Maintenance drain | Preparation is not quiet; pending work drains normally; payload resumes maintenance immediately |
+| Legacy races | Crossed idle offers clear quiet on fallback; delayed current-epoch unsupported results survive semantic expiry |
+| Disconnected membership | Shared runner reconnects a retained TCP member, persists departure, drains ACKs, and preserves survivor governance |
+| Workspace/all-targets | 2,016 passed; zero failures; 49 existing exclusions, including opt-in namespace/resource scenarios |
 | Clippy | Required correctness, suspicious, and performance groups pass; advisory and staged-unused API warnings remain |
-| Formatting and packaging | Changed Rust files pass rustfmt; evaluated Nix package source includes identical dispatcher sources/tests |
+| Formatting and packaging | Workspace and vendored Rust formatting pass; evaluated Linux/Android sources include identical runtime and patched dependency |
 | Unrun operational gates | Full Nix/Android package builds, NixOS VMs, live device/public-relay tests, long dormancy, and energy comparisons |
 
 The flood fixture keeps the transport cap above its request count. Otherwise a
@@ -139,8 +155,13 @@ lower-level stream refusal could masquerade as evidence that the application
 rate limiter worked.
 
 Validation used cached Nix Cargo/Rust/Clippy 1.97.1, two build jobs, and the
-existing approximately 4 GiB build directory. No SDK/toolchain download or
+existing approximately 6.3 GiB build directory. No SDK/toolchain download or
 device change was needed. These manual checks are not a full-flake pass.
+
+The first broad run exposed five fixture failures: synthetic connections still
+owned public DHT seed work, and storage-only churn did not finish its new offline
+handoff window. Explicit fixture setup fixed both; native readiness and slot
+retention guards remain intact. Focused reruns and the final full suite passed.
 
 Commands:
 
