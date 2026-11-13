@@ -118,6 +118,129 @@ fn poll_jobs(
     queries.into_iter().map(|(_, info)| info).collect()
 }
 
+#[tokio::test]
+async fn paused_background_jobs_retain_records_and_resume_under_existing_budgets() {
+    let local = PeerId::random();
+    let mut kad = kad::Behaviour::with_config(
+        local,
+        OrderedStore::default(),
+        job_config(Some(limits(3, 24, 128))),
+    );
+    kad.add_address(&PeerId::random(), "/memory/1".parse().unwrap());
+    let foreground = kad.try_get_closest_peers(PeerId::random()).unwrap();
+    for index in 0..8 {
+        let key = kad::RecordKey::new(&[index]);
+        kad.store_mut()
+            .add_provider(kad::ProviderRecord::new(key.clone(), local, Vec::new()))
+            .unwrap();
+        kad.store_mut()
+            .put(kad::Record::new(key, vec![index]))
+            .unwrap();
+    }
+    assert!(!kad.background_jobs_paused());
+    assert!(kad.set_background_jobs_paused(true));
+    assert!(!kad.set_background_jobs_paused(true));
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    for _ in 0..1000 {
+        assert!(poll_jobs(&mut kad, foreground).is_empty());
+        assert_eq!(kad.query_pool_usage().retained, 1);
+    }
+    assert!(
+        !kad.diagnostic_queries_paused(),
+        "production background pause must not suspend foreground queries"
+    );
+    assert_eq!(kad.store_mut().records.len(), 8);
+    assert_eq!(kad.store_mut().providers.len(), 8);
+    assert!(kad.set_background_jobs_paused(false));
+    assert!(!kad.set_background_jobs_paused(false));
+    let (mut providers, mut records) = (BTreeSet::new(), BTreeSet::new());
+    for _ in 0..1000 {
+        let work = poll_jobs(&mut kad, foreground);
+        assert!(work.len() <= 1);
+        for query in work {
+            match query {
+                kad::QueryInfo::AddProvider { key, .. } => {
+                    providers.insert(key.to_vec());
+                }
+                kad::QueryInfo::PutRecord { record, .. } => {
+                    records.insert(record.key.to_vec());
+                }
+                other => panic!("unexpected automatic work: {other:?}"),
+            }
+        }
+        assert!(kad.query_pool_usage().retained <= 2);
+        if providers.len() == 8 && records.len() == 8 {
+            break;
+        }
+    }
+    assert_eq!(providers.len(), 8);
+    assert_eq!(records.len(), 8);
+    assert_eq!(kad.query_pool_usage().rejected, 0);
+    assert!(kad.query_is_retained(&foreground));
+}
+
+#[tokio::test]
+async fn paused_background_jobs_allow_native_foreground_requests_and_inbound_serving() {
+    use libp2p::{Swarm, SwarmBuilder, noise, tcp, yamux};
+    fn host() -> Swarm<kad::Behaviour<kad::store::MemoryStore>> {
+        SwarmBuilder::with_new_identity()
+            .with_tokio()
+            .with_tcp(
+                tcp::Config::default(),
+                noise::Config::new,
+                yamux::Config::default,
+            )
+            .unwrap()
+            .with_behaviour(|key| {
+                let id = key.public().to_peer_id();
+                kad::Behaviour::with_config(id, kad::store::MemoryStore::new(id), job_config(None))
+            })
+            .unwrap()
+            .build()
+    }
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let mut client = host();
+        let mut server = host();
+        server.behaviour_mut().set_mode(Some(kad::Mode::Server));
+        client.behaviour_mut().set_mode(Some(kad::Mode::Client));
+        client.behaviour_mut().set_background_jobs_paused(true);
+        server.behaviour_mut().set_background_jobs_paused(true);
+        server.listen_on("/ip4/127.0.0.1/tcp/0".parse().unwrap()).unwrap();
+        let address = loop {
+            if let SwarmEvent::NewListenAddr { address, .. } = server.select_next_some().await { break address; }
+        };
+        client.behaviour_mut().add_address(server.local_peer_id(), address);
+        let key = kad::RecordKey::new(&b"foreground-while-quiet");
+        server.behaviour_mut().store_mut().put(kad::Record::new(key.clone(), b"awake".to_vec())).unwrap();
+        let provider = *client.local_peer_id();
+        client.behaviour_mut().store_mut().add_provider(kad::ProviderRecord::new(key.clone(), provider, Vec::new())).unwrap();
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        let query = client.behaviour_mut().try_get_record(key).unwrap();
+        let (mut found, mut terminal, mut served) = (false, false, false);
+        while !found || !terminal || !served {
+            tokio::select! {
+                event = client.select_next_some() => if let SwarmEvent::Behaviour(kad::Event::OutboundQueryProgressed {id, result, step, ..}) = event {
+                    assert_eq!(id, query, "no automatic query may start");
+                    terminal |= step.last;
+                    if let kad::QueryResult::GetRecord(Ok(kad::GetRecordOk::FoundRecord(record))) = result {
+                        assert_eq!(record.record.value, b"awake"); found = true;
+                    }
+                },
+                event = server.select_next_some() => match event {
+                    SwarmEvent::Behaviour(kad::Event::InboundRequest { request: kad::InboundRequest::GetRecord {..} }) => served = true,
+                    SwarmEvent::Behaviour(kad::Event::OutboundQueryProgressed {..}) => panic!("paused server started automatic work"),
+                    _ => (),
+                },
+            }
+        }
+        assert!(client.behaviour().background_jobs_paused());
+        assert!(server.behaviour().background_jobs_paused());
+        assert!(!client.behaviour().query_is_retained(&query));
+        assert_eq!(client.behaviour().query_pool_usage().retained, 0);
+        assert_eq!(server.behaviour().query_pool_usage().retained, 0);
+    }).await.expect("paused native DHT foreground deadline");
+}
+
 #[test]
 fn background_job_batches_bound_both_jobs_without_skipping_large_earlier_keys() {
     let local = PeerId::random();

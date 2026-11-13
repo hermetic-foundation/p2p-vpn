@@ -24,7 +24,7 @@ mod as_server;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     iter,
-    task::{Context, Poll},
+    task::{Context, Poll, Waker},
     time::Duration,
 };
 
@@ -183,6 +183,8 @@ pub struct Behaviour {
 
     // Timer for the next probe.
     schedule_probe: Delay,
+    client_probes_paused: bool,
+    client_probe_waker: Option<Waker>,
 
     // Ongoing inbound requests, where no response has been sent back to the remote yet.
     ongoing_inbound: HashMap<
@@ -232,6 +234,8 @@ impl Behaviour {
             local_peer_id,
             inner,
             schedule_probe: Delay::new(config.boot_delay),
+            client_probes_paused: false,
+            client_probe_waker: None,
             config,
             servers: HashSet::new(),
             ongoing_inbound: HashMap::default(),
@@ -266,6 +270,26 @@ impl Behaviour {
     /// Confidence in the assumed NAT status.
     pub fn confidence(&self) -> usize {
         self.confidence
+    }
+
+    /// Pause new client probes without stopping inbound serving or owned work.
+    /// Timers, confidence, throttle history and observed addresses are retained.
+    /// Returns whether the policy changed. Existing users default to unpaused.
+    pub fn set_client_probes_paused(&mut self, paused: bool) -> bool {
+        if self.client_probes_paused == paused {
+            return false;
+        }
+        self.client_probes_paused = paused;
+        if !paused {
+            if let Some(waker) = self.client_probe_waker.take() {
+                waker.wake();
+            }
+        }
+        true
+    }
+
+    pub fn client_probes_paused(&self) -> bool {
+        self.client_probes_paused
     }
 
     /// Whether native request or probe work is queued or in flight.
@@ -474,13 +498,17 @@ impl NetworkBehaviour for Behaviour {
                 Poll::Pending => {}
             }
 
-            match self.as_client().poll_auto_probe(cx) {
-                Poll::Ready(event) => {
-                    self.pending_actions
-                        .push_back(ToSwarm::GenerateEvent(Event::OutboundProbe(event)));
-                    continue;
+            if self.client_probes_paused {
+                self.client_probe_waker = Some(cx.waker().clone());
+            } else {
+                match self.as_client().poll_auto_probe(cx) {
+                    Poll::Ready(event) => {
+                        self.pending_actions
+                            .push_back(ToSwarm::GenerateEvent(Event::OutboundProbe(event)));
+                        continue;
+                    }
+                    Poll::Pending => {}
                 }
-                Poll::Pending => {}
             }
 
             return Poll::Pending;

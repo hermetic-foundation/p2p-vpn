@@ -123,8 +123,8 @@ Cached membership and DNS must remain authorized without retaining every socket.
 ## Remaining Activation Work
 
 1. Validate implemented bounded cold control discovery through public-WAN and extended dormancy scenarios.
-2. Preserve its native ownership while completing quiet discovery/NAT suppression.
-3. Complete remaining discovery/NAT quiet policy and prove first-payload recovery through the integrated runner.
+2. Preserve native ownership while validating the implemented quiet DHT/AutoNAT scheduling gates.
+3. Complete broader offline-peer retry policy and prove first-payload recovery through the activated runner.
 4. Verify extended dormancy, roaming, mixed-version operation, and feature-preservation gates before production advertisement.
 5. Run matched, replicated cellular comparisons; no source or socket test establishes 10x savings.
 
@@ -152,7 +152,8 @@ stale-epoch anchors; they do not replace the remaining integrated/device gates.
 | Dormant control delivery | 18 coalescing, deadline, quarantine, native-slot, LAN reconnect, and connection-ID regressions pass |
 | Checkpoint-only publication | Seven new regressions pass, including real gated TCP callbacks/replies, finite attempts, revocation, and expiry |
 | Checkpoint ownership | 58 tests pass, including finite hostname catch-up and cancelled/expired control leases |
-| Workspace/all-targets | 2,086 passed; zero failures; 50 existing exclusions, including opt-in namespace/resource scenarios |
+| Workspace/all-targets | 2,095 passed; zero failures; 50 existing exclusions, including opt-in namespace/resource scenarios |
+| Quiet discovery | Native serving/foreground requests survive pause; real relay ownership, demand/epoch resume, and six callback states pass |
 | Cold control discovery | Seven driver regressions and three native namespace runs pass; no demand renewal or foreign-provider dials |
 | Clippy | Required correctness, suspicious, and performance groups pass; advisory and staged-unused API warnings remain |
 | Formatting and packaging | Workspace and vendored Rust formatting pass; evaluated Linux/Android sources include identical runtime and patched dependency |

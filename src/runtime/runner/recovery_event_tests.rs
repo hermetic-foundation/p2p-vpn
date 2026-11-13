@@ -241,6 +241,101 @@ async fn idle_infrastructure_prunes_spare_quic_and_preserves_incoming_after_spar
 }
 
 #[tokio::test]
+async fn quiet_discovery_preserves_real_incoming_control_and_resumes_on_owner_loss() {
+    automatic_incoming_anchor_scenario(AnchorSetup::QuietDiscovery).await;
+}
+
+#[tokio::test]
+async fn paused_peer_connection_events_do_not_create_data_queries_or_failure_cooldown() {
+    for closed in [false, true] {
+        for phase in ["active", "preparing", "dormant"] {
+            let peer = Libp2pPeerId::random();
+            let overlay = PeerId::from_libp2p(peer);
+            let mut fixture = EventFixture::new(peer);
+            fixture.node.discovery.kademlia = true;
+            let before = fixture.forwarder.application_demand(overlay).unwrap();
+            if phase == "dormant" {
+                assert!(
+                    fixture
+                        .forwarder
+                        .grant_data_path_quiet(overlay, before.version.unwrap())
+                );
+            } else if phase == "preparing" {
+                assert!(
+                    fixture
+                        .forwarder
+                        .pause_data_path_maintenance(overlay, before.version.unwrap())
+                );
+            }
+            let id = ConnectionId::new_unchecked(812);
+            let event = if closed {
+                fixture.epochs.record_established(id);
+                SwarmEvent::ConnectionClosed {
+                    peer_id: peer,
+                    connection_id: id,
+                    endpoint: ConnectedPoint::Dialer {
+                        address: format!("/ip4/127.0.0.1/tcp/4001/p2p/{peer}")
+                            .parse()
+                            .unwrap(),
+                        role_override: libp2p::core::Endpoint::Dialer,
+                        port_use: libp2p::core::transport::PortUse::New,
+                    },
+                    num_established: 0,
+                    cause: None,
+                }
+            } else {
+                SwarmEvent::OutgoingConnectionError {
+                    peer_id: Some(peer),
+                    connection_id: id,
+                    error: DialError::NoAddresses,
+                }
+            };
+            fixture.dispatch(event).await;
+            let expected = usize::from(phase == "active" && !closed);
+            if phase == "active" && closed {
+                assert!(
+                    fixture
+                        .discovered
+                        .lan_first_recovery_active(peer, Instant::now()),
+                    "active connection loss must retain LAN-first recovery"
+                );
+            }
+            assert_eq!(
+                fixture
+                    .node
+                    .swarm
+                    .behaviour()
+                    .kad
+                    .query_pool_usage()
+                    .retained,
+                expected
+            );
+            assert_eq!(
+                fixture
+                    .discovered
+                    .recovery_queries
+                    .snapshot(Instant::now())
+                    .peers_retained,
+                expected,
+                "deliberate dormancy must not manufacture discovery failure history"
+            );
+            assert_eq!(
+                fixture
+                    .metrics
+                    .snapshot(crate::queue::QueueStats::default())
+                    .kademlia_provider_lookups,
+                u64::try_from(expected).unwrap()
+            );
+            assert_eq!(
+                fixture.forwarder.data_path_maintenance_is_paused(overlay),
+                phase != "active"
+            );
+            assert_eq!(fixture.forwarder.application_demand(overlay), Some(before));
+        }
+    }
+}
+
+#[tokio::test]
 async fn automatic_incoming_anchor_preserves_an_explicit_quic_reservation() {
     tokio::time::timeout(
         Duration::from_secs(10),
@@ -362,6 +457,37 @@ enum AnchorSetup {
     DiscoverAfterLoss,
     PrivateRouter,
     PruneIdle,
+    QuietDiscovery,
+}
+
+fn reconcile_quiet_fixture(receiver: &mut EventFixture) -> bool {
+    let local = ControlCapabilities::local("lab", None, 1280)
+        .with_demand_lifecycle_epoch(super::super::lifecycle::Epoch::new([8; 16]).unwrap());
+    quiet_discovery::reconcile(quiet_discovery::Context {
+        node: &mut receiver.node,
+        forwarder: &receiver.forwarder,
+        local: &local,
+        relay: &receiver.auto_relay,
+        readiness: &receiver.readiness,
+        epochs: &receiver.epochs,
+        connections: &receiver.active_connections,
+        pairing: &receiver.pairing,
+        discovered: &mut receiver.discovered,
+        now: Instant::now(),
+    });
+    let paused = receiver.node.swarm.behaviour().kad.background_jobs_paused();
+    assert_eq!(
+        receiver
+            .node
+            .swarm
+            .behaviour()
+            .autonat
+            .as_ref()
+            .unwrap()
+            .client_probes_paused(),
+        paused
+    );
+    paused
 }
 
 fn retire_infrastructure_fixture(
@@ -764,6 +890,12 @@ async fn automatic_incoming_anchor_scenario(setup: AnchorSetup) {
         let mut sender = membership_sync_test_node(NodeIdentity::generate_ed25519().unwrap());
         let mut receiver = EventFixture::new(sender.local_peer_id);
         receiver.auto_relay.policy.max_reservations = 1;
+        if matches!(setup, AnchorSetup::QuietDiscovery) {
+            receiver.node.swarm.behaviour_mut().autonat = Some(autonat::Behaviour::new(
+                receiver.node.local_peer_id,
+                autonat::Config {boot_delay: Duration::from_secs(3600), ..autonat::Config::default()},
+            )).into();
+        }
         let discover = matches!(setup, AnchorSetup::DiscoverTcp | AnchorSetup::DiscoverAfterLoss | AnchorSetup::PrivateRouter);
         let mut routing_bootstrap = None;
         if matches!(setup, AnchorSetup::DiscoverAfterLoss) {
@@ -800,7 +932,7 @@ async fn automatic_incoming_anchor_scenario(setup: AnchorSetup) {
         let reuse = match setup {
             AnchorSetup::ReuseTcp => Some(connect_anchor_fixture(&mut receiver, &mut relay, tcp.clone()).await),
             AnchorSetup::ReuseQuic | AnchorSetup::RecoverQuic => quic_id,
-            AnchorSetup::DialTcp | AnchorSetup::ColdQuic | AnchorSetup::DiscoverTcp | AnchorSetup::DiscoverAfterLoss | AnchorSetup::PrivateRouter | AnchorSetup::PruneIdle => None,
+            AnchorSetup::DialTcp | AnchorSetup::ColdQuic | AnchorSetup::DiscoverTcp | AnchorSetup::DiscoverAfterLoss | AnchorSetup::PrivateRouter | AnchorSetup::PruneIdle | AnchorSetup::QuietDiscovery => None,
         };
         let use_quic = matches!(setup, AnchorSetup::ReuseQuic | AnchorSetup::RecoverQuic | AnchorSetup::ColdQuic);
         let address = if use_quic {quic} else {tcp};
@@ -824,7 +956,7 @@ async fn automatic_incoming_anchor_scenario(setup: AnchorSetup) {
             &receiver.metrics, &mut receiver.epochs, &receiver.active_connections, &[]);
         let owned = receiver.auto_relay.pending_reservations.get(&relay_peer).and_then(|pending| pending.owned_dial);
         let expected_owner = reuse.or(owned);
-        assert_eq!(owned.is_some(), matches!(setup, AnchorSetup::DialTcp | AnchorSetup::RecoverQuic | AnchorSetup::ColdQuic | AnchorSetup::PruneIdle));
+        assert_eq!(owned.is_some(), matches!(setup, AnchorSetup::DialTcp | AnchorSetup::RecoverQuic | AnchorSetup::ColdQuic | AnchorSetup::PruneIdle | AnchorSetup::QuietDiscovery));
         assert_eq!(receiver.auto_relay.reservation_listeners.is_empty(), owned.is_some() || discover);
         let kind = if use_quic {PathKind::DirectQuicStream} else {PathKind::DirectTcpStream};
         let mut tick = tokio::time::interval(Duration::from_millis(20));
@@ -870,6 +1002,23 @@ async fn automatic_incoming_anchor_scenario(setup: AnchorSetup) {
         }
         if let Some(quic_id) = quic_id {
             assert!(receiver.epochs.is_usable(quic_id), "TCP promotion must not destroy the old connection");
+        }
+        if matches!(setup, AnchorSetup::QuietDiscovery) {
+            let peer = PeerId::from_libp2p(sender.local_peer_id);
+            let before = receiver.forwarder.application_demand(peer).unwrap();
+            assert!(receiver.forwarder.pause_data_path_maintenance(peer, before.version.unwrap()));
+            assert!(reconcile_quiet_fixture(&mut receiver));
+            assert_eq!(receiver.forwarder.application_demand(peer), Some(before));
+            assert!(!receiver.forwarder.data_path_is_dormant(peer), "maintenance preparation alone is not a packet fence");
+            receiver.epochs.mark_retiring(owner);
+            assert!(!reconcile_quiet_fixture(&mut receiver));
+            receiver.epochs.retiring.remove(&owner);
+            assert!(reconcile_quiet_fixture(&mut receiver));
+            assert!(receiver.forwarder.record_application_demand(peer, Instant::now()));
+            assert!(!reconcile_quiet_fixture(&mut receiver));
+            let version = receiver.forwarder.application_demand(peer).unwrap().version.unwrap();
+            assert!(receiver.forwarder.pause_data_path_maintenance(peer, version));
+            assert!(reconcile_quiet_fixture(&mut receiver));
         }
         if prune {
             while idle_infrastructure::wire_busy(&receiver.node) {
@@ -970,6 +1119,9 @@ async fn automatic_incoming_anchor_scenario(setup: AnchorSetup) {
             }
         }
         assert_anchor_readiness_fences(&mut receiver, relay_peer, owner);
+        if matches!(setup, AnchorSetup::QuietDiscovery) {
+            assert!(!reconcile_quiet_fixture(&mut receiver), "stale network epoch must resume discovery");
+        }
     })).await.expect("automatic anchor and fresh inbound control deadline");
 }
 

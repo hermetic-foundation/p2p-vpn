@@ -169,6 +169,7 @@ mod dormant_paths;
 mod idle_infrastructure;
 mod incoming_anchor;
 mod incoming_recovery;
+mod quiet_discovery;
 mod recovery_snapshot;
 use recovery_snapshot::ApplicationRecoverySnapshot;
 mod packet_endpoint_selection;
@@ -2047,6 +2048,18 @@ where
             );
             packet_authorization_revision = Some(forwarder.authorization_revision());
         }
+        quiet_discovery::reconcile(quiet_discovery::Context {
+            node: &mut node,
+            forwarder: &forwarder,
+            local: &local_capabilities,
+            relay: &auto_relay,
+            readiness: &relay_readiness,
+            epochs: &connection_epochs,
+            connections: &active_connections,
+            pairing: &code_pairing_sessions,
+            discovered: &mut queue_runtime.discovered_peer_addresses,
+            now: Instant::now(),
+        });
         let runtime_data_available = tun_reader_open
             || packet_plane.can_receive()
             || packet_plane_quic
@@ -7981,7 +7994,9 @@ fn handle_redial_tick(
             &mut node.swarm,
             &node.network_name,
             node.membership_tag.as_deref(),
-            forwarder.configured_transport_peers(),
+            forwarder.configured_transport_peers().filter(|peer| {
+                !forwarder.data_path_maintenance_is_paused(PeerId::from_libp2p(*peer))
+            }),
             paths,
             kademlia_maintenance,
             discovered_peer_addresses,
@@ -14263,6 +14278,9 @@ async fn handle_swarm_event(
                     context.packet_plane_negotiator.remove_peer(overlay_peer);
                 }
                 if context.forwarder.is_configured_transport_peer(peer_id)
+                    && !context
+                        .forwarder
+                        .data_path_maintenance_is_paused(overlay_peer)
                     && should_query_configured_peer_recovery_discovery(context.discovery)
                     && peer_lacks_supported_packet_path(
                         context.paths,
@@ -14352,6 +14370,9 @@ async fn handle_swarm_event(
                 && context.forwarder.is_configured_transport_peer(peer_id)
             {
                 if should_query_configured_peer_recovery_discovery(context.discovery)
+                    && !context
+                        .forwarder
+                        .data_path_maintenance_is_paused(PeerId::from_libp2p(peer_id))
                     && peer_lacks_supported_packet_path(
                         context.paths,
                         context.peer_capabilities,

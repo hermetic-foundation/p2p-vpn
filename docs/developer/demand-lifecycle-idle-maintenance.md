@@ -110,7 +110,7 @@ nix eval --offline --raw .#checks.x86_64-linux.nixos-quic-defaults-eval.text
 ## Remaining Gates
 
 - Negotiate bilateral dormancy and stop idle overlay maintenance at both ends.
-- Gate nonessential DHT/AutoNAT maintenance on the negotiated quiet state.
+- Validate the [implemented quiet discovery gate](demand-lifecycle-quiet-discovery.md) in the activated runtime.
 - Deliver membership, DNS, and revocation updates to dormant members on events.
 - Verify incoming/outgoing wake, legacy peers, active transfers, relay fallback, and roaming.
 - Deploy a validated candidate and measure fresh paired/reversed cellular controls.

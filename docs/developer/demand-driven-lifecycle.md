@@ -5,7 +5,7 @@
 | Item | Status |
 | --- | --- |
 | Decision | Separate incoming reachability from active per-peer data paths |
-| Runtime implementation | Incoming readiness, idle/wake, retirement, member/hostname updates, and bounded cold control recovery integrated; activation pending |
+| Runtime implementation | Incoming readiness, idle/wake, retirement, member/hostname updates, cold control recovery, and quiet discovery scheduling integrated; activation pending |
 | Default configuration | Preserve minimal JSON and native NixOS workflows; no required new settings |
 | Platforms | Shared Rust policy; Android and Linux must cooperate |
 | Battery acceptance | Measured 10x idle-cellular efficiency with feature preservation; not yet demonstrated |
@@ -260,9 +260,10 @@ the production runtime. Evaluate a focused proof once the model stabilizes.
 | [Model tests](../../src/runtime/lifecycle/tests.rs) | 34 tests, including 111,111 short bilateral event sequences | These model checks are not a production-runtime proof |
 | Idle delivery safety | Authenticated reply-sent/ACK commitment rechecks authority, epochs, demand, incoming path, and native work | Integrated first-payload and public-relay validation remain |
 | [Wire exchange](demand-lifecycle-wire.md) | 23 tests: bounded codec, contextual authentication, epochs, scope, stale/revoked response rejection | Quiet capability remains unadvertised |
-| [Runner dispatcher](demand-lifecycle-dispatch.md) | Native readiness, automatic idle/wake, bounded slots/rates, commit-time validation, and native-owned control quarantine leases | Integrated activation, quiet discovery/NAT policy, and operational validation remain |
+| [Runner dispatcher](demand-lifecycle-dispatch.md) | Native readiness, automatic idle/wake, bounded slots/rates, commit-time validation, and native-owned control quarantine leases | Integrated activation, broader offline-peer retry policy, and operational validation remain |
 | [Control delivery](demand-lifecycle-control-delivery.md) | Coalesced member/checkpoint updates, gated-roster isolation, hostname catch-up, and scoped cold discovery without payload demand | Public-WAN and extended dormancy validation remain |
-| [Application demand](demand-lifecycle-activity.md) | Shared forwarding hooks, atomic quiet fencing, transport retirement, and demand-gated probes/recovery | Complete discovery/NAT quiet policy and first-payload/roaming validation remain |
+| [Application demand](demand-lifecycle-activity.md) | Shared forwarding hooks, atomic quiet fencing, transport retirement, and demand-gated probes/recovery | Broader offline-peer retry policy and first-payload/roaming validation remain |
+| [Quiet discovery](demand-lifecycle-quiet-discovery.md) | Native AutoNAT client and DHT background gates preserve serving, owned requests, control, and incoming repair | Activated bilateral dormancy, public-WAN/roaming, and cellular energy remain unverified |
 | TCP/QUIC loopback | Idle commits after real response-sent; either endpoint can initiate wake | Virtual idle clock and fixture readiness; not long-idle or public-relay evidence |
 | Compatibility | Legacy defaults; dispatcher preserves unsupported fallback across ordinary capability refreshes | Operational peer-state presentation and full mixed-version deployment tests remain pending |
 | Energy impact | Source/transport evidence only; no updated APK/service deployment in these integration checks | All measured improvement and feature-preservation gates remain open |

@@ -103,6 +103,7 @@ pub struct Behaviour<TStore> {
     put_record_job: Option<PutRecordJob>,
     background_query_limit: usize,
     background_query_batch: usize,
+    background_jobs_paused: bool,
     provider_job_first: bool,
 
     /// The TTL of regular (value-)records.
@@ -631,6 +632,7 @@ where
             put_record_job,
             background_query_limit: config.background_query_limit,
             background_query_batch: config.background_query_batch,
+            background_jobs_paused: false,
             provider_job_first: true,
             record_ttl: config.record_ttl,
             provider_record_ttl: config.provider_record_ttl,
@@ -649,6 +651,24 @@ where
                 config.automatic_bootstrap_throttle,
             ),
         }
+    }
+
+    /// Pause only new automatic record/provider jobs and automatic bootstrap.
+    /// Explicit queries, inbound serving and current work continue normally.
+    /// Scheduling and stored records remain intact. Returns whether it changed.
+    pub fn set_background_jobs_paused(&mut self, paused: bool) -> bool {
+        if self.background_jobs_paused == paused {
+            return false;
+        }
+        self.background_jobs_paused = paused;
+        if let Some(waker) = self.no_events_waker.take() {
+            waker.wake();
+        }
+        true
+    }
+
+    pub fn background_jobs_paused(&self) -> bool {
+        self.background_jobs_paused
     }
 
     /// Temporarily stops advancing outbound queries and starting background jobs.
@@ -3133,7 +3153,9 @@ where
         });
         if !queries_paused {
             self.diagnostic_query_pause = None;
-            self.poll_background_jobs(cx, now);
+            if !self.background_jobs_paused {
+                self.poll_background_jobs(cx, now);
+            }
         }
 
         // Inbound work must not indefinitely defer terminal query ownership.
@@ -3159,7 +3181,7 @@ where
         }
 
         // Poll bootstrap periodically and automatically.
-        if !queries_paused {
+        if !queries_paused && !self.background_jobs_paused {
             if let Poll::Ready(()) = self.bootstrap_status.poll_next_bootstrap(cx) {
                 if let Err(e) = self.bootstrap() {
                     tracing::warn!("Failed to trigger bootstrap: {e}");

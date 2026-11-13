@@ -144,8 +144,8 @@ responses before they can advertise a stale catch-up opportunity.
 
 - Keep verified incoming ownership, essential renewal, and automatic anchor recovery intact in the activated runtime.
 - Validate implemented [finite cold control recovery](demand-lifecycle-control-discovery.md) with public-WAN and extended dormancy.
-- Preserve scoped control ownership while completing the remaining quiet discovery/NAT policy.
-- Complete demand-driven LAN-first establishment/recovery and sparse infrastructure maintenance policy.
+- Preserve scoped control ownership while validating the implemented quiet discovery/NAT scheduling gate.
+- Complete broader offline-peer retry policy, LAN-first establishment/recovery, and activated sparse infrastructure validation.
 - Verify first incoming/outgoing VPN payloads, legacy peers, active transfers, and roaming with lifecycle support enabled.
 - Measure fresh paired/reversed-order cellular energy only after the functional candidate is active.
 
@@ -153,7 +153,8 @@ responses before they can advertise a stale catch-up opportunity.
 
 | Check | Result |
 | --- | --- |
-| Workspace/all-target tests | 2,086 passed; zero failures; 50 existing/opt-in ignores |
+| Workspace/all-target tests | 2,095 passed; zero failures; 50 existing/opt-in ignores |
+| Quiet discovery | Scoped control ownership survives per-peer data cancellation; native foreground/serving and incoming owner gates pass |
 | Cold control recovery | Seven driver tests, thirteen shared-ledger tests, and three repeated native namespace runs pass |
 | Native work regressions | 18 passed: original ownership fences plus absolute deadlines, delayed writes, active/queued cancellation, normal terminal events, and FIFO preservation |
 | Stream retirement regressions | Six passed: work/demand, initial grace, pending transports, nine infrastructure roles, metadata retention, real TCP close/reconnect |

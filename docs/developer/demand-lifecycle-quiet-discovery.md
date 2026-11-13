@@ -2,9 +2,9 @@
 
 ## Status
 
-Implementation contract, published before native/runtime changes. Production
-lifecycle advertisement stays disabled until the integrated activation and
-energy gates pass. This document is not a battery measurement.
+The contract was published before native/runtime changes. Shared scheduling
+gates and additive native pause APIs are implemented. Production lifecycle
+advertisement stays disabled; activation and energy acceptance remain open.
 
 ## Entry Gates
 
@@ -44,6 +44,7 @@ existing per-poll and shared query budgets still apply.
 ## Per-Peer Recovery
 
 - Exclude maintenance-paused peers from periodic targeted data discovery, even when a different peer still needs recovery.
+- Connection-close and dial-error callbacks must also avoid starting data queries for paused peers; do not create a false cooldown by starting then cancelling them.
 - Cancel only those peers' ordinary data-query owners through the existing native cancellation path.
 - Preserve scoped, live control-query ownership and failure cooldowns.
 - Keep explicit application recovery, LAN-first selection, incoming-relay repair, and configured reservations available.
@@ -73,3 +74,58 @@ requirements; suppressing reachability is not an energy improvement.
 
 Unit and local native socket checks do not prove extended dormancy, public-WAN
 availability, mobile roaming, or the measured 10x target.
+
+## Implementation
+
+| Surface | Implementation |
+| --- | --- |
+| AutoNAT | `set_client_probes_paused` pauses future starts; one native waker resumes polling |
+| DHT | `set_background_jobs_paused` retains jobs/store and leaves foreground queries and serving active |
+| Runtime | Reconcile the current gate before each Swarm poll; no new timer, request ledger, or user setting |
+| Targeted discovery | Skip paused peers even when another peer needs recovery; cancel only ordinary data-query owners |
+| Existing work | Keep native terminal ownership and failure history; active control and incoming repair remain explicit foreground work |
+
+## Focused Evidence
+
+| Check | Result |
+| --- | --- |
+| AutoNAT native tests | Five pass, including two new paused-client/server and due-timer/resume regressions |
+| AutoNAT state | Due paused timer starts no probe; resume wakes polling; owned failure drains without retry; public status/confidence survive toggles |
+| DHT background | Due jobs remain stored; resume obeys the existing two-query ceiling and one-new-query-per-poll bound |
+| DHT foreground | Real encrypted TCP value lookup completes while both endpoints' background jobs are paused |
+| Runtime gates | Three unit tests pass: preparation versus commitment, activation/incoming/serving/pairing gates, control ownership, and mixed-peer recovery |
+| Real incoming owner | Fresh relayed control completes with quiet scheduling applied; payload demand, retiring owner, and stale epoch resume scheduling |
+| Connection callbacks | Preparation/dormancy do not create data queries or cooldown state; active peers retain LAN-first connection-loss recovery and ordinary failed-dial discovery |
+
+- The relay fixture injects the capability and maintenance-preparation state.
+- Its reservation, connection ownership, circuit, and control exchange use real sockets.
+- This is not bilateral idle negotiation or first IP payload recovery through an activated daemon.
+- AutoNAT's first public-status transition can retain confidence zero; the tests preserve its existing semantics.
+
+```sh
+cargo test --offline --locked --test autonat_work -- --test-threads=2
+cargo test --offline --locked --lib paused_background_jobs -- --test-threads=2
+cargo test --offline --locked --lib quiet_discovery -- --test-threads=2
+```
+
+## Verification Record
+
+| Check | Result |
+| --- | --- |
+| Workspace/all targets | 2,095 passed; zero failed; 50 existing/opt-in exclusions |
+| Connection callbacks | Six cases pass: active, preparing, and dormant peers under close and failed-dial events |
+| Cold control compatibility | Explicit native public-client namespace case passes with the new native APIs |
+| Clippy | Correctness, suspicious, and performance groups pass; advisory warnings remain |
+| Formatting | Workspace Rust and both touched native modules pass |
+| Package sources | Linux and Android ARM64/x86-64 match runtime, all three native patches, and lockfile byte-for-byte |
+| Test inventory | All 41 Rust integration/support files match the Linux source |
+| Build resources | Cached Nix tools, one existing approximately 7 GiB target, two jobs, incremental compilation off |
+| Full Nix/APK builds | Not run; the earlier offline dry run required 493 uncached derivations including bootstrap compilers |
+| Operational acceptance | Production capability remains unadvertised; no APK/service deployment or new energy measurement |
+
+The initial callback test assumed active connection loss immediately starts a
+public query. Its corrected assertion preserves the existing LAN-first grace;
+active failed dials still start discovery. Production LAN-first behavior was
+not changed to satisfy the test.
+
+These executable checks are not a formal proof or a battery comparison.

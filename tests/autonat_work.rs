@@ -122,9 +122,19 @@ async fn disconnected_probe_and_undelivered_failure_remain_busy() {
 
 #[tokio::test]
 async fn established_tcp_probe_is_busy_before_dial_back_and_drains_after_completion() {
+    exercise_established_probe(false).await;
+}
+
+#[tokio::test]
+async fn paused_autonat_client_drains_owned_probe_and_paused_server_still_serves() {
+    exercise_established_probe(true).await;
+}
+
+async fn exercise_established_probe(paused: bool) {
     tokio::time::timeout(DEADLINE, async {
         let mut client = host(config(Duration::ZERO, Duration::from_millis(50)));
         let mut server = host(config(QUIET, QUIET));
+        server.behaviour_mut().set_client_probes_paused(paused);
         let client_address = listen(&mut client).await;
         let server_address = listen(&mut server).await;
         let client_peer = *client.local_peer_id();
@@ -158,6 +168,7 @@ async fn established_tcp_probe_is_busy_before_dial_back_and_drains_after_complet
             }
         }
         client.behaviour_mut().remove_server(&server_peer);
+        client.behaviour_mut().set_client_probes_paused(paused);
         assert_no_pending_transports(&client);
         assert!(client.behaviour().has_pending_work());
 
@@ -189,9 +200,75 @@ async fn established_tcp_probe_is_busy_before_dial_back_and_drains_after_complet
         assert!(server.is_connected(&client_peer));
         assert!(!client.behaviour().has_pending_work());
         assert!(!server.behaviour().has_pending_work());
+        assert_eq!(client.behaviour().client_probes_paused(), paused);
+        assert_eq!(server.behaviour().client_probes_paused(), paused);
+        assert!(matches!(
+            client.behaviour().nat_status(),
+            autonat::NatStatus::Public(_)
+        ));
+        let status = client.behaviour().nat_status();
+        let confidence = client.behaviour().confidence();
+        for next in [!paused, paused] {
+            client.behaviour_mut().set_client_probes_paused(next);
+            assert_eq!(client.behaviour().nat_status(), status);
+            assert_eq!(client.behaviour().confidence(), confidence);
+            assert!(!client.behaviour().has_pending_work());
+        }
     })
     .await
     .expect("established TCP AutoNAT work deadline");
+}
+
+#[tokio::test]
+async fn paused_autonat_due_timer_is_silent_and_resume_preserves_native_ownership() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    struct WakeCount(AtomicUsize);
+    impl futures::task::ArcWake for WakeCount {
+        fn wake_by_ref(this: &Arc<Self>) {
+            this.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    tokio::time::timeout(DEADLINE, async {
+        let peer = PeerId::random();
+        let mut native = autonat::Behaviour::new(PeerId::random(), config(Duration::ZERO, QUIET));
+        native.add_server(peer, Some("/ip4/127.0.0.1/tcp/9".parse().unwrap()));
+        native.probe_address("/ip4/127.0.0.1/tcp/10".parse().unwrap());
+        assert!(!native.client_probes_paused());
+        assert!(native.set_client_probes_paused(true));
+        assert!(!native.set_client_probes_paused(true));
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        let wake = Arc::new(WakeCount(AtomicUsize::new(0)));
+        let waker = futures::task::waker(wake.clone());
+        let mut context = std::task::Context::from_waker(&waker);
+        for _ in 0..1000 {
+            assert!(NetworkBehaviour::poll(&mut native, &mut context).is_pending());
+            assert!(!native.has_pending_work());
+        }
+        let before = wake.0.load(Ordering::Relaxed);
+        assert!(native.set_client_probes_paused(false));
+        assert!(wake.0.load(Ordering::Relaxed) > before, "resume must wake the existing poller");
+        assert!(!native.set_client_probes_paused(false));
+        assert!(matches!(poll_fn(|cx| native.poll(cx)).await,
+            ToSwarm::GenerateEvent(autonat::Event::OutboundProbe(autonat::OutboundProbeEvent::Request {peer: owner, ..})) if owner == peer));
+        assert!(native.has_pending_work());
+        native.set_client_probes_paused(true);
+        let ToSwarm::Dial {opts} = poll_fn(|cx| native.poll(cx)).await else { panic!("owned native dial must drain while paused"); };
+        native.on_swarm_event(FromSwarm::DialFailure(DialFailure {
+            peer_id: Some(peer), connection_id: opts.connection_id(), error: &DialError::NoAddresses,
+        }));
+        assert!(native.has_pending_work());
+        assert!(matches!(poll_fn(|cx| native.poll(cx)).await,
+            ToSwarm::GenerateEvent(autonat::Event::OutboundProbe(autonat::OutboundProbeEvent::Error {peer: Some(owner), ..})) if owner == peer));
+        for _ in 0..1000 {
+            assert!(native.poll(&mut context).is_pending(), "failure must not rearm a paused retry");
+            assert!(!native.has_pending_work());
+        }
+        assert_eq!(native.nat_status(), autonat::NatStatus::Unknown);
+        assert_eq!(native.confidence(), 0);
+    }).await.expect("paused native AutoNAT deadline");
 }
 
 async fn finish_probe(
