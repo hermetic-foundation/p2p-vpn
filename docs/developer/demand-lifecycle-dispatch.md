@@ -122,6 +122,9 @@ Cached membership and DNS must remain authorized without retaining every socket.
 
 ## Remaining Activation Work
 
+The [activated runner contract](demand-lifecycle-activated-runner.md) defines
+an explicit embedding opt-in and real first-IP validation before deployment.
+
 1. Validate implemented bounded cold control discovery through public-WAN and extended dormancy scenarios.
 2. Preserve native ownership while validating the implemented quiet DHT/AutoNAT scheduling gates.
 3. Complete broader offline-peer retry policy and prove first-payload recovery through the activated runner.
