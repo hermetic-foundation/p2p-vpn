@@ -167,5 +167,18 @@ The observed rate changed from 304.36 to 296.03 mAh/hour, not the required 10x.
 | Two offline members retained in both arms | Do not remove members to improve the result |
 | One original/candidate pair only | No replicated or statistically confirmed savings claim |
 
+### Cold-Wake Probe Limit
+
+- The current endpoint probe sends three pings with a three-second per-packet wait.
+- A failed short probe does not prove that a dormant path cannot recover within its documented first-wake budget.
+- C2's failed short probes remain retained; it also failed to enter maintenance pause and is not accepted.
+- Add a separately timed, autonomous cold-wake check before relying on this collector for negotiated dormancy acceptance.
+- Keep cold-wake evidence separate from subsequent steady-state delivery; no manual dials, relay changes or restarts count as recovery.
+- Do not generate probes inside energy intervals or alter earlier plans/results to pass a candidate.
+
+The existing first-wake packet retention is 45 seconds. A lifecycle-aware probe
+must exercise that contract instead of requiring paths to remain active merely
+to pass a legacy short-timeout check.
+
 See Perfetto's [streaming contract](https://perfetto.dev/docs/concepts/config#streaming-long-traces)
 and [buffer statistics](https://raw.githubusercontent.com/google/perfetto/main/protos/perfetto/common/trace_stats.proto).
