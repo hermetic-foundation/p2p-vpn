@@ -16,6 +16,7 @@ Use these docs when changing, testing, or debugging `p2p-vpn`.
 | [Android Battery Efficiency](android-battery-efficiency.md) | 10x target, physical-device measurement contract, and feature-preservation gates. |
 | [Cellular Maintenance Isolation](android-cellular-combined-isolation.md) | Combined DHT/probe diagnostic, normal/off reference, and battery-accounting caveats. |
 | [Cellular Battery Comparison](android-cellular-comparison.md) | Matched raw-report/rail analysis, accounting validation, paired criteria, and remaining capture work. |
+| [Cellular Window Capture](android-cellular-capture.md) | USB-only collection contract, frozen workloads, trace padding, and restoration safeguards. |
 | [Demand-Driven Lifecycle](demand-driven-lifecycle.md) | Planned idle negotiation, incoming relay policy, compatibility, and battery acceptance gates. |
 | [Activated Runner Trials](demand-lifecycle-activated-runner.md) | Native idle/wake evidence, controlled application builds, and remaining device/energy gates. |
 | [Incoming Anchor Ownership](demand-lifecycle-incoming-anchor.md) | Native reservation ownership, TCP preference, compatibility, and staged activation. |
