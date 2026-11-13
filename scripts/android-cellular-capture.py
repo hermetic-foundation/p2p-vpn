@@ -31,6 +31,15 @@ require = compare.require
 PACKAGE = "org.hermeticfoundation.p2pvpn.debug"
 MAX_COMMAND = 256 * 1024
 MAX_TRACE = 32 * 1024 * 1024
+# Observe the round trip, not just the runtime's 30-second queue retention.
+FIRST_WAKE_REPLY_WAIT_SECONDS = 45
+WAKE_PROBE_TIMEOUT_SECONDS = FIRST_WAKE_REPLY_WAIT_SECONDS + 5
+STEADY_PROBE_TIMEOUT_SECONDS = 15
+BOUNDARY_PROBE_TIMEOUT_SECONDS = (
+    WAKE_PROBE_TIMEOUT_SECONDS + STEADY_PROBE_TIMEOUT_SECONDS
+)
+FALLBACK_ALLOWANCE_SECONDS = 360 + 2 * BOUNDARY_PROBE_TIMEOUT_SECONDS
+WATCHDOG_ALLOWANCE_SECONDS = 480 + 4 * BOUNDARY_PROBE_TIMEOUT_SECONDS
 
 
 class InterruptedCapture(Exception):
@@ -766,6 +775,91 @@ class Device:
             ],
         }
 
+    def _wake_ping(self, workload, inbound, count, wait, timeout):
+        args = [
+            "ping",
+            "-n",
+            "-c",
+            str(count),
+            "-W",
+            str(wait),
+            "-I",
+            workload["peer_address"] if inbound else workload["phone_address"],
+            workload["phone_address"] if inbound else workload["peer_address"],
+        ]
+        started = time.monotonic()
+        code, raw = None, b""
+        result = {
+            "success": False,
+            "packet_count": count,
+            "wait_seconds": wait,
+            "timeout_seconds": timeout,
+            "started_monotonic_seconds": started,
+        }
+        try:
+            code, raw = (
+                bounded_run(args, timeout=timeout, check=False)
+                if inbound
+                else self.adb("shell", shlex.join(args), timeout=timeout, check=False)
+            )
+        except CommandFailure as error:
+            code, raw = error.returncode, error.stdout
+            result["error"] = str(error)
+            result["stderr_base64"] = base64.b64encode(error.stderr).decode("ascii")
+        except InterruptedCapture:
+            result["error"] = "command_interrupted"
+        except compare.InvalidWindow as error:
+            result["error"] = str(error)
+        except compare.MALFORMED_EVIDENCE:
+            result["error"] = "probe_unavailable"
+        result["elapsed_seconds"] = time.monotonic() - started
+        result["exit_code"] = code
+        result["stdout"] = raw.decode(errors="replace")
+        result["stdout_base64"] = base64.b64encode(raw).decode("ascii")
+        result["summary"] = [
+            line
+            for line in result["stdout"].splitlines()
+            if "packets transmitted" in line
+        ]
+        delivered = re.findall(
+            r"(?m)^([0-9]+) packets transmitted,\s*([0-9]+) (?:packets )?received,",
+            result["stdout"],
+        )
+        result["success"] = (
+            "error" not in result
+            and code == 0
+            and delivered == [(str(count), str(count))]
+        )
+        if not result["success"] and "error" not in result:
+            result["error"] = "packet_delivery_failed"
+        return result
+
+    def wake_probe(self, workload, inbound):
+        cold = self._wake_ping(
+            workload,
+            inbound,
+            1,
+            FIRST_WAKE_REPLY_WAIT_SECONDS,
+            WAKE_PROBE_TIMEOUT_SECONDS,
+        )
+        # Never let later traffic rescue the first packet or obscure its failure.
+        steady = (
+            self._wake_ping(workload, inbound, 3, 3, STEADY_PROBE_TIMEOUT_SECONDS)
+            if cold["success"]
+            else None
+        )
+        final = steady if steady is not None else cold
+        result = {
+            "success": cold["success"] and steady is not None and steady["success"],
+            "exit_code": final["exit_code"],
+            "summary": final["summary"],
+            "cold": cold,
+            "steady": steady,
+        }
+        if "error" in final:
+            result["error"] = final["error"]
+        return result
+
 
 def capture(directory, slot, device, sleep=time.sleep):
     require(
@@ -856,18 +950,21 @@ def capture(directory, slot, device, sleep=time.sleep):
             )
         }
         for inbound, key in ((True, "inbound_before"), (False, "outbound_before")):
-            probe = device.probe(workload, inbound)
+            probe = device.wake_probe(workload, inbound)
             save(output, key + ".json", probe)
             probes[key] = probe["success"]
+            if probe.get("error") == "command_interrupted":
+                raise InterruptedCapture()
         require(
             probes["inbound_before"] and probes["outbound_before"],
             "initial_connectivity_failed",
         )
-        fallback_pid = device.fallback(tag, settle + seconds + 360)
+        fallback_seconds = settle + seconds + FALLBACK_ALLOWANCE_SECONDS
+        fallback_pid = device.fallback(tag, fallback_seconds)
         save(
             output,
             "fallback.json",
-            {"pid": fallback_pid, "tag": tag, "seconds": settle + seconds + 360},
+            {"pid": fallback_pid, "tag": tag, "seconds": fallback_seconds},
         )
         device.begin_override(fallback_pid, tag)
         emit("settling", slot=slot, seconds=settle)
@@ -935,15 +1032,15 @@ def capture(directory, slot, device, sleep=time.sleep):
         trace_pid = None
         for inbound, key in ((True, "inbound_after"), (False, "outbound_after")):
             try:
-                probe = device.probe(workload, inbound)
+                probe = device.wake_probe(workload, inbound)
             except CommandFailure as error:
-                if str(error) == "command_interrupted":
-                    raise InterruptedCapture() from error
                 probe = {
                     "success": False,
                     "exit_code": error.returncode,
                     "summary": [],
-                    "error": "probe_unavailable",
+                    "error": str(error),
+                    "stdout_base64": base64.b64encode(error.stdout).decode("ascii"),
+                    "stderr_base64": base64.b64encode(error.stderr).decode("ascii"),
                 }
             except compare.MALFORMED_EVIDENCE:
                 probe = {
@@ -954,6 +1051,8 @@ def capture(directory, slot, device, sleep=time.sleep):
                 }
             save(output, key + ".json", probe)
             probes[key] = probe["success"]
+            if probe.get("error") == "command_interrupted":
+                raise InterruptedCapture()
         require(
             compare.read_file(directory / "plan.json", compare.MAX_JSON) == raw_plan,
             "plan_changed",
@@ -1061,7 +1160,7 @@ def main():
                 plan["window_seconds"], 1800, 7200, "window_duration"
             )
             settle = compare.integer(plan["settle_seconds"], 300, 1800, "settling")
-            signal.alarm(duration + settle + 480)
+            signal.alarm(duration + settle + WATCHDOG_ALLOWANCE_SECONDS)
             result = capture(args.directory, args.slot, device)
         return (
             0

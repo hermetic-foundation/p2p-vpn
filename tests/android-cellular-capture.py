@@ -1,9 +1,11 @@
+import base64
 import contextlib
 import copy
 import importlib.util
 import io
 import json
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -90,6 +92,11 @@ class FakeDevice:
         self.start_decode_delay = 0
         self.raise_after_probe = False
         self.interrupt_after_probe = False
+        self.cold_delay = 0
+        self.steady_delay = 0
+        self.cold_error = None
+        self.steady_received = 3
+        self.apk = tool.sha(b"reference-test-only")
 
     def preflight(self, _workload):
         self.events.append(("preflight",))
@@ -101,7 +108,7 @@ class FakeDevice:
             key: tool.sha(key.encode())
             for key in ("device", "os_build", "profile", "peer_inventory")
         }
-        identity["apk"] = tool.sha(b"reference-test-only")
+        identity["apk"] = self.apk
         if self.identity_changed and self.reads >= 3:
             identity["profile"] = "b" * 64
         return identity, {"test_only": True}
@@ -111,12 +118,38 @@ class FakeDevice:
 
     def probe(self, _workload, inbound):
         self.events.append(("probe", inbound))
+        raise AssertionError("capture must not use the legacy diagnostic probe")
+
+    def wake_probe(self, workload, inbound):
+        self.events.append(("wake_probe", inbound))
         if self.raise_after_probe and self.clock.seconds > 1800:
             raise OSError("private-probe-failure")
         if self.interrupt_after_probe and self.clock.seconds > 1800:
             raise tool.InterruptedCapture()
-        success = not (self.fail_after_probe and self.clock.seconds > 1800)
-        return {"success": success, "exit_code": 0 if success else 1, "summary": []}
+        return tool.Device.wake_probe(self, workload, inbound)
+
+    def _wake_ping(self, workload, inbound, count, wait, timeout):
+        def run(*_args, **_kwargs):
+            self.events.append(
+                ("cold_packet" if count == 1 else "steady_probe", inbound)
+            )
+            if count == 1:
+                self.clock.seconds += self.cold_delay
+                if self.cold_error and self.clock.seconds > 1800:
+                    raise self.cold_error
+            else:
+                self.clock.seconds += self.steady_delay
+            received = count if count == 1 else self.steady_received
+            if count == 1 and self.fail_after_probe and self.clock.seconds > 1800:
+                received = 0
+            raw = f"{count} packets transmitted, {received} received, 0% packet loss\n"
+            return (0 if received else 1), raw.encode()
+
+        with (
+            patch.object(tool, "bounded_run", side_effect=run),
+            patch.object(self, "adb", side_effect=run),
+        ):
+            return tool.Device._wake_ping(self, workload, inbound, count, wait, timeout)
 
     def fallback(self, tag, seconds):
         self.events.append(("fallback", tag, seconds))
@@ -198,17 +231,129 @@ class FakeDevice:
         self.frozen = False
 
 
-def run_capture(directory, device):
+def run_capture(directory, device, slot="01-A"):
     output = io.StringIO()
     with (
         patch.object(tool.time, "monotonic", side_effect=lambda: device.clock.seconds),
         contextlib.redirect_stdout(output),
     ):
-        result = tool.capture(directory, "01-A", device, device.clock.sleep)
+        result = tool.capture(directory, slot, device, device.clock.sleep)
     return result, output.getvalue()
 
 
 class CaptureWorkflowTests(unittest.TestCase):
+    def test_delayed_wake_is_outside_energy_window_in_both_arms(self):
+        with tempfile.TemporaryDirectory() as root:
+            directory = initialize(Path(root))
+            for slot, apk in (
+                ("01-A", b"reference-test-only"),
+                ("02-B", b"candidate-test-only"),
+            ):
+                with self.subTest(slot=slot):
+                    device = FakeDevice(Clock())
+                    device.apk = tool.sha(apk)
+                    device.cold_delay = 44
+                    result, _ = run_capture(directory, device, slot)
+                    self.assertTrue(result["captured"], result)
+                    self.assertTrue(result["boundary_probes_passed"])
+                    start = device.events.index(("endpoint", "start"))
+                    end = device.events.index(("endpoint", "end"))
+                    self.assertEqual(
+                        device.events[start : end + 1],
+                        [("endpoint", "start"), ("sleep", 1800), ("endpoint", "end")],
+                    )
+                    self.assertEqual(
+                        [event for event in device.events if event[0] == "wake_probe"],
+                        [("wake_probe", True), ("wake_probe", False)] * 2,
+                    )
+                    self.assertFalse(
+                        any(event[0] == "probe" for event in device.events)
+                    )
+                    for key in (
+                        "inbound_before",
+                        "outbound_before",
+                        "inbound_after",
+                        "outbound_after",
+                    ):
+                        probe = tool.compare.read_json(
+                            directory / slot / (key + ".json")
+                        )
+                        self.assertTrue(probe["cold"]["success"])
+                        self.assertEqual(probe["cold"]["elapsed_seconds"], 44)
+                        self.assertEqual(probe["cold"]["packet_count"], 1)
+                        self.assertEqual(probe["steady"]["packet_count"], 3)
+
+    def test_post_wake_timeout_retains_raw_failure_and_accounting(self):
+        with tempfile.TemporaryDirectory() as root:
+            directory = initialize(Path(root))
+            device = FakeDevice(Clock())
+            device.cold_error = tool.CommandFailure(
+                "command_timeout", b"partial-cold-stdout\xff", b"private-stderr", None
+            )
+            result, output = run_capture(directory, device)
+            self.assertTrue(result["captured"], result)
+            self.assertFalse(result["boundary_probes_passed"])
+            self.assertTrue(result["restoration_verified"])
+            probe = tool.compare.read_json(directory / "01-A/inbound_after.json")
+            self.assertEqual(probe["cold"]["error"], "command_timeout")
+            self.assertEqual(
+                base64.b64decode(probe["cold"]["stdout_base64"]),
+                device.cold_error.stdout,
+            )
+            self.assertEqual(
+                base64.b64decode(probe["cold"]["stderr_base64"]), b"private-stderr"
+            )
+            self.assertIsNone(probe["steady"])
+            metadata = tool.compare.read_json(directory / "01-A/window.json")
+            accounting = tool.compare.report_window(
+                (directory / "01-A/start.pb").read_bytes(),
+                (directory / "01-A/end.pb").read_bytes(),
+                metadata,
+            )
+            self.assertEqual(accounting["app_mah_per_hour"], 100)
+            self.assertFalse(metadata["probes"]["inbound_after"])
+            self.assertNotIn("partial-cold", output)
+            self.assertNotIn("private-stderr", output)
+
+    def test_post_wake_interruption_retains_partial_probe_before_cleanup(self):
+        with tempfile.TemporaryDirectory() as root:
+            directory = initialize(Path(root))
+            device = FakeDevice(Clock())
+            device.cold_error = tool.CommandFailure(
+                "command_interrupted", b"partial-cold", b"", None
+            )
+            result, _ = run_capture(directory, device)
+            self.assertEqual(result["error"], "interrupted")
+            self.assertTrue(result["restoration_verified"])
+            probe = tool.compare.read_json(directory / "01-A/inbound_after.json")
+            self.assertEqual(probe["cold"]["stdout"], "partial-cold")
+            self.assertIsNone(probe["steady"])
+            self.assertTrue((directory / "01-A/window.json").exists())
+            self.assertTrue((directory / "01-A/end.pb").exists())
+
+    def test_fallback_budget_includes_both_post_window_boundary_checks(self):
+        with tempfile.TemporaryDirectory() as root:
+            directory = initialize(Path(root))
+            device = FakeDevice(Clock())
+            device.cold_delay = tool.FIRST_WAKE_REPLY_WAIT_SECONDS
+            device.steady_delay = tool.STEADY_PROBE_TIMEOUT_SECONDS
+            result, _ = run_capture(directory, device)
+            self.assertTrue(result["boundary_probes_passed"])
+            fallback = tool.compare.read_json(directory / "01-A/fallback.json")
+            self.assertEqual(fallback["seconds"], 300 + 1800 + 490)
+            self.assertEqual(
+                tool.FALLBACK_ALLOWANCE_SECONDS,
+                360
+                + 2
+                * (tool.WAKE_PROBE_TIMEOUT_SECONDS + tool.STEADY_PROBE_TIMEOUT_SECONDS),
+            )
+            pre_window_probes = 2 * (device.cold_delay + device.steady_delay)
+            self.assertGreaterEqual(
+                fallback["seconds"] - (device.clock.seconds - pre_window_probes),
+                360,
+            )
+            self.assertEqual(tool.WATCHDOG_ALLOWANCE_SECONDS, 740)
+
     def test_post_probe_interruption_keeps_completed_window_metadata(self):
         with tempfile.TemporaryDirectory() as root:
             directory = initialize(Path(root))
@@ -333,6 +478,14 @@ class CaptureWorkflowTests(unittest.TestCase):
                     "inbound_after"
                 ]
             )
+            probe = tool.compare.read_json(directory / "01-A/inbound_after.json")
+            self.assertFalse(probe["cold"]["success"])
+            self.assertIn("1 packets transmitted, 0 received", probe["cold"]["stdout"])
+            self.assertIsNone(probe["steady"])
+            self.assertEqual(
+                [event for event in device.events if event[0] == "steady_probe"],
+                [("steady_probe", True), ("steady_probe", False)],
+            )
 
     def test_identity_changes_fail_without_overwriting_app_state(self):
         with tempfile.TemporaryDirectory() as root:
@@ -372,6 +525,148 @@ class CaptureWorkflowTests(unittest.TestCase):
                 ):
                     run_capture(directory, device)
                 self.assertEqual(device.events, [])
+
+
+class WakeProbeTests(unittest.TestCase):
+    def test_real_probe_arguments_keep_legacy_diagnostics_unchanged(self):
+        device = tool.Device("PIXEL1234")
+        raw = b"3 packets transmitted, 2 received, 33% packet loss\n"
+        for inbound in (True, False):
+            with (
+                self.subTest(inbound=inbound),
+                patch.object(tool, "bounded_run", return_value=(0, raw)) as run,
+            ):
+                result = device.probe(workload(), inbound)
+            ping = ["ping", "-n", "-c", "3", "-W", "3", "-I"]
+            ping += (
+                ["10.42.0.1", "10.42.0.2"] if inbound else ["10.42.0.2", "10.42.0.1"]
+            )
+            run.assert_called_once_with(
+                ping
+                if inbound
+                else ["adb", "-s", "PIXEL1234", "shell", shlex.join(ping)],
+                timeout=15,
+                check=False,
+            )
+            self.assertEqual(
+                result,
+                {"success": True, "exit_code": 0, "summary": [raw.decode().strip()]},
+            )
+
+    def test_real_wake_arguments_allow_delayed_first_packet_then_require_steady(self):
+        device = tool.Device("PIXEL1234")
+        for inbound in (True, False):
+            for received in ("received", "packets received"):
+                cold = f"1 packets transmitted, 1 {received}, 0% packet loss\n".encode()
+                steady = (
+                    f"3 packets transmitted, 3 {received}, 0% packet loss\n".encode()
+                )
+                with (
+                    self.subTest(inbound=inbound, received=received),
+                    patch.object(tool.time, "monotonic", side_effect=[10, 54, 54, 56]),
+                    patch.object(
+                        tool, "bounded_run", side_effect=[(0, cold), (0, steady)]
+                    ) as run,
+                ):
+                    result = device.wake_probe(workload(), inbound)
+                self.assertTrue(result["success"])
+                self.assertEqual(result["cold"]["elapsed_seconds"], 44)
+                self.assertEqual(result["cold"]["stdout"], cold.decode())
+                self.assertEqual(result["steady"]["elapsed_seconds"], 2)
+                self.assertEqual(run.call_count, 2)
+                for call, count, wait, timeout in zip(
+                    run.call_args_list, (1, 3), (45, 3), (50, 15)
+                ):
+                    ping = ["ping", "-n", "-c", str(count), "-W", str(wait), "-I"]
+                    ping += (
+                        ["10.42.0.1", "10.42.0.2"]
+                        if inbound
+                        else ["10.42.0.2", "10.42.0.1"]
+                    )
+                    self.assertEqual(
+                        call.args,
+                        (
+                            ping
+                            if inbound
+                            else ["adb", "-s", "PIXEL1234", "shell", shlex.join(ping)],
+                        ),
+                    )
+                    self.assertEqual(call.kwargs, {"timeout": timeout, "check": False})
+
+    def test_failed_cold_cannot_be_rescued_by_queued_steady_success(self):
+        failed = b"1 packets transmitted, 0 received, 100% packet loss\n"
+        steady = b"3 packets transmitted, 3 received, 0% packet loss\n"
+        for inbound in (True, False):
+            with (
+                self.subTest(inbound=inbound),
+                patch.object(tool.time, "monotonic", side_effect=[0, 45]),
+                patch.object(
+                    tool, "bounded_run", side_effect=[(1, failed), (0, steady)]
+                ) as run,
+            ):
+                result = tool.Device("PIXEL1234").wake_probe(workload(), inbound)
+            self.assertFalse(result["success"])
+            self.assertEqual(result["cold"]["stdout"], failed.decode())
+            self.assertEqual(result["cold"]["elapsed_seconds"], 45)
+            self.assertEqual(result["cold"]["exit_code"], 1)
+            self.assertEqual(result["cold"]["error"], "packet_delivery_failed")
+            self.assertIsNone(result["steady"])
+            self.assertEqual(run.call_count, 1)
+
+    def test_zero_exit_still_requires_one_of_one_then_three_of_three(self):
+        cold = b"1 packets transmitted, 1 received, 0% packet loss\n"
+        for responses in (
+            [(0, b"1 packets transmitted, 0 received, 100% packet loss\n")],
+            [(0, b"missing summary\n")],
+            [(0, cold + cold)],
+            [(0, cold), (0, b"3 packets transmitted, 2 received, 33% packet loss\n")],
+            [(0, cold), (0, b"3 packets transmitted, 0 received, 100% packet loss\n")],
+        ):
+            with (
+                self.subTest(responses=responses),
+                patch.object(tool, "bounded_run", side_effect=responses) as run,
+            ):
+                result = tool.Device("PIXEL1234").wake_probe(workload(), True)
+            self.assertFalse(result["success"])
+            self.assertEqual(run.call_count, len(responses))
+
+    def test_command_failures_preserve_stage_stdout_timing_and_never_retry(self):
+        cold = b"1 packets transmitted, 1 received, 0% packet loss\n"
+        for inbound in (True, False):
+            for stage in ("cold", "steady"):
+                for code in ("command_timeout", "command_interrupted"):
+                    error = tool.CommandFailure(
+                        code, b"partial\xff", b"private-stderr", None
+                    )
+                    responses = [error] if stage == "cold" else [(0, cold), error]
+                    with (
+                        self.subTest(inbound=inbound, stage=stage, code=code),
+                        patch.object(
+                            tool.time, "monotonic", side_effect=[0, 50, 50, 65]
+                        ),
+                        patch.object(tool, "bounded_run", side_effect=responses) as run,
+                    ):
+                        result = tool.Device("PIXEL1234").wake_probe(
+                            workload(), inbound
+                        )
+                    self.assertFalse(result["success"])
+                    self.assertEqual(result["error"], code)
+                    self.assertEqual(result[stage]["error"], code)
+                    self.assertEqual(
+                        base64.b64decode(result[stage]["stdout_base64"]), error.stdout
+                    )
+                    self.assertEqual(
+                        base64.b64decode(result[stage]["stderr_base64"]), error.stderr
+                    )
+                    self.assertEqual(
+                        result[stage]["elapsed_seconds"], 50 if stage == "cold" else 15
+                    )
+                    self.assertEqual(run.call_count, len(responses))
+                    if stage == "cold":
+                        self.assertIsNone(result["steady"])
+                    else:
+                        self.assertTrue(result["cold"]["success"])
+                        self.assertEqual(result["cold"]["stdout"], cold.decode())
 
 
 class DeviceSafetyTests(unittest.TestCase):
@@ -887,6 +1182,82 @@ class DeviceSafetyTests(unittest.TestCase):
 
 
 class PlanAndCliTests(unittest.TestCase):
+    def test_old_collector_plan_is_rejected_without_touching_retained_failure(self):
+        with tempfile.TemporaryDirectory() as root:
+            directory = initialize(Path(root))
+            device = FakeDevice(Clock())
+            device.fail_after_probe = True
+            run_capture(directory, device)
+            retained = {
+                file.name: file.read_bytes() for file in (directory / "01-A").iterdir()
+            }
+            plan = tool.compare.read_json(directory / "plan.json")
+            plan["collector_source_sha256"] = "0" * 64
+            raw = json.dumps(plan).encode()
+            (directory / "plan.json").write_bytes(raw)
+            device = FakeDevice(Clock())
+            with self.assertRaisesRegex(
+                tool.compare.InvalidWindow, "collector_changed"
+            ):
+                run_capture(directory, device, "02-B")
+            self.assertEqual(device.events, [])
+            self.assertFalse((directory / "02-B").exists())
+            self.assertEqual((directory / "plan.json").read_bytes(), raw)
+            self.assertEqual(
+                {
+                    file.name: file.read_bytes()
+                    for file in (directory / "01-A").iterdir()
+                },
+                retained,
+            )
+
+    def test_host_watchdog_includes_all_four_bounded_boundary_checks(self):
+        with tempfile.TemporaryDirectory() as root:
+            directory = initialize(Path(root))
+            with (
+                patch.object(
+                    sys,
+                    "argv",
+                    [
+                        str(path),
+                        "capture",
+                        str(directory),
+                        "--slot",
+                        "01-A",
+                        "--serial",
+                        "PIXEL1234",
+                        "--simulate-on-battery",
+                    ],
+                ),
+                patch.object(tool, "Device"),
+                patch.object(
+                    tool, "device_lock", return_value=contextlib.nullcontext()
+                ),
+                patch.object(
+                    tool,
+                    "capture",
+                    return_value={
+                        "captured": True,
+                        "restoration_verified": True,
+                        "boundary_probes_passed": True,
+                        "cleanup_failures": [],
+                    },
+                ),
+                patch.object(tool.signal, "signal"),
+                patch.object(tool.signal, "alarm") as alarm,
+            ):
+                self.assertEqual(tool.main(), 0)
+            self.assertEqual(
+                [call.args for call in alarm.call_args_list],
+                [(300 + 1800 + 740,), (0,)],
+            )
+            self.assertEqual(
+                tool.WATCHDOG_ALLOWANCE_SECONDS,
+                480
+                + 4
+                * (tool.WAKE_PROBE_TIMEOUT_SECONDS + tool.STEADY_PROBE_TIMEOUT_SECONDS),
+            )
+
     def test_cli_initializes_frozen_series_without_device_access(self):
         with tempfile.TemporaryDirectory() as root:
             root = Path(root)
@@ -922,6 +1293,9 @@ class PlanAndCliTests(unittest.TestCase):
             self.assertEqual(plan["window_seconds"], 1800)
             self.assertEqual(plan["settle_seconds"], 300)
             self.assertEqual(plan["reference_apk"], tool.sha(b"reference-test-only"))
+            self.assertEqual(
+                plan["collector_source_sha256"], tool.sha(path.read_bytes())
+            )
             self.assertEqual(directory.stat().st_mode & 0o777, 0o700)
             for file in directory.iterdir():
                 self.assertEqual(file.stat().st_mode & 0o777, 0o600)

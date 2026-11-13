@@ -10,7 +10,7 @@
 | APK | Already installed and running; hash must match the planned arm |
 | Peers | Freeze the authorized inventory and counterpart builds in a private workload record |
 | Changes | Temporary simulated-on-battery accounting only; no install, pairing, route or radio changes |
-| Incoming access | Source-bound overlay probes before settling and after measurement |
+| Incoming access | Source-bound overlay wake/steady checks before settling and after measurement |
 | Timed interval | No ADB/UI/status/traffic polling and no builds |
 | Trace | Starts before the first binary report, ends after the last, with padding |
 | Trace storage | Stream every five seconds through an 8 MiB ring buffer; stop at a 32 MiB file limit |
@@ -43,7 +43,7 @@ outside captures. Existing, failed and out-of-order slots are never replaced.
 | Result | Meaning |
 | --- | --- |
 | `captured` | Raw reports, trace and metadata were retained; accounting/context checks passed |
-| `boundary_probes_passed` | Actual source-bound IPv4 probes passed in both directions |
+| `boundary_probes_passed` | Source-bound IPv4 first-packet and 3/3 steady checks passed in both directions; not independent cold-direction proof |
 | `battery_reporting_restored` | Battery reporting was verified back in hardware mode |
 | `restoration_verified` | Reporting and unchanged app/profile checks passed without cleanup failure |
 | Exit `0` | Capture, supplied probes and restoration passed; not a savings claim |
@@ -51,6 +51,9 @@ outside captures. Existing, failed and out-of-order slots are never replaced.
 Use `android-cellular-compare` afterward to validate trace coverage and compare
 all six windows. A fake-device trace is not battery evidence. Do not change a
 collector build midway through a series; its source hash is frozen in the plan.
+This boundary-probe change requires a new plan/series for both arms. A changed
+collector rejects old plans before device access; do not edit their hashes or
+replace retained attempts to continue them with new probe semantics.
 
 ## Frozen Workload
 
@@ -100,7 +103,7 @@ is an outcome to investigate, not a reason to hide that candidate's consumption.
 | App status | Enabled network, identity, runtime generation and underlay counters |
 | Radio | Validated default cellular path and extracted signal readings; never retain full telephony registry |
 | Temperature | Live thermal HAL reading; frozen BatteryService temperature is not current |
-| Probe results | Retain exit status and bounded packet summary in both directions |
+| Probe results | Separate first-packet/steady status, stdout, monotonic timing and command failures in both directions |
 | Lifecycle state | Verify separately for lifecycle acceptance; zero sessions alone is not a quiet/reachability proof |
 
 Addresses are parsed as CIDRs, matching the Android producer. Signal extraction
@@ -140,7 +143,9 @@ membership through the existing peer tools before the series.
 | Binary endpoint | `2 MiB` each |
 | Retained trace | `32 MiB` |
 | Metadata / individual command | Bounded size and timeout; private files only |
-| Device fallback | Settling plus capture plus bounded cleanup allowance |
+| First packet / steady command | `45-second` first-packet wait, `50-second` subprocess timeout; `15-second` steady timeout |
+| Device fallback | Settling plus capture plus `490 seconds`: existing `360` plus two `65-second` post-window checks |
+| Host watchdog | Settling plus capture plus `740 seconds`: existing `480` plus four `65-second` boundary checks |
 | Overall claim | No automated goal completion or unmeasured savings claim |
 
 The collector prewarms Protobuf decoding outside the interval, then schedules
@@ -169,16 +174,33 @@ The observed rate changed from 304.36 to 296.03 mAh/hour, not the required 10x.
 
 ### Cold-Wake Probe Limit
 
-- The current endpoint probe sends three pings with a three-second per-packet wait.
-- A failed short probe does not prove that a dormant path cannot recover within its documented first-wake budget.
-- C2's failed short probes remain retained; it also failed to enter maintenance pause and is not accepted.
-- Add a separately timed, autonomous cold-wake check before relying on this collector for negotiated dormancy acceptance.
-- Keep cold-wake evidence separate from subsequent steady-state delivery; no manual dials, relay changes or restarts count as recovery.
-- Do not generate probes inside energy intervals or alter earlier plans/results to pass a candidate.
+`Device.probe` remains the legacy diagnostic: three pings with a three-second
+per-packet wait and a 15-second subprocess timeout, with unchanged result semantics.
+A failed short diagnostic does not prove that a dormant path cannot recover
+within its first-wake budget. C2's failed short probes remain retained; it also
+failed to enter maintenance pause and is not accepted.
 
-The existing first-wake packet retention is 45 seconds. A lifecycle-aware probe
-must exercise that contract instead of requiring paths to remain active merely
-to pass a legacy short-timeout check.
+Capture now uses the distinct `Device.wake_probe` at each boundary, identically
+for reference and candidate arms:
+
+1. Send exactly one numeric IPv4 ping, source-bound to the declared overlay address. Allow 45 seconds to observe its round-trip reply, with a bounded 50-second subprocess timeout including command overhead.
+2. Retain that first packet's complete bounded stdout, exit status, packet summary, monotonic start/elapsed time and any command failure. Lossless base64 stdout and failure stderr remain in private boundary JSON, not console output.
+3. Only after successful 1/1 first-packet delivery, send a separate three-packet steady check with three-second per-packet waits and a 15-second subprocess timeout. Require 3/3 received, not just ping exit status zero.
+4. Keep `cold` and `steady` evidence separate in each existing `inbound_before.json`, `outbound_before.json`, `inbound_after.json` and `outbound_after.json`. A failed first packet has `steady: null` and cannot pass from later delivery.
+
+No retries, warm-up packets, manual dials, relay changes or restarts rescue a
+failed cold packet. Checks run before settling or after the end battery report
+and trace retention, never inside the energy interval. A post-window delivery
+failure or command timeout still retains accounting and a false functional
+result. Interruption preserves available probe/window evidence before cleanup.
+
+The `cold` field names the first-packet phase, not proof of prior dormancy.
+Inbound runs before outbound; the first check can warm the reverse path. Do not
+claim both sequential directions were independently cold. Separate device
+preflight must verify lifecycle state and test each direction after an independent
+idle period. The runtime's `FIRST_WAKE_PACKET_RETENTION` is 30 seconds per queue
+admission; the 45-second observation window is not a retention guarantee or a
+proof that recovery met that deadline. This change does not modify the runtime.
 
 See Perfetto's [streaming contract](https://perfetto.dev/docs/concepts/config#streaming-long-traces)
 and [buffer statistics](https://raw.githubusercontent.com/google/perfetto/main/protos/perfetto/common/trace_stats.proto).
