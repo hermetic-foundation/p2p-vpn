@@ -213,6 +213,12 @@ impl RecoveryQueries {
         cancelled
     }
 
+    pub(super) fn in_failure_cooldown(&self, peer: PeerId, now: Instant) -> bool {
+        self.peers.get(&peer).is_some_and(|state| {
+            state.attempt_count > 0 && state.pending_queries == 0 && now < state.retry_after
+        })
+    }
+
     pub(super) fn connected(&mut self, peer: PeerId, now: Instant) {
         if let Some(state) = self.peers.get_mut(&peer) {
             state.attempt_count = 0;
@@ -568,6 +574,36 @@ mod tests {
         assert!(owner.cancel_data_queries(|_| false, now).is_empty());
         assert_eq!(owner.reset(), vec![second]);
         assert_eq!(owner.snapshot(now), RecoveryQueriesSnapshot::default());
+    }
+
+    #[test]
+    fn failure_cooldown_excludes_pending_due_connected_and_reset_states() {
+        let now = Instant::now();
+        let peer = PeerId::random();
+        let (query, _) = query_ids();
+        let mut owner = RecoveryQueries::default();
+        assert!(!owner.in_failure_cooldown(peer, now));
+        assert!(owner.should_query(peer, now));
+        assert!(!owner.in_failure_cooldown(peer, now));
+        owner.record(peer, [query], now);
+        assert!(!owner.in_failure_cooldown(peer, now));
+        owner.finished(query, now);
+        assert!(owner.in_failure_cooldown(peer, now));
+        assert!(
+            owner.in_failure_cooldown(
+                peer,
+                (now + BACKOFF_BASE)
+                    .checked_sub(Duration::from_nanos(1))
+                    .expect("instant before deadline")
+            )
+        );
+        assert!(!owner.in_failure_cooldown(peer, now + BACKOFF_BASE));
+        owner.connected(peer, now);
+        assert!(!owner.in_failure_cooldown(peer, now));
+        owner.record(peer, [], now);
+        assert!(owner.in_failure_cooldown(peer, now));
+        owner.reset();
+        assert!(!owner.in_failure_cooldown(peer, now));
     }
 
     #[test]

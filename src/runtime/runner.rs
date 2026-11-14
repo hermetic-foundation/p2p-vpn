@@ -2417,7 +2417,27 @@ where
                 let recovery_active = queue_runtime
                     .discovered_peer_addresses
                     .has_pending_recovery_discovery_query();
-                if public_discovery_quiet || recovery_active {
+                let recovery_cooldown = !public_discovery_quiet
+                    && !recovery_active
+                    && kademlia_maintenance_recovery_cooldown(
+                        &forwarder,
+                        &queue_runtime.discovered_peer_addresses,
+                        &auto_relay,
+                        now,
+                        |peer| peer_has_healthy_supported_path(
+                            &paths,
+                            &peer_capabilities,
+                            Some(&packet_plane),
+                            packet_plane_quic.as_ref(),
+                            peer,
+                        ),
+                        |peer| queues.peer_stats(peer).queued_packets > 0
+                            || queue_runtime.packet_in_flight.has_application_work(peer),
+                    );
+                if recovery_cooldown {
+                    metrics.record_kademlia_maintenance_cooldown_tick();
+                }
+                if public_discovery_quiet || recovery_active || recovery_cooldown {
                     let cancelled = kademlia_maintenance
                         .cancel_queries(&mut node.swarm.behaviour_mut().kad);
                     if cancelled > 0 {
@@ -2430,8 +2450,10 @@ where
                                     "reason",
                                     if public_discovery_quiet {
                                         "healthy_paths"
-                                    } else {
+                                    } else if recovery_active {
                                         "peer_recovery"
+                                    } else {
+                                        "peer_retry_backoff"
                                     },
                                 ),
                             ],
@@ -2445,7 +2467,7 @@ where
                 );
                 if kademlia_maintenance.should_start(
                     now,
-                    public_discovery_quiet || recovery_active,
+                    public_discovery_quiet || recovery_active || recovery_cooldown,
                 ) {
                     let started = refresh_kademlia_rendezvous(
                         &mut node.swarm,
@@ -13203,6 +13225,42 @@ fn public_discovery_suppressed(
 
 fn public_discovery_holdoff_active(holdoff_until: Option<Instant>, now: Instant) -> bool {
     holdoff_until.is_some_and(|until| now < until)
+}
+
+fn kademlia_maintenance_recovery_cooldown(
+    forwarder: &Forwarder,
+    discovered: &DiscoveredPeerAddresses,
+    auto_relay: &AutoRelayState,
+    now: Instant,
+    mut healthy_path: impl FnMut(PeerId) -> bool,
+    mut application_work: impl FnMut(PeerId) -> bool,
+) -> bool {
+    if auto_relay.should_discover_candidates() {
+        return false;
+    }
+    let mut healthy = false;
+    let mut cooling_down = false;
+    for peer in forwarder.configured_overlay_peers() {
+        if application_work(peer) {
+            return false;
+        }
+        if healthy_path(peer) {
+            healthy = true;
+        } else if forwarder
+            .transport_peer_for_overlay(peer)
+            .is_some_and(|transport| {
+                discovered
+                    .recovery_queries
+                    .in_failure_cooldown(transport, now)
+            })
+        {
+            cooling_down = true;
+        } else {
+            return false;
+        }
+    }
+    // Keep rendezvous available for application work, isolation, or due discovery.
+    healthy && cooling_down
 }
 
 #[cfg(test)]
@@ -36240,6 +36298,269 @@ mod tests {
             now,
         ));
         assert!(!public_discovery_holdoff_active(Some(now), now));
+    }
+
+    #[test]
+    fn maintenance_cooldown_preserves_due_pending_isolated_and_reset_discovery() {
+        let local = NodeIdentity::generate_ed25519().expect("identity");
+        let healthy = peer_id();
+        let offline = peer_id();
+        let mut config = config_with_peer(&local, healthy);
+        config.peers[0].vpn_ip = Some("10.63.0.1".to_owned());
+        config.peers.push(PeerConfig {
+            id: offline.to_string(),
+            name: None,
+            ip: None,
+            vpn_ip: Some("10.63.0.2".to_owned()),
+            addresses: Vec::new(),
+            routes: Vec::new(),
+        });
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut paths = PathSet::new();
+        paths.record_established(PeerId::from_libp2p(healthy), PathKind::DirectTcpStream);
+        let mut discovered = DiscoveredPeerAddresses::default();
+        let now = Instant::now();
+        let auto_relay = AutoRelayState::new(AutoRelayConfig {
+            max_reservations: 0,
+            ..AutoRelayConfig::default()
+        });
+        let paused = |paths: &PathSet, discovered: &DiscoveredPeerAddresses, at| {
+            kademlia_maintenance_recovery_cooldown(
+                &forwarder,
+                discovered,
+                &auto_relay,
+                at,
+                |peer| {
+                    peer_has_healthy_supported_path(
+                        paths,
+                        &PeerCapabilities::default(),
+                        None,
+                        None,
+                        peer,
+                    )
+                },
+                |_| false,
+            )
+        };
+        assert!(
+            !paused(&paths, &discovered, now),
+            "new peer needs discovery"
+        );
+        assert!(discovered.recovery_queries.should_query(offline, now));
+        let kad_peer = peer_id();
+        let mut kad = kad::Behaviour::new(kad_peer, kad::store::MemoryStore::new(kad_peer));
+        let query = kad.get_closest_peers(offline);
+        discovered.recovery_queries.record(offline, [query], now);
+        assert!(
+            !paused(&paths, &discovered, now),
+            "pending query stays active"
+        );
+        discovered.recovery_queries.finished(query, now);
+        assert!(paused(&paths, &discovered, now));
+        assert!(
+            !paused(&PathSet::new(), &discovered, now),
+            "isolated rendezvous stays active"
+        );
+        assert!(paused(
+            &paths,
+            &discovered,
+            (now + RECOVERY_DISCOVERY_BACKOFF_BASE)
+                .checked_sub(Duration::from_nanos(1))
+                .expect("instant before deadline")
+        ));
+        assert!(!paused(
+            &paths,
+            &discovered,
+            now + RECOVERY_DISCOVERY_BACKOFF_BASE
+        ));
+        discovered.recovery_queries.connected(offline, now);
+        assert!(
+            !paused(&paths, &discovered, now),
+            "connected cooldown is not a failure"
+        );
+        discovered.recovery_queries.record(offline, [], now);
+        assert!(paused(&paths, &discovered, now));
+        discovered.recovery_queries.reset();
+        assert!(
+            !paused(&paths, &discovered, now),
+            "network change resumes discovery"
+        );
+        paths.record_established(PeerId::from_libp2p(offline), PathKind::CircuitRelay);
+        assert!(
+            !paused(&paths, &discovered, now),
+            "healthy paths use existing quiet policy"
+        );
+    }
+
+    #[test]
+    fn maintenance_cooldown_does_not_hide_another_missing_peer() {
+        let local = NodeIdentity::generate_ed25519().expect("identity");
+        let healthy = peer_id();
+        let waiting = peer_id();
+        let due = peer_id();
+        let mut config = config_with_peer(&local, healthy);
+        config.peers[0].vpn_ip = Some("10.63.0.1".to_owned());
+        for (peer, ip) in [(waiting, "10.63.0.2"), (due, "10.63.0.3")] {
+            config.peers.push(PeerConfig {
+                id: peer.to_string(),
+                name: None,
+                ip: None,
+                vpn_ip: Some(ip.to_owned()),
+                addresses: Vec::new(),
+                routes: Vec::new(),
+            });
+        }
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut paths = PathSet::new();
+        paths.record_established(PeerId::from_libp2p(healthy), PathKind::DirectTcpStream);
+        let mut discovered = DiscoveredPeerAddresses::default();
+        let now = Instant::now();
+        assert!(discovered.recovery_queries.should_query(waiting, now));
+        discovered.recovery_queries.record(waiting, [], now);
+        let auto_relay = AutoRelayState::new(AutoRelayConfig {
+            max_reservations: 0,
+            ..AutoRelayConfig::default()
+        });
+        let paused = |discovered: &DiscoveredPeerAddresses| {
+            kademlia_maintenance_recovery_cooldown(
+                &forwarder,
+                discovered,
+                &auto_relay,
+                now,
+                |peer| {
+                    peer_has_healthy_supported_path(
+                        &paths,
+                        &PeerCapabilities::default(),
+                        None,
+                        None,
+                        peer,
+                    )
+                },
+                |_| false,
+            )
+        };
+        assert!(!paused(&discovered));
+        assert!(discovered.recovery_queries.should_query(due, now));
+        discovered.recovery_queries.record(due, [], now);
+        assert!(paused(&discovered));
+    }
+
+    #[test]
+    fn maintenance_cooldown_keeps_relay_discovery_available() {
+        let local = NodeIdentity::generate_ed25519().expect("identity");
+        let healthy = peer_id();
+        let offline = peer_id();
+        let mut config = config_with_peer(&local, healthy);
+        config.peers[0].vpn_ip = Some("10.63.0.1".to_owned());
+        config.peers.push(PeerConfig {
+            id: offline.to_string(),
+            name: None,
+            ip: None,
+            vpn_ip: Some("10.63.0.2".to_owned()),
+            addresses: Vec::new(),
+            routes: Vec::new(),
+        });
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut discovered = DiscoveredPeerAddresses::default();
+        let now = Instant::now();
+        assert!(discovered.recovery_queries.should_query(offline, now));
+        discovered.recovery_queries.record(offline, [], now);
+        let paused = |relay: &AutoRelayState| {
+            kademlia_maintenance_recovery_cooldown(
+                &forwarder,
+                &discovered,
+                relay,
+                now,
+                |peer| peer == PeerId::from_libp2p(healthy),
+                |_| false,
+            )
+        };
+        let mut relay = AutoRelayState::new(AutoRelayConfig {
+            max_reservations: 1,
+            ..AutoRelayConfig::default()
+        });
+        assert!(!paused(&relay), "relay shortfall needs discovery");
+        let accepted = peer_id();
+        relay.accepted_reservation_peers.insert(accepted);
+        assert!(paused(&relay), "reservation budget is satisfied");
+        relay.accepted_reservation_peers.remove(&accepted);
+        assert!(!paused(&relay), "lost reservation resumes discovery");
+        relay.policy.max_reservations = 0;
+        assert!(paused(&relay), "disabled relays do not need discovery");
+    }
+
+    #[test]
+    fn maintenance_cooldown_preserves_queued_and_in_flight_application_work() {
+        let local = NodeIdentity::generate_ed25519().expect("identity");
+        let healthy = peer_id();
+        let offline = peer_id();
+        let mut config = config_with_peer(&local, healthy);
+        config.peers[0].vpn_ip = Some("10.63.0.1".to_owned());
+        config.peers.push(PeerConfig {
+            id: offline.to_string(),
+            name: None,
+            ip: None,
+            vpn_ip: Some("10.63.0.2".to_owned()),
+            addresses: Vec::new(),
+            routes: Vec::new(),
+        });
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut discovered = DiscoveredPeerAddresses::default();
+        let now = Instant::now();
+        assert!(discovered.recovery_queries.should_query(offline, now));
+        discovered.recovery_queries.record(offline, [], now);
+        let auto_relay = AutoRelayState::new(AutoRelayConfig {
+            max_reservations: 0,
+            ..AutoRelayConfig::default()
+        });
+        let paused = |queues: &PeerQueues, in_flight: &PacketInFlight| {
+            kademlia_maintenance_recovery_cooldown(
+                &forwarder,
+                &discovered,
+                &auto_relay,
+                now,
+                |peer| peer == PeerId::from_libp2p(healthy),
+                |peer| {
+                    queues.peer_stats(peer).queued_packets > 0
+                        || in_flight.has_application_work(peer)
+                },
+            )
+        };
+        let mut queues = PeerQueues::new(4, 4096);
+        let mut in_flight = PacketInFlight::new(4);
+        let mut requests = pinned_packet_stream::Behaviour::new(1280);
+        for remote in [offline, healthy] {
+            let peer = PeerId::from_libp2p(remote);
+            let mut paths = PathSet::new();
+            paths.record_established(peer, PathKind::DirectTcpStream);
+            let path = paths.best_for(peer).expect("path");
+            assert!(paused(&queues, &in_flight));
+            queues
+                .enqueue(crate::queue::Packet::new(peer, 1, vec![0x45; 20]))
+                .expect("enqueue");
+            assert!(!paused(&queues, &in_flight), "queued payload stays active");
+            let packet = queues.dequeue().expect("packet");
+            let request_id =
+                PacketInFlightId::PinnedPacketStream(requests.send_request_on_connection(
+                    remote,
+                    ConnectionId::new_unchecked(1),
+                    Frame::packet(1, 1, packet.payload().to_vec()).expect("frame"),
+                ));
+            in_flight.record(&packet, request_id, path);
+            assert!(in_flight.has_application_work(peer));
+            assert!(
+                !paused(&queues, &in_flight),
+                "in-flight payload stays active"
+            );
+            in_flight.complete(request_id).expect("application request");
+            assert!(paused(&queues, &in_flight));
+            in_flight.record_path_probe(peer, request_id, path);
+            assert!(
+                paused(&queues, &in_flight),
+                "probes are not application work"
+            );
+            in_flight.complete(request_id).expect("probe request");
+        }
     }
 
     #[test]

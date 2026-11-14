@@ -183,6 +183,7 @@ pub struct RuntimeMetrics {
     kademlia_membership_record_publication_failures: AtomicU64,
     kademlia_bootstrap_refreshes: AtomicU64,
     kademlia_bootstrap_failures: AtomicU64,
+    kademlia_maintenance_cooldown_ticks: AtomicU64,
     control_requests_sent: AtomicU64,
     control_requests_received: AtomicU64,
     control_responses_received: AtomicU64,
@@ -807,6 +808,11 @@ impl RuntimeMetrics {
 
     pub fn record_kademlia_bootstrap_refresh(&self) {
         self.kademlia_bootstrap_refreshes
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_kademlia_maintenance_cooldown_tick(&self) {
+        self.kademlia_maintenance_cooldown_ticks
             .fetch_add(1, Ordering::Relaxed);
     }
 
@@ -1498,6 +1504,9 @@ impl RuntimeMetrics {
             self.kademlia_bootstrap_refreshes.load(Ordering::Relaxed);
         snapshot.kademlia_bootstrap_failures =
             self.kademlia_bootstrap_failures.load(Ordering::Relaxed);
+        snapshot.kademlia_maintenance_cooldown_ticks = self
+            .kademlia_maintenance_cooldown_ticks
+            .load(Ordering::Relaxed);
     }
 
     fn fill_control_snapshot(&self, snapshot: &mut RuntimeSnapshot) {
@@ -1790,6 +1799,7 @@ pub struct RuntimeSnapshot {
     pub kademlia_membership_record_publication_failures: u64,
     pub kademlia_bootstrap_refreshes: u64,
     pub kademlia_bootstrap_failures: u64,
+    pub kademlia_maintenance_cooldown_ticks: u64,
     pub control_requests_sent: u64,
     pub control_requests_received: u64,
     pub control_responses_received: u64,
@@ -2178,6 +2188,10 @@ impl RuntimeSnapshot {
             format!(
                 "kademlia_bootstrap_failures {}",
                 self.kademlia_bootstrap_failures
+            ),
+            format!(
+                "kademlia_maintenance_cooldown_ticks {}",
+                self.kademlia_maintenance_cooldown_ticks
             ),
         ]);
         self.extend_observed_packet_plane_lines(lines);
@@ -2870,6 +2884,7 @@ mod tests {
         metrics.record_kademlia_membership_record_publication_failure();
         metrics.record_kademlia_bootstrap_refresh();
         metrics.record_kademlia_bootstrap_failure();
+        metrics.record_kademlia_maintenance_cooldown_tick();
     }
 
     fn populate_control_and_service_metrics(metrics: &RuntimeMetrics) {
@@ -3013,6 +3028,7 @@ mod tests {
         assert_eq!(snapshot.kademlia_membership_record_publication_failures, 1);
         assert_eq!(snapshot.kademlia_bootstrap_refreshes, 1);
         assert_eq!(snapshot.kademlia_bootstrap_failures, 1);
+        assert_eq!(snapshot.kademlia_maintenance_cooldown_ticks, 1);
     }
 
     fn assert_kademlia_discovery_lines(snapshot: &RuntimeSnapshot) {
@@ -3033,6 +3049,7 @@ mod tests {
         );
         assert_metric_line(snapshot, "kademlia_bootstrap_refreshes 1");
         assert_metric_line(snapshot, "kademlia_bootstrap_failures 1");
+        assert_metric_line(snapshot, "kademlia_maintenance_cooldown_ticks 1");
     }
 
     fn assert_pairing_counters(snapshot: &RuntimeSnapshot) {
