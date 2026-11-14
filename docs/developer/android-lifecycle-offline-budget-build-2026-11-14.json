@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "kind": "android_lifecycle_offline_budget_candidate",
+  "candidate": "C4",
+  "date_utc": "2026-11-14",
+  "runtime_revision": "2e51fba6fd660c3486054ac5629aff8aa6765102",
+  "production_lifecycle_default_enabled": false,
+  "device_deployed": false,
+  "device_preflight_passed": null,
+  "energy_measured": false,
+  "battery_improvement_ratio": null,
+  "candidate_accepted": false,
+  "goal_complete": false,
+  "apk": {
+    "sha256": "6a1b19ae9d9ae7aefcd46fb12a88fb131c68f77e6472aa347dc3d3476efcbea9",
+    "bytes": 20063779,
+    "application_id": "org.hermeticfoundation.p2pvpn.debug",
+    "abi": "arm64-v8a",
+    "signer_sha256": "92b218d359c00ca24fbc97c385f47817b2f263f5a614ebe0c843158b52e03950",
+    "signer_matches_original": true,
+    "zipalign_16k_passed": true,
+    "cache_relative_path": "p2p-vpn/battery-candidates/6a1b19ae9d9ae7aefcd46fb12a88fb131c68f77e6472aa347dc3d3476efcbea9/p2p-vpn-lifecycle-trial-arm64.apk"
+  },
+  "native": {
+    "feature": "demand-lifecycle-trial",
+    "derivation": "/nix/store/05mjnam37dq5wpcj8kw7a4js76hv1afw-p2p-vpn-android-arm64-aarch64-unknown-linux-android-0.1.0.drv",
+    "source": "/nix/store/mmxpv3a09gf2jji99f7lc7n8l1vfhh54-source",
+    "output": "/nix/store/la1q59l50wjn93h87jx970lwzqakc514-p2p-vpn-android-arm64-aarch64-unknown-linux-android-0.1.0",
+    "build_succeeded": true,
+    "store_library_sha256": "3924c2302b9f4598fba6072bcf205a8ee2c75562873227971f350f5ce42f23ee",
+    "packaged_library_sha256": "2b56c3cba0714973bde1aa41a005f9e03de7bd6f1bb2f83422c57b4b8ab0f358",
+    "packaged_library_matches_stripped_output": true,
+    "changed_runtime_and_new_tests_match_package_source": true,
+    "cargo_lock_matches_package_source": true,
+    "cargo_auditable_section_present": true,
+    "load_segment_alignment_bytes": [16384, 16384, 16384, 16384],
+    "nix_jobs": 1,
+    "nix_cores": 2,
+    "additional_toolchain_or_sdk_builds": 0
+  },
+  "linux": {
+    "feature": "demand-lifecycle-trial",
+    "sha256": "0ea2ec6b6f3b1246bcf52fbf3cc52d975c29300333fc3e78afe6585a6b96dee4",
+    "bytes": 84850552,
+    "cached_with_apk": true,
+    "dynamic_dependency_paths_unchanged": true,
+    "nix_release_package_built": false
+  },
+  "verification": {
+    "experimental_workspace_all_targets": {"passed": 2151, "failed": 0, "ignored": 50, "suites": 16, "log_sha256": "b2291e4336bbb593a9694a253c609c12b1baa9ee68d7fe4a6693ba8cbffdd016"},
+    "default_library": {"passed": 1748, "failed": 0, "ignored": 9, "log_sha256": "09a99f953dc6df8244fcc666e30d6af08e40c6e495cd6d843142801c3ed24fd6"},
+    "clippy_error_groups_passed": ["correctness", "suspicious", "perf"],
+    "clippy_log_sha256": "cedb2ff512923d3ce43e629b1e8bf69190bebef9fd3cd8cf84f7fa2b48f64dec",
+    "advisory_warnings_remain": true,
+    "rust_format_check_passed": true,
+    "java": {"tests": 158, "suites": 35, "failures": 0, "errors": 0, "lint_errors": 0, "lint_warnings": 7, "offline": true, "executed_tasks": 49},
+    "formal_proof_claimed": false
+  },
+  "prior_device_failure": "android-lifecycle-membership-preflight-2026-11-14.json",
+  "next": [
+    "Deploy this same candidate on all four reachable Linux counterparts and the Android endpoint without changing membership or configuration.",
+    "Repeat independent screen-off cellular first-packet checks; retain post-probe counters and Linux tunnel evidence to isolate request versus reply loss.",
+    "Require committed quiet, preserved incoming access, and fresh replicated paired/reversed energy measurements before claiming the 90 percent target."
+  ]
+}

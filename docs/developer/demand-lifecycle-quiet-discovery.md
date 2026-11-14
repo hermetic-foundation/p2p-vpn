@@ -150,6 +150,10 @@ The [C3 cellular preflight](android-lifecycle-membership-preflight-2026-11-14.js
 predates this extension. It failed outgoing first-packet delivery and did not
 reach committed quiet toward the phone; it is not acceptance evidence here.
 
+The [C4 build record](android-lifecycle-offline-budget-build-2026-11-14.json)
+retains source/artifact hashes and validation results. Building a candidate
+does not prove device recovery or battery savings.
+
 ## Validation
 
 | Boundary | Required Evidence |
