@@ -1,5 +1,9 @@
 # Android Battery Efficiency
 
+This page retains the early investigation and dated Wi-Fi pilot records.
+See the [lifecycle trial guide](../user/lifecycle-trial.md) for current deployment
+and [cellular comparison](android-cellular-comparison.md) for modem-rail evidence.
+
 ## Status
 
 | Item | State |
@@ -13,6 +17,8 @@
 | Native APKs | Working ARM64 baseline retained; current candidate installed; earlier bidirectional IPv4/IPv6 and DNS smoke checks pass |
 | Per-app feedback | Android `BatteryUsageStats` estimates can compare APKs; unsupported raw energy counters do not prevent this |
 | First per-app comparison | One matched Wi-Fi pair completed; no detectable improvement; 10x target remains open |
+| Backoff pilot | Lower short-window candidate mean, but differing recovery workload; no established savings claim |
+| Legacy Wi-Fi comparison | Separate connected-idle AB/BA/AB harness; not a cellular or dormancy benchmark |
 
 ## Per-App Feedback First
 
@@ -91,6 +97,16 @@ types consistent: binary and `--usage` cumulative totals need not share a scope.
 Removing display rounding does not improve Android's underlying model accuracy
 or fill missing CPU attribution. The tool is independent of the app APK.
 
+### Controlled Paired Series
+
+The [legacy Wi-Fi runner](android-battery-paired.md) retains the connected-idle
+experiment workflow. It is not suitable for negotiated dormancy or modem-energy
+acceptance. Its safety and analysis tests run without controlling a real phone.
+
+Use the [cellular capture](android-cellular-capture.md) and
+[cellular comparison](android-cellular-comparison.md) tools for retained reports
+and matched modem-rail evidence. No tool result completes the protocol goal.
+
 ### USB Accounting
 
 | Setting | Behavior |
@@ -136,6 +152,46 @@ finer Wi-Fi breakdown shows no detectable change. Neither shows a 10x gain.
 Next, retain higher-precision Android UID consumption and repeat with alternating
 build order. Do not treat the short pair, display-rounding bounds or Wi-Fi-only
 breakdown as a precise whole-app battery-life improvement.
+
+### Backoff Pilot, November 9
+
+[All seven windows](android-battery-backoff-2026-11-09.json) retain endpoint
+values, exact APK/source identities, discovery counters and the recovery audit.
+
+| Build | Rates, mAh/hour | Mean |
+| --- | --- | --- |
+| Reference, including return control | 1.83, 1.63, 1.87 | 1.78 |
+| Unshipped exploratory version | 1.30, 1.44 | 1.37 |
+| Guarded candidate | 1.60, 1.48 | 1.54 |
+
+The published policy also bypasses cooldown for queued or in-flight application
+payloads. These historical APKs predate that guard.
+
+These are Android estimates from short, consecutive windows, not independent
+paired trials. Path demotions, session expirations and probe failures differed;
+matching endpoint peer counts alone did not establish a steady workload.
+
+- Do not combine the two candidate APKs or promote the lower mean to a reliable savings percentage.
+- Review caught a relay-discovery gap in the first version; it was superseded before publishing.
+- The original hold decision is historical; publishing the guarded policy does not establish battery savings.
+- The 10x target is not met; CPU attribution, cellular comparisons and the wider feature matrix remain outstanding.
+
+### Bounded Iteration Builds
+
+Reuse one Cargo target directory and disable both dev and test debug information.
+Disabling only test debug information still permits large dependency artifacts.
+
+```sh
+export CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0
+export CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
+export CARGO_TARGET_DIR=/tmp/p2p-vpn-battery-build/host-target
+cargo test --offline --workspace --quiet
+```
+
+- Do not run builds inside accepted energy windows.
+- Reuse existing Gradle, SDK and NDK installations; do not download emulator images.
+- Keep raw captures below 64 MiB per run and retain only bounded APK references.
+- Record failed or interrupted attempts; do not include them among passing tests.
 
 ## Full-Device Discharge Validation
 

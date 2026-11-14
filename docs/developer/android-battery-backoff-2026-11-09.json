@@ -1,0 +1,220 @@
+{
+  "schema_version": 1,
+  "experiment": "Bound redundant main-DHT maintenance during failed-peer retry backoff",
+  "status": "short_windows_exploratory_controlled_paired_series_required",
+  "goal_complete": false,
+  "device": {
+    "model": "OnePlus 9 Pro LE2125",
+    "android_api": 36,
+    "package": "org.hermeticfoundation.p2pvpn.debug",
+    "uid": 10303,
+    "underlay": "wifi",
+    "physical_power": "USB attached and powered; no physical discharge claim",
+    "screen": "off throughout every accepted window"
+  },
+  "method": {
+    "metric": "Android per-UID attributed mAh/hour",
+    "collector": "dumpsys batterystats --proto, selected UID power_use_item.computed_power_mah",
+    "report_version": 36,
+    "parcel_version": 216,
+    "reset_clock_time_ms": 1794174224866,
+    "start_count": 1,
+    "settling_seconds_per_install": 300,
+    "window_seconds": 600,
+    "rate": "(end_uid_mah - start_uid_mah) * 3600000 / elapsed_device_realtime_ms",
+    "accounting": "Temporary battery unplug and no-auto-reset; restored after each run",
+    "observer": "Endpoint-only battery and cached native status snapshots; no polling, probes or builds inside windows",
+    "topology": "One enabled network; five connected peers and five owned QUIC sessions at both endpoints; one additional unreachable authorized peer",
+    "cpu_energy": "Unavailable in this phone's report; recorded CPU time is not energy",
+    "uid_screen_mah_at_all_recorded_endpoints": 10.886313,
+    "raw_full_reports_retained": false,
+    "privacy": "Only selected UID energy, clocks and aggregate counters retained",
+    "windows_are_independent_randomized_replicates": false
+  },
+  "artifacts": {
+    "original_goal_reference": {
+      "source": "eec88da9e6d4 with portable-lock correction",
+      "apk_sha256": "b1359996a8fbab7ea8eec2fd4c0649dfe0ea6290bf9466145af8242bf58453a3",
+      "role": "Retained original; not silently replaced as the eventual 10x reference"
+    },
+    "attempt_reference": {
+      "source": "64ddf062025d",
+      "apk_sha256": "08dc47b097087c5d8bb8434873b75e99eedb93dc80a9d675ca07e83fc1449a5d"
+    },
+    "exploratory_v1": {
+      "apk_sha256": "4449673f54da2075742facddbb7f0bbe2408dce3012c04746cf4c82f9af9479c",
+      "native_sha256": "ddd4f7a736f33132e00511b217caaec0aac8f8325bb9a1bdf040a12b8b8e6705",
+      "source_sha256": {
+        "src/runtime/runner.rs": "ab90b00f520789bc5e1d953c5f883388b300ef768a21a16a4a10feee321d206b",
+        "src/runtime/recovery_queries.rs": "ea501ee576df2d3b09718038872c6cd7bc8943b7bef4eb952284131756eb5008",
+        "src/metrics.rs": "8f90a76aae05e3dc013babe96fc11b2dbccdf778e9c4520d42c7148f43eb049c"
+      },
+      "published": false,
+      "disposition": "Superseded before shipping: review found a missing bypass for replacement-relay discovery"
+    },
+    "guarded_v2": {
+      "apk_sha256": "bb55a5bfc0f5a5a671904009a7a5c2a671782694f2ccc6534a904d39aaa3b5aa",
+      "native_sha256": "9a540c9f755c5254478274e9eda27c1553e20aacb6465294216d7d929f6d7181",
+      "packaged_native_sha256": "a4d532b724434d537afd3e3cfda07661582c2883b3414685e66abf18a8bddef6",
+      "source_sha256": {
+        "src/runtime/runner.rs": "393bbe5018251beacadf47219067127121b3dcb246ea3625168e7e42f151b657",
+        "src/runtime/recovery_queries.rs": "ff7c2271ce1b36c6f85a23644dc367488a10e0f023ea3d7cc12eca3e3a2f01be",
+        "src/metrics.rs": "8f90a76aae05e3dc013babe96fc11b2dbccdf778e9c4520d42c7148f43eb049c"
+      },
+      "change": "Retain maintenance whenever AutoRelayState needs more relay candidates"
+    }
+  },
+  "windows": [
+    {
+      "build": "attempt_reference", "order": 1,
+      "start_utc": "2026-11-09T03:29:56.168778+00:00",
+      "end_utc": "2026-11-09T03:39:56.430129+00:00",
+      "start_uid_mah": 12.399919, "end_uid_mah": 12.705635,
+      "elapsed_ms": 600352, "rate_mah_per_hour": 1.8332205106337527,
+      "screen_on_ms": 0, "scope_unchanged": true,
+      "public_routing_peers_start_end": [7, 8],
+      "main_dht_requests": 844, "main_dht_dial_intents_dispatched": 794,
+      "autonat_scheduling_intents": 239, "maintenance_cooldown_ticks": null,
+      "provider_lookups": 2, "provider_advertisements": 1,
+      "path_probes_sent": 1196, "path_probe_acks_sent": 1179
+    },
+    {
+      "build": "attempt_reference", "order": 2,
+      "start_utc": "2026-11-09T03:39:57.165646+00:00",
+      "end_utc": "2026-11-09T03:49:57.428765+00:00",
+      "start_uid_mah": 12.705929, "end_uid_mah": 12.978513999999999,
+      "elapsed_ms": 600272, "rate_mah_per_hour": 1.6347689047631706,
+      "screen_on_ms": 0, "scope_unchanged": true,
+      "public_routing_peers_start_end": [8, 9],
+      "main_dht_requests": 692, "main_dht_dial_intents_dispatched": 697,
+      "autonat_scheduling_intents": 195, "maintenance_cooldown_ticks": null,
+      "provider_lookups": 2, "provider_advertisements": 1,
+      "path_probes_sent": 1189, "path_probe_acks_sent": 1186
+    },
+    {
+      "build": "exploratory_v1", "order": 3,
+      "start_utc": "2026-11-09T04:14:28.916311+00:00",
+      "end_utc": "2026-11-09T04:24:29.186363+00:00",
+      "start_uid_mah": 13.176099, "end_uid_mah": 13.393144,
+      "elapsed_ms": 600237, "rate_mah_per_hour": 1.3017558064564427,
+      "screen_on_ms": 0, "scope_unchanged": true,
+      "public_routing_peers_start_end": [5, 3],
+      "main_dht_requests": 141, "main_dht_dial_intents_dispatched": 147,
+      "autonat_scheduling_intents": 105, "maintenance_cooldown_ticks": 103,
+      "provider_lookups": 2, "provider_advertisements": 1,
+      "path_probes_sent": 1204, "path_probe_acks_sent": 1156
+    },
+    {
+      "build": "exploratory_v1", "order": 4,
+      "start_utc": "2026-11-09T04:24:29.873830+00:00",
+      "end_utc": "2026-11-09T04:34:30.150190+00:00",
+      "start_uid_mah": 13.393341, "end_uid_mah": 13.633258,
+      "elapsed_ms": 600249, "rate_mah_per_hour": 1.4389048544853895,
+      "screen_on_ms": 0, "scope_unchanged": true,
+      "public_routing_peers_start_end": [3, 5],
+      "main_dht_requests": 208, "main_dht_dial_intents_dispatched": 190,
+      "autonat_scheduling_intents": 114, "maintenance_cooldown_ticks": 113,
+      "provider_lookups": 3, "provider_advertisements": 0,
+      "path_probes_sent": 1199, "path_probe_acks_sent": 1165
+    },
+    {
+      "build": "attempt_reference", "order": 5,
+      "start_utc": "2026-11-09T04:42:27.834381+00:00",
+      "end_utc": "2026-11-09T04:52:28.120831+00:00",
+      "start_uid_mah": 13.816106, "end_uid_mah": 14.128381,
+      "elapsed_ms": 600288, "rate_mah_per_hour": 1.8727510794818465,
+      "screen_on_ms": 0, "scope_unchanged": true,
+      "public_routing_peers_start_end": [7, 32],
+      "main_dht_requests": 834, "main_dht_dial_intents_dispatched": 790,
+      "autonat_scheduling_intents": 291, "maintenance_cooldown_ticks": null,
+      "provider_lookups": 3, "provider_advertisements": 1,
+      "path_probes_sent": 1198, "path_probe_acks_sent": 1188
+    },
+    {
+      "build": "guarded_v2", "order": 6,
+      "start_utc": "2026-11-09T05:12:17.537578+00:00",
+      "end_utc": "2026-11-09T05:22:17.840894+00:00",
+      "start_uid_mah": 14.253891, "end_uid_mah": 14.521241999999999,
+      "elapsed_ms": 600297, "rate_mah_per_hour": 1.603312360381609,
+      "screen_on_ms": 0, "scope_unchanged": true,
+      "public_routing_peers_start_end": [4, 4],
+      "main_dht_requests": 287, "main_dht_dial_intents_dispatched": 285,
+      "autonat_scheduling_intents": 187, "maintenance_cooldown_ticks": 88,
+      "provider_lookups": 4, "provider_advertisements": 1,
+      "path_probes_sent": 1136, "path_probe_acks_sent": 1064
+    },
+    {
+      "build": "guarded_v2", "order": 7,
+      "start_utc": "2026-11-09T05:22:18.501285+00:00",
+      "end_utc": "2026-11-09T05:32:18.773770+00:00",
+      "start_uid_mah": 14.521465, "end_uid_mah": 14.767529,
+      "elapsed_ms": 600272, "rate_mah_per_hour": 1.4757150091958342,
+      "screen_on_ms": 0, "scope_unchanged": true,
+      "public_routing_peers_start_end": [4, 4],
+      "main_dht_requests": 92, "main_dht_dial_intents_dispatched": 99,
+      "autonat_scheduling_intents": 155, "maintenance_cooldown_ticks": 116,
+      "provider_lookups": 1, "provider_advertisements": 0,
+      "path_probes_sent": 1200, "path_probe_acks_sent": 1147
+    }
+  ],
+  "functional_smoke": {
+    "scope": "Matched short smoke outside energy windows, not the full feature-preservation matrix",
+    "checks": [
+      "Five connected peers and five owned QUIC sessions",
+      "IPv4 and IPv6 in both directions between Linux and Android",
+      "Phone overlay hostname resolves",
+      "Wi-Fi disabled for ten seconds and restored; connectivity returns automatically",
+      "Five IPv4 packets delivered after Wi-Fi return",
+      "Encrypted profile hash unchanged; no pairing or membership mutation"
+    ],
+    "results": {
+      "attempt_reference": { "ping_sent": 25, "ping_received": 25, "wifi_return_ready_seconds": 130.48017065692693 },
+      "exploratory_v1": { "ping_sent": 25, "ping_received": 25, "wifi_return_ready_seconds": 29.509095463901758 },
+      "guarded_v2": { "ping_sent": 25, "ping_received": 25, "wifi_return_ready_seconds": 27.4395971710328 }
+    },
+    "timing_caveat": "Single smoke timings are not causal evidence of a recovery-speed improvement"
+  },
+  "verification": {
+    "rust_tests_passed": 1842,
+    "rust_tests_failed": 0,
+    "rust_tests_ignored": 48,
+    "clippy": "Correctness, suspicious and performance gates passed; other repository warnings remain",
+    "rust_format": "passed",
+    "nix": ["rust-test-sources", "android-native-arm64", "android-battery-decode package and 14-test check"],
+    "gradle": ["testDebugUnitTest", "lintDebug", "assembleDebug"],
+    "apk": "Signature, 16 KiB alignment, new native counter and installed SHA-256 verified",
+    "relay_guard_tests": "New and lost reservation deficits bypass cooldown; satisfied and disabled relay budgets permit it",
+    "discovery_guard_tests": "Pending, due, newly missing, isolated and reset states preserve discovery",
+    "formal_verification": "No Lean setup in this repository; executable transition tests, not a formal proof",
+    "not_run": "Full Nix flake check and full physical feature-preservation matrix"
+  },
+  "interpretation": {
+    "reference_mean_mah_per_hour": 1.7802468316262565,
+    "guarded_mean_mah_per_hour": 1.5395136847887216,
+    "established_battery_improvement": false,
+    "decision": "Hold the performance change for independent paired trials; do not promote the short-window difference to a savings claim",
+    "recovery_audit_in_window_order": {
+      "packet_plane_sessions_expired": [1, 5, 2, 4, 0, 1, 2],
+      "packet_plane_path_demotions": [5, 4, 5, 1, 7, 12, 6],
+      "outbound_path_probe_failures": [1, 4, 2, 0, 2, 16, 3],
+      "packet_plane_path_recovery_dial_attempts": [0, 1, 1, 0, 1, 4, 1],
+      "caveat": "Subpath events are not a count of peer disconnections; endpoint counts alone do not characterize this workload"
+    },
+    "counter_caveats": [
+      "DHT dial intents are not a count of established sockets or successful connections",
+      "AutoNAT scheduling intents are not proof that the library sent a probe",
+      "Cooldown ticks indicate policy eligibility, not queries avoided",
+      "Cached native counters can lag endpoints by approximately five seconds",
+      "Absent reference cooldown counters are null, not measured zero"
+    ],
+    "limitations": [
+      "Short, consecutive windows; no randomized independent replicate series",
+      "Authorized endpoint peer/session counts matched; public infrastructure connections were dynamic, not held fixed",
+      "This optimization targets failed-peer backoff; an already all-healthy network uses the existing quiet policy",
+      "Endpoint topology checks do not prove continuous reachability",
+      "No cellular energy comparison or whole-phone battery-life claim",
+      "Missing CPU attribution limits completeness of Android's energy estimate",
+      "V1 energy results cannot be substituted for the guarded V2 build"
+    ]
+  }
+}
