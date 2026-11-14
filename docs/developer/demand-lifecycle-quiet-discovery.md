@@ -128,6 +128,31 @@ Loss of the incoming anchor must resume repair immediately.
 Unit tests cannot prove battery savings or public-network recovery. Repeat live
 cold-packet checks and fresh matched energy measurements after integration.
 
+### Hint-Delivery Correction
+
+This correction is specified before implementation. C4 can discard lookup hints
+during a new LAN grace period, or suppress a cached hint whose immediate dial
+was refused because another address was already dialing.
+
+| Boundary | Required Correction |
+| --- | --- |
+| Lookup allowance | One background DATA lookup per ticket; foreground work and connected legacy recovery remain separate |
+| Cached-address window | Keep existing bounded/backed-off redials eligible until the ticket's original ten-minute deadline |
+| LAN-first | Validate and cache hints immediately; defer WAN dial effects until LAN grace ends |
+| Pending dial | A refused singleton dial cannot consume the entire remaining cached-address opportunity |
+| Expiry | New hints, dial refusal, query completion and cooldown expiry never move the deadline |
+| Late native query | Preserve native ownership until terminal completion; post-deadline results may cache but cannot reopen offline background dials |
+| Quiet | Wait for both the fixed window and an admitted native query to drain |
+| Reactivation | Genuine application demand or an underlay change starts a new ticket, never a maintenance event |
+
+The existing query owner and address cache retain all state. No additional retry
+registry, user option, wire message or timer is required. A blocked attempt can
+exhaust the deadline without reaching every address; this is an explicit bound.
+
+Regression evidence must cover retained WAN hints without early WAN dials, a
+stale pending dial followed by a usable cached hint, strict deadline expiry,
+late results, fresh demand and independent control-query ownership.
+
 ### Implementation Evidence
 
 | Boundary | Focused Evidence |
