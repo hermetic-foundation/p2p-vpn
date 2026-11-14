@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "kind": "android_cellular_lifecycle_reference_capture",
+  "date_utc": "2026-11-14",
+  "status": "reference_energy_valid_incoming_boundary_failed",
+  "goal_complete": false,
+  "completed_windows": 1,
+  "completed_pairs": 0,
+  "candidate_measured": false,
+  "candidate_improvement_claimed": false,
+  "settle_seconds": 900,
+  "window_seconds": 1800,
+  "reference": {
+    "phone_apk_sha256": "c6d5db42b79a830ab7e58ed5579034622ecbd8b41f94337d7b8c17def34bfa16",
+    "linux_counterpart_sha256": "8a7cb00fa096696693475a4436d0d5564a2de41f035b63662c78e8b48dc764ed",
+    "linux_counterparts_unchanged": true,
+    "authorized_phone_peers": 6,
+    "live_linux_counterparts": 4,
+    "offline_members_removed": false,
+    "accounting": "Android UID estimate under USB-powered simulated-on-battery accounting",
+    "physical_battery_discharge_claimed": false,
+    "elapsed_seconds": 1800.043,
+    "app_consumption_mah": 133.101484,
+    "app_mah_per_hour": 266.19660885878835,
+    "modem_mean_mw": 974.6204237293765,
+    "frontend_mean_mw": 168.70020483701947,
+    "raw_reports_sha256": [
+      "aeb9aa6ce188841112137e3b808792a116f2af7a52cf12f1e8d122cff430d3a2",
+      "2b688dff4783a36fe4208c299cbdb221c74e88730fa9bae35780b9b5f91752ff"
+    ],
+    "trace_sha256": "e42bbf95d68c233f5c6666e51bf9696208e25af0e1d6132db400645deff61a83",
+    "accounting_and_rails_valid": true,
+    "functionality_passed": false
+  },
+  "context": {
+    "screen_off": true,
+    "underlay": "validated_cellular",
+    "power_save": true,
+    "device_idle": "IDLE",
+    "signal_rsrp_dbm": [-107, -107],
+    "temperature_tenths_c": [302, 313],
+    "payload_counters_unchanged": true
+  },
+  "post_idle_probes": {
+    "incoming_cold_packets": [1, 0],
+    "incoming_wait_seconds": 45,
+    "incoming_elapsed_seconds": 45.03835892886855,
+    "incoming_steady_attempted": false,
+    "outgoing_cold_packets": [1, 1],
+    "outgoing_steady_packets": [3, 3],
+    "directions_independently_cold": false,
+    "failure_leg_identified": false
+  },
+  "restoration": {
+    "original_phone_apk_and_wifi": true,
+    "original_profile_verified": true,
+    "hardware_battery_reporting": true,
+    "four_linux_original_services_and_cleanup": true
+  },
+  "interpretation": [
+    "The reference arm used the original phone APK with fixed trial Linux counterparts, not an entirely original fleet.",
+    "This reference value is not a candidate improvement and must not be compared with a historical baseline to claim savings.",
+    "The frozen harness stopped before the candidate after the incoming reference boundary failed.",
+    "These results do not identify the lost packet leg, prove modem sleep behavior, or establish candidate recovery failure."
+  ]
+}

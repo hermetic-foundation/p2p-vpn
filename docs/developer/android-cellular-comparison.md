@@ -29,8 +29,11 @@ energy calculation alone cannot establish functional equivalence.
 ## Analyzer Commands
 
 The host-only analyzer and [capture adapter](android-cellular-capture.md) are
-implemented. Fresh cellular comparisons remain outstanding. These commands
-analyze existing bundles; they do not collect them or claim measured savings.
+implemented. The [first matched pair](android-cellular-lifecycle-pair-2026-11-13.json)
+was valid but missed the energy target. Replicated acceptance remains outstanding.
+
+These commands analyze existing bundles; they do not collect them or claim
+measured savings. Build and preflight records are not energy comparisons.
 
 ```sh
 tool=$(nix build .#android-cellular-compare --no-link --print-out-paths)

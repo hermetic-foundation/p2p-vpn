@@ -172,7 +172,7 @@ Replacement admission is not a remote handshake or handset reachability proof.
 | Static checks | Rust formatting and Clippy correctness, suspicious-code and performance groups pass; advisory warnings remain |
 | Packaging mode | Nix contract confirms separate trial builds and empty default features; no runtime/energy acceptance implied |
 | C5 Android build | ARM64 Nix native build, APK signature/alignment checks, 158 Java tests and lint pass; seven lint warnings remain |
-| Operational acceptance | C5 is not deployed or energy-measured; autonomous handset wake and fresh paired energy evidence remain required |
+| Operational acceptance | Trial Linux counterparts were deployed for a reference capture; the C5 phone candidate remains unmeasured and live wake/recovery verification remains open |
 
 The [C3 cellular preflight](android-lifecycle-membership-preflight-2026-11-14.json)
 predates this extension. It failed outgoing first-packet delivery and did not
@@ -195,6 +195,10 @@ prove extended idle wake; incomplete restoration checks remain explicitly marked
 The [C5 hint-window build](android-lifecycle-hint-window-build-2026-11-14.json)
 retains corrected source/artifact hashes and verification results. It was sealed
 without deployment or energy measurement; no new battery-improvement claim is made.
+
+The [latest reference capture](android-lifecycle-reference-capture-2026-11-14.json)
+retains valid energy but a failed post-idle incoming probe. The frozen harness
+stopped before the C5 phone arm and verified restoration; no comparison exists.
 
 ## Validation
 
