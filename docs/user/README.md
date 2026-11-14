@@ -17,6 +17,7 @@ Use these docs when you want to run `p2p-vpn`.
 | [Overlay DNS](dns.md) | Resolve authenticated members by short and canonical names. |
 | [Operations](operations.md) | Inspect a daemon, health-check it, and stop it. |
 | [Packet Transports](transports.md) | Understand path ordering, fallback, MTU, and diagnostics. |
+| [Demand Lifecycle Trial](lifecycle-trial.md) | Opt into experimental dormancy, verify activation, and roll back. |
 | [Public libp2p/IPFS](public-libp2p.md) | Use public bootstrap and relay infrastructure safely. |
 
 ## Minimum Requirements

@@ -6012,6 +6012,11 @@
 
         checks = {
           package = package;
+          demand-lifecycle-trial-module = import ./tests/nixos/lifecycle-trial-eval.nix {
+            inherit pkgs lib system;
+            module = self.nixosModules.default;
+            packages = self.packages.${system};
+          };
           demand-lifecycle-trial-packaging =
             let
               packages = self.packages.${system};
