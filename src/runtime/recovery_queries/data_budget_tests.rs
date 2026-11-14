@@ -587,3 +587,178 @@ fn reset_discards_budget_markers_and_control_owners_without_late_resurrection() 
     owner.reconcile_data_budget(peer, ticket, 2, now);
     assert!(owner.should_query_data(peer, now));
 }
+
+#[test]
+fn spent_lookup_keeps_cached_address_window_open_until_original_deadline() {
+    let now = Instant::now();
+    let peer = PeerId::random();
+    let demand = demand_for(&[peer], now);
+    let ticket = version(&demand, peer);
+    let (query, _) = native_queries();
+    let deadline = now + DATA_BUDGET_WINDOW;
+    let admitted = deadline - QUERY_TIMEOUT / 2;
+    let before = deadline - Duration::from_nanos(1);
+    let mut owner = RecoveryQueries::default();
+    owner.reconcile_data_budget(peer, ticket, 1, now);
+    assert!(!owner.data_recovery_window_expired(peer, ticket, 1, now));
+    assert!(owner.should_query_data(peer, admitted));
+    owner.record(peer, [query], admitted);
+    assert!(owner.data_budget_exhausted(peer, ticket, 1, admitted));
+    assert!(!owner.should_query_data(peer, admitted));
+
+    let mut expected = RecoveryQueries::default();
+    expected.reconcile_data_budget(peer, ticket, 1, now);
+    expected.record(peer, [query], admitted);
+    assert!(!owner.data_recovery_window_expired(peer, ticket, 1, admitted));
+    assert!(!owner.data_recovery_window_expired(peer, ticket, 1, before));
+    assert!(owner.data_recovery_window_expired(peer, ticket, 1, deadline));
+    assert!(owner.data_recovery_window_expired(peer, ticket, 1, deadline + QUERY_TIMEOUT));
+    assert!(!owner.data_recovery_window_expired(peer, ticket, 1, before));
+    assert_eq!(owner, expected);
+    assert!(owner.has_data_query(peer));
+    assert!(owner.owns_data_query(peer, &query));
+
+    let completed = deadline + Duration::from_secs(1);
+    owner.finished(query, completed);
+    assert!(!owner.has_data_query(peer));
+    assert!(owner.data_recovery_window_expired(peer, ticket, 1, completed));
+    assert!(owner.data_budget_exhausted(peer, ticket, 1, completed));
+    assert!(!owner.should_query_data(peer, completed + BACKOFF_BASE));
+}
+
+#[test]
+fn recovery_window_deadline_survives_completion_connection_reconciliation_and_pruning() {
+    assert_eq!(DATA_BUDGET_WINDOW, Duration::from_secs(600));
+    for admitted in [false, true] {
+        let now = Instant::now();
+        let peer = PeerId::random();
+        let demand = demand_for(&[peer], now);
+        let ticket = version(&demand, peer);
+        let (query, _) = native_queries();
+        let mut owner = RecoveryQueries::default();
+        owner.reconcile_data_budget(peer, ticket, 1, now);
+        if admitted {
+            owner.record(peer, [query], now + Duration::from_secs(30));
+            owner.finished(query, now + QUERY_TIMEOUT);
+        }
+        owner.connected(peer, now + QUERY_TIMEOUT);
+        let cooldown = now + QUERY_TIMEOUT + CONNECTED_RETRY;
+        assert!(!owner.data_recovery_window_expired(peer, ticket, 1, cooldown));
+        owner.reconcile_data_budget(peer, ticket, 1, cooldown);
+        owner.prune_idle(cooldown + STATE_TTL);
+        assert!(owner.state(&peer).is_some());
+        let before = now + DATA_BUDGET_WINDOW - Duration::from_nanos(1);
+        owner.reconcile_data_budget(peer, ticket, 1, before);
+        assert!(!owner.data_recovery_window_expired(peer, ticket, 1, before));
+        assert_eq!(
+            owner.data_budget_exhausted(peer, ticket, 1, before),
+            admitted
+        );
+        let deadline = now + DATA_BUDGET_WINDOW;
+        assert!(owner.data_recovery_window_expired(peer, ticket, 1, deadline));
+        assert!(owner.data_budget_exhausted(peer, ticket, 1, deadline));
+        let later = deadline + Duration::from_hours(24);
+        owner.connected(peer, later);
+        owner.finished(query, later);
+        owner.prune_idle(later);
+        owner.reconcile_data_budget(peer, ticket, 1, later);
+        assert!(owner.data_recovery_window_expired(peer, ticket, 1, later));
+        assert!(!owner.should_query_data(peer, later));
+    }
+}
+
+#[test]
+fn recovery_window_requires_current_matching_ticket_and_evidence() {
+    let now = Instant::now();
+    let peer = PeerId::random();
+    let unknown = PeerId::random();
+    let demand = demand_for(&[peer], now);
+    let ticket = version(&demand, peer);
+    let deadline = now + DATA_BUDGET_WINDOW;
+    let mut owner = RecoveryQueries::default();
+    assert!(!owner.data_recovery_window_expired(peer, ticket, 1, deadline));
+    assert!(owner.peers.is_empty());
+    assert!(owner.should_query(peer, now));
+    assert!(!owner.data_recovery_window_expired(peer, ticket, 1, deadline));
+    owner.reconcile_data_budget(peer, ticket, 1, now);
+    assert!(owner.data_recovery_window_expired(peer, ticket, 1, deadline));
+    assert!(!owner.data_recovery_window_expired(unknown, ticket, 1, deadline));
+    assert!(!owner.data_recovery_window_expired(peer, None, 1, deadline));
+    assert!(!owner.data_recovery_window_expired(peer, ticket, 2, deadline));
+    assert!(demand.record(crate::PeerId::from_libp2p(peer), deadline));
+    assert!(!owner.data_recovery_window_expired(peer, version(&demand, peer), 1, deadline));
+
+    owner.reconcile_data_budget(peer, None, 1, deadline);
+    assert!(!owner.data_recovery_window_expired(peer, ticket, 1, deadline));
+    let later = deadline + Duration::from_secs(1);
+    owner.reconcile_data_budget(peer, ticket, 1, later);
+    assert!(owner.data_recovery_window_expired(peer, ticket, 1, later));
+}
+
+#[test]
+fn fresh_demand_or_underlay_starts_a_new_fixed_recovery_window() {
+    for fresh_demand in [false, true] {
+        let now = Instant::now();
+        let peer = PeerId::random();
+        let demand = demand_for(&[peer], now);
+        let old_ticket = version(&demand, peer);
+        let mut owner = RecoveryQueries::default();
+        owner.reconcile_data_budget(peer, old_ticket, 1, now);
+        let renewed = now + DATA_BUDGET_WINDOW;
+        assert!(owner.data_recovery_window_expired(peer, old_ticket, 1, renewed));
+        let (ticket, underlay) = if fresh_demand {
+            assert!(demand.record(crate::PeerId::from_libp2p(peer), renewed));
+            (version(&demand, peer), 1)
+        } else {
+            (old_ticket, 2)
+        };
+        assert!(!owner.data_recovery_window_expired(peer, ticket, underlay, renewed));
+        owner.reconcile_data_budget(peer, ticket, underlay, renewed);
+        assert!(!owner.data_recovery_window_expired(peer, old_ticket, 1, renewed));
+        assert!(owner.should_query_data(peer, renewed));
+        let before = renewed + DATA_BUDGET_WINDOW - Duration::from_nanos(1);
+        assert!(!owner.data_recovery_window_expired(peer, ticket, underlay, before));
+        assert!(owner.data_recovery_window_expired(
+            peer,
+            ticket,
+            underlay,
+            renewed + DATA_BUDGET_WINDOW
+        ));
+    }
+}
+
+#[test]
+fn recovery_window_observation_does_not_change_control_ownership_or_cooldown() {
+    let now = Instant::now();
+    let peer = PeerId::random();
+    let demand = demand_for(&[peer], now);
+    let ticket = version(&demand, peer);
+    let (control, _) = native_queries();
+    let mut owner = RecoveryQueries::default();
+    owner.reconcile_data_budget(peer, ticket, 1, now);
+    let scope = ControlQueryScope {
+        peer,
+        generation: 1,
+        deadline: now + CONTROL_QUERY_TIMEOUT,
+    };
+    owner.record_control(control, scope, now);
+    let mut expected = RecoveryQueries::default();
+    expected.reconcile_data_budget(peer, ticket, 1, now);
+    expected.record_control(control, scope, now);
+    assert!(!owner.data_recovery_window_expired(peer, ticket, 1, now));
+    assert!(owner.data_recovery_window_expired(peer, ticket, 1, now + DATA_BUDGET_WINDOW));
+    assert_eq!(owner, expected);
+    assert_eq!(owner.control_query(&control).unwrap().scope, scope);
+    assert!(!owner.can_continue_control(peer));
+    assert_eq!(owner.expire(scope.deadline), vec![control]);
+    expected.finished(control, scope.deadline);
+    let retry = scope.deadline + BACKOFF_BASE;
+    assert!(!owner.data_recovery_window_expired(peer, ticket, 1, retry));
+    assert!(owner.data_recovery_window_expired(peer, ticket, 1, now + DATA_BUDGET_WINDOW));
+    assert_eq!(owner, expected);
+    assert_eq!(owner.state(&peer).unwrap().retry_after, retry);
+    assert!(!owner.should_query(peer, retry - Duration::from_nanos(1)));
+    assert!(owner.should_query(peer, retry));
+    assert!(owner.should_query_data(peer, retry));
+    assert!(owner.can_continue_control(peer));
+}

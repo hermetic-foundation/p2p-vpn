@@ -2330,7 +2330,7 @@ where
                     packet_plane_quic.as_ref(),
                     |peer| forwarder.transport_peer_for_overlay(peer).is_some_and(|peer| {
                         quiet_discovery::offline_suppressed(&node.swarm, &connection_epochs, &forwarder,
-                            &queue_runtime.discovered_peer_addresses, peer, None, Instant::now())
+                            &queue_runtime.discovered_peer_addresses, peer, Instant::now())
                     }),
                 );
                 attempt_auto_relay_reservations(
@@ -2401,7 +2401,7 @@ where
                     packet_plane_quic.as_ref(),
                     |peer| forwarder.transport_peer_for_overlay(peer).is_some_and(|peer| {
                         quiet_discovery::offline_suppressed(&node.swarm, &connection_epochs, &forwarder,
-                            &queue_runtime.discovered_peer_addresses, peer, None, Instant::now())
+                            &queue_runtime.discovered_peer_addresses, peer, Instant::now())
                     }),
                 );
                 let now = Instant::now();
@@ -11458,6 +11458,12 @@ enum DiscoveredPeerAddressSource {
     PublicDiscovery,
 }
 
+#[derive(Clone, Copy)]
+enum DiscoveredAddressDial {
+    Eligible,
+    CacheOnly,
+}
+
 impl DiscoveredPeerAddressSource {
     const fn as_str(self) -> &'static str {
         match self {
@@ -13970,7 +13976,6 @@ async fn handle_swarm_event(
                                     context.forwarder,
                                     context.discovered_peer_addresses,
                                     peer,
-                                    None,
                                     Instant::now(),
                                 )
                             })
@@ -14813,7 +14818,6 @@ async fn handle_swarm_event(
                                         context.forwarder,
                                         context.discovered_peer_addresses,
                                         peer,
-                                        None,
                                         Instant::now(),
                                     )
                                 })
@@ -23913,19 +23917,17 @@ fn handle_kademlia_event_at(
                         }
                     }
                 } else {
-                    let now = Instant::now();
                     let allowed = providers
                         .iter()
                         .copied()
                         .filter(|peer| {
                             !context.public_discovery_quiet
-                                && !quiet_discovery::offline_suppressed(
+                                && !quiet_discovery::offline_dials_suppressed(
                                     swarm,
                                     context.connection_epochs,
                                     context.forwarder,
                                     context.discovered_peer_addresses,
                                     *peer,
-                                    Some(id),
                                     now,
                                 )
                                 && !context
@@ -24004,10 +24006,10 @@ fn handle_kademlia_event_at(
                     context.metrics,
                 );
             }
-            // Consume exact DATA ownership before terminal cleanup below. An
-            // admitted lookup must deliver its hints even though it spent its ticket.
-            handle_kademlia_peer_address_record_result(swarm, &mut context, id, &result);
-            handle_kademlia_closest_peer_result_for_query(
+            // Retain validated hints before terminal cleanup. Dial eligibility
+            // has a fixed ticket deadline independent of native query draining.
+            handle_kademlia_peer_address_record_result(swarm, &mut context, &result, now);
+            handle_kademlia_closest_peer_result_at(
                 swarm,
                 context.connection_epochs,
                 context.forwarder,
@@ -24019,7 +24021,7 @@ fn handle_kademlia_event_at(
                 context.discovery,
                 context.public_discovery_quiet,
                 &result,
-                Some(id),
+                now,
             );
             if step.last {
                 context.kademlia_maintenance.finish_query(id);
@@ -24221,8 +24223,8 @@ fn handle_kademlia_membership_record_result(
 fn handle_kademlia_peer_address_record_result(
     swarm: &mut Swarm<Behaviour>,
     context: &mut KademliaEventContext<'_>,
-    query: kad::QueryId,
     result: &kad::QueryResult,
+    now: Instant,
 ) {
     let kad::QueryResult::GetRecord(Ok(kad::GetRecordOk::FoundRecord(peer_record))) = result else {
         return;
@@ -24240,35 +24242,25 @@ fn handle_kademlia_peer_address_record_result(
         peer_record.record.value.as_slice(),
     ) {
         Ok((peer, addresses)) => {
-            let now = Instant::now();
             let local_networks =
                 local_interface_networks(&context.forwarder.config().interface.name);
             let lan_first = context.public_discovery_quiet
                 || context
                     .discovered_peer_addresses
                     .lan_first_recovery_active(peer, now);
-            let cache_only = quiet_discovery::offline_suppressed(
-                swarm,
-                context.connection_epochs,
-                context.forwarder,
-                context.discovered_peer_addresses,
-                peer,
-                Some(query),
-                now,
-            );
             for address in addresses {
-                if lan_first
-                    && !cache_only
+                let dial = if lan_first
                     && !recovery_address_allowed_during_lan_first(
                         peer,
                         &address,
                         &[],
                         &local_networks,
-                    )
-                {
-                    continue;
-                }
-                learn_peer_address_with_policy_for_query(
+                    ) {
+                    DiscoveredAddressDial::CacheOnly
+                } else {
+                    DiscoveredAddressDial::Eligible
+                };
+                learn_peer_address_with_dial_policy(
                     swarm,
                     context.connection_epochs,
                     context.forwarder,
@@ -24280,7 +24272,8 @@ fn handle_kademlia_peer_address_record_result(
                     context.discovery,
                     DiscoveredPeerAddressSource::AuthenticatedPeerRecord,
                     false,
-                    Some(query),
+                    dial,
+                    now,
                 );
             }
         }
@@ -24372,7 +24365,7 @@ fn handle_kademlia_closest_peer_result(
     public_discovery_quiet: bool,
     result: &kad::QueryResult,
 ) {
-    handle_kademlia_closest_peer_result_for_query(
+    handle_kademlia_closest_peer_result_at(
         swarm,
         connection_epochs,
         forwarder,
@@ -24384,11 +24377,11 @@ fn handle_kademlia_closest_peer_result(
         discovery,
         public_discovery_quiet,
         result,
-        None,
+        Instant::now(),
     );
 }
 
-fn handle_kademlia_closest_peer_result_for_query(
+fn handle_kademlia_closest_peer_result_at(
     swarm: &mut Swarm<Behaviour>,
     connection_epochs: &mut ConnectionEpochs,
     forwarder: &Forwarder,
@@ -24400,7 +24393,7 @@ fn handle_kademlia_closest_peer_result_for_query(
     discovery: &DiscoveryConfig,
     public_discovery_quiet: bool,
     result: &kad::QueryResult,
-    query: Option<kad::QueryId>,
+    now: Instant,
 ) {
     if let kad::QueryResult::GetClosestPeers(
         Ok(kad::GetClosestPeersOk { peers, .. })
@@ -24408,18 +24401,8 @@ fn handle_kademlia_closest_peer_result_for_query(
     ) = result
     {
         for peer in peers {
-            let cache_only = quiet_discovery::offline_suppressed(
-                swarm,
-                connection_epochs,
-                forwarder,
-                discovered_peer_addresses,
-                peer.peer_id,
-                query,
-                Instant::now(),
-            );
             let lan_first = public_discovery_quiet
-                || discovered_peer_addresses
-                    .lan_first_recovery_active(peer.peer_id, Instant::now());
+                || discovered_peer_addresses.lan_first_recovery_active(peer.peer_id, now);
             let accepted_addresses = accepted_discovery_addresses(
                 metrics,
                 peer.peer_id,
@@ -24427,23 +24410,29 @@ fn handle_kademlia_closest_peer_result_for_query(
                 DiscoveredPeerAddressSource::PublicDiscovery,
                 "kademlia_closest_peer",
             );
-            if !lan_first || cache_only {
-                for address in &accepted_addresses {
-                    learn_peer_address_with_policy_for_query(
-                        swarm,
-                        connection_epochs,
-                        forwarder,
-                        discovered_peer_addresses,
-                        paths,
-                        metrics,
-                        peer.peer_id,
-                        (*address).clone(),
-                        discovery,
-                        DiscoveredPeerAddressSource::PublicDiscovery,
-                        false,
-                        query,
-                    );
-                }
+            for address in accepted_addresses
+                .iter()
+                .filter(|_| !lan_first || forwarder.is_configured_transport_peer(peer.peer_id))
+            {
+                learn_peer_address_with_dial_policy(
+                    swarm,
+                    connection_epochs,
+                    forwarder,
+                    discovered_peer_addresses,
+                    paths,
+                    metrics,
+                    peer.peer_id,
+                    (*address).clone(),
+                    discovery,
+                    DiscoveredPeerAddressSource::PublicDiscovery,
+                    false,
+                    if lan_first {
+                        DiscoveredAddressDial::CacheOnly
+                    } else {
+                        DiscoveredAddressDial::Eligible
+                    },
+                    now,
+                );
             }
             if !public_discovery_quiet || auto_relay.should_discover_candidates() {
                 admit_discovered_relay_infrastructure_peer(
@@ -24807,7 +24796,7 @@ fn learn_peer_address_with_policy(
     source: DiscoveredPeerAddressSource,
     lan_promotion: bool,
 ) {
-    learn_peer_address_with_policy_for_query(
+    learn_peer_address_with_dial_policy(
         swarm,
         connection_epochs,
         forwarder,
@@ -24819,12 +24808,13 @@ fn learn_peer_address_with_policy(
         discovery,
         source,
         lan_promotion,
-        None,
+        DiscoveredAddressDial::Eligible,
+        Instant::now(),
     );
 }
 
 #[allow(clippy::too_many_arguments)]
-fn learn_peer_address_with_policy_for_query(
+fn learn_peer_address_with_dial_policy(
     swarm: &mut Swarm<Behaviour>,
     connection_epochs: &mut ConnectionEpochs,
     forwarder: &Forwarder,
@@ -24836,7 +24826,8 @@ fn learn_peer_address_with_policy_for_query(
     discovery: &DiscoveryConfig,
     source: DiscoveredPeerAddressSource,
     lan_promotion: bool,
-    query: Option<kad::QueryId>,
+    dial: DiscoveredAddressDial,
+    now: Instant,
 ) {
     if peer == *swarm.local_peer_id() {
         return;
@@ -24927,8 +24918,11 @@ fn learn_peer_address_with_policy_for_query(
     }
 
     metrics.record_discovered_address_accepted();
-    let now = Instant::now();
     discovered_peer_addresses.insert(peer, address.clone());
+
+    if matches!(dial, DiscoveredAddressDial::CacheOnly) {
+        return;
+    }
 
     if discovery.autonat
         && let Some(autonat) = swarm.behaviour_mut().autonat.as_mut()
@@ -24938,13 +24932,12 @@ fn learn_peer_address_with_policy_for_query(
 
     // Retain validated hints while paused without creating a data-dial cooldown.
     if forwarder.data_path_maintenance_is_paused(PeerId::from_libp2p(peer))
-        || quiet_discovery::offline_suppressed(
+        || quiet_discovery::offline_dials_suppressed(
             swarm,
             connection_epochs,
             forwarder,
             discovered_peer_addresses,
             peer,
-            query,
             now,
         )
         || !should_dial_discovered_address(
@@ -34771,7 +34764,7 @@ mod tests {
             peers: vec![
                 kad::PeerInfo {
                     peer_id: configured,
-                    addrs: vec![configured_address],
+                    addrs: vec![configured_address.clone()],
                 },
                 kad::PeerInfo {
                     peer_id: relay,
@@ -34795,7 +34788,9 @@ mod tests {
         );
 
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
-        assert_eq!(snapshot.discovered_addresses_accepted, 0);
+        assert_eq!(snapshot.discovered_addresses_accepted, 1);
+        assert_eq!(snapshot.discovered_address_dial_attempts, 0);
+        assert_eq!(discovered.as_vec(), vec![(configured, configured_address)]);
         assert_eq!(snapshot.auto_relay_infrastructure_candidates, 1);
         assert_eq!(snapshot.auto_relay_candidates, 1);
         assert_eq!(auto_relay.snapshot(Instant::now()).candidates, 1);

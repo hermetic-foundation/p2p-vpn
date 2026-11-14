@@ -218,15 +218,14 @@ pub(super) fn revalidate_event(
     });
 }
 
-/// Read-only and ticket-exact. An owned result may use its admitted opportunity;
-/// a late ID cannot borrow a newer DATA query's permission to dial.
-pub(super) fn offline_suppressed(
+/// Fixed, ticket-exact limit for new offline background dials. A native lookup
+/// admitted before expiry still drains, but cannot extend its dial window.
+pub(super) fn offline_dials_suppressed(
     swarm: &Swarm<Behaviour>,
     epochs: &ConnectionEpochs,
     forwarder: &Forwarder,
     discovered: &DiscoveredPeerAddresses,
     peer: Libp2pPeerId,
-    result: Option<kad::QueryId>,
     now: Instant,
 ) -> bool {
     let gate = &discovered.offline;
@@ -244,7 +243,7 @@ pub(super) fn offline_suppressed(
                     .confirmed_reservation_connections(*relay)
                     .any(|current| current == *id)
         })
-        && discovered.recovery_queries.data_budget_exhausted(
+        && discovered.recovery_queries.data_recovery_window_expired(
             peer,
             forwarder
                 .application_demand(PeerId::from_libp2p(peer))
@@ -252,10 +251,19 @@ pub(super) fn offline_suppressed(
             epochs.current,
             now,
         )
-        && !result.map_or_else(
-            || discovered.recovery_queries.has_data_query(peer),
-            |id| discovered.recovery_queries.owns_data_query(peer, &id),
-        )
+}
+
+/// Idle scheduling additionally waits for the admitted native DATA owner.
+pub(super) fn offline_suppressed(
+    swarm: &Swarm<Behaviour>,
+    epochs: &ConnectionEpochs,
+    forwarder: &Forwarder,
+    discovered: &DiscoveredPeerAddresses,
+    peer: Libp2pPeerId,
+    now: Instant,
+) -> bool {
+    !discovered.recovery_queries.has_data_query(peer)
+        && offline_dials_suppressed(swarm, epochs, forwarder, discovered, peer, now)
 }
 
 pub(super) fn data_suppressed(
@@ -266,15 +274,7 @@ pub(super) fn data_suppressed(
     peer: Libp2pPeerId,
 ) -> bool {
     forwarder.data_path_maintenance_is_paused(PeerId::from_libp2p(peer))
-        || offline_suppressed(
-            swarm,
-            epochs,
-            forwarder,
-            discovered,
-            peer,
-            None,
-            Instant::now(),
-        )
+        || offline_dials_suppressed(swarm, epochs, forwarder, discovered, peer, Instant::now())
 }
 
 pub(super) fn draining_data_peer(
@@ -357,7 +357,6 @@ pub(super) fn reconcile_with_work(mut context: Context<'_>, work: Option<&WorkCo
                         context.forwarder,
                         context.discovered,
                         peer,
-                        None,
                         context.now,
                     )
                 })

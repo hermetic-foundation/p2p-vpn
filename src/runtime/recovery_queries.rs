@@ -145,9 +145,8 @@ impl RecoveryQueries {
             .any(|owner| owner.peer == peer && owner.control.is_none())
     }
 
-    /// Capture exact DATA ownership before `finished` when handling a result.
-    /// Budget exhaustion alone must not discard a still-owned late result;
-    /// expired/cancelled IDs and scoped control IDs never match here.
+    /// Observe exact DATA ownership without treating scoped control as DATA.
+    #[cfg(test)]
     pub(super) fn owns_data_query(&self, peer: PeerId, query: &QueryId) -> bool {
         self.queries
             .get(query)
@@ -282,14 +281,38 @@ impl RecoveryQueries {
         underlay: u64,
         now: Instant,
     ) -> bool {
+        self.current_data_budget(peer, current_version, underlay)
+            .is_some_and(|budget| budget.exhausted(now))
+    }
+
+    /// Read-only expiry of the original cached-address recovery window, not
+    /// the lookup allowance. Admission and completion never move this deadline.
+    /// Stale or missing evidence cannot authorize suppression; callers must
+    /// still drain `has_data_query` and preserve still-owned result delivery.
+    pub(super) fn data_recovery_window_expired(
+        &self,
+        peer: PeerId,
+        current_version: Option<DemandVersion>,
+        underlay: u64,
+        now: Instant,
+    ) -> bool {
+        self.current_data_budget(peer, current_version, underlay)
+            .is_some_and(|budget| now >= budget.deadline)
+    }
+
+    fn current_data_budget(
+        &self,
+        peer: PeerId,
+        current_version: Option<DemandVersion>,
+        underlay: u64,
+    ) -> Option<&DataBudget> {
         self.peers
             .get(&peer)
             .and_then(|state| state.data_budget.as_ref())
-            .is_some_and(|budget| {
+            .filter(|budget| {
                 budget.current
                     && Some(budget.demand_version) == current_version
                     && budget.underlay == underlay
-                    && budget.exhausted(now)
             })
     }
 

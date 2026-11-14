@@ -68,9 +68,10 @@ Exhausting background retries is not dormancy and cannot retire a legacy path.
 | Scope | Experimental lifecycle builds only; no new configuration or wire format |
 | Owner | Extend the existing bounded `RecoveryQueries` per-member state |
 | Ticket | Current application-demand version plus underlay generation |
-| Startup allowance | One admitted ordinary data lookup per member in a ten-minute window |
+| Startup allowance | One admitted background data lookup per member in a ten-minute window; foreground and connected legacy recovery remain separate |
 | Charging | Charge a native query only after admission succeeds; failed admission consumes nothing |
-| Exhaustion | Sticky for the ticket after admission or deadline; no replenishment from maintenance |
+| Lookup exhaustion | Sticky for the ticket after admission or deadline; no replenishment from maintenance |
+| Cached-address expiry | Ordinary cached-address retries remain eligible until the original deadline, not merely query admission |
 | Admitted lookup | Let its native owner drain before offline pause; spending an allowance cannot immediately cancel the admitted attempt |
 | Native capacity | Preserve the existing shared one-query ceiling and query deadlines |
 | Retention | Keep authorized exhausted markers across idle pruning; revocation removes them |
@@ -84,7 +85,7 @@ Existing control failure cooldowns remain independent.
 
 - Require lifecycle activation and a currently verified incoming relay path.
 - Require no active pairing operation and no configured relay-server role.
-- For each offline member, require a matching exhausted ticket and no usable connection, supported packet path, queued packet, or in-flight application work.
+- For each offline member, require a matching expired recovery window and no usable connection, supported packet path, queued packet, or in-flight application work.
 - Connected legacy members retain existing compatibility behavior; lack of capability support is not proof of dormancy.
 - Negotiated maintenance pause remains the separate gate for live idle members.
 
@@ -130,9 +131,9 @@ cold-packet checks and fresh matched energy measurements after integration.
 
 ### Hint-Delivery Correction
 
-This correction is specified before implementation. C4 can discard lookup hints
-during a new LAN grace period, or suppress a cached hint whose immediate dial
-was refused because another address was already dialing.
+This correction was specified before implementation and is now implemented for
+experimental lifecycle builds. C4 could discard hints during a new LAN grace
+period, or strand a hint refused while another address was already dialing.
 
 | Boundary | Required Correction |
 | --- | --- |
@@ -149,27 +150,29 @@ The existing query owner and address cache retain all state. No additional retry
 registry, user option, wire message or timer is required. A blocked attempt can
 exhaust the deadline without reaching every address; this is an explicit bound.
 
-Regression evidence must cover retained WAN hints without early WAN dials, a
-stale pending dial followed by a usable cached hint, strict deadline expiry,
-late results, fresh demand and independent control-query ownership.
+The 22 runtime/native cases cover retained WAN hints without early WAN
+dials, cached replacement admission after a real stale loopback dial fails,
+deadline expiry, late results, fresh demand and independent control ownership.
+Replacement admission is not a remote handshake or handset reachability proof.
 
 ### Implementation Evidence
 
 | Boundary | Focused Evidence |
 | --- | --- |
-| Query owner | 30 cases pass, including 17 finite-budget additions |
-| Runtime / native relay | 17 quiet-discovery cases pass, including nine offline-budget scenarios |
+| Query owner | 35 cases pass, including five new cached-window cases; existing lookup-allowance semantics retained |
+| Runtime / native relay | 22 quiet-discovery cases pass, including five new hint-window regressions |
 | Budget ownership | Only successfully admitted new DATA IDs spend allowance; pending DATA drains before quiet |
 | Current authority | Missing evidence, anchor loss, pairing, serving, and underlay changes restore conservative scheduling |
 | Reactivation | Fresh queued demand has a DATA-only allowance without clearing control cooldowns or LAN grace |
-| Late results | Exact retained query can deliver; expired/other IDs cache hints without reopening background dials |
+| Late results | Native DATA drains independently; after the fixed window, even owned results only cache offline hints |
 | Foreground | Scoped control ownership and essential signed address publication remain available |
 | Resources | Reuse scheduling snapshot capacity; retained tickets stay in the existing bounded owner |
-| Full experimental workspace | 2,151 passed; zero failed; 50 existing or opt-in exclusions across 16 suites |
-| Default-build library | 1,748 passed; zero failed; nine existing exclusions |
-| Static checks | Rust formatting and Clippy correctness, suspicious-code, and performance groups pass; advisory warnings remain |
-| Android build | ARM64 Nix native build, APK signature/alignment checks, 158 Java tests and lint pass; seven lint warnings remain |
-| Operational acceptance | C4 startup preflight failed; autonomous first-packet recovery and energy evidence remain required |
+| C5 experimental workspace | 2,161 passed; zero failed; 50 existing or opt-in exclusions across 16 suites |
+| C5 default library | 1,758 passed; zero failed; nine existing exclusions |
+| Static checks | Rust formatting and Clippy correctness, suspicious-code and performance groups pass; advisory warnings remain |
+| Packaging mode | Nix contract confirms separate trial builds and empty default features; no runtime/energy acceptance implied |
+| Prior C4 Android build | ARM64 Nix native build, APK signature/alignment checks, 158 Java tests and lint pass; rebuild required for this correction |
+| Operational acceptance | C5 is not deployed or energy-measured; autonomous handset wake and fresh paired energy evidence remain required |
 
 The [C3 cellular preflight](android-lifecycle-membership-preflight-2026-11-14.json)
 predates this extension. It failed outgoing first-packet delivery and did not
@@ -183,6 +186,11 @@ The [C4 startup preflight](android-lifecycle-offline-budget-preflight-2026-11-14
 retains its failed short diagnostics and restoration evidence. An original-build
 control also missed its first inbound packet, then passed outbound relay traffic.
 Neither outcome identifies the candidate's failed packet leg or proves savings.
+
+The [same-build C4 repeat](android-lifecycle-offline-budget-repeat-2026-11-14.json)
+passed startup cold/steady checks both ways on its second attempt. A Linux host
+reboot interrupted idle observation. It contains no energy window and does not
+prove extended idle wake; incomplete restoration checks remain explicitly marked.
 
 ## Validation
 

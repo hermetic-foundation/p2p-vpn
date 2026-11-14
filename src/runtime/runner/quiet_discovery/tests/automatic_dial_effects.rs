@@ -92,10 +92,7 @@ async fn closest_results_cache_paused_peers_without_automatic_dial_effects() {
                 assert_eq!(pending_dials(&f), expected);
                 assert_eq!(epochs.connections.len(), expected as usize);
                 assert!(f.discovered.as_vec().contains(&(f.peer, address)));
-                assert_eq!(
-                    f.discovered.as_vec().contains(&(missing, other_address)),
-                    !lan_first
-                );
+                assert!(f.discovered.as_vec().contains(&(missing, other_address)));
                 assert!(
                     !f.node
                         .swarm

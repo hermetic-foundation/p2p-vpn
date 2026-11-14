@@ -1,5 +1,7 @@
 use super::*;
 
+mod hint_window;
+
 struct OfflineFixture {
     f: Fixture,
     _server: P2pNode,
@@ -15,7 +17,12 @@ struct OfflineFixture {
 
 impl OfflineFixture {
     async fn new(count: usize) -> Self {
+        Self::new_at(count, Instant::now()).await
+    }
+
+    async fn new_at(count: usize, now: Instant) -> Self {
         let mut f = Fixture::new();
+        f.now = now;
         let mut config = f.forwarder.config().clone();
         let mut members = vec![f.peer];
         let mut occupied = HashSet::from([
@@ -139,16 +146,31 @@ impl OfflineFixture {
         );
     }
 
-    fn suppressed(&self, peer: Libp2pPeerId, query: Option<kad::QueryId>) -> bool {
+    fn suppressed(&self, peer: Libp2pPeerId) -> bool {
         offline_suppressed(
             &self.f.node.swarm,
             &self.epochs,
             &self.f.forwarder,
             &self.f.discovered,
             peer,
-            query,
             self.f.now,
         )
+    }
+
+    fn dial_suppressed(&self, peer: Libp2pPeerId) -> bool {
+        offline_dials_suppressed(
+            &self.f.node.swarm,
+            &self.epochs,
+            &self.f.forwarder,
+            &self.f.discovered,
+            peer,
+            self.f.now,
+        )
+    }
+
+    fn expire_window(&mut self) {
+        self.f.now += Duration::from_secs(600);
+        self.reconcile();
     }
 
     fn public_quiet(&self) -> bool {
@@ -162,7 +184,7 @@ impl OfflineFixture {
                 self.f
                     .forwarder
                     .transport_peer_for_overlay(peer)
-                    .is_some_and(|peer| self.suppressed(peer, None))
+                    .is_some_and(|peer| self.suppressed(peer))
             },
         )
     }
@@ -267,6 +289,77 @@ impl OfflineFixture {
 }
 
 #[tokio::test]
+async fn hint_window_spent_lookup_keeps_cached_address_recovery_open_until_deadline() {
+    let mut t = OfflineFixture::new(1).await;
+    let peer = t.f.peer;
+    let id = t.spend(peer);
+    t.finish(id);
+    t.reconcile();
+    assert!(
+        t.f.discovered.recovery_queries.data_budget_exhausted(
+            peer,
+            t.f.forwarder
+                .application_demand(PeerId::from_libp2p(peer))
+                .unwrap()
+                .version,
+            t.epochs.current,
+            t.f.now,
+        )
+    );
+    assert!(
+        !t.suppressed(peer),
+        "lookup completion must not consume the cached-address window"
+    );
+    assert!(!t.public_quiet());
+    assert!(!t.f.node.swarm.behaviour().kad.background_jobs_paused());
+    t.f.now += Duration::from_secs(599);
+    t.reconcile();
+    assert!(!t.suppressed(peer));
+    assert!(
+        !t.f.discovered
+            .should_query_recovery_discovery_at(peer, t.f.now)
+    );
+    t.f.now += Duration::from_secs(1);
+    t.reconcile();
+    assert!(t.suppressed(peer));
+    assert!(t.public_quiet());
+    assert!(t.f.node.swarm.behaviour().kad.background_jobs_paused());
+}
+
+#[tokio::test]
+async fn hint_window_keeps_admitted_wan_hint_during_lan_grace_without_dialing() {
+    let mut t = OfflineFixture::new(1).await;
+    let peer = t.f.peer;
+    let id = t.spend(peer);
+    assert!(t.f.discovered.start_lan_first_recovery(peer, t.f.now));
+    let address: Multiaddr = "/ip4/11.252.0.2/tcp/4001".parse().unwrap();
+    t.deliver(
+        id,
+        kad::QueryResult::GetClosestPeers(Ok(kad::GetClosestPeersOk {
+            key: peer.to_bytes(),
+            peers: vec![kad::PeerInfo {
+                peer_id: peer,
+                addrs: vec![address.clone()],
+            }],
+        })),
+    );
+    assert!(
+        t.f.discovered.as_vec().contains(&(peer, address)),
+        "an admitted lookup's WAN hint must survive LAN grace"
+    );
+    assert!(t.f.discovered.recovery_dial_attempts.is_empty());
+    assert_eq!(
+        t.f.node
+            .swarm
+            .network_info()
+            .connection_counters()
+            .num_pending_outgoing(),
+        0
+    );
+    assert!(!t.f.discovered.recovery_queries.has_pending());
+}
+
+#[tokio::test]
 async fn four_idle_two_offline_settle_both_gates_without_negotiating_offline_dormancy() {
     let mut t = OfflineFixture::new(6).await;
     for peer in &t.members[..4] {
@@ -310,7 +403,7 @@ async fn four_idle_two_offline_settle_both_gates_without_negotiating_offline_dor
         )
     );
     for peer in &t.members[4..] {
-        assert!(t.suppressed(*peer, None));
+        assert!(t.suppressed(*peer));
         assert!(
             !t.f.forwarder
                 .data_path_is_dormant(PeerId::from_libp2p(*peer))
@@ -354,7 +447,7 @@ async fn all_six_receive_one_native_attempt_and_admitted_data_drains_before_quie
                 .unwrap()
                 .id();
         t.reconcile();
-        assert!(!t.suppressed(peer, None));
+        assert!(!t.suppressed(peer));
         assert!(!t.public_quiet());
         assert!(!t.f.node.swarm.behaviour().kad.background_jobs_paused());
         t.redial(true);
@@ -370,6 +463,11 @@ async fn all_six_receive_one_native_attempt_and_admitted_data_drains_before_quie
         t.reconcile();
     }
     assert_eq!(seen.len(), 6);
+    assert!(
+        !t.public_quiet(),
+        "cached-address recovery keeps its original window"
+    );
+    t.expire_window();
     assert!(t.public_quiet());
     assert!(t.f.node.swarm.behaviour().kad.background_jobs_paused());
     for elapsed in [600, 7200, 86400] {
@@ -377,7 +475,7 @@ async fn all_six_receive_one_native_attempt_and_admitted_data_drains_before_quie
         t.reconcile();
         t.redial(true);
         assert!(!t.f.discovered.recovery_queries.has_pending());
-        assert!(t.members.iter().all(|peer| t.suppressed(*peer, None)));
+        assert!(t.members.iter().all(|peer| t.suppressed(*peer)));
     }
 }
 
@@ -387,13 +485,14 @@ async fn payload_and_underlay_invalidate_old_snapshot_and_preserve_lan_first() {
     let peer = t.f.peer;
     let id = t.spend(peer);
     t.finish(id);
-    assert!(t.suppressed(peer, None));
+    t.expire_window();
+    assert!(t.suppressed(peer));
     assert!(
         t.f.forwarder
             .record_application_demand(PeerId::from_libp2p(peer), t.f.now)
     );
     assert!(
-        !t.suppressed(peer, None),
+        !t.suppressed(peer),
         "live demand is checked without refreshing the snapshot"
     );
     t.reconcile();
@@ -411,18 +510,16 @@ async fn payload_and_underlay_invalidate_old_snapshot_and_preserve_lan_first() {
     t.f.now = after_grace;
     let id = t.spend(peer);
     t.finish(id);
-    assert!(t.suppressed(peer, None));
+    t.expire_window();
+    assert!(t.suppressed(peer));
     t.epochs.advance();
-    assert!(!t.suppressed(peer, None));
+    assert!(!t.suppressed(peer));
     t.reconcile();
     assert!(!t.f.node.swarm.behaviour().kad.background_jobs_paused());
     assert!(
-        !t.f.discovered
-            .should_query_recovery_discovery_at(peer, t.f.now)
-    );
-    assert!(
         t.f.discovered
-            .should_query_recovery_discovery_at(peer, t.f.now + Duration::from_secs(60))
+            .should_query_recovery_discovery_at(peer, t.f.now),
+        "underlay change must not recreate a cooldown that elapsed during the old window"
     );
 }
 
@@ -441,6 +538,20 @@ async fn spent_budget_never_suppresses_ordinary_admission_without_all_offline_ga
         let peer = t.f.peer;
         let id = t.spend(peer);
         t.finish(id);
+        t.expire_window();
+        // A foreground failure can establish its own cooldown after the
+        // background window ends; disabling a gate must not erase it.
+        let control = t.f.node.swarm.behaviour_mut().kad.get_closest_peers(peer);
+        t.f.discovered.recovery_queries.record_control(
+            control,
+            crate::runtime::recovery_queries::ControlQueryScope {
+                peer,
+                generation: 1,
+                deadline: t.f.now + Duration::from_secs(10),
+            },
+            t.f.now,
+        );
+        t.finish(control);
         let after_cooldown = t.f.now + Duration::from_secs(61);
         assert!(
             !t.f.discovered
@@ -510,7 +621,7 @@ async fn spent_budget_never_suppresses_ordinary_admission_without_all_offline_ga
             }
             _ => unreachable!(),
         }
-        assert!(!t.suppressed(peer, None), "{scenario}");
+        assert!(!t.suppressed(peer), "{scenario}");
         assert!(
             !t.f.discovered
                 .should_query_recovery_discovery_at(peer, t.f.now),
@@ -541,21 +652,22 @@ async fn missing_ticket_work_supported_path_and_connected_legacy_are_conservativ
     let mut t = OfflineFixture::new(1).await;
     let peer = t.f.peer;
     let overlay = PeerId::from_libp2p(peer);
-    assert!(!t.suppressed(peer, None));
+    assert!(!t.suppressed(peer));
     let id = t.spend(peer);
     t.finish(id);
-    assert!(t.suppressed(peer, None));
+    t.expire_window();
+    assert!(t.suppressed(peer));
     let version = t.f.forwarder.application_demand(overlay).unwrap().version;
     t.f.discovered
         .recovery_queries
         .reconcile_data_budget(peer, None, t.epochs.current, t.f.now);
-    assert!(!t.suppressed(peer, None));
+    assert!(!t.suppressed(peer));
     t.reconcile();
-    assert!(t.suppressed(peer, None));
+    assert!(t.suppressed(peer));
     let packet = crate::queue::Packet::new(overlay, 1, vec![1]);
     t.queues.enqueue(packet).unwrap();
     t.reconcile();
-    assert!(!t.suppressed(peer, None));
+    assert!(!t.suppressed(peer));
     assert!(!t.public_quiet());
     assert!(!t.f.node.swarm.behaviour().kad.background_jobs_paused());
     t.queues = PeerQueues::new(4, 4096);
@@ -565,13 +677,13 @@ async fn missing_ticket_work_supported_path_and_connected_legacy_are_conservativ
         .or_default()
         .record(0, true);
     t.reconcile();
-    assert!(!t.suppressed(peer, None));
+    assert!(!t.suppressed(peer));
     assert!(!t.f.node.swarm.behaviour().kad.background_jobs_paused());
     t.in_flight = PacketInFlight::new(4);
     t.paths
         .record_established(overlay, PathKind::DirectTcpStream);
     t.reconcile();
-    assert!(!t.suppressed(peer, None));
+    assert!(!t.suppressed(peer));
     assert!(!t.f.forwarder.data_path_is_dormant(overlay));
     assert!(!t.f.node.swarm.behaviour().kad.background_jobs_paused());
     assert_eq!(
@@ -580,9 +692,9 @@ async fn missing_ticket_work_supported_path_and_connected_legacy_are_conservativ
     );
     t.paths = PathSet::new();
     t.reconcile();
-    assert!(t.suppressed(peer, None));
+    assert!(t.suppressed(peer));
     t.f.discovered.recovery_queries.retain_peers(|_| false);
-    assert!(!t.suppressed(peer, None));
+    assert!(!t.suppressed(peer));
 
     // A connected legacy member remains live without a packet-path observation.
     let connected = t._server.local_peer_id;
@@ -600,7 +712,7 @@ async fn missing_ticket_work_supported_path_and_connected_legacy_are_conservativ
     let id = t.spend(connected);
     t.finish(id);
     assert!(t.f.node.swarm.is_connected(&connected));
-    assert!(!t.suppressed(connected, None));
+    assert!(!t.suppressed(connected));
     assert!(
         !t.f.forwarder
             .data_path_is_dormant(PeerId::from_libp2p(connected))
@@ -612,23 +724,24 @@ async fn stale_derived_gate_cannot_survive_listener_owner_loss_pairing_or_servin
     let mut t = OfflineFixture::new(1).await;
     let id = t.spend(t.f.peer);
     t.finish(id);
+    t.expire_window();
     let event = SwarmEvent::OutgoingConnectionError {
         peer_id: None,
         connection_id: ConnectionId::new_unchecked(999),
         error: DialError::NoAddresses,
     };
-    assert!(t.suppressed(t.f.peer, None));
+    assert!(t.suppressed(t.f.peer));
     let listeners = t.f.node.configured_relay_reservation_listeners.clone();
     t.f.node.configured_relay_reservation_listeners.clear();
     t.revalidate(&event);
-    assert!(!t.suppressed(t.f.peer, None));
+    assert!(!t.suppressed(t.f.peer));
     t.f.node.configured_relay_reservation_listeners = listeners;
     t.reconcile();
-    assert!(t.suppressed(t.f.peer, None));
+    assert!(t.suppressed(t.f.peer));
     let active = t.f.local.clone();
     t.f.local = ControlCapabilities::local("lab", None, 1280);
     t.revalidate(&event);
-    assert!(!t.suppressed(t.f.peer, None));
+    assert!(!t.suppressed(t.f.peer));
     t.f.local = active;
     t.reconcile();
     let invitation =
@@ -636,7 +749,7 @@ async fn stale_derived_gate_cannot_survive_listener_owner_loss_pairing_or_servin
             .open("lab", 60, current_unix_seconds_lossy(), t.f.now)
             .unwrap();
     t.revalidate(&event);
-    assert!(!t.suppressed(t.f.peer, None));
+    assert!(!t.suppressed(t.f.peer));
     t.f.pairing = CodePairingSessions::new();
     t.reconcile();
     t.f.pairing
@@ -651,12 +764,12 @@ async fn stale_derived_gate_cannot_survive_listener_owner_loss_pairing_or_servin
         )
         .unwrap();
     t.revalidate(&event);
-    assert!(!t.suppressed(t.f.peer, None));
+    assert!(!t.suppressed(t.f.peer));
     t.f.pairing = CodePairingSessions::new();
     t.reconcile();
     t.f.node.startup.relay_server_enabled = true;
     t.revalidate(&event);
-    assert!(!t.suppressed(t.f.peer, None));
+    assert!(!t.suppressed(t.f.peer));
     t.f.node.startup.relay_server_enabled = false;
     t.reconcile();
     let listener =
@@ -670,23 +783,29 @@ async fn stale_derived_gate_cannot_survive_listener_owner_loss_pairing_or_servin
         listener_id: listener,
         address,
     });
-    assert!(!t.suppressed(t.f.peer, None));
+    assert!(!t.suppressed(t.f.peer));
     t.reconcile();
     let (_, anchor) = t.f.discovered.offline.anchors[0];
     t.epochs.mark_retiring(anchor);
-    assert!(!t.suppressed(t.f.peer, None));
+    assert!(!t.suppressed(t.f.peer));
     t.reconcile();
     assert!(!t.f.node.swarm.behaviour().kad.background_jobs_paused());
 }
 
 #[tokio::test]
 async fn late_offline_provider_and_configured_cached_redials_stay_suppressed_with_an_active_peer() {
-    let mut t = OfflineFixture::new(2).await;
+    let mut t = OfflineFixture::new_at(2, Instant::now() - Duration::from_secs(600)).await;
     let peer = t.f.peer;
     let id = t.spend(peer);
     t.finish(id);
     let other = t.members[1];
     let pending = t.spend(other);
+    t.expire_window();
+    assert!(
+        t.f.forwarder
+            .record_application_demand(PeerId::from_libp2p(other), t.f.now)
+    );
+    t.reconcile();
     let address: Multiaddr = "/ip6/2001:4860::2/tcp/4001".parse().unwrap();
     t.f.node
         .swarm
@@ -710,7 +829,7 @@ async fn late_offline_provider_and_configured_cached_redials_stay_suppressed_wit
             .recovery_queries
             .owns_data_query(other, &pending)
     );
-    assert!(t.suppressed(peer, None));
+    assert!(t.suppressed(peer));
     assert_eq!(
         t.f.node
             .swarm
@@ -743,7 +862,7 @@ async fn late_offline_provider_and_configured_cached_redials_stay_suppressed_wit
 }
 
 #[tokio::test]
-async fn exact_admitted_result_dials_but_late_results_only_cache_even_with_another_active_member() {
+async fn owned_results_after_dial_deadline_only_cache_and_fresh_demand_reopens_window() {
     for timed_out in [false, true] {
         let mut t = OfflineFixture::new(2).await;
         let peer = t.f.peer;
@@ -766,23 +885,17 @@ async fn exact_admitted_result_dials_but_late_results_only_cache_even_with_anoth
                 }],
             })
         });
-        assert!(!t.suppressed(peer, Some(id)));
-        t.finish(id);
-        assert!(t.suppressed(peer, Some(id)));
-        handle_kademlia_closest_peer_result_for_query(
-            &mut t.f.node.swarm,
-            &mut t.epochs,
-            &t.f.forwarder,
-            &mut InfrastructurePeers::default(),
-            &mut AutoRelayState::default(),
-            &mut t.f.discovered,
-            &t.paths,
-            &RuntimeMetrics::default(),
-            &t.f.node.discovery,
-            false,
-            &result,
-            Some(id),
+        t.expire_window();
+        assert!(
+            t.dial_suppressed(peer),
+            "owned lookup cannot extend the original dial deadline"
         );
+        assert!(
+            !t.suppressed(peer),
+            "native DATA ownership still drains before quiet scheduling"
+        );
+        t.deliver(id, result.clone());
+        assert!(t.suppressed(peer));
         assert!(t.f.discovered.as_vec().contains(&(peer, address.clone())));
         assert!(t.f.discovered.recovery_dial_attempts.is_empty());
         assert_eq!(
@@ -799,11 +912,7 @@ async fn exact_admitted_result_dials_but_late_results_only_cache_even_with_anoth
         );
         t.reconcile();
         let fresh = t.spend(peer);
-        assert!(
-            t.suppressed(peer, Some(id)),
-            "old ID cannot borrow a newer pending lookup"
-        );
-        assert!(!t.suppressed(peer, Some(fresh)));
+        assert!(!t.dial_suppressed(peer));
         t.deliver(fresh, result);
         assert!(
             !t.f.discovered
@@ -827,7 +936,7 @@ async fn offline_pause_preserves_scoped_control_and_essential_signed_address_pub
     let peer = t.f.peer;
     let data = t.spend(peer);
     t.finish(data);
-    t.reconcile();
+    t.expire_window();
     assert!(t.f.node.swarm.behaviour().kad.background_jobs_paused());
     let control = t.f.node.swarm.behaviour_mut().kad.get_closest_peers(peer);
     let scope = crate::runtime::recovery_queries::ControlQueryScope {
