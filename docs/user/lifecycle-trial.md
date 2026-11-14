@@ -56,15 +56,17 @@ Updating only the phone does not enable bilateral dormancy with ordinary builds.
 On NixOS, inspect each instance after the service has restarted:
 
 ```sh
+sudo p2p-vpn daemon-capabilities \
+  --socket /run/p2p-vpn-personal-devices/control.sock
 sudo p2p-vpn daemon-state \
   --socket /run/p2p-vpn-personal-devices/control.sock
 ```
 
-| Field | Meaning |
-| --- | --- |
-| `local capability supports demand lifecycle: true` | The running daemon advertises the experimental protocol |
-| `peer lifecycle state` | Reports remote support, maintenance pause, and committed quiet state |
-| `quiet true` | Negotiated state, not proof of battery savings or end-to-end reachability |
+| Command | Field | Meaning |
+| --- | --- | --- |
+| `daemon-capabilities` | `local capability supports demand lifecycle: true` | The running daemon advertises the experimental protocol |
+| `daemon-state` | `peer lifecycle state` | Remote support, maintenance pause, and committed quiet state |
+| `daemon-state` | `quiet true` | Negotiated state, not proof of battery savings or end-to-end reachability |
 
 Verify incoming and outgoing overlay access after leaving the phone unused.
 Keep normal battery history for an all-day cellular evaluation; do not reset it.
