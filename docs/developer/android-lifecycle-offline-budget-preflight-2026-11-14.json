@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "kind": "android_lifecycle_offline_budget_preflight",
+  "candidate": "C4",
+  "date_utc": "2026-11-14",
+  "runtime_revision": "2e51fba6fd660c3486054ac5629aff8aa6765102",
+  "apk_sha256": "6a1b19ae9d9ae7aefcd46fb12a88fb131c68f77e6472aa347dc3d3476efcbea9",
+  "linux_sha256": "0ea2ec6b6f3b1246bcf52fbf3cc52d975c29300333fc3e78afe6585a6b96dee4",
+  "production_lifecycle_default_enabled": false,
+  "goal_complete": false,
+  "candidate_accepted": false,
+  "functional_passed": false,
+  "energy_measured": false,
+  "battery_improvement_ratio": null,
+  "topology": {
+    "updated_linux_counterparts": 4,
+    "updated_android_endpoints": 1,
+    "authorized_phone_members": 6,
+    "offline_authorized_members_preserved": 2
+  },
+  "startup": {
+    "outcome": "initial_connectivity_failed",
+    "warmup_attempts": 8,
+    "probe": "Legacy three-packet diagnostic with a three-second per-packet wait, not the 45-second cold-wake check.",
+    "inbound_packets_sent": 24,
+    "inbound_packets_received": 0,
+    "outbound_packets_sent": 24,
+    "outbound_packets_received": 0,
+    "independent_idle_phases_started": 0,
+    "cellular_boundary_evidence_retained": false,
+    "failure_leg_identified": false
+  },
+  "observations": [
+    "The local Linux endpoint lost the phone's LAN connection after Wi-Fi was disabled and did not negotiate its lifecycle afterward.",
+    "Subsequent local relay attempts reported missing destination reservations; these errors do not prove why no usable path formed.",
+    "Three other Linux endpoints recorded negotiated lifecycle preparation toward the phone.",
+    "No energy window started; this attempt cannot establish battery savings."
+  ],
+  "reference_connectivity_control": {
+    "original_apk_and_linux_services": true,
+    "energy_measurement": false,
+    "wifi_to_cellular": true,
+    "inbound_first_sent": 1,
+    "inbound_first_received": 0,
+    "inbound_observation_seconds": 45,
+    "subsequent_outbound_first_sent": 1,
+    "subsequent_outbound_first_received": 1,
+    "outbound_elapsed_seconds": 0.8679262599907815,
+    "outbound_steady_sent": 3,
+    "outbound_steady_received": 3,
+    "phone_underlay_after": "validated_cellular",
+    "phone_overlay_paths_after": "two_relays",
+    "wifi_restored": true,
+    "limitation": "The incoming startup miss also occurs without C4, but this does not explain C4's sustained bidirectional failure. Sequential directions are not independent cold-path evidence."
+  },
+  "restoration": {
+    "original_apk_hash_verified": true,
+    "encrypted_profile_unchanged": true,
+    "membership_unchanged": true,
+    "wifi_original_setting_requested": true,
+    "battery_reporting_hardware": true,
+    "all_four_linux_original_executables_and_configs_verified": true,
+    "management_network_service_pids_unchanged": true,
+    "trial_overrides_and_remote_staging_removed": true
+  },
+  "private_evidence_sha256": {
+    "candidate_trial": "959e24f66b0cb532985cb6983bdf43452a9cbbcd5a38e34a8c28e240d3e022ff",
+    "linux_restoration": "7dd3020c2f708231c5978c3111f0d4daf920a7a53f5c39d152cb0cecbede34f8",
+    "reference_connectivity": "68591f7be9f36787423a0d883401d5e9fc846fed7a5e27f0156dea3bd58db8fd"
+  },
+  "next": [
+    "Repeat the same immutable candidate with cold-packet startup observation and retained phone/Linux snapshots.",
+    "Reproduce source-reviewed LAN-grace hint loss and pending-dial hint starvation before selecting a fix.",
+    "Retain all failures and require fresh matched energy measurements; reduced maintenance counters are not battery savings."
+  ]
+}

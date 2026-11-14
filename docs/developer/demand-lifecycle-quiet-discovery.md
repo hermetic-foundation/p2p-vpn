@@ -144,7 +144,7 @@ cold-packet checks and fresh matched energy measurements after integration.
 | Default-build library | 1,748 passed; zero failed; nine existing exclusions |
 | Static checks | Rust formatting and Clippy correctness, suspicious-code, and performance groups pass; advisory warnings remain |
 | Android build | ARM64 Nix native build, APK signature/alignment checks, 158 Java tests and lint pass; seven lint warnings remain |
-| Operational acceptance | New candidate is not deployed; autonomous first-packet recovery and energy evidence remain required |
+| Operational acceptance | C4 startup preflight failed; autonomous first-packet recovery and energy evidence remain required |
 
 The [C3 cellular preflight](android-lifecycle-membership-preflight-2026-11-14.json)
 predates this extension. It failed outgoing first-packet delivery and did not
@@ -153,6 +153,11 @@ reach committed quiet toward the phone; it is not acceptance evidence here.
 The [C4 build record](android-lifecycle-offline-budget-build-2026-11-14.json)
 retains source/artifact hashes and validation results. Building a candidate
 does not prove device recovery or battery savings.
+
+The [C4 startup preflight](android-lifecycle-offline-budget-preflight-2026-11-14.json)
+retains its failed short diagnostics and restoration evidence. An original-build
+control also missed its first inbound packet, then passed outbound relay traffic.
+Neither outcome identifies the candidate's failed packet leg or proves savings.
 
 ## Validation
 
