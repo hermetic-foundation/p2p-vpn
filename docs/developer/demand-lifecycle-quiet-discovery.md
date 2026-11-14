@@ -171,7 +171,7 @@ Replacement admission is not a remote handshake or handset reachability proof.
 | C5 default library | 1,758 passed; zero failed; nine existing exclusions |
 | Static checks | Rust formatting and Clippy correctness, suspicious-code and performance groups pass; advisory warnings remain |
 | Packaging mode | Nix contract confirms separate trial builds and empty default features; no runtime/energy acceptance implied |
-| Prior C4 Android build | ARM64 Nix native build, APK signature/alignment checks, 158 Java tests and lint pass; rebuild required for this correction |
+| C5 Android build | ARM64 Nix native build, APK signature/alignment checks, 158 Java tests and lint pass; seven lint warnings remain |
 | Operational acceptance | C5 is not deployed or energy-measured; autonomous handset wake and fresh paired energy evidence remain required |
 
 The [C3 cellular preflight](android-lifecycle-membership-preflight-2026-11-14.json)
@@ -191,6 +191,10 @@ The [same-build C4 repeat](android-lifecycle-offline-budget-repeat-2026-11-14.js
 passed startup cold/steady checks both ways on its second attempt. A Linux host
 reboot interrupted idle observation. It contains no energy window and does not
 prove extended idle wake; incomplete restoration checks remain explicitly marked.
+
+The [C5 hint-window build](android-lifecycle-hint-window-build-2026-11-14.json)
+retains corrected source/artifact hashes and verification results. It was sealed
+without deployment or energy measurement; no new battery-improvement claim is made.
 
 ## Validation
 
