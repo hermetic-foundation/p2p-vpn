@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "kind": "android_lifecycle_offline_budget_repeat",
+  "candidate": "C4",
+  "date_utc": "2026-11-14",
+  "runtime_revision": "2e51fba6fd660c3486054ac5629aff8aa6765102",
+  "apk_sha256": "6a1b19ae9d9ae7aefcd46fb12a88fb131c68f77e6472aa347dc3d3476efcbea9",
+  "linux_sha256": "0ea2ec6b6f3b1246bcf52fbf3cc52d975c29300333fc3e78afe6585a6b96dee4",
+  "same_artifacts_as_first_preflight": true,
+  "goal_complete": false,
+  "candidate_accepted": false,
+  "energy_measured": false,
+  "battery_improvement_ratio": null,
+  "topology": {"linux_counterparts": 4, "android_endpoints": 1, "authorized_phone_members": 6, "offline_members_preserved": 2},
+  "startup": {
+    "first_packet_reply_wait_seconds": 45,
+    "first_attempt": {"inbound_first_received": 0, "outbound_first_received": 1, "outbound_steady_received": 3},
+    "second_attempt": {
+      "inbound_first_sent": 1,
+      "inbound_first_received": 1,
+      "inbound_elapsed_seconds": 1.0197663779836148,
+      "inbound_steady_sent": 3,
+      "inbound_steady_received": 3,
+      "outbound_first_sent": 1,
+      "outbound_first_received": 1,
+      "outbound_elapsed_seconds": 1.3704907018691301,
+      "outbound_steady_sent": 3,
+      "outbound_steady_received": 3
+    },
+    "cellular_validated_in_phone_snapshot": true,
+    "phone_overlay_paths_in_first_snapshot": "four_circuit_relays",
+    "limitation": "Sequential startup checks are not independent cold-direction or extended-dormancy proof."
+  },
+  "idle_observation": {
+    "planned_seconds_each_direction": 300,
+    "complete_phases_retained": 0,
+    "interrupted": true,
+    "error": "midi-desktop-1 SSH connection timed out during boundary observation",
+    "followup": "Host reboot observed; its transient runtime manager was gone and normal declared service was active.",
+    "reboot_cause_known": false,
+    "functional_acceptance_proven": false
+  },
+  "restoration": {
+    "original_phone_apk_hash_verified": true,
+    "encrypted_profile_unchanged": true,
+    "membership_unchanged": true,
+    "wifi_original_setting_verified_afterward": true,
+    "battery_reporting_hardware": true,
+    "other_three_linux_original_services_and_cleanup_verified": true,
+    "harness_all_linux_restoration_verified": false,
+    "rebooted_host_followup": {
+      "uptime_observed_seconds": 154.48,
+      "normal_declared_service_active": true,
+      "trial_dropins_absent": true,
+      "trial_runtime_directory_absent": true,
+      "trial_remote_staging_absent": true,
+      "exact_pre_reboot_config_and_management_pid_verification_possible": false
+    }
+  },
+  "private_evidence_sha256": {
+    "trial": "6a664738aba9de9cbbf2cb5c98923f21fd9d6bf7858ec78ade86cdab71f88a0d",
+    "second_startup_snapshot": "7a8f15682375540358d6ff916c3020e354cd84023be03a8a4c137a778639f604"
+  },
+  "limits": [
+    "Do not replace the first failed preflight with this partial repeat.",
+    "Do not treat a management timeout as a proven VPN packet-path failure.",
+    "Do not claim extended idle reachability, battery savings or goal completion from this run."
+  ]
+}
