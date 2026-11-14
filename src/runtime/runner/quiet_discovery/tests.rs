@@ -2,6 +2,7 @@ use super::*;
 use crate::runtime::runner::tests::{config_with_peer, membership_sync_test_node};
 
 mod automatic_dial_effects;
+mod offline_budget;
 
 struct Fixture {
     node: P2pNode,
@@ -69,7 +70,14 @@ impl Fixture {
     }
 
     fn eligible(&self) -> bool {
-        eligible(&self.forwarder, &self.local, true, &self.pairing, false)
+        eligible(
+            &self.forwarder,
+            &self.local,
+            true,
+            &self.pairing,
+            false,
+            |_| false,
+        )
     }
 
     fn reconcile(&mut self) {
@@ -104,10 +112,25 @@ async fn quiet_discovery_requires_activation_current_pause_incoming_and_nonservi
         &ControlCapabilities::local("lab", None, 1280),
         true,
         &f.pairing,
-        false
+        false,
+        |_| false
     ));
-    assert!(!eligible(&f.forwarder, &f.local, false, &f.pairing, false));
-    assert!(!eligible(&f.forwarder, &f.local, true, &f.pairing, true));
+    assert!(!eligible(
+        &f.forwarder,
+        &f.local,
+        false,
+        &f.pairing,
+        false,
+        |_| false
+    ));
+    assert!(!eligible(
+        &f.forwarder,
+        &f.local,
+        true,
+        &f.pairing,
+        true,
+        |_| false
+    ));
     assert!(
         f.forwarder
             .record_application_demand(PeerId::from_libp2p(f.peer), f.now)

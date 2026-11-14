@@ -2098,18 +2098,28 @@ where
             );
             packet_authorization_revision = Some(forwarder.authorization_revision());
         }
-        quiet_discovery::reconcile(quiet_discovery::Context {
-            node: &mut node,
-            forwarder: &forwarder,
-            local: &local_capabilities,
-            relay: &auto_relay,
-            readiness: &relay_readiness,
-            epochs: &connection_epochs,
-            connections: &active_connections,
-            pairing: &code_pairing_sessions,
-            discovered: &mut queue_runtime.discovered_peer_addresses,
-            now: Instant::now(),
-        });
+        quiet_discovery::reconcile_with_work(
+            quiet_discovery::Context {
+                node: &mut node,
+                forwarder: &forwarder,
+                local: &local_capabilities,
+                relay: &auto_relay,
+                readiness: &relay_readiness,
+                epochs: &connection_epochs,
+                connections: &active_connections,
+                pairing: &code_pairing_sessions,
+                discovered: &mut queue_runtime.discovered_peer_addresses,
+                now: Instant::now(),
+            },
+            Some(&quiet_discovery::WorkContext {
+                paths: &paths,
+                peers: &peer_capabilities,
+                udp: Some(&packet_plane),
+                quic: packet_plane_quic.as_ref(),
+                queues: &queues,
+                in_flight: &queue_runtime.packet_in_flight,
+            }),
+        );
         let runtime_data_available = tun_reader_open
             || packet_plane.can_receive()
             || packet_plane_quic
@@ -2318,6 +2328,10 @@ where
                     &peer_capabilities,
                     Some(&packet_plane),
                     packet_plane_quic.as_ref(),
+                    |peer| forwarder.transport_peer_for_overlay(peer).is_some_and(|peer| {
+                        quiet_discovery::offline_suppressed(&node.swarm, &connection_epochs, &forwarder,
+                            &queue_runtime.discovered_peer_addresses, peer, None, Instant::now())
+                    }),
                 );
                 attempt_auto_relay_reservations(
                     &mut node.swarm, &mut auto_relay, &metrics,
@@ -2385,6 +2399,10 @@ where
                     &peer_capabilities,
                     Some(&packet_plane),
                     packet_plane_quic.as_ref(),
+                    |peer| forwarder.transport_peer_for_overlay(peer).is_some_and(|peer| {
+                        quiet_discovery::offline_suppressed(&node.swarm, &connection_epochs, &forwarder,
+                            &queue_runtime.discovered_peer_addresses, peer, None, Instant::now())
+                    }),
                 );
                 let now = Instant::now();
                 drive_kademlia_address_publication(
@@ -6577,6 +6595,13 @@ fn handle_runtime_network_change(
     }
 
     request_kademlia_address_publication(context.kademlia_maintenance, &context.node.discovery);
+    quiet_discovery::reconcile_data_budgets(
+        context.forwarder,
+        context.local_capabilities,
+        context.connection_epochs,
+        context.discovered_peer_addresses,
+        Instant::now(),
+    );
     handle_redial_tick(
         context.node,
         context.connection_epochs,
@@ -8040,8 +8065,28 @@ fn handle_redial_tick(
         configured_relay_reservation_retries,
     );
     if public_discovery_quiet {
+        let activated = discovered_peer_addresses.offline.activated;
+        let draining = quiet_discovery::draining_data_peer(
+            forwarder,
+            connection_epochs,
+            discovered_peer_addresses,
+            Instant::now(),
+        );
+        // A global scheduling pause cannot retire a newly admitted DATA owner.
         let cancelled = discovered_peer_addresses
-            .cancel_recovery_discovery_queries(&mut node.swarm.behaviour_mut().kad, Instant::now());
+            .recovery_queries
+            .cancel_data_queries(
+                |peer| {
+                    activated
+                        && forwarder.is_configured_transport_peer(peer)
+                        && (draining == Some(peer)
+                            || !forwarder
+                                .data_path_maintenance_is_paused(PeerId::from_libp2p(peer)))
+                },
+                Instant::now(),
+            );
+        let cancelled =
+            finish_targeted_recovery_queries(&mut node.swarm.behaviour_mut().kad, cancelled);
         if cancelled > 0 {
             log_runtime_event(
                 LogLevel::Info,
@@ -8050,13 +8095,23 @@ fn handle_redial_tick(
             );
         }
     } else if should_query_configured_peer_recovery_discovery(&node.discovery) {
+        let configured_peers = forwarder
+            .configured_transport_peers()
+            .filter(|peer| {
+                !quiet_discovery::data_suppressed(
+                    &node.swarm,
+                    connection_epochs,
+                    forwarder,
+                    discovered_peer_addresses,
+                    *peer,
+                )
+            })
+            .collect::<Vec<_>>();
         query_configured_peer_recovery_discovery(
             &mut node.swarm,
             &node.network_name,
             node.membership_tag.as_deref(),
-            forwarder.configured_transport_peers().filter(|peer| {
-                !forwarder.data_path_maintenance_is_paused(PeerId::from_libp2p(*peer))
-            }),
+            configured_peers,
             paths,
             kademlia_maintenance,
             discovered_peer_addresses,
@@ -9330,11 +9385,16 @@ fn redial_known_addresses(
     }
 
     for (peer, addresses) in group_peer_dial_targets(targets.addresses) {
-        if forwarder.data_path_is_dormant(PeerId::from_libp2p(peer))
-            && !bootstrap_addresses
-                .iter()
-                .chain(relay_addresses)
-                .any(|(infrastructure, _)| *infrastructure == peer)
+        if quiet_discovery::data_suppressed(
+            swarm,
+            connection_epochs,
+            forwarder,
+            discovered_address_state,
+            peer,
+        ) && !bootstrap_addresses
+            .iter()
+            .chain(relay_addresses)
+            .any(|(infrastructure, _)| *infrastructure == peer)
         {
             continue;
         }
@@ -10723,6 +10783,15 @@ fn dial_relay_ready_configured_peers(
         |peer| redial_connection_state(paths, *peer, swarm.is_connected(peer)),
     );
     for (peer, addresses) in group_peer_dial_targets(targets) {
+        if quiet_discovery::data_suppressed(
+            swarm,
+            connection_epochs,
+            forwarder,
+            discovered_peer_addresses,
+            peer,
+        ) {
+            continue;
+        }
         let now = Instant::now();
         let lan_first =
             lan_first_for_all || discovered_peer_addresses.lan_first_recovery_active(peer, now);
@@ -11353,6 +11422,7 @@ struct DiscoveredPeerAddresses {
     recovery_dial_attempts: HashMap<(Libp2pPeerId, RecoveryDialTarget), RecoveryDialAttempt>,
     last_recovery_dial_prune: Option<Instant>,
     recovery_queries: RecoveryQueries,
+    offline: quiet_discovery::OfflineGate,
     lan_first_recovery_until: HashMap<Libp2pPeerId, Instant>,
 }
 
@@ -11684,7 +11754,17 @@ impl DiscoveredPeerAddresses {
     }
 
     fn should_query_recovery_discovery_at(&mut self, peer: Libp2pPeerId, now: Instant) -> bool {
-        !self.lan_first_recovery_active(peer, now) && self.recovery_queries.should_query(peer, now)
+        !self.lan_first_recovery_active(peer, now)
+            && if self.offline.budget_enabled() {
+                // Fresh DATA may bypass a control cooldown, but spent allowance
+                // cannot suppress recovery while application work or a live path
+                // makes the offline exception inapplicable.
+                self.recovery_queries.should_query_data(peer, now)
+                    || (self.offline.has_work_or_path(peer)
+                        && self.recovery_queries.should_query(peer, now))
+            } else {
+                self.recovery_queries.should_query(peer, now)
+            }
     }
 
     fn record_recovery_discovery_queries(
@@ -13102,14 +13182,16 @@ fn public_discovery_suppressed(
     peer_capabilities: &PeerCapabilities,
     packet_plane: Option<&PacketPlaneRuntime>,
     packet_plane_quic: Option<&PacketPlaneQuicRuntime>,
+    offline: impl FnMut(PeerId) -> bool,
 ) -> bool {
     public_discovery_holdoff_active(holdoff_until, Instant::now())
-        || public_discovery_quiet_mode(
+        || public_discovery_quiet_mode_with_offline(
             forwarder,
             paths,
             peer_capabilities,
             packet_plane,
             packet_plane_quic,
+            offline,
         )
 }
 
@@ -13117,6 +13199,7 @@ fn public_discovery_holdoff_active(holdoff_until: Option<Instant>, now: Instant)
     holdoff_until.is_some_and(|until| now < until)
 }
 
+#[cfg(test)]
 fn public_discovery_quiet_mode(
     forwarder: &Forwarder,
     paths: &PathSet,
@@ -13124,10 +13207,29 @@ fn public_discovery_quiet_mode(
     packet_plane: Option<&PacketPlaneRuntime>,
     packet_plane_quic: Option<&PacketPlaneQuicRuntime>,
 ) -> bool {
+    public_discovery_quiet_mode_with_offline(
+        forwarder,
+        paths,
+        peer_capabilities,
+        packet_plane,
+        packet_plane_quic,
+        |_| false,
+    )
+}
+
+fn public_discovery_quiet_mode_with_offline(
+    forwarder: &Forwarder,
+    paths: &PathSet,
+    peer_capabilities: &PeerCapabilities,
+    packet_plane: Option<&PacketPlaneRuntime>,
+    packet_plane_quic: Option<&PacketPlaneQuicRuntime>,
+    mut offline: impl FnMut(PeerId) -> bool,
+) -> bool {
     let peers = forwarder.configured_overlay_peers().collect::<Vec<_>>();
     !peers.is_empty()
         && peers.into_iter().all(|peer| {
             forwarder.data_path_is_dormant(peer)
+                || offline(peer)
                 || peer_has_healthy_supported_path(
                     paths,
                     peer_capabilities,
@@ -13812,6 +13914,21 @@ async fn handle_swarm_event(
     mut context: SwarmEventContext<'_>,
     event: SwarmEvent<BehaviourEvent>,
 ) -> Result<(), RunnerError> {
+    quiet_discovery::revalidate_event(
+        swarm,
+        quiet_discovery::EventContext {
+            gate: &mut context.discovered_peer_addresses.offline,
+            local: context.local_capabilities,
+            pairing: context.code_pairing_sessions,
+            relay_server: context.relay_server_enabled,
+            epochs: context.connection_epochs,
+            connections: context.active_connections,
+            readiness: context.relay_readiness,
+            relay: context.auto_relay,
+            configured_listeners: context.configured_relay_reservation_listeners,
+        },
+        &event,
+    );
     match event {
         SwarmEvent::Behaviour(BehaviourEvent::Control(event)) => {
             handle_control_event(swarm, &mut context, event).await?;
@@ -13836,12 +13953,28 @@ async fn handle_swarm_event(
         }
         SwarmEvent::Behaviour(event) => {
             let public_discovery_quiet = context.public_discovery_holdoff_active
-                || public_discovery_quiet_mode(
+                || public_discovery_quiet_mode_with_offline(
                     context.forwarder,
                     context.paths,
                     context.peer_capabilities,
                     Some(context.packet_plane),
                     context.packet_plane_quic.as_deref(),
+                    |peer| {
+                        context
+                            .forwarder
+                            .transport_peer_for_overlay(peer)
+                            .is_some_and(|peer| {
+                                quiet_discovery::offline_suppressed(
+                                    swarm,
+                                    context.connection_epochs,
+                                    context.forwarder,
+                                    context.discovered_peer_addresses,
+                                    peer,
+                                    None,
+                                    Instant::now(),
+                                )
+                            })
+                    },
                 );
             let mut behaviour_context = BehaviourEventContext {
                 forwarder: context.forwarder,
@@ -14338,9 +14471,13 @@ async fn handle_swarm_event(
                     context.packet_plane_negotiator.remove_peer(overlay_peer);
                 }
                 if context.forwarder.is_configured_transport_peer(peer_id)
-                    && !context
-                        .forwarder
-                        .data_path_maintenance_is_paused(overlay_peer)
+                    && !quiet_discovery::data_suppressed(
+                        swarm,
+                        context.connection_epochs,
+                        context.forwarder,
+                        context.discovered_peer_addresses,
+                        peer_id,
+                    )
                     && should_query_configured_peer_recovery_discovery(context.discovery)
                     && peer_lacks_supported_packet_path(
                         context.paths,
@@ -14430,9 +14567,13 @@ async fn handle_swarm_event(
                 && context.forwarder.is_configured_transport_peer(peer_id)
             {
                 if should_query_configured_peer_recovery_discovery(context.discovery)
-                    && !context
-                        .forwarder
-                        .data_path_maintenance_is_paused(PeerId::from_libp2p(peer_id))
+                    && !quiet_discovery::data_suppressed(
+                        swarm,
+                        context.connection_epochs,
+                        context.forwarder,
+                        context.discovered_peer_addresses,
+                        peer_id,
+                    )
                     && peer_lacks_supported_packet_path(
                         context.paths,
                         context.peer_capabilities,
@@ -14654,6 +14795,30 @@ async fn handle_swarm_event(
                         relay,
                     );
                 }
+                let public_discovery_quiet = context.public_discovery_holdoff_active
+                    || public_discovery_quiet_mode_with_offline(
+                        context.forwarder,
+                        context.paths,
+                        context.peer_capabilities,
+                        Some(context.packet_plane),
+                        context.packet_plane_quic.as_deref(),
+                        |peer| {
+                            context
+                                .forwarder
+                                .transport_peer_for_overlay(peer)
+                                .is_some_and(|peer| {
+                                    quiet_discovery::offline_suppressed(
+                                        swarm,
+                                        context.connection_epochs,
+                                        context.forwarder,
+                                        context.discovered_peer_addresses,
+                                        peer,
+                                        None,
+                                        Instant::now(),
+                                    )
+                                })
+                        },
+                    );
                 dial_relay_ready_configured_peers(
                     swarm,
                     context.connection_epochs,
@@ -14663,14 +14828,7 @@ async fn handle_swarm_event(
                     context.configured_peer_addresses,
                     context.discovered_peer_addresses,
                     context.paths,
-                    context.public_discovery_holdoff_active
-                        || public_discovery_quiet_mode(
-                            context.forwarder,
-                            context.paths,
-                            context.peer_capabilities,
-                            Some(context.packet_plane),
-                            context.packet_plane_quic.as_deref(),
-                        ),
+                    public_discovery_quiet,
                     context.metrics,
                     relay,
                 );
@@ -14911,9 +15069,13 @@ fn redial_configured_peer_after_supported_path_loss(
     peer: Libp2pPeerId,
 ) {
     if !context.forwarder.is_configured_transport_peer(peer)
-        || context
-            .forwarder
-            .data_path_is_dormant(PeerId::from_libp2p(peer))
+        || quiet_discovery::data_suppressed(
+            swarm,
+            context.connection_epochs,
+            context.forwarder,
+            context.discovered_peer_addresses,
+            peer,
+        )
         || !peer_lacks_supported_packet_path(
             context.paths,
             context.peer_capabilities,
@@ -14971,9 +15133,13 @@ fn dial_ready_relays_for_configured_peer(
     peer: Libp2pPeerId,
 ) {
     if !context.forwarder.is_configured_transport_peer(peer)
-        || context
-            .forwarder
-            .data_path_is_dormant(PeerId::from_libp2p(peer))
+        || quiet_discovery::data_suppressed(
+            swarm,
+            context.connection_epochs,
+            context.forwarder,
+            context.discovered_peer_addresses,
+            peer,
+        )
         || !peer_lacks_supported_packet_path(
             context.paths,
             context.peer_capabilities,
@@ -23748,18 +23914,32 @@ fn handle_kademlia_event_at(
                     }
                 } else {
                     let now = Instant::now();
+                    let allowed = providers
+                        .iter()
+                        .copied()
+                        .filter(|peer| {
+                            !context.public_discovery_quiet
+                                && !quiet_discovery::offline_suppressed(
+                                    swarm,
+                                    context.connection_epochs,
+                                    context.forwarder,
+                                    context.discovered_peer_addresses,
+                                    *peer,
+                                    Some(id),
+                                    now,
+                                )
+                                && !context
+                                    .discovered_peer_addresses
+                                    .lan_first_recovery_active(*peer, now)
+                        })
+                        .collect::<HashSet<_>>();
                     dial_kademlia_providers(
                         swarm,
                         context.connection_epochs,
                         context.forwarder,
                         context.metrics,
                         providers,
-                        |peer| {
-                            !context.public_discovery_quiet
-                                && !context
-                                    .discovered_peer_addresses
-                                    .lan_first_recovery_active(peer, now)
-                        },
+                        |peer| allowed.contains(&peer),
                     );
                 }
             }
@@ -23824,8 +24004,10 @@ fn handle_kademlia_event_at(
                     context.metrics,
                 );
             }
-            handle_kademlia_peer_address_record_result(swarm, &mut context, &result);
-            handle_kademlia_closest_peer_result(
+            // Consume exact DATA ownership before terminal cleanup below. An
+            // admitted lookup must deliver its hints even though it spent its ticket.
+            handle_kademlia_peer_address_record_result(swarm, &mut context, id, &result);
+            handle_kademlia_closest_peer_result_for_query(
                 swarm,
                 context.connection_epochs,
                 context.forwarder,
@@ -23837,12 +24019,13 @@ fn handle_kademlia_event_at(
                 context.discovery,
                 context.public_discovery_quiet,
                 &result,
+                Some(id),
             );
             if step.last {
                 context.kademlia_maintenance.finish_query(id);
                 context
                     .discovered_peer_addresses
-                    .finish_recovery_discovery_query(id, Instant::now());
+                    .finish_recovery_discovery_query(id, now);
                 context.code_pairing_sessions.finish_join_lookup(id);
             }
             log_runtime_event(
@@ -24038,6 +24221,7 @@ fn handle_kademlia_membership_record_result(
 fn handle_kademlia_peer_address_record_result(
     swarm: &mut Swarm<Behaviour>,
     context: &mut KademliaEventContext<'_>,
+    query: kad::QueryId,
     result: &kad::QueryResult,
 ) {
     let kad::QueryResult::GetRecord(Ok(kad::GetRecordOk::FoundRecord(peer_record))) = result else {
@@ -24063,8 +24247,18 @@ fn handle_kademlia_peer_address_record_result(
                 || context
                     .discovered_peer_addresses
                     .lan_first_recovery_active(peer, now);
+            let cache_only = quiet_discovery::offline_suppressed(
+                swarm,
+                context.connection_epochs,
+                context.forwarder,
+                context.discovered_peer_addresses,
+                peer,
+                Some(query),
+                now,
+            );
             for address in addresses {
                 if lan_first
+                    && !cache_only
                     && !recovery_address_allowed_during_lan_first(
                         peer,
                         &address,
@@ -24074,7 +24268,7 @@ fn handle_kademlia_peer_address_record_result(
                 {
                     continue;
                 }
-                learn_peer_address(
+                learn_peer_address_with_policy_for_query(
                     swarm,
                     context.connection_epochs,
                     context.forwarder,
@@ -24085,6 +24279,8 @@ fn handle_kademlia_peer_address_record_result(
                     address,
                     context.discovery,
                     DiscoveredPeerAddressSource::AuthenticatedPeerRecord,
+                    false,
+                    Some(query),
                 );
             }
         }
@@ -24162,6 +24358,7 @@ fn handle_kademlia_put_record_result(metrics: &RuntimeMetrics, result: &kad::Que
     }
 }
 
+#[cfg(test)]
 fn handle_kademlia_closest_peer_result(
     swarm: &mut Swarm<Behaviour>,
     connection_epochs: &mut ConnectionEpochs,
@@ -24175,12 +24372,51 @@ fn handle_kademlia_closest_peer_result(
     public_discovery_quiet: bool,
     result: &kad::QueryResult,
 ) {
+    handle_kademlia_closest_peer_result_for_query(
+        swarm,
+        connection_epochs,
+        forwarder,
+        infrastructure_peers,
+        auto_relay,
+        discovered_peer_addresses,
+        paths,
+        metrics,
+        discovery,
+        public_discovery_quiet,
+        result,
+        None,
+    );
+}
+
+fn handle_kademlia_closest_peer_result_for_query(
+    swarm: &mut Swarm<Behaviour>,
+    connection_epochs: &mut ConnectionEpochs,
+    forwarder: &Forwarder,
+    infrastructure_peers: &mut InfrastructurePeers,
+    auto_relay: &mut AutoRelayState,
+    discovered_peer_addresses: &mut DiscoveredPeerAddresses,
+    paths: &PathSet,
+    metrics: &RuntimeMetrics,
+    discovery: &DiscoveryConfig,
+    public_discovery_quiet: bool,
+    result: &kad::QueryResult,
+    query: Option<kad::QueryId>,
+) {
     if let kad::QueryResult::GetClosestPeers(
         Ok(kad::GetClosestPeersOk { peers, .. })
         | Err(kad::GetClosestPeersError::Timeout { peers, .. }),
     ) = result
     {
         for peer in peers {
+            let cache_only = quiet_discovery::offline_suppressed(
+                swarm,
+                connection_epochs,
+                forwarder,
+                discovered_peer_addresses,
+                peer.peer_id,
+                query,
+                Instant::now(),
+            );
             let lan_first = public_discovery_quiet
                 || discovered_peer_addresses
                     .lan_first_recovery_active(peer.peer_id, Instant::now());
@@ -24191,9 +24427,9 @@ fn handle_kademlia_closest_peer_result(
                 DiscoveredPeerAddressSource::PublicDiscovery,
                 "kademlia_closest_peer",
             );
-            if !lan_first {
+            if !lan_first || cache_only {
                 for address in &accepted_addresses {
-                    learn_peer_address(
+                    learn_peer_address_with_policy_for_query(
                         swarm,
                         connection_epochs,
                         forwarder,
@@ -24204,6 +24440,8 @@ fn handle_kademlia_closest_peer_result(
                         (*address).clone(),
                         discovery,
                         DiscoveredPeerAddressSource::PublicDiscovery,
+                        false,
+                        query,
                     );
                 }
             }
@@ -24569,6 +24807,37 @@ fn learn_peer_address_with_policy(
     source: DiscoveredPeerAddressSource,
     lan_promotion: bool,
 ) {
+    learn_peer_address_with_policy_for_query(
+        swarm,
+        connection_epochs,
+        forwarder,
+        discovered_peer_addresses,
+        paths,
+        metrics,
+        peer,
+        address,
+        discovery,
+        source,
+        lan_promotion,
+        None,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn learn_peer_address_with_policy_for_query(
+    swarm: &mut Swarm<Behaviour>,
+    connection_epochs: &mut ConnectionEpochs,
+    forwarder: &Forwarder,
+    discovered_peer_addresses: &mut DiscoveredPeerAddresses,
+    paths: &PathSet,
+    metrics: &RuntimeMetrics,
+    peer: Libp2pPeerId,
+    address: Multiaddr,
+    discovery: &DiscoveryConfig,
+    source: DiscoveredPeerAddressSource,
+    lan_promotion: bool,
+    query: Option<kad::QueryId>,
+) {
     if peer == *swarm.local_peer_id() {
         return;
     }
@@ -24669,6 +24938,15 @@ fn learn_peer_address_with_policy(
 
     // Retain validated hints while paused without creating a data-dial cooldown.
     if forwarder.data_path_maintenance_is_paused(PeerId::from_libp2p(peer))
+        || quiet_discovery::offline_suppressed(
+            swarm,
+            connection_epochs,
+            forwarder,
+            discovered_peer_addresses,
+            peer,
+            query,
+            now,
+        )
         || !should_dial_discovered_address(
             paths,
             peer,

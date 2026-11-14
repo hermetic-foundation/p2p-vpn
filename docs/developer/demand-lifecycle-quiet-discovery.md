@@ -59,11 +59,11 @@ requirements; suppressing reachability is not an energy improvement.
 
 ## Offline Retry Budget
 
-This extension is planned, not activated. An unreachable authorized member must
-not prevent all other members from becoming quiet indefinitely. Exhausting
-background retries is not negotiated dormancy and cannot retire a legacy path.
+This extension is implemented for explicit lifecycle trials, not production
+activation. An unreachable member must not prevent quiet scheduling indefinitely.
+Exhausting background retries is not dormancy and cannot retire a legacy path.
 
-| Boundary | Planned Policy |
+| Boundary | Policy |
 | --- | --- |
 | Scope | Experimental lifecycle builds only; no new configuration or wire format |
 | Owner | Extend the existing bounded `RecoveryQueries` per-member state |
@@ -71,13 +71,14 @@ background retries is not negotiated dormancy and cannot retire a legacy path.
 | Startup allowance | One admitted ordinary data lookup per member in a ten-minute window |
 | Charging | Charge a native query only after admission succeeds; failed admission consumes nothing |
 | Exhaustion | Sticky for the ticket after admission or deadline; no replenishment from maintenance |
+| Admitted lookup | Let its native owner drain before offline pause; spending an allowance cannot immediately cancel the admitted attempt |
 | Native capacity | Preserve the existing shared one-query ceiling and query deadlines |
 | Retention | Keep authorized exhausted markers across idle pruning; revocation removes them |
 | Missing evidence | Missing demand version, owner capacity, or current ticket cannot authorize suppression |
 
-The proposed allowance is a bounded starting policy, not a measured optimum.
-All authorized members receive their own allowance; early members cannot take
-later members' attempts. Existing control failure cooldowns remain independent.
+The allowance is a bounded starting policy, not a measured optimum. Each member
+has a separate allowance; capacity and deadlines can still prevent admission.
+Existing control failure cooldowns remain independent.
 
 ### Suppression Gates
 
@@ -99,7 +100,7 @@ addresses; do not create cooldowns for attempts never admitted.
 | Scoped control / pairing | Preserve request IDs, original deadlines, budgets, and delivery |
 | Signed address publication | Keep essential publication and authorization updates |
 | Native serving | Continue accepting and answering inbound protocol requests |
-| Existing data lookup | Cancel only its ordinary owner through the existing cancellation path |
+| Existing data lookup | Drain the admitted attempt; subsequent cancellation uses its exact ordinary owner, never scoped control |
 | Overlay retention | Never grant quiet permission or release a legacy connection from budget exhaustion |
 
 ### Reactivation
@@ -119,12 +120,35 @@ Loss of the incoming anchor must resume repair immediately.
 | Four idle live members, two offline | Eventually pause background discovery without declaring offline members dormant |
 | Six offline members | Preserve a finite initial discovery opportunity for every member |
 | Repeated ticks / expiry / late events | Never replenish an exhausted ticket |
+| Fresh admitted lookup | Remain owned through completion/timeout; cache validated late hints without reopening background dials |
 | Payload / roaming / re-admission | Invalidate stale tickets and restore LAN-first recovery |
 | Connected legacy / missing evidence | Preserve compatibility and fail conservatively |
 | Pairing / control / publication / anchor loss | Preserve foreground ownership and incoming recovery |
 
 Unit tests cannot prove battery savings or public-network recovery. Repeat live
 cold-packet checks and fresh matched energy measurements after integration.
+
+### Implementation Evidence
+
+| Boundary | Focused Evidence |
+| --- | --- |
+| Query owner | 30 cases pass, including 17 finite-budget additions |
+| Runtime / native relay | 17 quiet-discovery cases pass, including nine offline-budget scenarios |
+| Budget ownership | Only successfully admitted new DATA IDs spend allowance; pending DATA drains before quiet |
+| Current authority | Missing evidence, anchor loss, pairing, serving, and underlay changes restore conservative scheduling |
+| Reactivation | Fresh queued demand has a DATA-only allowance without clearing control cooldowns or LAN grace |
+| Late results | Exact retained query can deliver; expired/other IDs cache hints without reopening background dials |
+| Foreground | Scoped control ownership and essential signed address publication remain available |
+| Resources | Reuse scheduling snapshot capacity; retained tickets stay in the existing bounded owner |
+| Full experimental workspace | 2,151 passed; zero failed; 50 existing or opt-in exclusions across 16 suites |
+| Default-build library | 1,748 passed; zero failed; nine existing exclusions |
+| Static checks | Rust formatting and Clippy correctness, suspicious-code, and performance groups pass; advisory warnings remain |
+| Android build | ARM64 Nix native build, APK signature/alignment checks, 158 Java tests and lint pass; seven lint warnings remain |
+| Operational acceptance | New candidate is not deployed; autonomous first-packet recovery and energy evidence remain required |
+
+The [C3 cellular preflight](android-lifecycle-membership-preflight-2026-11-14.json)
+predates this extension. It failed outgoing first-packet delivery and did not
+reach committed quiet toward the phone; it is not acceptance evidence here.
 
 ## Validation
 
