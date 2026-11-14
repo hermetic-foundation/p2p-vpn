@@ -5,7 +5,7 @@ use std::{
 
 use libp2p::{PeerId, kad::QueryId};
 
-use crate::membership::MAX_MEMBERSHIP_RECORDS;
+use crate::{membership::MAX_MEMBERSHIP_RECORDS, runtime::lifecycle::activity::DemandVersion};
 
 pub(super) const QUERY_TIMEOUT: Duration = Duration::from_mins(1);
 pub(super) const BACKOFF_BASE: Duration = Duration::from_secs(30);
@@ -14,6 +14,7 @@ const BACKOFF_MAX: Duration = Duration::from_hours(1);
 const STATE_TTL: Duration = Duration::from_secs(5 * 60 + 10);
 const CONNECTED_RETRY: Duration = Duration::from_secs(10);
 const MAX_CONCURRENT: usize = 1;
+const DATA_BUDGET_WINDOW: Duration = Duration::from_mins(10);
 
 /// Owns targeted overlay query accounting, never public infrastructure queries.
 /// Cancellation decisions remove ownership before the runner applies effects.
@@ -48,6 +49,34 @@ pub(super) struct QueryState {
     pub(super) pending_queries: usize,
     pub(super) attempt_count: u8,
     retry_after: Instant,
+    data_budget: Option<DataBudget>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct DataBudget {
+    demand_version: DemandVersion,
+    underlay: u64,
+    deadline: Instant,
+    admitted: bool,
+    current: bool,
+}
+
+impl DataBudget {
+    fn exhausted(&self, now: Instant) -> bool {
+        self.admitted || now >= self.deadline
+    }
+}
+
+impl QueryState {
+    fn new(now: Instant) -> Self {
+        Self {
+            last_query: now,
+            pending_queries: 0,
+            attempt_count: 0,
+            retry_after: now,
+            data_budget: None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -105,6 +134,24 @@ impl RecoveryQueries {
 
     pub(super) fn has_pending(&self) -> bool {
         !self.queries.is_empty()
+    }
+
+    /// A spent DATA allowance is not permission to cancel its pending lookup.
+    /// Callers must let this ordinary owner drain before offline/global pause;
+    /// scoped control queries are separate foreground owners.
+    pub(super) fn has_data_query(&self, peer: PeerId) -> bool {
+        self.queries
+            .values()
+            .any(|owner| owner.peer == peer && owner.control.is_none())
+    }
+
+    /// Capture exact DATA ownership before `finished` when handling a result.
+    /// Budget exhaustion alone must not discard a still-owned late result;
+    /// expired/cancelled IDs and scoped control IDs never match here.
+    pub(super) fn owns_data_query(&self, peer: PeerId, query: &QueryId) -> bool {
+        self.queries
+            .get(query)
+            .is_some_and(|owner| owner.peer == peer && owner.control.is_none())
     }
 
     pub(super) fn control_query(&self, id: &QueryId) -> Option<ControlQuery> {
@@ -174,14 +221,111 @@ impl RecoveryQueries {
         }
     }
 
-    pub(super) fn should_query(&mut self, peer: PeerId, now: Instant) -> bool {
+    /// Reconcile every authorized member, not only the peer taking the shared
+    /// query slot. Only a changed demand/underlay ticket renews its allowance.
+    /// Each ticket permits one ordinary DATA lookup before a ten-minute deadline.
+    /// Missing evidence/capacity cannot authorize suppression. Authorization
+    /// removal belongs to `retain_peers`; reconciliation preserves cooldowns.
+    pub(super) fn reconcile_data_budget(
+        &mut self,
+        peer: PeerId,
+        demand_version: Option<DemandVersion>,
+        underlay: u64,
+        now: Instant,
+    ) {
+        let Some(demand_version) = demand_version else {
+            // Missing evidence disables suppression, but must not let the same
+            // ticket regain its allowance when evidence becomes available.
+            if let Some(budget) = self
+                .peers
+                .get_mut(&peer)
+                .and_then(|state| state.data_budget.as_mut())
+            {
+                budget.current = false;
+            }
+            return;
+        };
+        if !self.peers.contains_key(&peer) && self.peers.len() >= MAX_MEMBERSHIP_RECORDS {
+            self.prune_idle(now);
+            if self.peers.len() >= MAX_MEMBERSHIP_RECORDS {
+                return;
+            }
+        }
+        let state = self
+            .peers
+            .entry(peer)
+            .or_insert_with(|| QueryState::new(now));
+        if let Some(budget) = &mut state.data_budget
+            && budget.demand_version == demand_version
+            && budget.underlay == underlay
+        {
+            budget.current = true;
+            return;
+        }
+        state.data_budget = Some(DataBudget {
+            demand_version,
+            underlay,
+            deadline: now + DATA_BUDGET_WINDOW,
+            admitted: false,
+            current: true,
+        });
+    }
+
+    /// Read-only evidence for the caller's suppression gates; stale or missing
+    /// tickets and absent owners never authorize suppression.
+    /// This means spent allowance, not permission to cancel or pause: callers
+    /// must also drain `has_data_query` and preserve still-owned result delivery.
+    pub(super) fn data_budget_exhausted(
+        &self,
+        peer: PeerId,
+        current_version: Option<DemandVersion>,
+        underlay: u64,
+        now: Instant,
+    ) -> bool {
+        self.peers
+            .get(&peer)
+            .and_then(|state| state.data_budget.as_ref())
+            .is_some_and(|budget| {
+                budget.current
+                    && Some(budget.demand_version) == current_version
+                    && budget.underlay == underlay
+                    && budget.exhausted(now)
+            })
+    }
+
+    /// After the caller's LAN grace, a current unspent DATA ticket bypasses
+    /// retry_after, but not pending ownership or the shared native query cap.
+    /// This neither spends the allowance nor changes the control cooldown.
+    /// Lifecycle-inactive callers must keep using `should_query`. Active callers
+    /// must reconcile current tickets first and record only admitted native DATA
+    /// IDs. Without a current ticket this falls back to legacy `should_query`,
+    /// never budget suppression.
+    pub(super) fn should_query_data(&mut self, peer: PeerId, now: Instant) -> bool {
+        if let Some(state) = self.peers.get(&peer)
+            && let Some(budget) = &state.data_budget
+            && budget.current
+        {
+            return !budget.exhausted(now)
+                && state.pending_queries == 0
+                && self.queries.len() < MAX_CONCURRENT;
+        }
+        self.should_query(peer, now)
+    }
+
+    fn prune_idle(&mut self, now: Instant) {
         self.peers.retain(|_, state| {
+            // Ticket owners survive idle pruning, including unspent deadlines.
             // Idle expiry must not erase a long failure cooldown or reset its
             // attempt count just as the next retry becomes eligible.
-            state.pending_queries > 0
+            state.data_budget.is_some()
+                || state.pending_queries > 0
                 || now.saturating_duration_since(state.last_query.max(state.retry_after))
                     < STATE_TTL
         });
+    }
+
+    pub(super) fn should_query(&mut self, peer: PeerId, now: Instant) -> bool {
+        self.prune_idle(now);
         if let Some(state) = self.peers.get(&peer) {
             if state.pending_queries > 0 || now < state.retry_after {
                 return false;
@@ -190,19 +334,13 @@ impl RecoveryQueries {
             if self.peers.len() >= MAX_MEMBERSHIP_RECORDS {
                 return false;
             }
-            self.peers.insert(
-                peer,
-                QueryState {
-                    last_query: now,
-                    pending_queries: 0,
-                    attempt_count: 0,
-                    retry_after: now,
-                },
-            );
+            self.peers.insert(peer, QueryState::new(now));
         }
         self.queries.len() < MAX_CONCURRENT
     }
 
+    /// Charge a retained DATA ticket only for newly owned native IDs. Empty or
+    /// duplicate IDs do not spend it; legacy failure accounting is unchanged.
     pub(super) fn record(
         &mut self,
         peer: PeerId,
@@ -237,8 +375,14 @@ impl RecoveryQueries {
         state.attempt_count = state.attempt_count.saturating_add(1);
         state.retry_after = now + failure_backoff(state.attempt_count);
         for (query, owner) in queries {
-            if self.queries.insert(query, owner).is_none() {
+            if let std::collections::hash_map::Entry::Vacant(entry) = self.queries.entry(query) {
+                entry.insert(owner);
                 state.pending_queries += 1;
+                if owner.control.is_none()
+                    && let Some(budget) = &mut state.data_budget
+                {
+                    budget.admitted = true;
+                }
             }
         }
     }
@@ -313,6 +457,9 @@ fn failure_backoff(failure_count: u8) -> Duration {
         .saturating_mul(1_u32 << exponent)
         .min(BACKOFF_MAX)
 }
+
+#[cfg(test)]
+mod data_budget_tests;
 
 #[cfg(test)]
 mod tests {
