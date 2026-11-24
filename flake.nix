@@ -4,6 +4,7 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+    sdk.url = "git+https://github.com/hermetic-foundation/libp2p-vpn.git?rev=cc40da135edd90abcd008f8fc9c54a6695272c95";
   };
 
   outputs =
@@ -11,6 +12,7 @@
       self,
       nixpkgs,
       flake-utils,
+      sdk,
     }:
     let
       supportedSystems = [
@@ -32,11 +34,19 @@
       let
         pkgs = import nixpkgs { inherit system; };
         lib = nixpkgs.lib;
+        sdkPackages = sdk.packages.${system};
+        sdkRev = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).dependencies.p2p_vpn.rev;
+        appCargoLock =
+          assert lib.assertMsg (sdk.rev == sdkRev) "The SDK Cargo and Nix revisions must match.";
+          {
+            lockFile = ./Cargo.lock;
+            outputHashes."libp2p-vpn-0.1.0" = sdk.narHash;
+          };
         androidSupported = system == "x86_64-linux";
         android =
           if androidSupported then
             import ./nix/android.nix {
-              inherit pkgs;
+              inherit pkgs sdk;
               androidSdkLicenseAccepted = true;
             }
           else
@@ -44,7 +54,7 @@
         androidLifecycleTrial =
           if androidSupported then
             import ./nix/android.nix {
-              inherit pkgs;
+              inherit pkgs sdk;
               androidSdkLicenseAccepted = true;
               demandLifecycleTrial = true;
             }
@@ -57,28 +67,8 @@
           fileset = lib.fileset.unions [
             ./Cargo.toml
             ./Cargo.lock
-            ./vendor/libp2p-autonat-0.15.0
-            ./vendor/libp2p-core-0.43.2
-            ./vendor/libp2p-dns-0.44.0
-            ./vendor/libp2p-kad-0.48.0
-            ./vendor/libp2p-mdns-0.48.0
-            ./vendor/libp2p-quic-0.13.1
-            ./vendor/libp2p-relay-0.21.1
-            ./vendor/libp2p-request-response-0.29.0
-            ./vendor/libp2p-swarm-0.47.1
-            ./vendor/stats_alloc-0.1.10
-            ./vendor/quinn-0.11.11
-            ./vendor/quinn-udp-0.5.15
-            ./vendor/libp2p-webrtc-0.9.0-alpha.1
-            ./vendor/libp2p-webrtc-websys-0.4.0
-            ./vendor/webrtc-dtls-0.11.0
-            ./crates/p2p-vpn-android
-            ./crates/p2p-vpn-android-e2e-fixture
-            ./crates/p2p-vpn-browser/Cargo.toml
-            ./crates/p2p-vpn-browser/src
             ./docs/developer/kademlia-resource-builds.json
             ./docs/developer/kademlia-resource-campaign-v3.json
-            ./docs/developer/protocol/vectors.json
             ./src
             (lib.fileset.fileFilter (file: file.hasExt "rs") ./tests)
           ];
@@ -87,7 +77,7 @@
           pname = "p2p-vpn";
           version = "0.1.0";
           src = rustSource;
-          cargoLock.lockFile = ./Cargo.lock;
+          cargoLock = appCargoLock;
           nativeBuildInputs = [
             pkgs.installShellFiles
             pkgs.pkg-config
@@ -102,22 +92,7 @@
         vmPackage = package.overrideAttrs (_: {
           doCheck = false;
         });
-        androidE2eFixture = pkgs.rustPlatform.buildRustPackage {
-          pname = "p2p-vpn-android-e2e-fixture";
-          version = "0.1.0";
-          src = rustSource;
-          cargoLock.lockFile = ./Cargo.lock;
-          cargoBuildFlags = [
-            "--package"
-            "p2p-vpn-android-e2e-fixture"
-          ];
-          cargoTestFlags = [
-            "--package"
-            "p2p-vpn-android-e2e-fixture"
-          ];
-          nativeBuildInputs = [ pkgs.pkg-config ];
-          RUST_MIN_STACK = "8388608";
-        };
+        androidE2eFixture = sdkPackages.android-e2e-fixture;
         vmSelf = self // {
           packages = self.packages // {
             ${system} = self.packages.${system} // {
@@ -239,6 +214,8 @@
                         checks=(
                           ".#checks.$system.package"
                           ".#checks.$system.rust-test-sources"
+                          ".#checks.$system.sdk-package"
+                          ".#checks.$system.sdk-test-sources"
                           ".#checks.$system.fmt"
                           ".#checks.$system.clippy"
                           ".#checks.$system.releaseArchiveSanity"
@@ -5821,7 +5798,7 @@
           pname = "p2p-vpn-namespace-smoke-preflighted";
           version = "0.1.0";
           src = rustSource;
-          cargoLock.lockFile = ./Cargo.lock;
+          cargoLock = appCargoLock;
           nativeBuildInputs = [
             pkgs.pkg-config
             namespacePreflight
@@ -5954,6 +5931,9 @@
                   -czf "$out" -C "$TMPDIR" "p2p-vpn-0.1.0-${system}"
               '';
         }
+        // lib.optionalAttrs (sdkPackages ? browser-sdk) {
+          browser-sdk = sdkPackages.browser-sdk;
+        }
         // lib.optionalAttrs androidSupported {
           android-battery-decode = androidBatteryDecoder;
           android-cellular-compare = androidCellularCompare;
@@ -5972,10 +5952,7 @@
           android-e2e = androidE2eLauncher;
           android-e2e-runtime = androidE2eRuntime;
           android-e2e-fixture = androidE2eFixture;
-          android-e2e-fixture-demand-lifecycle-trial = androidE2eFixture.overrideAttrs (_: {
-            cargoBuildFeatures = [ "demand-lifecycle-trial" ];
-            cargoCheckFeatures = [ "demand-lifecycle-trial" ];
-          });
+          android-e2e-fixture-demand-lifecycle-trial = sdkPackages.android-e2e-fixture-demand-lifecycle-trial;
           android-emulator = android.androidEmulator;
           android-sdk = android.androidSdk;
         }
@@ -6130,6 +6107,8 @@
         };
 
         checks = {
+          sdk-package = sdk.checks.${system}.package;
+          sdk-test-sources = sdk.checks.${system}.rust-test-sources;
           package = package;
           demand-lifecycle-trial-module = import ./tests/nixos/lifecycle-trial-eval.nix {
             inherit pkgs lib system;
@@ -6193,48 +6172,10 @@
                 test_targets ${self} > repository-tests.json
                 test_targets ${rustSource} > packaged-tests.json
                 diff -u repository-tests.json packaged-tests.json
-                diff -r ${self}/vendor/libp2p-autonat-0.15.0 ${rustSource}/vendor/libp2p-autonat-0.15.0
-                diff -r ${self}/vendor/libp2p-core-0.43.2 ${rustSource}/vendor/libp2p-core-0.43.2
-                diff -r ${self}/vendor/libp2p-dns-0.44.0 ${rustSource}/vendor/libp2p-dns-0.44.0
-                diff -r ${self}/vendor/libp2p-kad-0.48.0 ${rustSource}/vendor/libp2p-kad-0.48.0
-                diff -r ${self}/vendor/libp2p-mdns-0.48.0 ${rustSource}/vendor/libp2p-mdns-0.48.0
-                diff -r ${self}/vendor/libp2p-quic-0.13.1 ${rustSource}/vendor/libp2p-quic-0.13.1
-                diff -r ${self}/vendor/libp2p-relay-0.21.1 ${rustSource}/vendor/libp2p-relay-0.21.1
-                diff -r ${self}/vendor/libp2p-request-response-0.29.0 ${rustSource}/vendor/libp2p-request-response-0.29.0
-                diff -r ${self}/vendor/libp2p-swarm-0.47.1 ${rustSource}/vendor/libp2p-swarm-0.47.1
-                diff -r ${self}/vendor/stats_alloc-0.1.10 ${rustSource}/vendor/stats_alloc-0.1.10
-                diff -r ${self}/vendor/quinn-0.11.11 ${rustSource}/vendor/quinn-0.11.11
-                diff -r ${self}/vendor/quinn-udp-0.5.15 ${rustSource}/vendor/quinn-udp-0.5.15
                 diff ${self}/docs/developer/kademlia-resource-builds.json \
                   ${rustSource}/docs/developer/kademlia-resource-builds.json
                 diff ${self}/docs/developer/kademlia-resource-campaign-v3.json \
                   ${rustSource}/docs/developer/kademlia-resource-campaign-v3.json
-                ${lib.optionalString androidSupported ''
-                  diff -r ${self}/vendor/libp2p-autonat-0.15.0 ${android.androidNativeArm64.src}/vendor/libp2p-autonat-0.15.0
-                  diff -r ${self}/vendor/libp2p-autonat-0.15.0 ${android.androidNativeX86_64.src}/vendor/libp2p-autonat-0.15.0
-                  diff -r ${self}/vendor/libp2p-core-0.43.2 ${android.androidNativeArm64.src}/vendor/libp2p-core-0.43.2
-                  diff -r ${self}/vendor/libp2p-core-0.43.2 ${android.androidNativeX86_64.src}/vendor/libp2p-core-0.43.2
-                  diff -r ${self}/vendor/libp2p-dns-0.44.0 ${android.androidNativeArm64.src}/vendor/libp2p-dns-0.44.0
-                  diff -r ${self}/vendor/libp2p-dns-0.44.0 ${android.androidNativeX86_64.src}/vendor/libp2p-dns-0.44.0
-                  diff -r ${self}/vendor/libp2p-kad-0.48.0 ${android.androidNativeArm64.src}/vendor/libp2p-kad-0.48.0
-                  diff -r ${self}/vendor/libp2p-mdns-0.48.0 ${android.androidNativeArm64.src}/vendor/libp2p-mdns-0.48.0
-                  diff -r ${self}/vendor/libp2p-kad-0.48.0 ${android.androidNativeX86_64.src}/vendor/libp2p-kad-0.48.0
-                  diff -r ${self}/vendor/libp2p-mdns-0.48.0 ${android.androidNativeX86_64.src}/vendor/libp2p-mdns-0.48.0
-                  diff -r ${self}/vendor/libp2p-quic-0.13.1 ${android.androidNativeArm64.src}/vendor/libp2p-quic-0.13.1
-                  diff -r ${self}/vendor/libp2p-quic-0.13.1 ${android.androidNativeX86_64.src}/vendor/libp2p-quic-0.13.1
-                  diff -r ${self}/vendor/libp2p-relay-0.21.1 ${android.androidNativeArm64.src}/vendor/libp2p-relay-0.21.1
-                  diff -r ${self}/vendor/libp2p-relay-0.21.1 ${android.androidNativeX86_64.src}/vendor/libp2p-relay-0.21.1
-                  diff -r ${self}/vendor/libp2p-request-response-0.29.0 ${android.androidNativeArm64.src}/vendor/libp2p-request-response-0.29.0
-                  diff -r ${self}/vendor/libp2p-request-response-0.29.0 ${android.androidNativeX86_64.src}/vendor/libp2p-request-response-0.29.0
-                  diff -r ${self}/vendor/libp2p-swarm-0.47.1 ${android.androidNativeArm64.src}/vendor/libp2p-swarm-0.47.1
-                  diff -r ${self}/vendor/libp2p-swarm-0.47.1 ${android.androidNativeX86_64.src}/vendor/libp2p-swarm-0.47.1
-                  diff -r ${self}/vendor/stats_alloc-0.1.10 ${android.androidNativeArm64.src}/vendor/stats_alloc-0.1.10
-                  diff -r ${self}/vendor/stats_alloc-0.1.10 ${android.androidNativeX86_64.src}/vendor/stats_alloc-0.1.10
-                  diff -r ${self}/vendor/quinn-0.11.11 ${android.androidNativeArm64.src}/vendor/quinn-0.11.11
-                  diff -r ${self}/vendor/quinn-0.11.11 ${android.androidNativeX86_64.src}/vendor/quinn-0.11.11
-                  diff -r ${self}/vendor/quinn-udp-0.5.15 ${android.androidNativeArm64.src}/vendor/quinn-udp-0.5.15
-                  diff -r ${self}/vendor/quinn-udp-0.5.15 ${android.androidNativeX86_64.src}/vendor/quinn-udp-0.5.15
-                ''}
                 touch "$out"
               '';
           releaseArchive = self.packages.${system}.releaseArchive;
@@ -6333,7 +6274,7 @@
             pname = "p2p-vpn-clippy";
             version = "0.1.0";
             src = rustSource;
-            cargoLock.lockFile = ./Cargo.lock;
+            cargoLock = appCargoLock;
             nativeBuildInputs = [
               pkgs.clippy
               pkgs.pkg-config

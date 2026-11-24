@@ -1,8 +1,0 @@
-//! Wire limits shared by native and browser peers, independent of sockets.
-pub const PACKET_PLANE_DATAGRAM_HEADER_LEN: usize = 24;
-pub const PACKET_PLANE_AEAD_TAG_LEN: usize = 16;
-pub const PACKET_PLANE_MAX_UDP_DATAGRAM_LEN: usize = 65_535;
-pub const PACKET_PLANE_DATAGRAM_OVERHEAD_LEN: usize =
-    PACKET_PLANE_DATAGRAM_HEADER_LEN + PACKET_PLANE_AEAD_TAG_LEN + crate::wire::HEADER_LEN;
-pub const PACKET_PLANE_MAX_PAYLOAD_LEN: usize =
-    PACKET_PLANE_MAX_UDP_DATAGRAM_LEN - PACKET_PLANE_DATAGRAM_OVERHEAD_LEN;

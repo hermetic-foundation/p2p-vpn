@@ -1,5 +1,6 @@
 {
   pkgs,
+  sdk,
   src ? ../.,
   version ? "0.1.0",
   androidSdkLicenseAccepted ? false,
@@ -16,7 +17,7 @@ let
     arm64Abi
     x86_64Abi
   ];
-  lifecycleTrialFeatures = lib.optional demandLifecycleTrial "demand-lifecycle-trial";
+
   minimumSdkVersion = "29";
   platformVersion = "37";
   buildToolsVersion = "37.0.0";
@@ -33,35 +34,6 @@ let
     system = pkgs.stdenv.hostPlatform.system;
     config = androidNixpkgsConfig;
   };
-
-  androidCrossSystem = lib.systems.examples.aarch64-android-prebuilt // {
-    androidSdkVersion = minimumSdkVersion;
-  };
-  androidCrossPkgs = import pkgs.path {
-    localSystem = pkgs.stdenv.hostPlatform.system;
-    crossSystem = androidCrossSystem;
-    config = androidNixpkgsConfig;
-  };
-  androidRustStd = androidCrossPkgs.buildPackages.rustc.unwrapped.overrideAttrs (previous: {
-    preConfigure = (previous.preConfigure or "") + ''
-      configureFlagsArray+=("--set=build.jobs=$NIX_BUILD_CORES")
-    '';
-  });
-  androidRustc = androidCrossPkgs.buildPackages.rustc.override {
-    rustc-unwrapped = androidRustStd;
-    sysroot = androidRustStd;
-  };
-  androidRustPlatform = androidCrossPkgs.makeRustPlatform {
-    cargo = pkgs.cargo;
-    cargo-auditable = pkgs.cargo-auditable;
-    rustc = androidRustc;
-  };
-  arm64RustTarget = androidCrossPkgs.stdenv.hostPlatform.rust.rustcTarget;
-  x86_64RustTarget = "x86_64-linux-android";
-  androidPageSizeRustFlags = lib.concatStringsSep " " [
-    "-C link-arg=-Wl,-z,max-page-size=16384"
-    "-C link-arg=-Wl,-z,common-page-size=16384"
-  ];
 
   jdk = androidPkgs.jdk17;
   gradle = androidPkgs.gradle_9.override { java = jdk; };
@@ -81,53 +53,7 @@ let
   androidNdkRoot = "${androidHome}/ndk/${ndkVersion}";
 
   androidProject = src + "/android";
-  rootManifest = src + "/Cargo.toml";
-  rootLock = src + "/Cargo.lock";
-  rootRustSource = src + "/src";
-  autonatSource = src + "/vendor/libp2p-autonat-0.15.0";
-  libp2pCoreSource = src + "/vendor/libp2p-core-0.43.2";
-  libp2pDnsSource = src + "/vendor/libp2p-dns-0.44.0";
-  kademliaSource = src + "/vendor/libp2p-kad-0.48.0";
-  mdnsSource = src + "/vendor/libp2p-mdns-0.48.0";
-  libp2pQuicSource = src + "/vendor/libp2p-quic-0.13.1";
-  relaySource = src + "/vendor/libp2p-relay-0.21.1";
-  requestResponseSource = src + "/vendor/libp2p-request-response-0.29.0";
-  libp2pSwarmSource = src + "/vendor/libp2p-swarm-0.47.1";
-  allocationReviewSource = src + "/vendor/stats_alloc-0.1.10";
-  quinnSource = src + "/vendor/quinn-0.11.11";
-  quinnUdpSource = src + "/vendor/quinn-udp-0.5.15";
-  webRtcWebsysSource = src + "/vendor/libp2p-webrtc-websys-0.4.0";
-  browserManifest = src + "/crates/p2p-vpn-browser/Cargo.toml";
-  browserRustSource = src + "/crates/p2p-vpn-browser/src";
-  webRtcSource = src + "/vendor/libp2p-webrtc-0.9.0-alpha.1";
-  webRtcDtlsSource = src + "/vendor/webrtc-dtls-0.11.0";
-  androidCrate = src + "/crates/p2p-vpn-android";
-  androidE2eFixtureCrate = src + "/crates/p2p-vpn-android-e2e-fixture";
   androidProjectPresent = builtins.pathExists androidProject;
-  nativeSourcesPresent = builtins.all builtins.pathExists [
-    rootManifest
-    rootLock
-    rootRustSource
-    autonatSource
-    libp2pCoreSource
-    libp2pDnsSource
-    kademliaSource
-    mdnsSource
-    libp2pQuicSource
-    relaySource
-    requestResponseSource
-    libp2pSwarmSource
-    allocationReviewSource
-    quinnSource
-    quinnUdpSource
-    webRtcWebsysSource
-    browserManifest
-    browserRustSource
-    webRtcSource
-    webRtcDtlsSource
-    androidCrate
-    androidE2eFixtureCrate
-  ];
 
   unavailable =
     name: reason:
@@ -143,233 +69,32 @@ let
         exit 1
       '';
 
-  nativeSource = lib.fileset.toSource {
-    root = src;
-    fileset = lib.fileset.unions [
-      rootManifest
-      rootLock
-      rootRustSource
-      autonatSource
-      libp2pCoreSource
-      libp2pDnsSource
-      kademliaSource
-      mdnsSource
-      libp2pQuicSource
-      relaySource
-      requestResponseSource
-      libp2pSwarmSource
-      allocationReviewSource
-      quinnSource
-      quinnUdpSource
-      webRtcWebsysSource
-      browserManifest
-      browserRustSource
-      webRtcSource
-      webRtcDtlsSource
-      androidCrate
-      androidE2eFixtureCrate
-    ];
-  };
+  sdkPackages = sdk.packages.${pkgs.stdenv.hostPlatform.system};
+  variantSuffix = lib.optionalString demandLifecycleTrial "-demand-lifecycle-trial";
+  sdkPackage =
+    name:
+    let
+      attr = name + variantSuffix;
+    in
+    sdkPackages.${attr}
+      or (throw "The pinned libp2p-vpn SDK must export packages.${pkgs.stdenv.hostPlatform.system}.${attr}");
 
-  androidNativeArm64 =
-    if nativeSourcesPresent then
-      assert lib.assertMsg (
-        androidCrossPkgs.stdenv.hostPlatform.androidSdkVersion == minimumSdkVersion
-      ) "p2p-vpn Android Rust cross target must use API ${minimumSdkVersion}";
-      assert lib.assertMsg (
-        androidCrossPkgs.stdenv.hostPlatform.androidNdkVersion == "27"
-      ) "p2p-vpn Android Rust cross target must retain the nixpkgs prebuilt NDK 27 toolchain";
-      assert lib.assertMsg (androidCrossPkgs.stdenv.hostPlatform.useAndroidPrebuilt or false
-      ) "p2p-vpn Android Rust cross target must retain the nixpkgs prebuilt Android toolchain";
-      assert lib.assertMsg (lib.hasInfix "--keep-stage=0 --stage=1 build library" (
-        androidRustc.unwrapped.buildPhase or ""
-      )) "p2p-vpn Android Rust cross compiler must build only the target standard library";
-      assert lib.assertMsg
-        (lib.hasInfix "--sysroot ${builtins.unsafeDiscardStringContext (toString androidRustStd)}" androidRustc.buildCommand)
-        "p2p-vpn Android compiler and sysroot must use the same bounded standard-library build";
-      androidRustPlatform.buildRustPackage {
-        pname = "${pname}-arm64";
-        inherit version;
-        src = nativeSource;
-        cargoLock.lockFile = rootLock;
-        buildFeatures = lifecycleTrialFeatures;
-        cargoBuildFlags = [
-          "--package"
-          "p2p-vpn-android"
-          "--lib"
-        ];
-        doCheck = false;
-        strictDeps = true;
-        RUSTFLAGS = androidPageSizeRustFlags;
-
-        installPhase = ''
-          runHook preInstall
-
-          shared_library="target/${arm64RustTarget}/release/libp2p_vpn_android.so"
-          if [[ ! -s "$shared_library" ]]; then
-            echo "missing Android JNI library: $shared_library" >&2
-            exit 1
-          fi
-
-          install -Dm755 \
-            "$shared_library" \
-            "$out/lib/${arm64Abi}/libp2p_vpn_android.so"
-
-          runHook postInstall
-        '';
-
-        passthru = {
-          available = true;
-          abi = arm64Abi;
-          rustTarget = arm64RustTarget;
-          minimumSdk = lib.toInt minimumSdkVersion;
-          toolchainNdkMajor = 27;
-          rustCompiler = androidRustc;
-        };
-      }
-    else
-      unavailable "${pname}-native-source-missing" (
-        "The Rust Android source is incomplete under ${toString src}; "
-        + "Cargo.toml, Cargo.lock, src/, and crates/p2p-vpn-android/ are required."
-      );
-
-  # Nixpkgs only provides a prebuilt Rust standard library for Android arm64.
-  # Build std for x86_64 with the pinned NDK so the APK can run in a KVM emulator.
-  x86_64RustcSysroot = pkgs.symlinkJoin {
-    name = "rustc-with-android-libsrc";
-    paths = [ pkgs.rustc.unwrapped ];
-    postBuild = ''
-      mkdir -p "$out/lib/rustlib/src/rust"
-      ln -s ${pkgs.rustPlatform.rustLibSrc} "$out/lib/rustlib/src/rust/library"
-    '';
-  };
-  x86_64Rustc = pkgs.rustc.override { sysroot = x86_64RustcSysroot; };
-  x86_64RustPlatform = pkgs.makeRustPlatform {
-    cargo = pkgs.cargo;
-    rustc = x86_64Rustc;
-  };
-  x86_64BaseCargoDeps = x86_64RustPlatform.importCargoLock { lockFile = rootLock; };
-  x86_64CargoDeps = pkgs.symlinkJoin {
-    # importCargoLock's config resolves this relative directory name.
-    name = "cargo-vendor-dir";
-    paths = [ x86_64BaseCargoDeps ];
-    postBuild = ''
-      for crate in ${pkgs.rustPlatform.rustLibSrc}/vendor/*; do
-        name="$(basename "$crate")"
-        if [[ ! -e "$out/$name" ]]; then
-          ln -s "$crate" "$out/$name"
-        fi
-      done
-    '';
-  };
-  x86_64Linker = "${androidNdkRoot}/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android${minimumSdkVersion}-clang";
-
-  androidNativeX86_64 =
-    if nativeSourcesPresent then
-      x86_64RustPlatform.buildRustPackage {
-        pname = "${pname}-x86_64";
-        inherit version;
-        src = nativeSource;
-        cargoDeps = x86_64CargoDeps;
-        doCheck = false;
-        strictDeps = true;
-        auditable = false;
-
-        env = {
-          RUSTC_BOOTSTRAP = "1";
-          CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER = x86_64Linker;
-          CC_x86_64_linux_android = x86_64Linker;
-        };
-
-        buildPhase = ''
-          runHook preBuild
-
-          cargo build \
-            --jobs "$NIX_BUILD_CORES" \
-            -Z build-std=std,panic_abort \
-            --target ${x86_64RustTarget} \
-            --offline \
-            --release \
-            --package p2p-vpn-android \
-            --lib ${lib.optionalString demandLifecycleTrial "--features demand-lifecycle-trial"}
-
-          runHook postBuild
-        '';
-
-        installPhase = ''
-          runHook preInstall
-
-          shared_library="target/${x86_64RustTarget}/release/libp2p_vpn_android.so"
-          if [[ ! -s "$shared_library" ]]; then
-            echo "missing Android JNI library: $shared_library" >&2
-            exit 1
-          fi
-
-          install -Dm755 \
-            "$shared_library" \
-            "$out/lib/${x86_64Abi}/libp2p_vpn_android.so"
-
-          runHook postInstall
-        '';
-
-        passthru = {
-          available = true;
-          abi = x86_64Abi;
-          rustTarget = x86_64RustTarget;
-          minimumSdk = lib.toInt minimumSdkVersion;
-          toolchainNdkMajor = 28;
-        };
-      }
-    else
-      unavailable "${pname}-x86_64-native-source-missing" (
-        "The Rust Android source is incomplete under ${toString src}; "
-        + "Cargo.toml, Cargo.lock, src/, and crates/p2p-vpn-android/ are required."
-      );
-
-  androidNative = pkgs.symlinkJoin {
-    name = "${pname}-native-${version}";
-    paths = [
-      androidNativeArm64
-      androidNativeX86_64
-    ];
-    passthru = {
-      available = nativeSourcesPresent;
-      inherit abis androidNativeArm64 androidNativeX86_64;
-      minimumSdk = lib.toInt minimumSdkVersion;
-    };
-  };
-
-  androidRustTests =
-    if nativeSourcesPresent then
-      pkgs.rustPlatform.buildRustPackage {
-        pname = "${pname}-rust-tests";
-        inherit version;
-        src = nativeSource;
-        cargoLock.lockFile = rootLock;
-        buildFeatures = lifecycleTrialFeatures;
-        cargoBuildFlags = [
-          "--package"
-          "p2p-vpn-android"
-          "--tests"
-        ];
-        cargoTestFlags = [
-          "--package"
-          "p2p-vpn-android"
-        ];
-        doCheck = true;
-        strictDeps = true;
-
-        installPhase = ''
-          runHook preInstall
-          touch "$out"
-          runHook postInstall
-        '';
-      }
-    else
-      unavailable "${pname}-rust-tests-source-missing" (
-        "The Rust Android source is incomplete under ${toString src}; "
-        + "Cargo.toml, Cargo.lock, src/, and crates/p2p-vpn-android/ are required."
-      );
+  androidAar =
+    let
+      aar = sdkPackage "android-aar";
+    in
+    assert lib.assertMsg (
+      aar.minimumSdk == lib.toInt minimumSdkVersion
+    ) "The libp2p-vpn Android AAR must use API ${minimumSdkVersion}";
+    assert lib.assertMsg (
+      lib.sort builtins.lessThan aar.abis == lib.sort builtins.lessThan abis
+    ) "The libp2p-vpn Android AAR must contain exactly ${lib.concatStringsSep ", " abis}";
+    aar;
+  androidAarFile = "${androidAar}/${androidAar.aarName}";
+  androidNative = androidAar.androidNative;
+  androidNativeArm64 = sdkPackage "android-native-arm64";
+  androidNativeX86_64 = sdkPackage "android-native-x86_64";
+  androidRustTests = sdkPackage "android-rust-tests";
 
   androidDebugApk =
     if androidProjectPresent then
@@ -396,17 +121,10 @@ let
           JAVA_HOME = jdk.home;
           LANG = "C.UTF-8";
           LC_ALL = "C.UTF-8";
+          P2P_VPN_ANDROID_AAR = androidAarFile;
         };
 
         postPatch = ''
-          for abi in ${lib.escapeShellArgs abis}; do
-            mkdir -p "app/src/main/jniLibs/$abi"
-            rm -f "app/src/main/jniLibs/$abi/libp2p_vpn_android.so"
-            install -m755 \
-              "${androidNative}/lib/$abi/libp2p_vpn_android.so" \
-              "app/src/main/jniLibs/$abi/libp2p_vpn_android.so"
-          done
-
           printf 'sdk.dir=%s\n' "$ANDROID_HOME" > local.properties
           export HOME="$TMPDIR/home"
           export ANDROID_USER_HOME="$TMPDIR/android-user-home"
@@ -443,7 +161,7 @@ let
           available = true;
           apkName = "p2p-vpn-debug.apk";
           abi = arm64Abi;
-          inherit abis androidNative;
+          inherit abis androidAar androidNative;
           minimumSdk = lib.toInt minimumSdkVersion;
           updateScript = finalAttrs.mitmCache.updateScript;
         };
@@ -561,6 +279,7 @@ let
     JAVA_HOME = jdk.home;
     LANG = "C.UTF-8";
     LC_ALL = "C.UTF-8";
+    P2P_VPN_ANDROID_AAR = androidAarFile;
 
     shellHook = ''
       export GRADLE_OPTS="''${GRADLE_OPTS:-} -Dorg.gradle.java.home=$JAVA_HOME"
@@ -573,6 +292,7 @@ let
         nativeBuildInputs = [
           jdk
           pkgs.binutils
+          pkgs.unzip
         ];
       }
       ''
@@ -608,7 +328,9 @@ let
           fi
         }
 
-        arm64_native=${androidNative}/lib/${arm64Abi}/libp2p_vpn_android.so
+        unzip -q ${lib.escapeShellArg androidAarFile} 'jni/*' -d sdk-aar
+
+        arm64_native=sdk-aar/jni/${arm64Abi}/libp2p_vpn_android.so
         if [[ ! -s "$arm64_native" ]]; then
           echo "missing Android JNI library: $arm64_native" >&2
           exit 1
@@ -624,7 +346,7 @@ let
         esac
         check_load_alignment "$arm64_native" ${lib.escapeShellArg arm64Abi}
 
-        x86_64_native=${androidNative}/lib/${x86_64Abi}/libp2p_vpn_android.so
+        x86_64_native=sdk-aar/jni/${x86_64Abi}/libp2p_vpn_android.so
         if [[ ! -s "$x86_64_native" ]]; then
           echo "missing Android JNI library: $x86_64_native" >&2
           exit 1
@@ -820,6 +542,7 @@ let
 in
 {
   inherit
+    androidAar
     androidCheck
     androidDebugApk
     androidDevShell
@@ -835,7 +558,7 @@ in
 
   androidBuildConfig = {
     abi = arm64Abi;
-    rustTarget = arm64RustTarget;
+    rustTarget = androidNativeArm64.rustTarget;
     inherit
       abis
       buildToolsVersion
@@ -844,16 +567,16 @@ in
       platformVersion
       ;
     rustTargets = {
-      arm64 = arm64RustTarget;
-      x86_64 = x86_64RustTarget;
+      arm64 = androidNativeArm64.rustTarget;
+      x86_64 = androidNativeX86_64.rustTarget;
     };
     minimumSdk = lib.toInt minimumSdkVersion;
-    inherit androidProjectPresent nativeSourcesPresent;
+    inherit androidProjectPresent;
+    nativeSourcesPresent = androidAar.available;
     inherit demandLifecycleTrial;
     gradleVersion = gradle.version;
     gradleJdkVersion = lib.versions.major gradle.jdk.version;
     jdkVersion = lib.versions.major jdk.version;
-    rustToolchainNdkMajor = lib.toInt androidCrossPkgs.stdenv.hostPlatform.androidNdkVersion;
-    rustUsesAndroidPrebuilt = androidCrossPkgs.stdenv.hostPlatform.useAndroidPrebuilt or false;
+    rustToolchainNdkMajor = androidNativeArm64.toolchainNdkMajor;
   };
 }

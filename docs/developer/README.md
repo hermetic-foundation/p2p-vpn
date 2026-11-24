@@ -7,7 +7,8 @@ Use these docs when changing, testing, or debugging `p2p-vpn`.
 | Document | Use It For |
 | --- | --- |
 | [Architecture](architecture.md) | Runtime and protocol layout. |
-| [Protocol Specification](protocol/README.md) | Interoperability rules, wire formats, discovery, membership, and conformance. |
+| [Protocol Specification](https://github.com/hermetic-foundation/libp2p-vpn/blob/cc40da135edd90abcd008f8fc9c54a6695272c95/docs/developer/protocol/README.md) | Interoperability rules, wire formats, discovery, membership, and conformance. |
+| [SDK dependency](sdk-dependency.md) | Update and roll back the shared SDK pin. |
 | [Browser WASM Validation](browser-wasm-validation.md) | Browser/native packet proof, compatibility fixes, bounds, and remaining gates. |
 | [Browser Code Reuse](browser-code-reuse.md) | Shared protocol logic and the browser and companion adapter boundaries. |
 | [Browser Real-Network Validation](browser-real-network-validation.md) | Physical LAN enrollment and credential reopen, plus public relay traffic across an LTE-to-Wi-Fi handoff. |

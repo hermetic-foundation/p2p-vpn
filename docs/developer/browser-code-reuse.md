@@ -1,7 +1,7 @@
 # Browser Code Reuse
 
 The browser, native runtime, and Linux companion share the
-[protocol](protocol/README.md). This refactor does not change its wire format
+[protocol](https://github.com/hermetic-foundation/libp2p-vpn/blob/cc40da135edd90abcd008f8fc9c54a6695272c95/docs/developer/protocol/README.md). This refactor does not change its wire format
 or supported profiles.
 
 ## What Changed
@@ -29,6 +29,6 @@ or supported profiles.
 | Checkpoint recovery | Reopening pending credentials left forwarding disabled. An authenticated removal survived another reopen; no VPN packet reached the peer. |
 | Companion routing | Isolated Chromium tests covered relay fallback, default-route switch and return, and IPv6 underlay to an IPv4-only reservation owner. |
 
-Keep the existing [browser conformance limits](protocol/browser-conformance.md).
+Keep the existing [browser conformance limits](https://github.com/hermetic-foundation/libp2p-vpn/blob/cc40da135edd90abcd008f8fc9c54a6695272c95/docs/developer/protocol/browser-conformance.md).
 The Chromium IPv6-only underlay results do not qualify hosts with no
 non-loopback IPv4, and isolated DHT tests do not qualify public IPFS.

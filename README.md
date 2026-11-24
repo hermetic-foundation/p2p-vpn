@@ -11,6 +11,9 @@ It uses libp2p for identity, encrypted transports, discovery, relay, AutoNAT,
 and DCUtR. It forwards overlay IP packets through authenticated packet
 protocols and bounded queues.
 
+The reusable engine and platform bindings are in [libp2p-vpn](https://github.com/hermetic-foundation/libp2p-vpn).
+This repository packages the applications and the NixOS module.
+
 ## Documentation
 
 | Audience | Start Here | Purpose |

@@ -61,7 +61,8 @@ try {
     New-Item -ItemType Directory -Path $evidence | Out-Null
     $stdout = Join-Path $evidence 'native-stdout.log'
     $stderr = Join-Path $evidence 'native-stderr.log'
-    $fixtureArguments = @('--port', "$Port")
+    $appWeb = Join-Path $repo 'crates\p2p-vpn-browser\web'
+    $fixtureArguments = @('--port', "$Port", '--web-root', ('"' + $appWeb + '"'))
     if ($WebRtcIp) { $fixtureArguments += @('--webrtc-ip', $WebRtcIp) }
     $clientDirectory = Join-Path $evidence 'client'
     if ($Lan) { $fixtureArguments += @('--export-client', ('"' + $clientDirectory + '"')) }
