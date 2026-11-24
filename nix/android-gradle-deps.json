@@ -189,14 +189,6 @@
    "jar": "sha256-3od3Omd+h/YZx1HDBq9u5zoEp7JuXyBf/yh3KNivSs4=",
    "module": "sha256-9MRgBQahVm02+xqdJ8GH9JI2nArmcTUjq/9mcVuh1xw=",
    "pom": "sha256-HYB2KVCfK27TrEFkWvCxkEPIsmJY0Q3FYJUVzf0rhLc="
-  },
-  "play-sdk/index/snapshot": {
-   "gz": "sha256-LKT05VpB4K5/V5qFl5vCDMGCQjP9N14iR8EqG5ee/eM="
-  }
- },
- "https://maven.google.com": {
-  "master-index": {
-   "xml": "sha256-ABmkuroB0FZdbp/A9bnczPhDvAQI7KDCGQLuBxhog3o="
   }
  },
  "https://repo.maven.apache.org/maven2": {

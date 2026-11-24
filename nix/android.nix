@@ -528,10 +528,20 @@ let
 
   androidUpdateDeps = pkgs.writeShellApplication {
     name = "p2p-vpn-android-update-deps";
+    runtimeInputs = [ pkgs.jq ];
     text =
       if androidProjectPresent then
         ''
-          exec ${androidDebugApk.updateScript} "$@"
+          ${androidDebugApk.updateScript} "$@"
+          # Lint's remote advisory catalogs change independently of pinned artifacts.
+          lock=nix/android-gradle-deps.json
+          cleaned=$(mktemp "$lock.XXXXXX")
+          trap 'rm -f "$cleaned"' EXIT
+          jq --indent 1 '
+            del(.["https://maven.google.com"]["master-index"], .["https://dl.google.com"]["play-sdk/index/snapshot"])
+            | if .["https://maven.google.com"] == {} then del(.["https://maven.google.com"]) else . end
+          ' "$lock" > "$cleaned"
+          mv -- "$cleaned" "$lock"
         ''
       else
         ''
