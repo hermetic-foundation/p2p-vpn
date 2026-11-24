@@ -1,8 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if (( $# == 2 )) && [[ $1 == --sdk-package ]]; then
+    script_dir=$(dirname -- "${BASH_SOURCE[0]}")
+    if [[ -n ${P2P_VPN_BROWSER_OUT_DIR:-} ]]; then
+        exec bash "$script_dir/stage-browser-sdk.sh" "$2" "$P2P_VPN_BROWSER_OUT_DIR"
+    fi
+    exec bash "$script_dir/stage-browser-sdk.sh" "$2"
+fi
+
 if (( $# > 1 )) || { (( $# == 1 )) && [[ $1 != --test-hooks ]]; }; then
-    printf 'usage: bash scripts/build-browser.sh [--test-hooks]\n' >&2
+    printf 'usage: bash scripts/build-browser.sh [--test-hooks | --sdk-package SDK_PKG]\n' >&2
     exit 2
 fi
 
