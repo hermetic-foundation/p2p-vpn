@@ -55,21 +55,12 @@ disposable authorized peer and checks the browser's actual protocol responses.
 It needs a test interface but not a TUN adapter or public discovery.
 
 ```sh
-bash scripts/build-browser.sh --test-hooks
-cargo build --locked -p p2p-vpn-browser --bin browser-receiver-fixture
-export P2P_VPN_RECEIVER_FIXTURE="$(realpath target/debug/browser-receiver-fixture)"
 npm ci --prefix crates/p2p-vpn-browser
-unshare --user --map-root-user --net sh -ec '
-  ip link set lo up
-  ip link add pv-receiver type dummy
-  ip address add 192.0.2.1/24 dev pv-receiver
-  ip link set pv-receiver up
-  node --test crates/p2p-vpn-browser/tests/receiver.mjs
-'
+bash scripts/test-browser-linux.sh wire
 ```
 
-Build again without `--test-hooks` before serving the app, or set
-`P2P_VPN_BROWSER_OUT_DIR` to keep the test-hook package separate.
+The runner builds the fixture from the pinned SDK and keeps test-hook
+bindings out of the app package.
 
 ## Linux Companion
 

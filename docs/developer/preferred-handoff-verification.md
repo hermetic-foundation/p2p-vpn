@@ -77,33 +77,19 @@ executable unit, socket, and end-to-end testing, not a formal proof.
 
 ## Reproduce
 
-Build with the repository's flake tooling:
+Run the relay suite with the repository's flake tooling. It builds the app CLI
+and takes the browser bindings and pairing seed fixture from the pinned SDK.
 
 ```sh
 nix develop
-cargo build --locked -p p2p-vpn --features webrtc --bin p2p-vpn
-bash scripts/build-browser.sh
-cargo test --locked -p p2p-vpn --features webrtc \
-  --test browser_public_pairing_seed --no-run
-```
-
-Set the compiled fixture paths, then run in a fresh namespace:
-
-```sh
-export P2P_VPN_BIN="$PWD/target/debug/p2p-vpn"
-export P2P_VPN_APP_ASSETS="$PWD/crates/p2p-vpn-browser/web"
-export P2P_VPN_PAIRING_SEED=/absolute/path/to/browser_public_pairing_seed-test-binary
-export P2P_VPN_TEST_NETNS="$(readlink /proc/self/ns/net)"
-unshare --user --map-root-user --mount --net --pid --fork \
-  --kill-child=SIGKILL --mount-proc node --test \
-  crates/p2p-vpn-browser/tests/preferred-interface-handoff.mjs
+npm ci --prefix crates/p2p-vpn-browser
+bash scripts/test-browser-linux.sh relay
 ```
 
 - Install the browser package's locked Playwright dependencies and Chromium.
 - Set `P2P_VPN_CHROMIUM` to select a nonstandard Chromium executable.
 - Set `P2P_VPN_LEGACY_APP_ASSETS` to a pre-extension build to run the legacy
   compatibility case; otherwise that one case explicitly skips.
-- The test is also registered in `scripts/test-browser-linux.sh relay`.
 
 For this run, the full Nix development shell attempted uncached dependency
 builds. Those builds were cancelled. Tests used the already installed Nix-store
@@ -131,14 +117,15 @@ migrations the old resources retired only after commit.
 With the same injected probe and a browser built before the reply fix, the
 native peer saw an unexpected end-of-stream instead of a typed rejection.
 
-Run the checkpoint case in its own namespace with the commands above and add
-`--test-name-pattern='checkpoint-paired Chromium'` before the test file.
-To exercise the rejection independently of the current sender guard:
+The relay suite includes the checkpoint case. To exercise the rejection
+independently of the current sender guard:
 
-1. Create a disposable workspace and apply
+1. Create a writable checkout at the SDK revision in `flake.lock`. Apply
    [the early-probe fixture](../../crates/p2p-vpn-browser/tests/fixtures/early-handoff-probe.patch)
-   using `patch -p1`. Build only the native binary there.
-2. Run the same test against the production browser assets with that binary
+   using `patch -p1`. In a disposable app checkout, point its Cargo SDK
+   dependency at the patched checkout and rebuild the native CLI.
+2. Run the handoff test in an isolated namespace against the production
+   browser assets, with that binary
    in `P2P_VPN_BIN` and set `P2P_VPN_TEST_EARLY_HANDOFF_PROBE=1`.
 3. Check that the native peer received the typed rejection on the same
    candidate that later delivered the authorized payload and committed.
