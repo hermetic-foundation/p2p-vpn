@@ -27,6 +27,9 @@ nix flake check --no-build
 bash scripts/build-browser.sh
 ```
 
-For an app cutover rollback, revert the cutover commit as a unit.
+For an app cutover rollback, redeploy the last app revision before the
+cutover. To roll back in source control, revert the cutover and its
+follow-up packaging commits together; the new scripts require the SDK.
+
 For a later SDK update, restore both manifest pins and both lockfiles.
 Neither rollback changes device identity files or network membership.

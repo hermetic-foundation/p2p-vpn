@@ -16,7 +16,7 @@ reliability review or constitute physical/public-WAN certification.
 
 ## Ownership Inventory
 
-Symbols refer to [the runtime adapter](../../src/runtime/runner.rs).
+Symbols refer to [the runtime adapter](https://github.com/hermetic-foundation/libp2p-vpn/blob/cc40da135edd90abcd008f8fc9c54a6695272c95/src/runtime/runner.rs).
 The final verification section records whole-workstream gates separately from
 the source traces and focused tests below.
 
@@ -173,7 +173,7 @@ Recorded test-binary SHA-256:
 
 Status: listener and acceptance regressions reproduced through production dispatch;
 corrections passed full scoped verification. Tests live in
-[recovery_event_tests.rs](../../src/runtime/runner/recovery_event_tests.rs).
+[recovery_event_tests.rs](https://github.com/hermetic-foundation/libp2p-vpn/blob/cc40da135edd90abcd008f8fc9c54a6695272c95/src/runtime/runner/recovery_event_tests.rs).
 
 | Defect / Boundary | Correction / Evidence |
 | --- | --- |

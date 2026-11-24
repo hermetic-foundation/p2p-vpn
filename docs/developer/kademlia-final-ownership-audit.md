@@ -63,9 +63,9 @@ Pending expiry and inbound expiry use the configured substream timeout, ten
 seconds by default. Inbound request activity refreshes its deadline; stalled
 responses and idle streams do not. Expiry drops a DHT stream, not its connection.
 
-Source: [handler](../../vendor/libp2p-kad-0.48.0/src/handler.rs),
-[pending owner](../../vendor/libp2p-kad-0.48.0/src/handler/pending.rs),
-[inbound owner](../../vendor/libp2p-kad-0.48.0/src/handler/inbound.rs).
+Source: [handler](https://github.com/hermetic-foundation/libp2p-vpn/blob/cc40da135edd90abcd008f8fc9c54a6695272c95/vendor/libp2p-kad-0.48.0/src/handler.rs),
+[pending owner](https://github.com/hermetic-foundation/libp2p-vpn/blob/cc40da135edd90abcd008f8fc9c54a6695272c95/vendor/libp2p-kad-0.48.0/src/handler/pending.rs),
+[inbound owner](https://github.com/hermetic-foundation/libp2p-vpn/blob/cc40da135edd90abcd008f8fc9c54a6695272c95/vendor/libp2p-kad-0.48.0/src/handler/inbound.rs).
 
 ### Per-DHT Storage
 
@@ -106,11 +106,11 @@ Container overhead remains additional to the payload accounting above. The
 bounded element counts constrain container growth under the standard collections;
 these counters are not allocator instrumentation or a portable RSS promise.
 
-Source: [query pool](../../vendor/libp2p-kad-0.48.0/src/query.rs),
+Source: [query pool](https://github.com/hermetic-foundation/libp2p-vpn/blob/cc40da135edd90abcd008f8fc9c54a6695272c95/vendor/libp2p-kad-0.48.0/src/query.rs),
 [query owners](../../vendor/libp2p-kad-0.48.0/src/query),
-[background jobs](../../vendor/libp2p-kad-0.48.0/src/jobs.rs),
-[routing leases](../../vendor/libp2p-kad-0.48.0/src/addresses/budget.rs),
-[behaviour queue](../../vendor/libp2p-kad-0.48.0/src/behaviour/queue.rs).
+[background jobs](https://github.com/hermetic-foundation/libp2p-vpn/blob/cc40da135edd90abcd008f8fc9c54a6695272c95/vendor/libp2p-kad-0.48.0/src/jobs.rs),
+[routing leases](https://github.com/hermetic-foundation/libp2p-vpn/blob/cc40da135edd90abcd008f8fc9c54a6695272c95/vendor/libp2p-kad-0.48.0/src/addresses/budget.rs),
+[behaviour queue](https://github.com/hermetic-foundation/libp2p-vpn/blob/cc40da135edd90abcd008f8fc9c54a6695272c95/vendor/libp2p-kad-0.48.0/src/behaviour/queue.rs).
 
 ## Production Producers
 

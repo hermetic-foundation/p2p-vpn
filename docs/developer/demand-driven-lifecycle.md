@@ -48,8 +48,8 @@ high idle cellular power but does not identify the exact remaining packet source
 | Membership sync | Compares snapshots before fetching pages | Preserve event-driven updates; do not turn idle state into membership loss |
 | Android status polling | Local JNI snapshot polling | Do not classify local snapshots as network activity |
 
-Sources: [host](../../src/runtime/p2p.rs), [runner](../../src/runtime/runner.rs),
-[retention](../../src/runtime/runner/control_connection_retention.rs),
+Sources: [host](https://github.com/hermetic-foundation/libp2p-vpn/blob/cc40da135edd90abcd008f8fc9c54a6695272c95/src/runtime/p2p.rs), [runner](https://github.com/hermetic-foundation/libp2p-vpn/blob/cc40da135edd90abcd008f8fc9c54a6695272c95/src/runtime/runner.rs),
+[retention](https://github.com/hermetic-foundation/libp2p-vpn/blob/cc40da135edd90abcd008f8fc9c54a6695272c95/src/runtime/runner/control_connection_retention.rs),
 and the dependency versions recorded in `Cargo.lock`.
 
 ## Two Independent Lifecycles
@@ -260,8 +260,8 @@ the production runtime. Evaluate a focused proof once the model stabilizes.
 | Component | Evidence | Remaining Boundary |
 | --- | --- | --- |
 | Protocol contract | Published before runtime edits | Operational assumptions still require verification |
-| [Policy model](../../src/runtime/lifecycle.rs) | Fixed-size state, epoch/revision-bound exchanges, and wake announcements that preserve application time | Shared runner driver is integrated; production advertisement remains gated |
-| [Model tests](../../src/runtime/lifecycle/tests.rs) | 34 tests, including 111,111 short bilateral event sequences | These model checks are not a production-runtime proof |
+| [Policy model](https://github.com/hermetic-foundation/libp2p-vpn/blob/cc40da135edd90abcd008f8fc9c54a6695272c95/src/runtime/lifecycle.rs) | Fixed-size state, epoch/revision-bound exchanges, and wake announcements that preserve application time | Shared runner driver is integrated; production advertisement remains gated |
+| [Model tests](https://github.com/hermetic-foundation/libp2p-vpn/blob/cc40da135edd90abcd008f8fc9c54a6695272c95/src/runtime/lifecycle/tests.rs) | 34 tests, including 111,111 short bilateral event sequences | These model checks are not a production-runtime proof |
 | Idle delivery safety | Authenticated reply-sent/ACK commitment rechecks authority, epochs, demand, incoming path, and native work | Integrated first-payload and public-relay validation remain |
 | [Wire exchange](demand-lifecycle-wire.md) | 23 tests: bounded codec, contextual authentication, epochs, scope, stale/revoked response rejection | Quiet capability remains unadvertised |
 | [Runner dispatcher](demand-lifecycle-dispatch.md) | Native readiness, automatic idle/wake, bounded slots/rates, commit-time validation, and native-owned control quarantine leases | Integrated activation, broader offline-peer retry policy, and operational validation remain |

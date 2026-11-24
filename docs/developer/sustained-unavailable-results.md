@@ -98,9 +98,9 @@ Observed retry clocks rise toward 300 seconds for dial/address cooldowns and
 240 seconds for recovery queries. This is consistent with the existing
 exponential policies, not proof of every transport's internal retry interval.
 
-Policy sources: [dial backoff](../../src/runtime/runner.rs),
-[query backoff](../../src/runtime/recovery_queries.rs), and
-[owner-counter semantics](../../src/runtime/runner/recovery_snapshot.rs).
+Policy sources: [dial backoff](https://github.com/hermetic-foundation/libp2p-vpn/blob/cc40da135edd90abcd008f8fc9c54a6695272c95/src/runtime/runner.rs),
+[query backoff](https://github.com/hermetic-foundation/libp2p-vpn/blob/cc40da135edd90abcd008f8fc9c54a6695272c95/src/runtime/recovery_queries.rs), and
+[owner-counter semantics](https://github.com/hermetic-foundation/libp2p-vpn/blob/cc40da135edd90abcd008f8fc9c54a6695272c95/src/runtime/runner/recovery_snapshot.rs).
 Portable samples retain each counter's range and the observed error timeline.
 
 ### Memory Attribution Remains Open

@@ -492,8 +492,8 @@ absolute-time ICMP deadlines and a bounded structured traffic report.
 | LAN-first grace, discovery backoff, relay reservation, and direct address quarantine | Reuse Phase 2's 130-second outage, 960-second relay and 375-second direct recovery budgets |
 | 600-second packet sessions; 900-second address publication refresh | Long recovery runs cross these timers; short idle/traffic runs do not establish renewal or long-term leak behavior |
 
-Timer sources: [runtime constants](../../src/runtime/runner.rs),
-[swarm idle timeout](../../src/runtime/p2p.rs), and the accepted
+Timer sources: [runtime constants](https://github.com/hermetic-foundation/libp2p-vpn/blob/cc40da135edd90abcd008f8fc9c54a6695272c95/src/runtime/runner.rs),
+[swarm idle timeout](https://github.com/hermetic-foundation/libp2p-vpn/blob/cc40da135edd90abcd008f8fc9c54a6695272c95/src/runtime/p2p.rs), and the accepted
 [recovery fixture](../../tests/support/recovery_soak.rs).
 No timer is shortened in either subject to make this experiment pass.
 

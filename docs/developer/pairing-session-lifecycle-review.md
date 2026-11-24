@@ -40,14 +40,14 @@ security or membership policy.
 
 | Owner / Source | Transitions to Trace |
 | --- | --- |
-| [CodePairingSessions](../../src/runtime/pairing_sessions.rs) | Operation IDs, Hello/Submit/Poll request map, inbound sessions, approval tickets and retry flags |
+| [CodePairingSessions](https://github.com/hermetic-foundation/libp2p-vpn/blob/cc40da135edd90abcd008f8fc9c54a6695272c95/src/runtime/pairing_sessions.rs) | Operation IDs, Hello/Submit/Poll request map, inbound sessions, approval tickets and retry flags |
 | Same session owner | Prepared/Applied/Aborting ledger, receipts, replay tokens, expiry and replacement |
-| [Runtime adapter](../../src/runtime/runner.rs) | RPC mutations, both code protocol dispatchers, file pairing, provider/query retirement and shutdown |
+| [Runtime adapter](https://github.com/hermetic-foundation/libp2p-vpn/blob/cc40da135edd90abcd008f8fc9c54a6695272c95/src/runtime/runner.rs) | RPC mutations, both code protocol dispatchers, file pairing, provider/query retirement and shutdown |
 | Same runtime adapter | Runtime enrollment preparation, route application, completion, checkpoint and abort cleanup |
-| [PairingStateStore](../../src/runtime/pairing_store.rs) | Atomic save, load validation, error handling and restart ownership |
-| [Code protocol codecs](../../src/runtime/pairing_code.rs) | Terminal transport events and bounded messages for both protocol versions |
-| [File pairing codec](../../src/runtime/pairing.rs) | Request completion, rejection and disconnect behavior |
-| [V2 bootstrap client](../../src/runtime/pairing_bootstrap.rs) | Separate request map, selected peer, pending approval, timeout and future-drop cleanup |
+| [PairingStateStore](https://github.com/hermetic-foundation/libp2p-vpn/blob/cc40da135edd90abcd008f8fc9c54a6695272c95/src/runtime/pairing_store.rs) | Atomic save, load validation, error handling and restart ownership |
+| [Code protocol codecs](https://github.com/hermetic-foundation/libp2p-vpn/blob/cc40da135edd90abcd008f8fc9c54a6695272c95/src/runtime/pairing_code.rs) | Terminal transport events and bounded messages for both protocol versions |
+| [File pairing codec](https://github.com/hermetic-foundation/libp2p-vpn/blob/cc40da135edd90abcd008f8fc9c54a6695272c95/src/runtime/pairing.rs) | Request completion, rejection and disconnect behavior |
+| [V2 bootstrap client](https://github.com/hermetic-foundation/libp2p-vpn/blob/cc40da135edd90abcd008f8fc9c54a6695272c95/src/runtime/pairing_bootstrap.rs) | Separate request map, selected peer, pending approval, timeout and future-drop cleanup |
 | [CLI tests](../../tests/pair_cli.rs) | Cancellation outcomes, operation resumption, artifact export and acknowledgement |
 
 ## Bounded Checklist
@@ -485,9 +485,9 @@ No production behavior change was needed for this inventory checkpoint.
 | Abort compaction | `finish_enrollment_abort_with` | Retain in-memory abort until save succeeds; replay protection replaces enrollment on disk |
 | Artifact acknowledgement | `acknowledge_enrollment` and RPC adapter | Receipt matching is idempotent; a failed save returns an error rather than durable acknowledgement |
 
-Relevant sources: [runtime adapter](../../src/runtime/runner.rs),
-[session owner](../../src/runtime/pairing_sessions.rs) and
-[state store](../../src/runtime/pairing_store.rs).
+Relevant sources: [runtime adapter](https://github.com/hermetic-foundation/libp2p-vpn/blob/cc40da135edd90abcd008f8fc9c54a6695272c95/src/runtime/runner.rs),
+[session owner](https://github.com/hermetic-foundation/libp2p-vpn/blob/cc40da135edd90abcd008f8fc9c54a6695272c95/src/runtime/pairing_sessions.rs) and
+[state store](https://github.com/hermetic-foundation/libp2p-vpn/blob/cc40da135edd90abcd008f8fc9c54a6695272c95/src/runtime/pairing_store.rs).
 
 ### Shutdown and Restart
 
@@ -561,9 +561,9 @@ The persistence inventory and test extension were published as `88542fca`;
 
 ## Standalone V2 Ownership Inventory
 
-Source trace at `88542fca`: [bootstrap client](../../src/runtime/pairing_bootstrap.rs)
+Source trace at `88542fca`: [bootstrap client](https://github.com/hermetic-foundation/libp2p-vpn/blob/cc40da135edd90abcd008f8fc9c54a6695272c95/src/runtime/pairing_bootstrap.rs)
 and its sole production caller in the
-[Android native bridge](../../crates/p2p-vpn-android/src/lib.rs).
+[Android native bridge](https://github.com/hermetic-foundation/libp2p-vpn/blob/cc40da135edd90abcd008f8fc9c54a6695272c95/crates/p2p-vpn-android/src/lib.rs).
 This completes the standalone-client trace, not the daemon dispatch checklist.
 
 ### Lifetime and Admission
@@ -748,8 +748,8 @@ commit ordering has separate negative/positive evidence under PS-4.
 | Code reads | Check the 64 KiB frame bound before payload allocation; 10-second request timeout and configured stream cap |
 | File reads | Check the bounded length-prefixed frame before allocation; same request timeout and stream-cap mechanism |
 
-Sources: [CLI](../../src/main.rs), [code codec](../../src/runtime/pairing_code.rs)
-and [file codec](../../src/runtime/pairing.rs). The workspace run includes codec
+Sources: [CLI](../../src/main.rs), [code codec](https://github.com/hermetic-foundation/libp2p-vpn/blob/cc40da135edd90abcd008f8fc9c54a6695272c95/src/runtime/pairing_code.rs)
+and [file codec](https://github.com/hermetic-foundation/libp2p-vpn/blob/cc40da135edd90abcd008f8fc9c54a6695272c95/src/runtime/pairing.rs). The workspace run includes codec
 round trips/oversize rejection and CLI live acceptance, bootstrap discovery,
 relay discovery and timeout diagnostics; PS-4 adds namespace traffic checks.
 

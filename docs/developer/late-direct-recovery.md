@@ -175,7 +175,7 @@ that all public NAT topologies permit direct connectivity.
 
 ## Scoped Runtime Fix
 
-The [ordinary peer dial helper](../../src/runtime/runner.rs) allocates a fresh
+The [ordinary peer dial helper](https://github.com/hermetic-foundation/libp2p-vpn/blob/cc40da135edd90abcd008f8fc9c54a6695272c95/src/runtime/runner.rs) allocates a fresh
 outbound port when every supplied address is direct TCP on a currently active
 local interface subnet. Interface discovery failure preserves the previous policy.
 

@@ -62,9 +62,9 @@ just active-query iterators. Polling allowances assume a serviced event loop.
 | Path health probes | Five-second cadence; 12-second probe timeout | Probe traffic is legitimate maintenance, not a discovery storm |
 | Automatic relay reservation attempt | 30-second pending timeout; default retry interval 30 seconds | Distinguish failed acquisition from renewal of an accepted reservation |
 
-Sources: [runner timers and owners](../../src/runtime/runner.rs),
-[recovery-query owner](../../src/runtime/recovery_queries.rs), and
-[configuration defaults](../../src/config.rs).
+Sources: [runner timers and owners](https://github.com/hermetic-foundation/libp2p-vpn/blob/cc40da135edd90abcd008f8fc9c54a6695272c95/src/runtime/runner.rs),
+[recovery-query owner](https://github.com/hermetic-foundation/libp2p-vpn/blob/cc40da135edd90abcd008f8fc9c54a6695272c95/src/runtime/recovery_queries.rs), and
+[configuration defaults](https://github.com/hermetic-foundation/libp2p-vpn/blob/cc40da135edd90abcd008f8fc9c54a6695272c95/src/config.rs).
 
 The fixture-specific recovery and settling budgets below were frozen from these
 timers and the topology before acceptance. Failures were fixed without widening

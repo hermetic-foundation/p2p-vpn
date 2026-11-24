@@ -158,7 +158,7 @@ energy counter. Retaining raw reports made the collector failures diagnosable.
 | Combined pause leaves 891.98 mW | Targeted outbound DHT work and peer probes are not the whole explanation |
 | Independent off reference reaches 17.28 mW | Strong evidence associates most observed modem load with VPN networking |
 
-The [host configuration](../../src/runtime/p2p.rs) includes 15-second libp2p pings
+The [host configuration](https://github.com/hermetic-foundation/libp2p-vpn/blob/cc40da135edd90abcd008f8fc9c54a6695272c95/src/runtime/p2p.rs) includes 15-second libp2p pings
 and uses the default `libp2p-quic` 0.13.1 configuration, which has a 5-second
 keepalive interval. Existing transport traffic is outside the DHT/probe pause gates.
 
