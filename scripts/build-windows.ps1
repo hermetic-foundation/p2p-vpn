@@ -14,6 +14,7 @@ function Invoke-Cargo {
     if ($LASTEXITCODE -ne 0) { throw "cargo failed with exit code $LASTEXITCODE" }
 }
 $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+. (Join-Path $PSScriptRoot 'sdk-source.ps1')
 Push-Location $repo
 $previousPath = $env:PATH
 $previousFlags = $env:RUSTFLAGS
@@ -53,19 +54,33 @@ try {
     if ($Test -or $DriverTest) {
         $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
         if (!$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Run Windows persistence tests from an elevated PowerShell.' }
-        Invoke-Cargo @('test', '--locked', '--test', 'windows_platform', '--', '--include-ignored')
-        Invoke-Cargo test --locked --lib runtime::control_socket::tests
-        Invoke-Cargo test --locked --lib fresh_formation_accepts_empty_or_self_only_startup_history_and_returns_gated
-        Invoke-Cargo test --locked --lib checkpoint_pair_rpc_approval_crosses_authenticated_tcp_pairing_transport
+        Invoke-Cargo test --locked --test windows_platform -- --include-ignored
     }
-    if ($DriverTest) {
-        $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
-        if (!$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Run the driver test from an elevated PowerShell.' }
-        Copy-Item -LiteralPath $dll -Destination (Join-Path $repo 'target\debug\deps\wintun.dll')
-        Invoke-Cargo @('test', '--locked', '--lib', 'wintun_udp_roundtrip_and_blocked_read_cancellation', '--', '--ignored', '--nocapture')
-    }
-    if ($RecoveryTest) {
-        Invoke-Cargo @('test', '--locked', '--test', 'connection_recovery', '--', '--nocapture', '--test-threads=1')
+    if ($Test -or $DriverTest -or $RecoveryTest) {
+        $sdk = Get-PinnedSdkSource -Repo $repo
+        $previousTarget = $env:CARGO_TARGET_DIR
+        Push-Location $sdk
+        try {
+            $env:CARGO_TARGET_DIR = Join-Path $sdk 'target'
+            $deps = Join-Path $env:CARGO_TARGET_DIR 'debug\deps'
+            New-Item -ItemType Directory -Path $deps -Force | Out-Null
+            Copy-Item -LiteralPath $dll -Destination (Join-Path $deps 'wintun.dll')
+            if ($Test -or $DriverTest) {
+                Invoke-Cargo test --locked --test windows_platform -- --include-ignored
+                Invoke-Cargo test --locked --lib runtime::control_socket::tests
+                Invoke-Cargo test --locked --lib fresh_formation_accepts_empty_or_self_only_startup_history_and_returns_gated
+                Invoke-Cargo test --locked --lib checkpoint_pair_rpc_approval_crosses_authenticated_tcp_pairing_transport
+            }
+            if ($DriverTest) {
+                Invoke-Cargo test --locked --lib wintun_udp_roundtrip_and_blocked_read_cancellation -- --ignored --nocapture
+            }
+            if ($RecoveryTest) {
+                Invoke-Cargo test --locked --test connection_recovery -- --nocapture --test-threads=1
+            }
+        } finally {
+            $env:CARGO_TARGET_DIR = $previousTarget
+            Pop-Location
+        }
     }
     Write-Host "Built $(Join-Path $binaryDirectory 'p2p-vpn.exe')"
 } finally {
