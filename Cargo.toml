@@ -51,8 +51,8 @@ base64 = "0.23.0"
 clap = { version = "4.6.5", features = ["derive"] }
 clap_complete = "4.6.0"
 futures = "0.3.33"
-libp2p = { git = "https://github.com/hermetic-foundation/libp2p-vpn.git", rev = "cc40da135edd90abcd008f8fc9c54a6695272c95", features = ["kad", "mdns", "relay", "request-response"] }
-p2p_vpn = { package = "libp2p-vpn", git = "https://github.com/hermetic-foundation/libp2p-vpn.git", rev = "cc40da135edd90abcd008f8fc9c54a6695272c95" }
+libp2p = { git = "https://github.com/hermetic-foundation/libp2p-vpn.git", rev = "716ef177c26b1ff7e7d4659d97d770ffeac9e6b5", features = ["kad", "mdns", "relay", "request-response"] }
+p2p_vpn = { package = "libp2p-vpn", git = "https://github.com/hermetic-foundation/libp2p-vpn.git", rev = "716ef177c26b1ff7e7d4659d97d770ffeac9e6b5" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 tokio = { version = "1.53.1", features = ["full"] }
@@ -62,4 +62,4 @@ hickory-proto = "0.25.2"
 rand_core = { version = "0.6.4", features = ["getrandom"] }
 sha2 = "0.11.0"
 socket2 = { version = "0.6.5", features = ["all"] }
-stats_alloc = { version = "=0.1.10", git = "https://github.com/hermetic-foundation/libp2p-vpn.git", rev = "cc40da135edd90abcd008f8fc9c54a6695272c95" }
+stats_alloc = { version = "=0.1.10", git = "https://github.com/hermetic-foundation/libp2p-vpn.git", rev = "716ef177c26b1ff7e7d4659d97d770ffeac9e6b5" }

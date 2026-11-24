@@ -2,7 +2,7 @@
 
 Status: **Draft**. This generalizes the existing [physical network policy](physical-network-policy.md)
 and [public discovery contract](public-discovery-relay-acceptance.md).
-See the [browser conformance audit](https://github.com/hermetic-foundation/libp2p-vpn/blob/cc40da135edd90abcd008f8fc9c54a6695272c95/docs/developer/protocol/browser-conformance.md) for
+See the [browser conformance audit](https://github.com/hermetic-foundation/libp2p-vpn/blob/716ef177c26b1ff7e7d4659d97d770ffeac9e6b5/docs/developer/protocol/browser-conformance.md) for
 separate evidence on browser-managed paths and Linux companion egress.
 
 ## Egress Rules
@@ -32,7 +32,7 @@ Keep peer identity, membership, and overlay addresses across handoff. Availabili
 an ICE candidate pair, and successful authentication are separate facts: none
 alone proves traffic followed the current preferred physical route.
 
-The optional [preferred-interface handoff protocol](https://github.com/hermetic-foundation/libp2p-vpn/blob/cc40da135edd90abcd008f8fc9c54a6695272c95/docs/developer/protocol/preferred-handoff.md)
+The optional [preferred-interface handoff protocol](https://github.com/hermetic-foundation/libp2p-vpn/blob/716ef177c26b1ff7e7d4659d97d770ffeac9e6b5/docs/developer/protocol/preferred-handoff.md)
 specifies coordinated relay replacement. The changed peer verifies its own
 physical owner and real IP delivery before acknowledging promotion.
 

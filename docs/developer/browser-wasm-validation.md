@@ -1,6 +1,6 @@
 # Browser WASM Validation
 
-The [conformance audit](https://github.com/hermetic-foundation/libp2p-vpn/blob/cc40da135edd90abcd008f8fc9c54a6695272c95/docs/developer/protocol/browser-conformance.md) records which
+The [conformance audit](https://github.com/hermetic-foundation/libp2p-vpn/blob/716ef177c26b1ff7e7d4659d97d770ffeac9e6b5/docs/developer/protocol/browser-conformance.md) records which
 features have live interoperability evidence. Fixtures are not qualification
 for public NAT traversal or unattended background operation.
 

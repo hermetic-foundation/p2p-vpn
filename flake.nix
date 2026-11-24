@@ -4,7 +4,7 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
-    sdk.url = "git+https://github.com/hermetic-foundation/libp2p-vpn.git?rev=cc40da135edd90abcd008f8fc9c54a6695272c95";
+    sdk.url = "git+https://github.com/hermetic-foundation/libp2p-vpn.git?rev=716ef177c26b1ff7e7d4659d97d770ffeac9e6b5";
   };
 
   outputs =
