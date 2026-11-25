@@ -5,7 +5,7 @@ one publication, readback, native code enrollment from an independent seed,
 and closure of an in-flight stream on a default-link change. It does not show
 public IPFS convergence or any remote deletion guarantee.
 
-The [current audit](https://github.com/hermetic-foundation/libp2p-vpn/blob/716ef177c26b1ff7e7d4659d97d770ffeac9e6b5/docs/developer/protocol/browser-conformance.md#clause-audit) records
+The [current audit](https://github.com/hermetic-foundation/libp2p-vpn/blob/4ba644cb8835dfaa2b4b39b05821af392164ed93/docs/developer/protocol/browser-conformance.md#clause-audit) records
 the implemented scoped publication paths for fresh/rooted legacy and live
 checkpoint issuers, including checkpoint reissue under separate child
 leases. The design notes below preserve the implementation plan, not a
@@ -33,7 +33,7 @@ Controlled follow-ups:
 - Relay-side loss with a readable cached locator and no grant, and stale
   local SDK approval on a confirmed replacement, are covered separately.
   Neither sends the old uncommitted Poll on the replacement. The
-  [audited browser dispatch guards](https://github.com/hermetic-foundation/libp2p-vpn/blob/716ef177c26b1ff7e7d4659d97d770ffeac9e6b5/docs/developer/protocol/browser-conformance.md#exact-scope-disposition)
+  [audited browser dispatch guards](https://github.com/hermetic-foundation/libp2p-vpn/blob/4ba644cb8835dfaa2b4b39b05821af392164ed93/docs/developer/protocol/browser-conformance.md#exact-scope-disposition)
   and typed lifecycle tests cover the owner boundary separately. Further
   typed dispatch coverage is optional; do not replay on the wire or
   conflate this with valid committed receipt recovery.

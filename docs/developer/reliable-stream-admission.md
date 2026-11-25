@@ -1,6 +1,6 @@
 # Reliable Stream Admission
 
-The [stream specification](https://github.com/hermetic-foundation/libp2p-vpn/blob/716ef177c26b1ff7e7d4659d97d770ffeac9e6b5/docs/developer/protocol/stream.md#connection-admission) requires a
+The [stream specification](https://github.com/hermetic-foundation/libp2p-vpn/blob/4ba644cb8835dfaa2b4b39b05821af392164ed93/docs/developer/protocol/stream.md#connection-admission) requires a
 grant on the authenticated member connection carrying the packet. The native
 peer capability cache may inform discovery or datagram negotiation, but it
 cannot grant reliable-stream access on a different connection.
@@ -71,7 +71,7 @@ control-only updates. The browser tracks one exact dial and its candidate
 probe. Sharing the tables would tie these distinct lifecycles together.
 
 Keep OS route ownership and WebRTC signaling in their adapters. The
-[preferred handoff extension](https://github.com/hermetic-foundation/libp2p-vpn/blob/716ef177c26b1ff7e7d4659d97d770ffeac9e6b5/docs/developer/protocol/preferred-handoff.md) needs physical
+[preferred handoff extension](https://github.com/hermetic-foundation/libp2p-vpn/blob/4ba644cb8835dfaa2b4b39b05821af392164ed93/docs/developer/protocol/preferred-handoff.md) needs physical
 socket evidence, not just an accepted packet probe. Its wire messages,
 initiation rules, and commit criteria did not change here.
 
