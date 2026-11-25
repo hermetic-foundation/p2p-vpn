@@ -81,16 +81,16 @@
         "nixpkgs": "nixpkgs_2"
       },
       "locked": {
-        "lastModified": 1795579010,
-        "narHash": "sha256-tBJmLy91NL+i8Y7hRqmh0/J6FlmxanrGbbpfxxjVGa4=",
+        "lastModified": 1795581515,
+        "narHash": "sha256-V3fk8MwCebAkHDsbb+ax2W7Q0NpovpdEEkxhXYZ2ZX4=",
         "ref": "refs/heads/main",
-        "rev": "4ba644cb8835dfaa2b4b39b05821af392164ed93",
-        "revCount": 1733,
+        "rev": "13464c4dce39f58d51ab38b87a93cb688e958154",
+        "revCount": 1734,
         "type": "git",
         "url": "https://github.com/hermetic-foundation/libp2p-vpn.git"
       },
       "original": {
-        "rev": "4ba644cb8835dfaa2b4b39b05821af392164ed93",
+        "rev": "13464c4dce39f58d51ab38b87a93cb688e958154",
         "type": "git",
         "url": "https://github.com/hermetic-foundation/libp2p-vpn.git"
       }
